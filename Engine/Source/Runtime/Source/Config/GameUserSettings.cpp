@@ -20,7 +20,8 @@ namespace Lumina
     namespace
     {
         // Vsync off keeps whichever uncapped mode the project chose, and falls back to Immediate under a FIFO project.
-        EPresentMode PresentModeFor(bool bVSync)
+        // Editor builds take the early return in ApplyDisplay, so this is unused there rather than dead.
+        [[maybe_unused]] EPresentMode PresentModeFor(bool bVSync)
         {
             if (bVSync)
             {

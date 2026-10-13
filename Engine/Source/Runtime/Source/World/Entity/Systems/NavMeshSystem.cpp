@@ -226,6 +226,39 @@ namespace Lumina
         }
     }
 
+    // External linkage on purpose. FNavFoliageCache is forward declared in NavMeshComponent.h and
+    // holds these through FNavFoliageEntity, so an external-linkage class would otherwise carry
+    // subobjects whose types have internal linkage.
+
+    // Tag-bit packed into cache key so one entity may track one collider of each type.
+    enum class ENavColliderType : uint8 { Box = 0, Sphere = 1, Mesh = 2, CharacterCapsule = 3, Capsule = 4, Cylinder = 5, Terrain = 6, TriangleSoup = 7, DynamicMesh = 8, AreaVolume = 9, OffMeshLink = 10, Foliage = 11 };
+
+    // POD shape snapshot; safe to ship to a bake worker (Mesh ptr / terrain tri-soup are read-only there).
+    struct FNavSourcePrim
+    {
+        ENavColliderType                Type  = ENavColliderType::Box;
+        FMatrix4                        World = FMatrix4(1.0f);
+        FVector3                        Shape = FVector3(0.0f);   // Box half-extent, or Radius and HalfHeight
+        CStaticMesh*                    Mesh  = nullptr;
+        TSharedPtr<FDynamicMeshRenderData> DynamicMesh;          // held so a re-commit on the game thread cannot free it under the bake
+        TSharedPtr<TVector<FVector3>>   TriangleSoup;             // world-space tri soup (groups of 3); Terrain and TriangleSoup types
+        TSharedPtr<FNavAreaVolume>      AreaVolume;               // AreaVolume type
+        TSharedPtr<FNavOffMeshLink>     Link;                     // OffMeshLink type
+        // Foliage type, shared by every instance of a species in its local space and placed by World.
+        TSharedPtr<const TVector<FNavSourcePrim>> Children;
+        // Reads the mesh's coarsest LOD, enough for a footprint at a fraction of the triangles.
+        bool                            bCoarsestLOD = false;
+    };
+
+    // A species' collision in its own space, built once per scan and placed per instance.
+    struct FFoliageNavTemplate
+    {
+        TSharedPtr<const TVector<FNavSourcePrim>> Children;
+        FVector3 LocalMin = FVector3( FLT_MAX);
+        FVector3 LocalMax = FVector3(-FLT_MAX);
+        uint64   ContentId = 0;
+    };
+
     namespace
     {
         const CNavigationSettings& NavSettings()
@@ -258,9 +291,6 @@ namespace Lumina
                      TMax.y < BMin.y || TMin.y > BMax.y ||
                      TMax.z < BMin.z || TMin.z > BMax.z);
         }
-
-        // Tag-bit packed into cache key so one entity may track one collider of each type.
-        enum class ENavColliderType : uint8 { Box = 0, Sphere = 1, Mesh = 2, CharacterCapsule = 3, Capsule = 4, Cylinder = 5, Terrain = 6, TriangleSoup = 7, DynamicMesh = 8, AreaVolume = 9, OffMeshLink = 10, Foliage = 11 };
 
         // Compound children reuse the primitive types, so their sub-indices sit above a collision shape asset's.
         constexpr uint32 CompoundSubIndexBase = 1u << 23;
@@ -647,23 +677,6 @@ namespace Lumina
             }
         }
 
-        // POD shape snapshot; safe to ship to a bake worker (Mesh ptr / terrain tri-soup are read-only there).
-        struct FNavSourcePrim
-        {
-            ENavColliderType                Type  = ENavColliderType::Box;
-            FMatrix4                        World = FMatrix4(1.0f);
-            FVector3                        Shape = FVector3(0.0f);   // Box half-extent, or Radius and HalfHeight
-            CStaticMesh*                    Mesh  = nullptr;
-            TSharedPtr<FDynamicMeshRenderData> DynamicMesh;          // held so a re-commit on the game thread cannot free it under the bake
-            TSharedPtr<TVector<FVector3>>   TriangleSoup;             // world-space tri soup (groups of 3); Terrain and TriangleSoup types
-            TSharedPtr<FNavAreaVolume>      AreaVolume;               // AreaVolume type
-            TSharedPtr<FNavOffMeshLink>     Link;                     // OffMeshLink type
-            // Foliage type, shared by every instance of a species in its local space and placed by World.
-            TSharedPtr<const TVector<FNavSourcePrim>> Children;
-            // Reads the mesh's coarsest LOD, enough for a footprint at a fraction of the triangles.
-            bool                            bCoarsestLOD = false;
-        };
-
         struct FNavSourceEntry
         {
             uint64          Key = 0;
@@ -904,15 +917,6 @@ namespace Lumina
                 Emit(Entry.Prim.Type, i, std::move(Entry));
             }
         }
-
-        // A species' collision in its own space, built once per scan and placed per instance.
-        struct FFoliageNavTemplate
-        {
-            TSharedPtr<const TVector<FNavSourcePrim>> Children;
-            FVector3 LocalMin = FVector3( FLT_MAX);
-            FVector3 LocalMax = FVector3(-FLT_MAX);
-            uint64   ContentId = 0;
-        };
 
         // The type's own shape, then the mesh's default, matching SFoliageCollisionSystem.
         const CCollisionShape* ResolveFoliageCollisionShape(const SFoliageType& Type)

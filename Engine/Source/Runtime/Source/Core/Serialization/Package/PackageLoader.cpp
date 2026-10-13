@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "PackageLoader.h"
 
 #include "Core/Object/ObjectArray.h"
@@ -24,14 +24,15 @@ namespace Lumina
         TSharedPtr<const FPackageNameTable> Table = Names;
         CPackage* Owner = Package;
         const int32 Version = GetFileVersion();
-        return [Table, Owner, Version](const TVector<uint8>& Bytes) -> TUniquePtr<FArchive>
+        // Named InBytes rather than Bytes, which would shadow the member this loader holds.
+        return [Table, Owner, Version](const TVector<uint8>& InBytes) -> TUniquePtr<FArchive>
         {
-            void* Copy = Memory::Malloc(Math::Max<SIZE_T>(Bytes.size(), 1));
-            if (!Bytes.empty())
+            void* Copy = Memory::Malloc(Math::Max<SIZE_T>(InBytes.size(), 1));
+            if (!InBytes.empty())
             {
-                Memory::Memcpy(Copy, Bytes.data(), Bytes.size());
+                Memory::Memcpy(Copy, InBytes.data(), InBytes.size());
             }
-            TUniquePtr<FPackageLoader> Reader = MakeUnique<FPackageLoader>(MakeShared<FPackageFileBytes>(Copy, (int64)Bytes.size()), Owner);
+            TUniquePtr<FPackageLoader> Reader = MakeUnique<FPackageLoader>(MakeShared<FPackageFileBytes>(Copy, (int64)InBytes.size()), Owner);
             Reader->SetNameTable(Table);
             Reader->SetFileVersion(Version);
             return Reader;

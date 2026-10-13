@@ -1,4 +1,4 @@
-﻿#include "LayoutRegistry.h"
+#include "LayoutRegistry.h"
 #include "DotNetHost.h"
 #include "Core/Delegates/CoreDelegates.h"
 #include "Scripting/EntityScript.h"
@@ -76,6 +76,15 @@ namespace Lumina
 
 namespace Lumina::DotNet
 {
+    // Keeps each source file's text alive while it's marshaled to managed.
+    // Named rather than inside the anonymous namespace below: FSourceBucket holds a vector of these,
+    // and a class with external linkage cannot carry a subobject whose type has internal linkage.
+    struct FGatheredSource
+    {
+        FString Path;
+        FString Text;
+    };
+
     namespace
     {
     #if defined(_WIN32)
@@ -365,13 +374,6 @@ namespace Lumina::DotNet
             Out->emplace_back(std::move(Desc));
         }
 
-
-        // Keeps each source file's text alive while it's marshaled to managed.
-        struct FGatheredSource
-        {
-            FString Path;
-            FString Text;
-        };
 
         // Scripts are source rather than VFS content, so a code-only plugin still gets its scripts compiled.
         void GatherSourcesUnder(const FString& DiskDir, TVector<FGatheredSource>& Out)
