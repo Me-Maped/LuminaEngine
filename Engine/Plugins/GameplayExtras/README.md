@@ -1,17 +1,17 @@
 # GameplayExtras
 
-Optional gameplay-flavored components that aren't core engine functionality.
-Anything that lives here can be disabled per-project via the `.lproject`
-`Plugins` array, Runtime itself never depends on it.
+可选的游戏玩法类组件，不属于引擎核心功能。
+这里的所有内容都可以按项目通过 `.lproject` 的
+`Plugins` 数组禁用，Runtime 本身从不依赖它。
 
-## Currently bundled
+## 当前内置
 
-- `SHealthComponent` (`Components/HealthComponent.h`), health + max health
-  + optional regen. Reflected Lua API: `ApplyDamage(float)`, `GiveHealth(float)`.
+- `SHealthComponent`（`Components/HealthComponent.h`），生命值 + 最大生命值
+  + 可选回复。已反射的 Lua API：`ApplyDamage(float)`、`GiveHealth(float)`。
 
-## How to disable for a project
+## 如何为某个项目禁用
 
-In your `.lproject`:
+在你的 `.lproject` 中：
 
 ```json
 "Plugins": [
@@ -19,13 +19,13 @@ In your `.lproject`:
 ]
 ```
 
-Or use the **Tools → Plugin Browser** editor tool.
+或使用 **Tools → Plugin Browser** 编辑器工具。
 
-## Pattern for plugin API headers
+## 插件 API 头文件的模式
 
-`GameplayExtrasRuntimeAPI.h` follows the three-mode pattern every plugin
-should adopt so it works in both modular (Debug/Development) and monolithic
-(Shipping) builds:
+`GameplayExtrasRuntimeAPI.h` 采用三模式写法，每个插件都应照此
+编写，从而同时适用于模块化（Debug/Development）和单体
+（Shipping）构建：
 
 ```cpp
 #pragma once
@@ -38,6 +38,6 @@ should adopt so it works in both modular (Debug/Development) and monolithic
 #endif
 ```
 
-`LUMINA_MONOLITHIC` is defined by Workspace.lua only in Shipping config;
-in that config every module is statically linked into the final exe and
-dllexport/dllimport would just produce LNK4286 warnings.
+`LUMINA_MONOLITHIC` 仅由 Workspace.lua 在 Shipping 配置下定义；
+在该配置中每个模块都被静态链接进最终的可执行文件，
+dllexport/dllimport 只会产生 LNK4286 警告。

@@ -1,58 +1,59 @@
 # NsightPerf
 
-Editor-only plugin that integrates the **NVIDIA Nsight Perf SDK** as a live GPU metrics HUD
-(periodic sampler) inside the Lumina editor.
+仅编辑器可用的插件，它将 **NVIDIA Nsight Perf SDK** 集成为 Lumina 编辑器内的实时 GPU 指标 HUD
+（周期性采样器）。
 
-## What it does
+## 它的作用
 
-- Adds a **Tools → Plugins → Nsight Perf HUD** window: a continuously-updating dashboard of GPU
-  metrics (SM occupancy, throughputs, memory bandwidth, ...) sourced from NvPerf's *periodic
-  sampler* and rendered with the engine's ImPlot.
-- Sampling runs only while the window is open.
+- 新增一个 **Tools → Plugins → Nsight Perf HUD** 窗口：一块持续更新的 GPU
+  指标看板（SM 占用率、吞吐量、显存带宽等），数据来自 NvPerf 的 *periodic
+  sampler*，并使用引擎的 ImPlot 渲染。
+- 仅在窗口打开时进行采样。
 
-## How it's toggled
+## 如何启用/禁用
 
-The plugin **is** the unit of opt-in. It lives in `Engine/Plugins/NsightPerf/`, always builds, and
-each project enables/disables it in its `.lproject`:
+插件**本身**就是可选择启用的单位。它位于 `Engine/Plugins/NsightPerf/`，始终参与构建，
+每个项目在自己的 `.lproject` 中启用/禁用它：
 
 ```json
 "Plugins": [ { "Name": "NsightPerf", "Enabled": false } ]
 ```
 
-It is `EnabledByDefault: true`. There is no global build flag.
+它是 `EnabledByDefault: true`。没有全局构建开关。
 
-## Why it loads at the Core phase
+## 为什么它在 Core 阶段加载
 
-NvPerf's periodic sampler requires specific Vulkan **instance and device extensions enabled at
-device creation**. The engine creates the device during startup, before most plugins load, so this
-plugin's module loads at the **Core** loading phase (before `RHI::CreateDevice`) and registers the
-required extensions via `RHI::Native::RegisterDeviceCreationRequest` (see
-`Engine/Source/Runtime/Renderer/RHINative.h`). It also grabs the live device through
-`RHI::Native::GetNativeDeviceHandles()`, which returns *opaque* handles (no Vulkan types leak out of
-the backend) that this plugin reinterprets to `Vk*` itself.
+NvPerf 的 periodic sampler 要求特定的 Vulkan **instance 和 device 扩展在
+设备创建时即已启用**。引擎在启动期间创建设备，早于大多数插件的加载，因此本
+插件的模块在 **Core** 加载阶段（早于 `RHI::CreateDevice`）加载，并通过
+`RHI::Native::RegisterDeviceCreationRequest` 注册所需扩展（见
+`Engine/Source/Runtime/Renderer/RHINative.h`）。它还通过
+`RHI::Native::GetNativeDeviceHandles()` 取得实时设备句柄，该函数返回的是*不透明*句柄
+（不会有任何 Vulkan 类型泄漏出后端），由本插件自行将其重新解释为 `Vk*`。
 
-## Requirements
+## 要求
 
-- An **NVIDIA GPU** with a driver that supports Nsight Perf. On other GPUs the window opens and
-  explains that it's unavailable.
-- The vendored SDK under `Engine/Source/ThirdParty/NsightPerf/` (headers + `nvperf_grfx_host`
-  lib/DLL). The DLL is copied next to the executable at build time.
+- 一块**支持 Nsight Perf 的 NVIDIA GPU** 及其驱动。在其他 GPU 上窗口仍会打开，
+  并说明该功能不可用。
+- `Engine/Source/ThirdParty/NsightPerf/` 下内置的 SDK（头文件 + `nvperf_grfx_host`
+  的 lib/DLL）。该 DLL 会在构建时被复制到可执行文件旁边。
 
-## Threading
+## 线程
 
-The periodic sampler shares the engine's graphics queue, but the engine submits frames on the render
-thread while this tool's per-frame work runs on the game thread. Concurrent `vkQueueSubmit` on one
-queue from two threads loses the device. The tool therefore wraps every NvPerf call that submits
-(init, the per-frame `OnFrameEnd`, teardown) in `RHI::Native::FScopedSubmitLock`, which takes the
-same mutex the RHI uses for its own submits, so they're serialized and never race. The ImGui render
-stays outside the lock.
+periodic sampler 与引擎的图形队列共用同一个队列，但引擎在渲染线程上提交帧，
+而本工具逐帧的工作运行在游戏线程上。两个线程对同一个队列并发执行 `vkQueueSubmit`
+会导致设备丢失。因此本工具把所有会提交的 NvPerf 调用
+（初始化、逐帧的 `OnFrameEnd`、销毁）都包在 `RHI::Native::FScopedSubmitLock` 中，
+它获取的正是 RHI 用于自身提交的那把 mutex，从而将它们串行化、绝不竞争。
+ImGui 渲染仍留在锁之外。
 
-Cost: while the tool is open, holding that lock around `OnFrameEnd` can briefly stall the render
-thread each frame (a profiling-only hitch). A lower-overhead design would marshal the sampler onto
-the render thread via a per-frame RHI hook; the submit-lock approach was chosen for simplicity.
+代价：当该工具打开时，在 `OnFrameEnd` 前后持有这把锁可能会在每帧短暂阻塞渲染
+线程（这是仅存在于性能分析场景的卡顿）。一个开销更低的设计是通过逐帧的 RHI hook
+把 sampler 调度到渲染线程上；出于简洁考虑选择了 submit-lock 方案。
 
-## NVIDIA permission
+## NVIDIA 权限
 
-`BeginSession` fails with `NVPA_STATUS_INSUFFICIENT_PRIVILEGE` until GPU performance counters are
-allowed for non-admins: NVIDIA Control Panel → Developer → "Allow access to the GPU performance
-counters to all users" (or run the editor elevated). The tool reports this state instead of failing.
+在未向非管理员开放 GPU 性能计数器之前，`BeginSession` 会以
+`NVPA_STATUS_INSUFFICIENT_PRIVILEGE` 失败：NVIDIA Control Panel → Developer →
+“Allow access to the GPU performance counters to all users”（或以管理员身份运行
+编辑器）。该工具会报告这一状态，而不是直接失败。

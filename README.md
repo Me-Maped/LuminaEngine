@@ -1,10 +1,10 @@
-﻿<div align="center">
+<div align="center">
 
 <img src="https://github.com/user-attachments/assets/552b8ca0-ebca-4876-9c6a-df38c468d41e" width="120"/>
 
 # Lumina Game Engine
 
-**A modern, high-performance game engine built with Vulkan**
+**一款基于 Vulkan 构建的现代高性能游戏引擎**
 
 [![License](https://img.shields.io/github/license/mrdrelliot/lumina)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-blue)](https://github.com/mrdrelliot/lumina)
@@ -12,127 +12,127 @@
 [![Vulkan](https://img.shields.io/badge/Vulkan-renderer-red)](https://www.vulkan.org/)
 [![Discord](https://img.shields.io/discord/1193738186892005387?label=Discord&logo=discord)](https://discord.gg/xQSB7CRzQE)
 
-[Website](https://luminagameengine.com) &bull; [Discord](https://discord.gg/xQSB7CRzQE) &bull; [Documentation](https://luminagameengine.com/getting-started/introduction/) &bull; [Support](#support)
+[官网](https://luminagameengine.com) &bull; [Discord](https://discord.gg/xQSB7CRzQE) &bull; [文档](https://luminagameengine.com/getting-started/introduction/) &bull; [支持](#支持)
 
 </div>
 
 ---
 
-## Contents
+## 目录
 
 - [Lumina Game Engine](#lumina-game-engine)
-  - [Contents](#contents)
-  - [Overview](#overview)
-  - [Features](#features)
-    - [Rendering](#rendering)
-    - [Architecture](#architecture)
-    - [Editor](#editor)
-    - [Performance](#performance)
-    - [C# Scripting](#c-scripting)
-  - [Documentation](#documentation)
-  - [Screenshots](#screenshots)
-  - [Getting Started](#getting-started)
-    - [Requirements](#requirements)
+  - [目录](#目录)
+  - [概述](#概述)
+  - [特性](#特性)
+    - [渲染](#渲染)
+    - [架构](#架构)
+    - [编辑器](#编辑器)
+    - [性能](#性能)
+    - [C# 脚本](#c-脚本)
+  - [文档](#文档)
+  - [截图](#截图)
+  - [快速开始](#快速开始)
+    - [环境要求](#环境要求)
       - [Windows](#windows)
       - [Linux](#linux)
-    - [Installation (Windows)](#installation-windows)
-    - [Installation (Linux)](#installation-linux)
-    - [Build Configuration](#build-configuration)
-    - [Troubleshooting](#troubleshooting)
-  - [Contributing](#contributing)
-    - [Workflow](#workflow)
-    - [Requirements](#requirements-1)
-  - [Support](#support)
-  - [Third-Party Dependencies](#third-party-dependencies)
-  - [Acknowledgments](#acknowledgments)
-  - [License](#license)
-  - [Connect](#connect)
+    - [安装（Windows）](#安装windows)
+    - [安装（Linux）](#安装linux)
+    - [构建配置](#构建配置)
+    - [故障排查](#故障排查)
+  - [贡献](#贡献)
+    - [工作流程](#工作流程)
+    - [要求](#要求)
+  - [支持](#支持)
+  - [第三方依赖](#第三方依赖)
+  - [致谢](#致谢)
+  - [许可证](#许可证)
+  - [联系方式](#联系方式)
 
 ---
 
-## Overview
+## 概述
 
-Lumina is a modern C++ game engine built from the ground up with Vulkan. It is
-designed for learning and experimentation with real-world engine architecture,
-demonstrating professional design patterns including a reflection system, an
-ECS-based gameplay layer, and modern rendering techniques.
+Lumina 是一款从零开始、以 Vulkan 为基础打造的现代 C++ 游戏引擎。它的设计目标是结合真实的引擎架构进行学习与实验，展示了多种专业设计模式，包括反射系统、基于 ECS 的游戏逻辑层，以及现代渲染技术。
 
 > [!NOTE]
-> For more detailed information, go to: https://luminagameengine.com
+> 获取更详细的信息，请访问：https://luminagameengine.com
 
-It is well suited for:
+它非常适合用于：
 
-- Learning modern game engine architecture
-- Experimenting with Vulkan rendering techniques
-- Building prototypes on a clean, modular codebase
-- Understanding how engines such as Unreal and Godot work internally
+- 学习现代游戏引擎架构
+- 试验 Vulkan 渲染技术
+- 在干净、模块化的代码库上构建原型
+- 理解 Unreal、Godot 等引擎的内部工作原理
 
-Contributions are recognized in several ways, including Steam keys for popular
-games and public acknowledgment in the Discord community. Lumina improves
-through the work of motivated contributors who help push the engine forward.
+贡献者会通过多种方式获得认可，包括热门游戏的 Steam 激活码，以及在 Discord 社区中的公开致谢。Lumina 正是依靠有动力的贡献者的工作不断改进、推动引擎向前发展。
 
 > [!CAUTION]
-> Lumina is an educational project under active development. APIs may change,
-> and some features are experimental. If you encounter build issues, please
-> reach out on [Discord](https://discord.gg/xQSB7CRzQE) for assistance.
+> Lumina 是一个正在积极开发中的教育项目。API 可能发生变化，部分功能仍处于实验阶段。如果你遇到构建问题，请在 [Discord](https://discord.gg/xQSB7CRzQE) 上寻求帮助。
 
 
 > [!NOTE]
 >
-> ### AI Usage
+> ### AI 使用说明
 >
-> AI has been used selectively for tasks such as static analysis, research, build tooling, and scripting assistance.
+> AI 仅被有选择地用于静态分析、调研、构建工具和脚本辅助等任务。
 >
-> The engine itself has been hand-crafted over the course of three years as a passion project. AI is treated as a tool where it provides value, nothing more, nothing less.
+> 引擎本身是历经三年手工打造的业余爱好项目。AI 被当作一种在能创造价值时使用的工具，仅此而已。
 
 
 ---
 
-## Features
+## 特性
 
-### Rendering
+### 渲染
 
-- Vulkan-powered renderer with automatic resource tracking and barrier placement
-- Forward+ pipeline with clustered lighting for efficient multi-light scenes
-- PBR materials authored through a material graph compiled to shader code
+- 由 Vulkan 驱动的渲染器，具备自动资源追踪与 barrier 插入
+- 采用 Forward+ 管线与 clustered lighting，可高效处理多光源场景
+- 通过材质图（material graph）创作 PBR 材质，并编译为 shader 代码
 
-### Architecture
+### 架构
 
-- In-house sparse-set Entity Component System with per-type storage layouts, typed views, and lifecycle signals
-- Reflection system driving automatic serialization and editor integration
-- Modular design with clean separation of concerns
+- 自研的稀疏集（sparse-set）Entity Component System，支持按类型划分的存储布局、类型化视图和生命周期信号
+- 反射系统驱动自动序列化与编辑器集成
+- 模块化设计，关注点清晰分离
 
-### Editor
+### 编辑器
 
-- ImGui-based editor with real-time scene manipulation
-- Scene hierarchy for entity management
-- Component inspector with UI generated automatically via reflection
+- 基于 ImGui 的编辑器，支持实时场景操作
+- 用于实体管理的场景层级（Scene Hierarchy）
+- 组件检视器，其 UI 由反射自动生成
 
-### Performance
+### 性能
 
-- Multi-threaded task system built with fibers.
-- Custom memory allocators built on RPMalloc
-- Built-in profiling through Tracy integration
+- 基于 fiber 构建的多线程任务系统
+- 基于 RPMalloc 构建的自定义内存分配器
+- 通过 Tracy 集成提供内置性能分析
 
-### C# Scripting
+### C# 脚本
 
-- C# scripting via LuminaSharp, a CoreCLR host that bundles the .NET 10 runtime
-- EntityScript-based gameplay with full ECS access: `Registry.View` queries,
-  C# entity systems, and component reads and writes
-- Reflection-driven C++ to C# bindings generated automatically by the Reflector
-- Hot-reloadable scripts for iterating on gameplay without recompiling
-- High-level gameplay APIs through the `World` facade: Physics, Navigation,
-  Input, Messages, and GameplayTags
+- 通过 LuminaSharp 实现 C# 脚本，LuminaSharp 是一个内置 .NET 10 运行时的 CoreCLR 宿主
+- 基于 EntityScript 的游戏逻辑，可完整访问 ECS：`Registry.View` 查询、C# 实体系统，以及组件读写
+- 由 Reflector 自动生成、反射驱动的 C++ 到 C# 绑定
+- 支持脚本热重载，无需重新编译即可迭代游戏逻辑
+- 通过 `World` 门面（facade）提供的高层游戏 API：Physics、Navigation、Input、Messages 和 GameplayTags
 
 ---
 
-## Documentation
+## 文档
 
-[Getting Started](https://luminagameengine.com/getting-started/introduction/)
+[快速开始](https://luminagameengine.com/getting-started/introduction/)
+
+仓库内还包含一组架构文档，说明各子系统真实的实现方式（每条结论都附源码路径）：
+
+- [引擎概览](docs/EngineOverview.md) — 仓库布局、模块与 target、启动流程、主循环与更新阶段
+- [渲染架构](docs/RenderingArchitecture.md) — RHI 分层、帧编排、shader 与管线缓存、场景渲染的 pass 顺序
+- [ECS 指南](docs/ECSGuide.md) — `FEntity`、`FRegistry`、组件存储、typed view、如何定义新组件
+- [反射系统](docs/ReflectionSystem.md) — 标记宏、Reflector、运行时元数据、序列化与 C# 绑定
+
+总入口见 [docs/README.md](docs/README.md)。
 
 ---
 
-## Screenshots
+## 截图
 
 <div align="center">
   <img width="800" alt="Lumina editor" src="https://github.com/user-attachments/assets/ba4fc531-362c-4b4f-bbec-261bb1e79652" />
@@ -140,7 +140,7 @@ through the work of motivated contributors who help push the engine forward.
 </div>
 
 <details>
-  <summary><b>Show more screenshots</b></summary>
+  <summary><b>显示更多截图</b></summary>
 
   <div align="center">
     <img width="800" alt="Lumina screenshot" src="https://github.com/user-attachments/assets/086a1e5e-4d8d-4c98-be81-bc77287fba39" />
@@ -155,55 +155,42 @@ https://github.com/user-attachments/assets/3d797479-fc47-4b8f-baf4-87315709d0c2
 
 ---
 
-## Getting Started
+## 快速开始
 
-### Requirements
+### 环境要求
 
-**Every platform** needs a GPU that supports Vulkan mesh shaders
-(`VK_EXT_mesh_shader`): NVIDIA Turing (GTX 16-series / RTX 20-series) or newer,
-AMD RDNA2 (RX 6000) or newer, or Intel Arc. The renderer's geometry pipeline is
-built on them, so the editor refuses to start on anything older and says so.
+**所有平台**都需要一块支持 Vulkan mesh shader（`VK_EXT_mesh_shader`）的 GPU：NVIDIA Turing（GTX 16 系列 / RTX 20 系列）或更新，AMD RDNA2（RX 6000）或更新，或 Intel Arc。渲染器的几何管线建立在这些特性之上，因此编辑器在更旧的硬件上会拒绝启动，并给出说明。
 
-That GPU also needs **4 GB of graphics memory, 6 GB or more recommended**. The
-renderer reserves well over a gigabyte before any content loads (render targets,
-two 4K shadow atlases, and a 1 GB streaming texture pool by default), and a card
-under the minimum does not degrade gracefully, it renders corrupt frames and
-eventually loses the device. The check runs at device selection alongside the
-mesh-shader one and names the shortfall. A few mesh-capable parts land under the
-line, mostly 2 GB laptop chips such as the GeForce MX550 and MX570.
+该 GPU 还需要 **4 GB 显存，建议 6 GB 或更多**。渲染器在任何内容加载之前就会预留远超 1 GB 的显存（render target、两张 4K shadow atlas，以及默认 1 GB 的流式纹理池），低于最低要求的显卡不会优雅降级，而是渲染出错帧并最终丢失设备。这项检查与 mesh shader 检查一并在设备选择时执行，并会指出具体差在哪里。有少数支持 mesh shader 的型号低于这条线，多数是 2 GB 的笔记本芯片，例如 GeForce MX550 和 MX570。
 
-`-ignoreminspec` runs anyway, unsupported. `-minvram=N` sets a different
-threshold, which is how to see the rejection dialog on hardware that passes.
+`-ignoreminspec` 会无视限制继续运行（不受支持）。`-minvram=N` 可设置不同的阈值，这是在能通过检查的硬件上查看拒绝对话框的方法。
 
 #### Windows
 
-- Windows 10 (1803 or newer) or Windows 11, 64-bit
-- **Visual Studio 2026 (18.0 or newer)** with the MSVC v143 toolset and the
-  ".NET desktop development" workload
-- **.NET 10 SDK** (x64)
+- Windows 10（1803 或更新）或 Windows 11，64 位
+- **Visual Studio 2026（18.0 或更新）**，并安装 MSVC v143 工具集和“使用 .NET 的桌面开发”工作负载
+- **.NET 10 SDK**（x64）
 
 > [!IMPORTANT]
-> The engine's C# layer (LuminaSharp) targets **`net10.0`**. Only Visual Studio
-> **18.0+ (2026)** can build that target, VS 2022 (17.x) fails with
-> `error NETSDK1209` even if you install the standalone .NET 10 SDK, because VS
-> uses its own bundled MSBuild. `Setup.bat` validates this for you and stops with
-> a clear message if anything is missing.
+> 引擎的 C# 层（LuminaSharp）目标框架为 **`net10.0`**。只有 Visual Studio
+> **18.0+（2026）** 才能构建该目标框架，VS 2022（17.x）即使安装了独立的 .NET 10 SDK 也会
+> 以 `error NETSDK1209` 失败，因为 VS 使用的是它自带的 MSBuild。`Setup.bat` 会为你校验
+> 这一点，一旦缺东西就会停下并给出清晰的提示。
 
 #### Linux
 
-- A 64-bit distribution
-- **GCC 16 or newer.** `Memory/Construct.h` uses `__is_trivially_destructible`,
-  a builtin GCC only grew in 16, so g++-13 and g++-15 reject the tree outright.
-  Clang is not usable right now whatever its libstdc++: it rejects the
-  `RUNTIME_API NODISCARD` attribute order in `Memory/Memory.h`, `PlatformString.h`
-  and `MeshData.h`, which GCC accepts.
+- 64 位发行版
+- **GCC 16 或更新。** `Memory/Construct.h` 使用了 `__is_trivially_destructible`，
+  这是 GCC 直到 16 才新增的内建特性，因此 g++-13 和 g++-15 会直接拒绝这套代码树。
+  Clang 目前也不可用，无论其链接的 libstdc++ 是什么版本：它会拒绝
+  `Memory/Memory.h`、`PlatformString.h` 和 `MeshData.h` 中 `RUNTIME_API NODISCARD`
+  这样的属性顺序，而 GCC 是接受的。
 - **.NET 10 SDK**
-- X11 development packages, which GLFW links directly
-- A Vulkan **loader and driver** at run time. These are not needed to compile:
-  the Vulkan headers are vendored and volk resolves entry points with `dlopen`,
-  so a machine with no driver builds a working editor it cannot launch.
+- X11 开发包，GLFW 会直接链接它们
+- 运行时需要 Vulkan **loader 和驱动**。编译时并不需要这些：Vulkan 头文件已随源码内置，
+  volk 通过 `dlopen` 解析入口点，因此一台没有任何驱动的机器也能构建出编辑器，只是无法启动。
 
-  On Debian or Ubuntu:
+  在 Debian 或 Ubuntu 上：
 
   ```bash
   # build
@@ -214,370 +201,341 @@ threshold, which is how to see the rejection dialog on hardware that passes.
   # .NET 10 SDK: https://dotnet.microsoft.com/download/dotnet/10.0
   ```
 
-  `Setup.sh` checks all of this and tells you what is missing, including
-  whether any installed GPU actually reports `VK_EXT_mesh_shader`.
+  `Setup.sh` 会检查上述全部内容，并告诉你缺了什么，包括已安装的 GPU 是否真的报告支持
+  `VK_EXT_mesh_shader`。
 
 > [!NOTE]
-> No IDE is required. On Windows,
-> [JetBrains Rider](https://www.jetbrains.com/rider/) and Visual Studio both open
-> the generated solution. On Linux there is no solution:
-> [CLion](https://www.jetbrains.com/clion/) reads the generated
-> `compile_commands.json` for C++, and Rider opens the engine's C# projects.
+> 不需要 IDE。在 Windows 上，[JetBrains Rider](https://www.jetbrains.com/rider/) 和
+> Visual Studio 都能打开生成的解决方案。在 Linux 上没有解决方案文件：
+> [CLion](https://www.jetbrains.com/clion/) 会读取为 C++ 生成的
+> `compile_commands.json`，Rider 则打开引擎的 C# 项目。
 
-### Installation (Windows)
+### 安装（Windows）
 
-1. **Clone the repository**
+1. **克隆仓库**
 
    ```bash
    git clone https://github.com/mrdrelliot/luminaengine
    cd LuminaEngine
    ```
 
-2. **Run setup**
+2. **运行 setup**
 
    ```bash
    Setup.bat
    ```
-   It downloads one prebuilt dependency bundle
-   (`External-Win64.zip`, ~192 MB), verifies it against a SHA-256 hash pinned in this
-   repo (once the maintainer records it, see
-   [`DEPENDENCIES.md`](DEPENDENCIES.md)), persists the `LUMINA_DIR` environment
-   variable, configures git hooks, and generates `Lumina.sln`.
+   它会下载一个预编译的依赖包
+   （`External-Win64.zip`，约 192 MB），用本仓库中固定的 SHA-256 哈希进行校验
+   （需要维护者先录入，见 [`DEPENDENCIES.md`](DEPENDENCIES.md)），持久化 `LUMINA_DIR`
+   环境变量，配置 git hooks，并生成 `Lumina.sln`。
 
-   The bundle contains the .NET 10 runtime (C# scripting), LLVM/Clang 19
-   (reflection codegen), the Slang shader compiler, RenderDoc, and Tracy. Each
-   is open source; [`DEPENDENCIES.md`](DEPENDENCIES.md) lists every component
-   with its version, purpose, upstream source, and license, and explains how to
-   fetch them yourself instead of using the bundle.
+   该依赖包包含 .NET 10 运行时（C# 脚本）、LLVM/Clang 19
+   （反射代码生成）、Slang shader 编译器、RenderDoc 和 Tracy。每一项都是开源的；
+   [`DEPENDENCIES.md`](DEPENDENCIES.md) 列出了每个组件的版本、用途、上游来源和许可证，
+   并说明了如何自行获取这些组件而不使用依赖包。
 
-   To skip the prompt for unattended/CI runs, pass `--yes` (or set
-   `LUMINA_SETUP_YES=1`). If the download fails, manually download
-   [External-Win64.zip](https://github.com/MrDrElliot/LuminaEngine/releases/download/external-deps/External-Win64.zip),
-   extract it into the `LuminaEngine/` folder, then run
-   `GenerateProjectFiles.bat`.
+   若要在无人值守/CI 运行中跳过提示，请传入 `--yes`（或设置
+   `LUMINA_SETUP_YES=1`）。如果下载失败，请手动下载
+   [External-Win64.zip](https://github.com/MrDrElliot/LuminaEngine/releases/download/external-deps/External-Win64.zip)，
+   解压到 `LuminaEngine/` 文件夹，然后运行
+   `GenerateProjectFiles.bat`。
 
-1. **Open the solution**
+1. **打开解决方案**
 
-   Open `Lumina.sln` in Visual Studio.
+   在 Visual Studio 中打开 `Lumina.sln`。
 
-2. **Build and run**
+2. **构建并运行**
 
-   - Set `Lumina` as the startup project.
-   - Pick a configuration: `Development Editor` (default), `Debug Editor` for
-     full debugger functionality at the cost of speed, or `Development Game` for
-     the runtime without the editor.
-   - Press F5, or use **Build -> Run**.
+   - 将 `Lumina` 设为启动项目。
+   - 选择配置：`Development Editor`（默认）、`Debug Editor`（完整调试器功能，牺牲速度），
+     或 `Development Game`（不含编辑器的运行时）。
+   - 按 F5，或使用 **Build -> Run**。
 
-3. **Start developing**
+3. **开始开发**
 
-   - Copy `Templates/Blank/` to create a new project, then run its
-     `GenerateProject.bat` to produce a solution.
+   - 复制 `Templates/Blank/` 来创建新项目，然后运行其中的
+     `GenerateProject.bat` 生成解决方案。
 
-### Installation (Linux)
+### 安装（Linux）
 
-Every script below has a `.bat` counterpart of the same name on Windows, and
-takes the same arguments.
+下面每个脚本在 Windows 上都有同名的 `.bat` 版本，并接受相同的参数。
 
-1. **Clone the repository**
+1. **克隆仓库**
 
    ```bash
    git clone https://github.com/mrdrelliot/luminaengine
    cd LuminaEngine
    ```
 
-2. **Run setup**
+2. **运行 setup**
 
    ```bash
    ./Setup.sh
    ```
 
-   It checks the prerequisites above, downloads one prebuilt dependency bundle
-   (`External-Linux64.tar.gz`, ~186 MB), verifies it against a SHA-256 hash
-   pinned in this repo, configures git hooks, and offers to add `LUMINA_DIR` to
-   your shell profile.
+   它会检查上述先决条件、下载一个预编译的依赖包
+   （`External-Linux64.tar.gz`，约 186 MB）、用本仓库中固定的 SHA-256 哈希校验、
+   配置 git hooks，并询问是否将 `LUMINA_DIR` 添加到你的 shell 配置文件中。
 
-   The bundle contains the .NET 10 runtime (C# scripting), LLVM/Clang 19
-   (reflection codegen), the Slang shader compiler, RenderDoc, and Tracy. Each
-   is open source; [`DEPENDENCIES.md`](DEPENDENCIES.md) lists every component
-   with its version, purpose, upstream source, and license, and explains how to
-   fetch them yourself instead of using the bundle.
+   该依赖包包含 .NET 10 运行时（C# 脚本）、LLVM/Clang 19
+   （反射代码生成）、Slang shader 编译器、RenderDoc 和 Tracy。每一项都是开源的；
+   [`DEPENDENCIES.md`](DEPENDENCIES.md) 列出了每个组件的版本、用途、上游来源和许可证，
+   并说明了如何自行获取这些组件而不使用依赖包。
 
-   To skip the prompts for unattended/CI runs, pass `-Yes` (or set
-   `LUMINA_SETUP_YES=1`); an unattended run never edits your shell profile. If
-   the download fails, fetch
+   若要在无人值守/CI 运行中跳过提示，请传入 `-Yes`（或设置
+   `LUMINA_SETUP_YES=1`）；无人值守运行绝不会修改你的 shell 配置文件。如果
+   下载失败，请手动获取
    [External-Linux64.tar.gz](https://github.com/MrDrElliot/LuminaEngine/releases/download/external-deps/External-Linux64.tar.gz)
-   by hand and extract it into the `LuminaEngine/` folder.
+   并解压到 `LuminaEngine/` 文件夹。
 
-3. **Build**
+3. **构建**
 
    ```bash
    ./LuminaBuild.sh Build Lumina -TargetType=Editor
    ```
 
-   The Reflector is a prerequisite of that target and builds itself first, so
-   this is the only command you need. Add `-Configuration=Debug` for full
-   debugger fidelity at the cost of speed, or `-TargetType=Game` for the runtime
-   without the editor.
+   Reflector 是该目标的前置依赖，会先自行构建，所以这是你唯一需要的命令。加上
+   `-Configuration=Debug` 可获得完整的调试器保真度，代价是速度；用 `-TargetType=Game`
+   可获得不含编辑器的运行时。
 
-4. **Run**
+4. **运行**
 
    ```bash
    ./LuminaBuild.sh Run Lumina -TargetType=Editor
    ```
 
-   `Run` locates the binary through the same rules the build used, so it always
-   launches the configuration you name rather than whatever was built last. It
-   takes the same `-TargetType` and `-Configuration` flags as `Build`, and
-   anything after a bare `--` is forwarded to the editor untouched. The
-   executable itself is at `Binaries/Linux64/Lumina-Editor-Development` if you would
-   rather launch it directly; it finds the engine relative to itself, so it does
-   not care what directory you run it from.
+   `Run` 会按构建时所用的同一套规则定位二进制文件，因此它总是启动你指定的配置，
+   而不是最近一次构建出来的东西。它接受与 `Build` 相同的 `-TargetType` 和
+   `-Configuration` 参数，而裸 `--` 之后的任何内容都会原样转发给编辑器。如果你更愿意
+   直接启动可执行文件，它位于 `Binaries/Linux64/Lumina-Editor-Development`；它会相对
+   自身定位引擎，因此不关心你从哪个目录运行。
 
-5. **Set up code completion**
+5. **配置代码补全**
 
    ```bash
    ./GenerateProjectFiles.sh
    ```
 
-   This writes `compile_commands.json` at the repository root. No solution is
-   generated on Linux, because nothing here can open one. Point your editor at
-   the repository root and it will pick the database up:
+   这会在仓库根目录写出 `compile_commands.json`。Linux 上不生成解决方案文件，
+   因为这里没有任何东西能打开它。把你的编辑器指向仓库根目录，它就会拾取该数据库：
 
-   - **clangd** (and the VS Code clangd extension) finds it with no
-     configuration.
-   - **CLion**: open the folder and select the compile database when prompted.
+   - **clangd**（以及 VS Code 的 clangd 扩展）无需任何配置即可找到它。
+   - **CLion**：打开该文件夹，在提示时选择 compile database。
 
-   Rider is the tool for the engine's C# projects (`LuminaBuildTool`,
-   `LuminaSharp`) rather than for the compile database.
+   Rider 是用于引擎 C# 项目（`LuminaBuildTool`、`LuminaSharp`）的工具，
+   而不是用于 compile database 的。
 
-   Re-run it after adding or removing modules, plugins or sources. Ordinary
-   source files are discovered at build time, and a build that changes a
-   `Build.cs` refreshes the database on its own.
+   在增删模块、插件或源文件之后请重新运行它。普通源文件在构建时被发现，
+   而修改 `Build.cs` 的构建会自行刷新该数据库。
 
-6. **Start developing**
+6. **开始开发**
 
-   Create a project from the editor, or copy `Templates/Blank/` by hand and run
-   its `GenerateProject.sh`. Every generated project ships both
-   `GenerateProject.bat` and `GenerateProject.sh`, so a project created on one
-   platform still works on the other.
+   在编辑器中创建项目，或手工复制 `Templates/Blank/` 并运行其中的
+   `GenerateProject.sh`。每个生成的项目都同时附带 `GenerateProject.bat` 和
+   `GenerateProject.sh`，因此在一个平台上创建的项目在另一个平台上依然可用。
 
-### Build Configuration
+### 构建配置
 
-Optional engine features are controlled from a single file,
-[`Engine/Build/BuildConfiguration.json`](Engine/Build/BuildConfiguration.json). Each feature is
-`"auto"`, `"on"` (force into every configuration) or `"off"` (strip from every
-configuration), and the choices are baked in when you regenerate the solution.
+可选的引擎特性由单个文件控制，
+[`Engine/Build/BuildConfiguration.json`](Engine/Build/BuildConfiguration.json)。每个特性可设为
+`"auto"`、`"on"`（强制纳入所有配置）或 `"off"`（从所有配置中剔除），这些选择会在你重新生成解决方案时固化。
 
-| Feature | What it controls | `"auto"` default |
+| 特性 | 控制内容 | `"auto"` 默认值 |
 | -------------------- | ------------------------------------------ | ---------------------------------------- |
-| `Tracy` | Tracy CPU/GPU profiler (`LUMINA_PROFILE_*`) | Debug + Development; **off** in Shipping |
-| `GpuProfiling` | GPU timing query pools and their readback | Debug + Development; **off** in Shipping |
-| `RmlUiProfiling` | RmlUi's own Tracy zones, one per element, property and text run | **off**; needs `Tracy` |
-| `Validation` | Vulkan validation + sync layers | Debug only |
-| `GpuValidation` | GPU-assisted validation inside every shader | **off** everywhere; `--gpuvalidation` toggles at runtime |
-| `Aftermath` | NVIDIA Nsight Aftermath GPU crash dumps | NVIDIA hosts, Debug + Development |
-| `RadeonGpuDetective` | AMD object naming and fault reporting for `.rgd` dumps | AMD hosts, Debug + Development |
-| `VerboseLogging` | `LOG_TRACE` / `LOG_DEBUG` / `LOG_INFO` macros | Debug + Development; **off** in Shipping |
-| `BugSplat` | Crash and minidump upload to the engine's database | Editor targets on Windows only |
-| `Box3DDebugChecks` | Box3D's own asserts and internal validation | Debug only |
+| `Tracy` | Tracy CPU/GPU 性能分析器（`LUMINA_PROFILE_*`） | Debug + Development；Shipping 中**关闭** |
+| `GpuProfiling` | GPU 计时查询池及其回读 | Debug + Development；Shipping 中**关闭** |
+| `RmlUiProfiling` | RmlUi 自身的 Tracy zone，每个 element、property 和 text run 一个 | **关闭**；需要 `Tracy` |
+| `Validation` | Vulkan 验证层 + 同步层 | 仅 Debug |
+| `GpuValidation` | 在每个 shader 内进行的 GPU 辅助验证 | 各处均**关闭**；`--gpuvalidation` 在运行时切换 |
+| `Aftermath` | NVIDIA Nsight Aftermath GPU 崩溃转储 | NVIDIA 主机，Debug + Development |
+| `RadeonGpuDetective` | 针对 `.rgd` 转储的 AMD 对象命名与故障报告 | AMD 主机，Debug + Development |
+| `VerboseLogging` | `LOG_TRACE` / `LOG_DEBUG` / `LOG_INFO` 宏 | Debug + Development；Shipping 中**关闭** |
+| `BugSplat` | 向引擎数据库上传崩溃和 minidump | 仅 Windows 上的 Editor 目标 |
+| `Box3DDebugChecks` | Box3D 自身的断言与内部校验 | 仅 Debug |
 
-`"off"` is a true strip: e.g. `Tracy = "off"` drops the Tracy library from the
-build entirely and turns every profiling macro into a no-op, and
-`VerboseLogging = "off"` removes `LOG_TRACE/DEBUG/INFO` (warnings and errors are
-always kept). `Aftermath` auto-enables only when an NVIDIA GPU is detected on the
-machine generating the solution.
+`"off"` 是真正的剔除：例如 `Tracy = "off"` 会把 Tracy 库完全从构建中移除，
+并把每个性能分析宏变成空操作，而 `VerboseLogging = "off"` 会移除 `LOG_TRACE/DEBUG/INFO`
+（warning 和 error 始终保留）。`Aftermath` 仅在生成解决方案的机器上检测到 NVIDIA GPU 时才会自动启用。
 
-For a one-off build (e.g. a profiling-free package) you can override any feature
-on the command line without editing the file, the flag wins:
+对于一次性构建（例如产出不含性能分析的包），你可以在命令行上覆盖任何特性而无需编辑文件，命令行标志优先：
 
 ```bash
 GenerateProjectFiles.bat --tracy=off --validation=on --verbose-logging=off
 ```
 
-On Linux there is no solution to bake the choices into, so pass the same flags
-to the build (or to `./GenerateProjectFiles.sh`, which only affects the compile
-database):
+在 Linux 上没有可供固化这些选择的解决方案文件，因此请把同样的标志传给构建
+（或传给 `./GenerateProjectFiles.sh`，它只影响 compile database）：
 
 ```bash
 ./LuminaBuild.sh Build Lumina -TargetType=Editor -Tracy=off -Validation=on
 ```
 
-Regenerating prints the resolved feature set, e.g.
-`[Lumina] Build features: Tracy=auto (Debug, Development)  Validation=auto (Debug)  Aftermath=auto (Debug, Development)  VerboseLogging=auto (Debug, Development)  [NVIDIA GPU]`.
+重新生成时会打印解析后的特性集合，例如
+`[Lumina] Build features: Tracy=auto (Debug, Development)  Validation=auto (Debug)  Aftermath=auto (Debug, Development)  VerboseLogging=auto (Debug, Development)  [NVIDIA GPU]`。
 
-### Troubleshooting
+### 故障排查
 
 #### Linux
 
 > [!TIP]
-> - **"Vulkan Device Unsuitable: No GPU meeting the renderer's requirements was
->   found"?** The log names each GPU it rejected and why. If the reason is
->   `no VK_EXT_mesh_shader` or `below the ... MiB minimum` for every device, the
->   hardware is below the floor in [Requirements](#requirements). If a GPU you
->   expected is missing from the list entirely, the Vulkan loader is not seeing
->   its driver; check `vulkaninfo --summary` and compare.
-> - **Hybrid-graphics laptop starting on the wrong GPU?** The device is chosen at
->   startup and the discrete one is preferred when it enumerates at all. If it
->   does not appear in `vulkaninfo --summary`, the proprietary driver is not
->   loaded, and no engine setting can work around that.
-> - **`error: the .NET SDK is required`, but you installed it?**
->   `dotnet-install.sh` puts it in `$HOME/.dotnet` and persists nothing. The
->   scripts here look there anyway, but your own shell will not until you add it
->   to `PATH`.
-> - **The build uses fewer cores than the machine has?** Deliberate: parallelism
->   is capped to fit available memory, and the reason is logged. Override with
->   `-MaxParallel=<n>`.
-> - **Link failure on `stdc++_libbacktrace` or `stdc++exp`?** The archive behind
->   `std::stacktrace` was renamed in GCC 14 and the toolchain probes for
->   whichever one your compiler ships. If it fails anyway, the compiler is
->   probably not the one you think it is; check `CXX`.
-> - **A build failure inside `External/` or `ThirdParty/`?** Usually a compiler
->   newer than the tree has been built with. There is no older fallback to pin
->   to at the moment: GCC 16 is both the floor and the newest tested version.
+> - **“Vulkan Device Unsuitable: No GPU meeting the renderer's requirements was
+>   found”？** 日志会列出它拒绝的每一块 GPU 以及原因。如果原因对每个设备都是
+>   `no VK_EXT_mesh_shader` 或 `below the ... MiB minimum`，说明硬件低于
+>   [环境要求](#环境要求)中的下限。如果你预期的某块 GPU 完全不在列表中，
+>   说明 Vulkan loader 没有看到它的驱动；用 `vulkaninfo --summary` 检查并对比。
+> - **混合显卡笔记本启动到了错误的 GPU？** 设备在启动时选择，只要独显能被枚举出来就
+>   优先使用它。如果它没有出现在 `vulkaninfo --summary` 中，说明专有驱动没有加载，
+>   任何引擎设置都无法绕过这一点。
+> - **`error: the .NET SDK is required`，但你确实装了？**
+>   `dotnet-install.sh` 会把它装到 `$HOME/.dotnet` 且不做任何持久化。这里的脚本
+>   无论如何都会去那里查找，但除非你把它加进 `PATH`，你自己的 shell 不会。
+> - **构建使用的核心数比机器实际拥有的少？** 这是有意为之：并行度被限制以适配可用内存，
+>   原因会记录在日志中。可用 `-MaxParallel=<n>` 覆盖。
+> - **在 `stdc++_libbacktrace` 或 `stdc++exp` 上链接失败？** `std::stacktrace` 背后的
+>   归档文件在 GCC 14 中改名了，工具链会探测你的编译器附带的是哪一个。如果仍然失败，
+>   你的编译器很可能不是你以为的那个；检查 `CXX`。
+> - **在 `External/` 或 `ThirdParty/` 内部构建失败？** 通常是用了比这套代码树构建时更新的
+>   编译器。目前没有更旧的版本可以固定回去：GCC 16 既是下限，也是测试过的最新版本。
 
 #### Windows
 
 > [!TIP]
-> - **`error NETSDK1209` / "does not support targeting .NET 10.0"?** Your Visual
->   Studio is older than 18.0 (2026). Install VS 2026, the standalone .NET 10
->   SDK alone will **not** fix this, because VS builds with its own bundled
->   MSBuild. Run `Setup.bat` (or `BuildScripts\CheckPrerequisites.ps1`) to verify.
-> - **Missing v143 toolset?** Install it via Visual Studio Installer ->
->   Individual Components -> MSVC v143 Build Tools.
-> - **"Cannot find .generated.h" error?** Build again; Visual Studio sometimes
->   needs a second pass to pick up generated files.
-> - **C1076 compiler limit reached?** Retry the build; this is a known
->   intermittent issue with a font file.
-> - **"Application control policy blocked this file"?** Disable Windows 11
->   Smart App Control.
-> - **`error NETSDK1004` / "Assets file ... project.assets.json not found"?** The
->   managed projects' NuGet restore lives under `Intermediates/`, so deleting that
->   folder removes it. Run `GenerateProjectFiles.bat` (it restores at the end), or
->   pass `-restore` to MSBuild.
-> - **"C# scripting disabled: managed bootstrap missing"?** The `LuminaSharp`
->   managed project didn't build, usually the restore above. Run
->   `GenerateProjectFiles.bat` and rebuild (the `Lumina` app builds it as a
->   dependency). From the command line, pass `-restore` to MSBuild.
+> - **`error NETSDK1209` / “does not support targeting .NET 10.0”？** 你的 Visual
+>   Studio 比 18.0（2026）旧。请安装 VS 2026，仅安装独立的 .NET 10
+>   SDK **不会**解决这个问题，因为 VS 构建时使用的是它自带的
+>   MSBuild。运行 `Setup.bat`（或 `BuildScripts\CheckPrerequisites.ps1`）来验证。
+> - **缺少 v143 工具集？** 通过 Visual Studio Installer ->
+>   Individual Components -> MSVC v143 Build Tools 安装。
+> - **出现 “Cannot find .generated.h” 错误？** 再构建一次；Visual Studio 有时
+>   需要第二轮才能拾取生成的文件。
+> - **达到 C1076 编译器上限？** 重试构建；这是一个与某个字体文件相关的已知
+>   偶发问题。
+> - **“Application control policy blocked this file”？** 关闭 Windows 11
+>   的 Smart App Control。
+> - **`error NETSDK1004` / “Assets file ... project.assets.json not found”？** 托管项目的
+>   NuGet 还原位于 `Intermediates/` 下，因此删除该文件夹会一并删除它。运行
+>   `GenerateProjectFiles.bat`（它会在最后执行还原），或
+>   给 MSBuild 传入 `-restore`。
+> - **“C# scripting disabled: managed bootstrap missing”？** `LuminaSharp`
+>   托管项目没有构建成功，通常是上面的还原问题。运行
+>   `GenerateProjectFiles.bat` 并重新构建（`Lumina` 应用会把它作为
+>   依赖项来构建）。在命令行上，给 MSBuild 传入 `-restore`。
 
-**Still failing on either platform?**
-[Submit an issue](https://github.com/mrdrelliot/LuminaEngine/issues) or reach
-out on Discord.
+**在任一平台上仍然失败？**
+[提交 issue](https://github.com/mrdrelliot/LuminaEngine/issues) 或在 Discord 上
+联系我们。
 
 > [!NOTE]
-> Standalone game projects locate the engine through `LUMINA_DIR`. `Setup.bat`
-> persists it via `setx`; `Setup.sh` offers to add it to your shell profile,
-> since Linux has no equivalent user environment store. To set it manually:
+> 独立游戏项目通过 `LUMINA_DIR` 定位引擎。`Setup.bat`
+> 通过 `setx` 持久化它；`Setup.sh` 则询问是否将其加入你的 shell 配置文件，
+> 因为 Linux 没有等效的用户环境变量存储。若要手动设置：
 > ```bash
 > setx LUMINA_DIR "C:\path\to\lumina"          # Windows
 > export LUMINA_DIR="/path/to/lumina"          # Linux, in your shell profile
 > ```
 
 > [!CAUTION]
-> After pulling or merging, delete `Binaries/` and `Intermediates/`, then run
-> `GenerateProjectFiles.bat` on Windows to regenerate the solution, or
-> `./GenerateProjectFiles.sh` on Linux to refresh the compile database.
+> 在拉取或合并之后，删除 `Binaries/` 和 `Intermediates/`，然后在 Windows 上运行
+> `GenerateProjectFiles.bat` 重新生成解决方案，或在 Linux 上运行
+> `./GenerateProjectFiles.sh` 刷新 compile database。
 
 ---
 
-## Contributing
+## 贡献
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete guidelines.
+完整准则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-Contributions are welcome, whether they are bug fixes, features, or
-documentation improvements.
+欢迎任何形式的贡献，无论是 bug 修复、新功能还是文档改进。
 
-### Workflow
+### 工作流程
 
-1. Fork the repository.
-2. Create a feature branch: `git checkout -b feature/amazing-feature`.
-3. Make your changes following the [coding standards](CONTRIBUTING.md).
-4. Add tests where applicable.
-5. Commit with clear messages: `git commit -m "Add amazing feature"`.
-6. Push to your branch: `git push origin feature/amazing-feature`.
-7. Open a pull request.
+1. Fork 仓库。
+2. 创建功能分支：`git checkout -b feature/amazing-feature`。
+3. 按照[编码规范](CONTRIBUTING.md)进行修改。
+4. 在适用的地方添加测试。
+5. 用清晰的提交信息提交：`git commit -m "Add amazing feature"`。
+6. 推送到你的分支：`git push origin feature/amazing-feature`。
+7. 发起 pull request。
 
-### Requirements
+### 要求
 
-- Clean, well-documented code
-- Adherence to existing architecture patterns
-- Tests where appropriate
-- Updated documentation as needed
-
----
-
-## Support
-
-Lumina is a passion project built and maintained in the open. If you find it
-useful, [support Lumina on Patreon](https://www.patreon.com/c/DrElliot).
-Your support helps sustain work on the engine, documentation, and future
-releases.
-
-You can also help by [contributing code or documentation](CONTRIBUTING.md),
-[reporting bugs or sharing ideas](https://github.com/MrDrElliot/LuminaEngine/issues),
-and telling other developers about Lumina. Every form of support helps the
-project grow. Thank you for being part of it.
+- 干净、文档完善的代码
+- 遵循现有架构模式
+- 在合适的地方编写测试
+- 按需更新文档
 
 ---
 
-## Third-Party Dependencies
+## 支持
 
-Listed alphabetically.
+Lumina 是一个公开构建和维护的业余爱好项目。如果你觉得它有用，
+[在 Patreon 上支持 Lumina](https://www.patreon.com/c/DrElliot)。
+你的支持有助于维持引擎、文档以及未来版本的开发工作。
 
-| Library | Purpose |
+你也可以通过[贡献代码或文档](CONTRIBUTING.md)、
+[报告 bug 或分享想法](https://github.com/MrDrElliot/LuminaEngine/issues)，以及向其他开发者
+介绍 Lumina 来提供帮助。每一种支持都能帮助项目成长。感谢你成为其中的一分子。
+
+---
+
+## 第三方依赖
+
+按字母顺序排列。
+
+| 库 | 用途 |
 | --------- | --------- |
-| basis_universal | GPU texture compression with runtime transcoding to BC7/ETC/ASTC |
-| Box3D | Multi-threaded rigid body physics with a stateless capsule character mover |
-| BugSplat | Crash and minidump upload to the engine's crash database |
-| cgltf | glTF 2.0 parser behind the mesh and material importers |
-| DPDK | Source of the vectorized memcpy in `Engine/Source/Runtime/Source/Memory/Memcpy.h`; vendored for its license only |
-| ENet | Reliable UDP transport behind the networking plugin |
-| FreeType | Font rasterization for RmlUi, MSDFGen, and editor text |
-| GLFW | Multi-platform window and input library for OpenGL and Vulkan |
-| GoogleTest | C++ testing framework with assertions, fixtures, and test discovery |
-| ImGui | Immediate-mode GUI for rapid tool development |
-| MeshOptimizer | Mesh optimization for vertex cache, overdraw, and buffer compression |
-| MikkTSpace | Reference tangent-space generation for imported meshes |
-| Miniz | Deflate compression for package and pak archive serialization |
-| MSDFGen | Multi-channel signed distance fields for crisp world-space text |
-| .NET Runtime | CoreCLR (.NET 10) bundled as the host for C# (LuminaSharp) scripting |
-| Nlohmann JSON | Modern JSON library with STL compatibility |
-| NVIDIA Aftermath | GPU crash debugging and post-mortem dump analysis |
-| NVIDIA Nsight Perf | GPU counter collection behind the hardware profiler plugin |
-| Recast & Detour | Navigation mesh generation and pathfinding |
-| RenderDoc | Graphics debugger integration for frame capture and analysis |
-| RmlUi | Retained HTML/CSS-style UI used for game and editor interfaces |
-| RPMalloc | Lock-free, thread-caching memory allocator |
-| Slang | Modern shader language and compiler with SPIR-V / HLSL output |
-| stb_image | Single-header image loading library |
-| TinyObjLoader | Lightweight OBJ parser with MTL material support |
-| Tracy | Real-time frame profiler with sampling, GPU zones, and lock contention tracking |
-| ufbx | FBX loader for geometry, skeletons, and animation |
-| Volk | Vulkan meta-loader for runtime function loading |
-| Vulkan | Low-level graphics API providing explicit GPU control |
-| VulkanMemoryAllocator | Memory management library for Vulkan with defragmentation |
-| xxHash | Extremely fast non-cryptographic hash algorithm |
+| basis_universal | GPU 纹理压缩，可在运行时转码为 BC7/ETC/ASTC |
+| Box3D | 多线程刚体物理，带无状态的胶囊体角色移动器 |
+| BugSplat | 向引擎崩溃数据库上传崩溃与 minidump |
+| cgltf | 网格与材质导入器背后的 glTF 2.0 解析器 |
+| DPDK | `Engine/Source/Runtime/Source/Memory/Memcpy.h` 中向量化 memcpy 的来源；仅为许可证而内置 |
+| ENet | 网络插件背后的可靠 UDP 传输 |
+| FreeType | 为 RmlUi、MSDFGen 和编辑器文本提供字体光栅化 |
+| GLFW | 面向 OpenGL 和 Vulkan 的多平台窗口与输入库 |
+| GoogleTest | 带断言、fixture 和测试发现功能的 C++ 测试框架 |
+| ImGui | 用于快速工具开发的即时模式 GUI |
+| MeshOptimizer | 针对 vertex cache、overdraw 和 buffer 压缩的网格优化 |
+| MikkTSpace | 为导入的网格提供参考切线空间生成 |
+| Miniz | 用于 package 和 pak 归档序列化的 Deflate 压缩 |
+| MSDFGen | 用于清晰世界空间文本的多通道有符号距离场 |
+| .NET Runtime | 作为 C#（LuminaSharp）脚本宿主的 CoreCLR（.NET 10） |
+| Nlohmann JSON | 兼容 STL 的现代 JSON 库 |
+| NVIDIA Aftermath | GPU 崩溃调试与事后转储分析 |
+| NVIDIA Nsight Perf | 硬件性能分析器插件背后的 GPU 计数器采集 |
+| Recast & Detour | 导航网格生成与寻路 |
+| RenderDoc | 用于帧捕获与分析的图形调试器集成 |
+| RmlUi | 用于游戏和编辑器界面的保留式 HTML/CSS 风格 UI |
+| RPMalloc | 无锁、线程缓存的内存分配器 |
+| Slang | 现代 shader 语言与编译器，可输出 SPIR-V / HLSL |
+| stb_image | 单头文件的图像加载库 |
+| TinyObjLoader | 轻量的 OBJ 解析器，支持 MTL 材质 |
+| Tracy | 实时帧性能分析器，支持采样、GPU zone 和锁竞争追踪 |
+| ufbx | 用于几何体、骨骼和动画的 FBX 加载器 |
+| Volk | 用于运行时函数加载的 Vulkan 元加载器 |
+| Vulkan | 提供显式 GPU 控制的底层图形 API |
+| VulkanMemoryAllocator | Vulkan 内存管理库，支持碎片整理 |
+| xxHash | 极快的非加密哈希算法 |
 
 ---
 
-## Acknowledgments
+## 致谢
 
-Lumina is inspired by and learns from these open-source engines:
+Lumina 受到以下开源引擎的启发并从中学习：
 
-- [Spartan Engine](https://github.com/PanosK92/SpartanEngine) - Feature-rich Vulkan engine
-- [Kohi Game Engine](https://kohiengine.com/) - Educational engine series
-- [Lumix Game Engine](https://github.com/nem0/LumixEngine) - Fully working indie engine
-- [ezEngine](https://ezengine.net/) - Professional open-source engine
-- [Godot](https://godotengine.org/) - High-quality open-source engine
-- [Unreal Engine](https://www.unrealengine.com/) - Industry-standard engine
+- [Spartan Engine](https://github.com/PanosK92/SpartanEngine) - 功能丰富的 Vulkan 引擎
+- [Kohi Game Engine](https://kohiengine.com/) - 教学性质的引擎系列
+- [Lumix Game Engine](https://github.com/nem0/LumixEngine) - 完整可用的独立引擎
+- [ezEngine](https://ezengine.net/) - 专业的开源引擎
+- [Godot](https://godotengine.org/) - 高质量的开源引擎
+- [Unreal Engine](https://www.unrealengine.com/) - 业界标准的引擎
 
-Thanks to the game engine development community for sharing knowledge and
-resources.
+感谢游戏引擎开发社区分享知识与资源。
 
 ---
 
-## License
+## 许可证
 
-Lumina is licensed under the [Apache 2.0 License](LICENSE).
+Lumina 采用 [Apache 2.0 License](LICENSE) 授权。
 
 ```
 Copyright 2024 Dr. Elliot
@@ -597,8 +555,8 @@ limitations under the License.
 
 ---
 
-## Connect
+## 联系方式
 
-- Blog: [dr-elliot.com](https://www.dr-elliot.com)
-- Discord: [Join the community](https://discord.gg/xQSB7CRzQE)
-- GitHub: [mrdrelliot/lumina](https://github.com/mrdrelliot/lumina)
+- 博客：[dr-elliot.com](https://www.dr-elliot.com)
+- Discord：[加入社区](https://discord.gg/xQSB7CRzQE)
+- GitHub：[mrdrelliot/lumina](https://github.com/mrdrelliot/lumina)

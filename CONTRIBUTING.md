@@ -1,8 +1,8 @@
 <div align="center">
 
-# Contributing to Lumina Engine
+# 为 Lumina Engine 贡献代码
 
-**Building the future of game engines, together.**
+**携手共建游戏引擎的未来。**
 
 [![Discord](https://img.shields.io/discord/1193738186892005387?label=Discord&logo=discord)](https://discord.gg/xQSB7CRzQE)
 [![License](https://img.shields.io/github/license/mrdrelliot/lumina)](LICENSE)
@@ -11,50 +11,50 @@
 
 ---
 
-## Our Philosophy
+## 我们的理念
 
-**Contributing is a right for everyone.** Lumina is a community-driven project built on the principle of shared knowledge. We believe that every contribution, no matter how small, helps advance our collective understanding of game engine architecture.
+**贡献是每个人的权利。** Lumina 是一个以知识共享为原则、由社区驱动的项目。我们相信，每一份贡献，无论多么微小，都有助于推进我们对游戏引擎架构的集体理解。
 
-### We Welcome
+### 我们欢迎
 
-- Bug fixes and stability improvements
-- New features and systems
-- Documentation and tutorials
-- Editor improvements and tooling
-- Performance optimizations
-- Architecture suggestions
-- Questions and discussions
+- Bug 修复与稳定性改进
+- 新功能与新系统
+- 文档与教程
+- 编辑器改进与工具
+- 性能优化
+- 架构建议
+- 提问与讨论
 
-**Any and all pull requests that benefit the engine will be seriously considered and merged.** We're here to learn together and build something amazing.
+**任何对引擎有益的 pull request 都会被认真考虑并合并。** 我们在这里共同学习，一起打造了不起的东西。
 
 
 > [!CAUTION]
-> Code or documentstion that includes AI generative content will not be accepted, we do not need low effort.
+> 包含 AI 生成内容的代码或文档将不被接受，我们不需要低投入的产出。
 
 ---
 
-## Getting Started
+## 入门
 
-### 1. Join the Community
+### 1. 加入社区
 
-Before contributing, we recommend joining our [Discord server](https://discord.gg/xQSB7CRzQE) to:
-- Discuss your ideas with the team
-- Get help with setup and development
-- Coordinate on larger features
-- Meet other contributors
+在贡献之前，我们建议加入我们的 [Discord 服务器](https://discord.gg/xQSB7CRzQE)，以便：
+- 与团队讨论你的想法
+- 获得环境搭建和开发方面的帮助
+- 在较大的功能上协同工作
+- 结识其他贡献者
 
-### 2. Set Up Your Environment
+### 2. 配置开发环境
 
-Follow the [Quick Start guide](README.md#-quick-start) in the main README to get Lumina building on your machine.
+按照主 README 中的[快速开始指南](README.md#快速开始)在你的机器上完成 Lumina 的构建。
 
-### 3. Find Something to Work On
+### 3. 找到可做的事
 
-- Check the [Issues](https://github.com/mrdrelliot/lumina/issues) page for open tasks
-- Look for issues labeled `good first issue` or `help wanted`
-- Propose new features by opening an issue first
-- Fix bugs you encounter while using the engine
+- 查看 [Issues](https://github.com/mrdrelliot/lumina/issues) 页面上的待办任务
+- 寻找标记为 `good first issue` 或 `help wanted` 的 issue
+- 先开一个 issue 来提出新功能
+- 修复你在使用引擎时遇到的 bug
 
-### 4. Fork & Branch
+### 4. Fork 与创建分支
 
 ```bash
 # Fork the repository on GitHub, then:
@@ -68,26 +68,26 @@ git checkout -b feature/my-awesome-feature
 
 ---
 
-## Coding Standards
+## 编码规范
 
-Lumina enforces strict coding standards to maintain consistency and readability across the codebase.
+Lumina 执行严格的编码规范，以保持整个代码库的一致性与可读性。
 
-### Naming Conventions
+### 命名约定
 
-#### Prefixes
+#### 前缀
 
-All types must use appropriate prefixes based on their purpose:
+所有类型都必须根据其用途使用合适的前缀：
 
-| Prefix | Usage | Example |
+| 前缀 | 用途 | 示例 |
 |--------|-------|---------|
-| `F` | Internal engine types (non-reflected) | `FRenderer`, `FTexture`, `FRenderGraph` |
-| `C` | Reflected classes (game-facing) | `CTransform`, `CMeshRenderer`, `CLight` |
-| `S` | Reflected structs (data types) | `SVertex`, `SMaterial`, `SRenderSettings` |
-| `E` | Enumerations | `ETextureFormat`, `ERenderPass` |
-| `I` | Interfaces (abstract classes) | `ISystem`, `IRenderable` |
-| `T` | Template parameters | `TObjectHandle<T>`, `TArray<T>` |
+| `F` | 引擎内部类型（非反射） | `FRenderer`、`FTexture`、`FRenderGraph` |
+| `C` | 反射类（面向游戏逻辑） | `CTransform`、`CMeshRenderer`、`CLight` |
+| `S` | 反射结构体（数据类型） | `SVertex`、`SMaterial`、`SRenderSettings` |
+| `E` | 枚举 | `ETextureFormat`、`ERenderPass` |
+| `I` | 接口（抽象类） | `ISystem`、`IRenderable` |
+| `T` | 模板参数 | `TObjectHandle<T>`、`TArray<T>` |
 
-#### Case Conventions
+#### 大小写约定
 
 ```cpp
 // CORRECT: PascalCase for everything
@@ -103,16 +103,16 @@ int entity_count;          // Wrong
 glm::vec3 m_position;        // Wrong (no Hungarian notation)
 ```
 
-**All identifiers use PascalCase:**
-- Classes, structs, enums
-- Functions and methods
-- Variables (local, member, global)
-- Constants
-- Namespaces
+**所有标识符均使用 PascalCase：**
+- 类、结构体、枚举
+- 函数与方法
+- 变量（局部、成员、全局）
+- 常量
+- 命名空间
 
-### Code Style
+### 代码风格
 
-#### Indentation & Formatting
+#### 缩进与格式
 
 ```cpp
 // CORRECT: Tabs for indentation, braces on new lines
@@ -137,15 +137,15 @@ void ProcessEntities() {
 }
 ```
 
-**Rules:**
-- Use **tabs** for indentation (not spaces)
-- Opening braces on **new lines**
-- One statement per line
-- Space after control flow keywords: `if (`, `for (`, `while (`
+**规则：**
+- 使用 **tab** 缩进（不要用空格）
+- 左花括号放在**新行**
+- 每行一条语句
+- 控制流关键字后加空格：`if (`、`for (`、`while (`
 
-#### Function Design
+#### 函数设计
 
-Functions should be **focused, minimal, and well-encapsulated**:
+函数应当**职责单一、参数精简、封装良好**：
 
 ```cpp
 // CORRECT: Single responsibility, minimal parameters
@@ -181,18 +181,18 @@ void DoStuff(CEntity* Entity, float X, float Y, float Z, bool Flag1, bool Flag2,
 }
 ```
 
-**Principles:**
-- **Single Responsibility** - One function, one purpose
-- **Minimal Parameters** - Prefer 3 or fewer parameters
-- **Small Functions** - Keep functions under 50 lines when possible
-- **Early Returns** - Validate inputs first, return early on failure
-- **No Side Effects** - Functions should do what their name implies, nothing more
+**原则：**
+- **单一职责** - 一个函数只做一件事
+- **参数精简** - 尽量不超过 3 个参数
+- **函数短小** - 尽可能把函数控制在 50 行以内
+- **尽早返回** - 先校验输入，失败时尽早返回
+- **无副作用** - 函数只做其名字所暗示的事，不多做
 
-### Memory Management
+### 内存管理
 
-#### Handle System (Required)
+#### 句柄系统（强制要求）
 
-**Raw pointers to `CObject`-derived types are PROHIBITED.** Always use `TObjectHandle<T>`:
+**禁止使用指向 `CObject` 派生类型的裸指针。** 始终使用 `TObjectHandle<T>`：
 
 ```cpp
 // CORRECT: Use TObjectHandle for safe weak references
@@ -231,22 +231,22 @@ private:
 };
 ```
 
-**Why TObjectHandle?**
-- Generational safety prevents use-after-free
-- Automatic invalidation on object destruction
-- Weak reference semantics
-- Serialization-friendly
-- Thread-safe validation
+**为什么用 TObjectHandle？**
+- 分代（generational）安全性可防止 use-after-free
+- 对象销毁时自动失效
+- 弱引用语义
+- 便于序列化
+- 线程安全的校验
 
-**Exceptions:**
-Raw pointers are allowed for:
-- Non-`CObject` types (e.g., `FRenderer*`, `FTexture*`)
-- Local function parameters (lifetime guaranteed by caller)
-- Platform/external APIs
+**例外：**
+以下情况允许使用裸指针：
+- 非 `CObject` 类型（例如 `FRenderer*`、`FTexture*`）
+- 函数的局部参数（生命周期由调用者保证）
+- 平台/外部 API
 
-### Data-Oriented Design
+### 面向数据的设计
 
-**Prefer data-oriented programming over heavy OOP inheritance.**
+**优先使用面向数据的编程，而非沉重的 OOP 继承。**
 
 ```cpp
 // CORRECT: Data-oriented, cache-friendly
@@ -274,16 +274,16 @@ class CDerivedTransform2 : public CBaseTransform { /* ... */ };
 // Virtual calls, scattered memory, cache misses
 ```
 
-**Principles:**
-- Separate **data from behavior**
-- Use **plain structs** for data storage
-- Process data in **batches** when possible
-- Minimize **virtual function calls** in hot paths
-- Favor **composition over inheritance**
+**原则：**
+- 将**数据与行为分离**
+- 使用**普通结构体**存储数据
+- 尽可能**批量**处理数据
+- 在热路径中尽量减少**虚函数调用**
+- 优先**组合而非继承**
 
-### Metaprogramming
+### 元编程
 
-**Template metaprogramming is allowed but MUST be constrained with C++20 concepts.**
+**允许使用模板元编程，但必须用 C++20 concept 加以约束。**
 
 ```cpp
 // CORRECT: Concepts enforce constraints at compile-time
@@ -309,15 +309,15 @@ void ApplyTranslation(T& Object, const glm::vec3& Translation)
 }
 ```
 
-**Requirements:**
-- **All templates** must use concepts or SFINAE
-- **Clear error messages** through concept constraints
-- **Document requirements** in comments
-- **Avoid** template metaprogramming for simple cases
+**要求：**
+- **所有模板**都必须使用 concept 或 SFINAE
+- 通过 concept 约束提供**清晰的错误信息**
+- 在注释中**说明需求**
+- 简单场景**避免**使用模板元编程
 
-### Documentation
+### 文档
 
-**All code must be well-documented with clear, concise comments.**
+**所有代码都必须有清晰、简洁的注释。**
 
 ```cpp
 /**
@@ -355,52 +355,52 @@ CommandBuffer.Submit();
 ++i;
 ```
 
-**Documentation Guidelines:**
-- **Doxygen-style comments** for all public APIs
-- Explain **why** decisions were made, not just what the code does
-- Reference **papers/articles** for non-obvious algorithms
-- Document **thread-safety** and **performance characteristics**
-- Include **usage examples** for complex systems
+**文档准则：**
+- 所有公开 API 使用 **Doxygen 风格注释**
+- 解释**为什么**这样做，而不只是代码做了什么
+- 对非显而易见的算法**引用论文/文章**
+- 记录**线程安全性**与**性能特征**
+- 为复杂系统提供**用法示例**
 
 ---
 
-## Testing & Quality
+## 测试与质量
 
-### Code Quality Checklist
+### 代码质量检查清单
 
-Before submitting a PR, ensure:
+提交 PR 之前，请确认：
 
-- [ ] Code compiles without warnings on MSVC
-- [ ] Follows all naming and style conventions
-- [ ] No raw `CObject*` pointers (uses `TObjectHandle`)
-- [ ] Functions are small and focused
-- [ ] All templates use concepts
-- [ ] Code is well-documented
-- [ ] No memory leaks or crashes
-- [ ] Performance impact considered
+- [ ] 代码在 MSVC 上编译无警告
+- [ ] 遵循所有命名与风格约定
+- [ ] 没有裸 `CObject*` 指针（使用 `TObjectHandle`）
+- [ ] 函数短小且职责单一
+- [ ] 所有模板都使用了 concept
+- [ ] 代码文档完善
+- [ ] 无内存泄漏或崩溃
+- [ ] 已考虑性能影响
 
 
-**Test Requirements:**
-- Write tests for new features
-- Ensure existing tests pass
-- Test edge cases and error conditions
-- Verify no performance regressions
+**测试要求：**
+- 为新功能编写测试
+- 确保现有测试通过
+- 测试边界情况和错误条件
+- 确认没有性能退化
 
 ---
 
-## Pull Request Process
+## Pull Request 流程
 
-### 1. Before Submitting
+### 1. 提交之前
 
-- Discuss major changes on Discord or in an issue first
-- Ensure code follows all standards above
-- Update documentation as needed
-- Test thoroughly
-- Rebase on latest `main` branch
+- 先在 Discord 或 issue 中讨论重大改动
+- 确保代码遵循上述所有规范
+- 按需更新文档
+- 充分测试
+- 变基（rebase）到最新的 `main` 分支
 
-### 2. Commit Messages
+### 2. 提交信息
 
-Write clear, descriptive commit messages:
+编写清晰、有描述性的提交信息：
 
 ```bash
 # GOOD. Clear, specific, imperative mood
@@ -415,7 +415,7 @@ Updated things
 asdfasdf
 ```
 
-**Format:**
+**格式：**
 ```
 [Category] Brief description (50 chars or less)
 
@@ -426,11 +426,11 @@ this particular solution.
 Fixes #123
 ```
 
-**Categories:** `Feature`, `Fix`, `Refactor`, `Docs`, `Test`, `Perf`
+**类别：** `Feature`、`Fix`、`Refactor`、`Docs`、`Test`、`Perf`
 
-### 3. Pull Request Template
+### 3. Pull Request 模板
 
-When opening a PR, include:
+发起 PR 时，请包含：
 
 ```markdown
 ## Description
@@ -458,67 +458,69 @@ Fixes #123
 Related to #456
 ```
 
-### 4. Review Process
+### 4. 评审流程
 
-- A maintainer will review your PR within a few days
-- Address feedback and requested changes
-- Once approved, your PR will be merged!
-- You'll be credited in the release notes
-
----
-
-## 🎯 Priority Areas
-
-Areas where we especially welcome contributions:
-
-### High Priority
-- **Performance optimizations** - Profiling and bottleneck fixes
-- **Platform support** - Linux/macOS ports
-- **Documentation** - API docs, tutorials, examples
-- **Bug fixes** - Stability improvements
-
-### Medium Priority
-- **Editor features** - Workflow improvements
-- **Rendering features** - New techniques and effects
-- **Asset pipeline** - Import/export improvements
-- **Scripting** - Gameplay scripting support
-
-### Nice to Have
-- **Example projects** - Demos and samples
-- **Tools** - External editor plugins
-- **CI/CD** - Automated testing and builds
+- 维护者会在几天内评审你的 PR
+- 处理反馈和所要求的修改
+- 一经批准，你的 PR 就会被合并！
+- 你会在发行说明中获得署名
 
 ---
 
-## Resources
+## 🎯 优先领域
 
-### Learning Materials
+我们尤其欢迎贡献的领域：
+
+### 高优先级
+- **性能优化** - 性能分析与瓶颈修复
+- **平台支持** - Linux/macOS 移植
+- **文档** - API 文档、教程、示例
+- **Bug 修复** - 稳定性改进
+
+### 中优先级
+- **编辑器功能** - 工作流程改进
+- **渲染功能** - 新技术与效果
+- **资源管线** - 导入/导出改进
+- **脚本** - 游戏逻辑脚本支持
+
+### 锦上添花
+- **示例项目** - 演示与样例
+- **工具** - 外部编辑器插件
+- **CI/CD** - 自动化测试与构建
+
+---
+
+## 资源
+
+### 学习资料
 - [Vulkan Tutorial](https://vulkan-tutorial.com/)
 - [Game Engine Architecture](https://www.gameenginebook.com/)
 - [Real-Time Rendering](https://www.realtimerendering.com/)
 - [GPU Gems](https://developer.nvidia.com/gpugems/gpugems/contributors)
 
-### Lumina Architecture
-- [Engine Overview](docs/EngineOverview.md) *(Coming Soon)*
-- [Rendering Architecture](docs/RenderingArchitecture.md) *(Coming Soon)*
-- [ECS Guide](docs/ECSGuide.md) *(Coming Soon)*
-- [Reflection System](docs/ReflectionSystem.md) *(Coming Soon)*
+### Lumina 架构
+- [引擎概览](docs/EngineOverview.md) — 仓库布局、模块与 target、启动流程、主循环
+- [渲染架构](docs/RenderingArchitecture.md) — RHI、shader、场景渲染的 pass 顺序
+- [ECS 指南](docs/ECSGuide.md) — `FRegistry`、组件存储、typed view
+- [反射系统](docs/ReflectionSystem.md) — 标记宏、Reflector、序列化与 C# 绑定
+
+以上文档的入口与阅读约定见 [docs/README.md](docs/README.md)。
 
 ---
 
-## Questions?
+## 有问题？
 
-**Don't hesitate to ask!** We're here to help:
+**尽管提问！** 我们在这里提供帮助：
 
-- [Discord Server](https://discord.gg/xQSB7CRzQE) - Real-time chat
-- [GitHub Issues](https://github.com/mrdrelliot/lumina/issues) - Bug reports and features
-- Contact maintainers directly for sensitive matters
+- [Discord 服务器](https://discord.gg/xQSB7CRzQE) - 实时聊天
+- [GitHub Issues](https://github.com/mrdrelliot/lumina/issues) - Bug 报告与功能请求
+- 敏感事务请直接联系维护者
 
 ---
 
-## Contributors
+## 贡献者
 
-Thank you to all our contributors! Every contribution, big or small, helps make Lumina better.
+感谢我们所有的贡献者！每一份贡献，无论大小，都让 Lumina 变得更好。
 
 <!-- ALL-CONTRIBUTORS-LIST:START -->
 <!-- This section will be automatically updated -->
@@ -526,53 +528,53 @@ Thank you to all our contributors! Every contribution, big or small, helps make 
 
 ---
 
-## Code of Conduct
+## 行为准则
 
-### Our Pledge
+### 我们的承诺
 
-We are committed to providing a welcoming and inclusive environment for everyone, regardless of:
-- Experience level
-- Gender identity and expression
-- Sexual orientation
-- Disability
-- Personal appearance
-- Body size
-- Race or ethnicity
-- Age
-- Religion
-- Nationality
+我们致力于为每个人提供一个友好、包容的环境，无论：
+- 经验水平
+- 性别认同与表达
+- 性取向
+- 残障情况
+- 外貌
+- 体型
+- 种族或民族
+- 年龄
+- 宗教
+- 国籍
 
-### Our Standards
+### 我们的标准
 
-**Positive behavior includes:**
-- Using welcoming and inclusive language
-- Being respectful of differing viewpoints
-- Gracefully accepting constructive criticism
-- Focusing on what's best for the community
-- Showing empathy towards others
+**值得提倡的行为包括：**
+- 使用友好、包容的语言
+- 尊重不同的观点
+- 优雅地接受建设性批评
+- 以社区利益为重
+- 对他人展现共情
 
-**Unacceptable behavior includes:**
-- Harassment, trolling, or insulting comments
-- Personal or political attacks
-- Publishing others' private information
-- Any conduct inappropriate in a professional setting
+**不可接受的行为包括：**
+- 骚扰、挑衅或侮辱性言论
+- 人身或政治攻击
+- 公开他人隐私信息
+- 任何在职业场合不恰当的行为
 
-### Enforcement
+### 执行
 
-Violations may result in temporary or permanent bans from the project. Report issues to project maintainers via Discord or email.
+违规行为可能导致被临时或永久禁止参与本项目。请通过 Discord 或电子邮件向项目维护者报告问题。
 
 ---
 
 <div align="center">
 
-## Thank You!
+## 谢谢！
 
-**Your contributions make Lumina possible.**
+**你的贡献让 Lumina 得以存在。**
 
-Every bug fix, feature, and documentation improvement helps the entire community learn and grow.
+每一个 bug 修复、每一项功能和每一处文档改进，都帮助整个社区学习与成长。
 
-**Let's build something amazing together!**
+**让我们一起打造了不起的东西！**
 
-[Start Contributing →](https://github.com/mrdrelliot/lumina/issues)
+[开始贡献 →](https://github.com/mrdrelliot/lumina/issues)
 
 </div>

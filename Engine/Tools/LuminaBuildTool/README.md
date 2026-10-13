@@ -1,60 +1,56 @@
 # LuminaBuildTool
 
-The build and project generation system for Lumina Engine. It is the sole authority on how the
-engine is configured, generated and compiled; Premake has been removed.
+Lumina Engine 的构建与项目生成系统。它是引擎如何配置、生成和编译的唯一权威；Premake 已被移除。
 
-Modules and targets are described in C# rules files (`*.Build.cs`, `*.Target.cs`) that the tool
-compiles and executes. From those it resolves a module dependency graph, derives compile and link
-command lines, runs the reflection generator, decides what is out of date, runs the toolchain, and
-writes IDE project files.
+模块和目标由 C# 规则文件（`*.Build.cs`、`*.Target.cs`）描述，该工具会编译并执行这些文件。
+工具据此解析模块依赖图、推导编译与链接命令行、运行反射生成器、判断哪些内容已过期、
+运行工具链，并写出 IDE 项目文件。
 
-## Running it
+## 运行方式
 
-`LuminaBuild.bat` at the engine root is the front end. It rebuilds the tool if needed and forwards
-everything else:
+引擎根目录下的 `LuminaBuild.bat` 是前端入口。它会在需要时重建该工具，并把其余内容转发过去：
 
 ```bash
 LuminaBuild.bat Build Lumina -TargetType=Editor -Configuration=Development
 ```
 
-| Script | Purpose |
+| 脚本 | 用途 |
 | --- | --- |
-| `Setup.bat` | First-time setup: prerequisites, dependency bundle, project files |
-| `GenerateProjectFiles.bat` | Refresh the IDE solution |
-| `LuminaBuild.bat` | Everything else, forwarded to the tool |
+| `Setup.bat` | 首次安装：先决条件、依赖包、项目文件 |
+| `GenerateProjectFiles.bat` | 刷新 IDE 解决方案 |
+| `LuminaBuild.bat` | 其他所有操作，转发给该工具 |
 
-Modes:
+模式：
 
-| Mode | Purpose |
+| 模式 | 用途 |
 | --- | --- |
-| `Setup` | Fetch and verify the external dependency bundle, persist LUMINA_DIR, set git hooks |
-| `Build <Target>` | Compile and link a target |
-| `Clean [Target]` | Delete a target's outputs, or every intermediate |
-| `Query [Target]` | List targets, modules and plugins, or describe one resolved target |
-| `Includes <Target>` | Rank headers by how many translation units include them |
-| `Deps <Target>` | Compare a module's declared dependencies against the ones it reaches |
-| `GenerateProjectFiles` | Write `.vcxproj`, `.filters`, a solution and `compile_commands.json` |
+| `Setup` | 获取并校验外部依赖包、持久化 LUMINA_DIR、设置 git hooks |
+| `Build <Target>` | 编译并链接一个目标 |
+| `Clean [Target]` | 删除某个目标的产物，或删除全部中间产物 |
+| `Query [Target]` | 列出目标、模块和插件，或描述某个已解析的目标 |
+| `Includes <Target>` | 按包含该头文件的翻译单元数量对头文件排名 |
+| `Deps <Target>` | 将模块声明的依赖与它实际触及的依赖进行对比 |
+| `GenerateProjectFiles` | 写出 `.vcxproj`、`.filters`、解决方案以及 `compile_commands.json` |
 
-Targets: `Lumina` (the editor and game launcher), `Reflector` (the reflection generator),
-and `Tests`. Game projects live outside the engine tree and are passed with `-Project=<path>`.
+目标：`Lumina`（编辑器与游戏启动器）、`Reflector`（反射生成器）
+以及 `Tests`。游戏项目位于引擎目录树之外，通过 `-Project=<path>` 传入。
 
-Common options: `-Configuration=Debug|Development|Shipping`, `-TargetType=Editor|Game|Program`,
-`-Platform=Win64`, `-EngineRoot=<path>`, `-Project=<path>`, `-MaxParallel=<n>`, `-DryRun`,
-`-Clean`, `-KeepGoing`, `-RecompileRules`, `-Verbose`, `-Trace`, `-Timeline`,
-`-NoProjectFileUpdate`.
+常用选项：`-Configuration=Debug|Development|Shipping`、`-TargetType=Editor|Game|Program`、
+`-Platform=Win64`、`-EngineRoot=<path>`、`-Project=<path>`、`-MaxParallel=<n>`、`-DryRun`、
+`-Clean`、`-KeepGoing`、`-RecompileRules`、`-Verbose`、`-Trace`、`-Timeline`、
+`-NoProjectFileUpdate`。
 
-## Measuring the build
+## 度量构建
 
-`-Timeline` writes a Chrome Trace Event file to
-`Intermediates/BuildTool/Timeline-<Target>-<Type>-<Configuration>.json`, which opens in Perfetto or
-`chrome://tracing`, and logs the ten longest actions. Spans cover execution only, not the wait for a
-parallelism slot, so a gap in the picture is real idleness rather than queueing. The lane count the
-viewer shows is the parallelism the build achieved, which is the number worth comparing against the
-one it was allowed.
+`-Timeline` 会把 Chrome Trace Event 文件写到
+`Intermediates/BuildTool/Timeline-<Target>-<Type>-<Configuration>.json`，该文件可在 Perfetto 或
+`chrome://tracing` 中打开，同时还会记录耗时最长的十个操作。span 只覆盖执行时间，不包含等待并行
+槽位的时间，因此图上出现的空隙是真正的空闲而非排队。查看器显示的 lane 数量就是该构建实际达到的
+并行度，这个数字值得与它被允许的并行度进行对比。
 
-`Includes` and `Deps` read the header closure the compiler reported during the last build, which
-LuminaBuildTool already keeps so that editing a header rebuilds exactly the objects that read it.
-Both need that target to have been built once; neither compiles anything itself.
+`Includes` 和 `Deps` 会读取编译器在最近一次构建中报告的头部闭包，LuminaBuildTool 本来就保存了
+这份数据，以便编辑某个头文件时只重建真正读取了它的那些对象。
+两者都要求该目标已经被构建过一次；它们自身都不编译任何东西。
 
 ```bash
 LuminaBuild.bat Includes Lumina -Top=30
@@ -62,30 +58,26 @@ LuminaBuild.bat Includes Lumina -Module=Runtime
 LuminaBuild.bat Deps Lumina
 ```
 
-`Includes` rolls the ranking up to the module owning each header before listing individual files,
-because a library is the unit you make a decision about. A header high in that list and outside the
-precompiled header is the cheapest clean-build win available; one low in it and inside a PCH is
-weight every translation unit pays and almost none use. `-All` adds toolchain and SDK headers, which
-are excluded by default because they dominate the ranking and cannot be changed.
+`Includes` 会先把排名按拥有该头文件的模块汇总，然后再列出单个文件，因为你需要做判断的单位是库。
+排名靠前且位于预编译头之外的头文件，是可获得的最廉价的干净构建收益；排名靠后且位于某个 PCH 之内
+的头文件，则是每个翻译单元都要付出、却几乎无人使用的负担。`-All` 会纳入工具链和 SDK 头文件，
+它们默认被排除，因为它们会主导排名且无法更改。
 
-`Deps` reports two things. Declared dependencies whose headers a module never opens are candidates
-for deletion, though not confirmed ones: a dependency can exist purely to link. Headers reached from
-an undeclared module compile today only because something else re-exports them, and the report names
-the module they arrive through, since that is the edge whose removal would break the build. Note that
-a per-image source such as `EASTLImpl.cpp` is compiled into every module and its closure is charged
-to whichever module compiled it, which accounts for entries with no re-exporting module named.
+`Deps` 会报告两件事。模块从未打开其头文件的已声明依赖是可供删除的候选，但并非已确认要删：
+某个依赖可能纯粹是为了链接而存在。从某个未声明模块触及的头文件之所以今天还能编译，只是因为
+其他东西重新导出了它们，报告会指出它们经由哪个模块到达，因为正是这条边在被移除时会破坏构建。
+注意，像 `EASTLImpl.cpp` 这样按 image 编译的源文件会被编译进每个模块，其闭包会被计入编译它的
+那个模块，这解释了那些没有指出重新导出模块的条目。
 
-## Module layering
+## 模块分层
 
-Every resolved graph is checked against the layering the rules declare, before any compile or link
-environment is built. All violations are reported at once, because architectural drift is usually
-several edges that arrived together.
+每个解析出的依赖图都会在任何编译或链接环境建立之前，按规则声明的分层进行检查。
+所有违规会一次性全部报告，因为架构漂移通常是一批同时到来的边。
 
-Two checks need no declaration. A third-party module must not depend on a first-party one: vendored
-code has to stand alone so it can be replaced by the next version of itself, and an edge back into
-the engine turns that update into a merge. And a target's own `ForbidDependency` rules are checked
-across the whole closure, so routing a forbidden edge through an intermediate module does not evade
-it; the error names the shortest path it found.
+有两项检查无需声明。第三方模块不得依赖第一方模块：内置的代码必须能独立存在，这样它才能被自身的
+下一个版本替换，而一条指回引擎的边会把这次更新变成一次合并。此外，某个目标自身的
+`ForbidDependency` 规则会在整个闭包上检查，因此把一条被禁止的边经由中间模块绕过去也无法规避它；
+错误信息会指出它找到的最短路径。
 
 ```csharp
 ForbidDependency(
@@ -94,39 +86,35 @@ ForbidDependency(
     "The runtime is what ships. An editor dependency here cannot link in a Game target.");
 ```
 
-The reason is required, and it is quoted back in the error. A layering rule without one becomes
-folklore as soon as whoever added it stops answering questions about it.
+原因是必填的，并且会被原样引用回错误信息中。一旦添加规则的人不再回答相关问题，一条没有原因的
+分层规则就会变成口口相传的传说。
 
-Host type is deliberately **not** checked. "A dependency must exist everywhere its dependent does"
-reads like the obvious rule and is unsound: a `Build.cs` is evaluated per target type, so a module
-can name an editor dependency inside a `Target.bWithEditor` check and the edge simply does not exist
-in a Game resolution. `Lumina` does exactly that. What is left after excluding conditional edges is
-a dependency missing from the target being resolved right now, which module resolution already
-rejects with a better message.
+宿主类型被有意**不**做检查。“依赖必须存在于其被依赖者存在的所有地方”听起来像是一条显而易见
+的规则，但它并不成立：`Build.cs` 是按目标类型分别求值的，因此模块可以在
+`Target.bWithEditor` 判断内部写明一个编辑器依赖，而这条边在 Game 解析中根本不存在。
+`Lumina` 正是这么做的。排除条件边之后剩下的，只是当前正在解析的目标缺少某个依赖，
+而模块解析已经会用更好的信息拒绝这种情况。
 
-A target that genuinely has to build against its own declared layering sets
-`bEnforceModuleLayering = false` in its rules. There is no command-line equivalent on purpose: a
-guard any build can wave away stops being one the first time waving it away is quicker than fixing
-the dependency.
+如果某个目标确实需要按照它自己声明的分层来构建，可在其规则中设置
+`bEnforceModuleLayering = false`。故意没有对应的命令行开关：任何构建都能挥手绕过的守卫，
+在第一次“挥手绕过比修复依赖更快”之后就不再是守卫了。
 
-## Compile database
+## 编译数据库
 
-Project generation also writes `compile_commands.json` at the workspace root, where clangd,
-clang-tidy and editors other than Visual Studio look for it. The commands come from the same
-toolchain call the build uses, so a tool sees what the compiler sees.
+项目生成还会在工作区根目录写出 `compile_commands.json`，clangd、clang-tidy 以及 Visual Studio
+之外的编辑器都会在这里查找它。这些命令来自构建所使用的同一次工具链调用，因此工具看到的内容与
+编译器看到的一致。
 
-Two differences from the real command line, both about precompiled headers. Clang cannot read an
-MSVC `.pch`, so `/Yc` and `/Yu` become a forced include of the same header and `/Fp` is dropped: the
-same declarations arrive by the route that does not need a binary the tool cannot parse.
-`/sourceDependencies` is dropped because it asks for a build artifact and reading code is not a
-build. Entries are per file rather than per unity blob, because a blob's command line does not name
-the sources it absorbed.
+与真实命令行有两处不同，都与预编译头有关。Clang 无法读取 MSVC 的 `.pch`，因此 `/Yc` 和 `/Yu`
+会变成对同一个头文件的强制包含，而 `/Fp` 被丢弃：相同的声明会经由不需要该工具无法解析的二进制
+文件的途径到达。`/sourceDependencies` 被丢弃，因为它要求的是一个构建产物，而读取代码并不是构建。
+条目按文件而非按 unity blob 划分，因为 blob 的命令行并未指出它吸收了哪些源文件。
 
-The file is generated, machine specific and gitignored.
+该文件是生成产物、与机器相关，并且被 git 忽略。
 
-## Writing rules
+## 编写规则
 
-A module is a directory containing a `<Name>.Build.cs`:
+模块是一个包含 `<Name>.Build.cs` 的目录：
 
 ```csharp
 using LuminaBuildTool.Configuration;
@@ -155,7 +143,7 @@ public class Renderer : LuminaModuleRules
 }
 ```
 
-A target is a `<Name>.Target.cs`:
+目标是 `<Name>.Target.cs`：
 
 ```csharp
 public class LuminaTarget : LuminaTargetRules
@@ -170,317 +158,285 @@ public class LuminaTarget : LuminaTargetRules
 }
 ```
 
-The class name must match the file's base name, optionally with a `Target` or `Module` suffix.
-Constructors take a single `TargetInfo`, and may call `ModulePath()` / `TargetPath()` to resolve
-paths relative to the rules file.
+类名必须与文件的基名一致，可以带可选的 `Target` 或 `Module` 后缀。
+构造函数接收单个 `TargetInfo`，并可调用 `ModulePath()` / `TargetPath()` 来解析相对于规则文件的路径。
 
-Shared helper code goes in a `*.BuildRules.cs` file. It is compiled into the rules assembly but
-never instantiated as a module. `Engine/Build/Lumina.BuildRules.cs` holds the engine-wide target
-defaults and the `LuminaModuleRules` / `LuminaThirdPartyModuleRules` base classes.
+共享的辅助代码放在 `*.BuildRules.cs` 文件中。它会被编译进规则程序集，但绝不会被实例化为模块。
+`Engine/Build/Lumina.BuildRules.cs` 存放引擎范围的默认目标设置，以及 `LuminaModuleRules` /
+`LuminaThirdPartyModuleRules` 基类。
 
-### Public versus private
+### public 与 private
 
-Public settings propagate transitively through `PublicDependencyModuleNames`. Private settings
-apply to the declaring module only. Use public for anything a module's own headers expose, and
-private for everything else; that split is what keeps include paths from leaking across the graph.
+public 设置会通过 `PublicDependencyModuleNames` 传递性地传播。private 设置仅作用于声明它的模块。
+凡是模块自身头文件对外暴露的内容都用 public，其余一律用 private；正是这种划分防止了 include 路径
+在整个依赖图中泄漏。
 
-### Plugins
+### 插件
 
-A plugin is a directory containing a `.lplugin` descriptor. The descriptor is the single source of
-truth for the plugin's identity and its module list, and each listed module needs a matching
-`Build.cs` under the plugin's `Source` tree. Plugin binaries are written to the plugin's own
-`Binaries/<Platform>` directory so the runtime plugin loader finds them where it expects.
+插件是一个包含 `.lplugin` 描述符的目录。该描述符是插件身份及其模块列表的唯一真实来源，
+列出的每个模块都需要在插件的 `Source` 目录树下有匹配的 `Build.cs`。插件二进制会被写到插件自己的
+`Binaries/<Platform>` 目录，以便运行时插件加载器能在它预期的位置找到它们。
 
-A plugin is built when `EnabledByDefault` is set in its descriptor, or when a target lists it in
-`EnabledPlugins`. `DisabledPlugins` overrides both. `EditorOnly` plugins and `Editor` host-type
-modules are dropped from Game targets. Standalone `Program` targets host no plugins at all.
+当描述符中设置了 `EnabledByDefault`，或者某个目标在 `EnabledPlugins` 中列出了该插件时，
+插件就会被构建。`DisabledPlugins` 会覆盖这两者。`EditorOnly` 插件和 `Editor` 宿主类型的模块
+会从 Game 目标中剔除。独立的 `Program` 目标完全不承载任何插件。
 
-## How incremental builds decide
+## 增量构建如何做判断
 
-Every action declares its inputs and its outputs. An action reruns when:
+每个 action 都会声明其输入和输出。action 会在以下情况下重新运行：
 
-1. an output is missing,
-2. the command that produced that output differs from the recorded one,
-3. a declared input is newer than the outputs, or
-4. a header the previous compile actually included is newer than the outputs.
+1. 某个输出缺失，
+2. 生成该输出的命令与记录的命令不同，
+3. 某个已声明的输入比输出更新，或
+4. 上一次编译实际包含过的某个头文件比输出更新。
 
-Outdatedness then propagates to dependents.
+随后过期状态会传播到依赖方。
 
-Rule 2 is what makes a `Build.cs` or `Target.cs` edit invalidate the right work, and only the
-right work. Rules changes reach the build as different compiler and linker command lines, so
-adding a public definition to a leaf module rebuilds that module and everything downstream of it,
-while an edit with no effect on any command line rebuilds nothing. This is more precise than
-invalidating on the rules file's timestamp, which would rebuild the world on any edit.
+规则 2 正是让编辑 `Build.cs` 或 `Target.cs` 只使正确的工作失效、且仅使正确的工作失效的原因。
+规则变化以不同的编译器和链接器命令行形式传到构建中，因此给叶子模块添加一个 public 定义会重建该
+模块及其下游的一切，而一个不影响任何命令行的编辑则什么都不重建。这比按规则文件时间戳来失效更精确，
+后者会在任何编辑时重建整个世界。
 
-Rule 4 uses the compiler's own `/sourceDependencies` output, so header tracking reflects what was
-really included rather than what the rules claimed.
+规则 4 使用编译器自身的 `/sourceDependencies` 输出，因此头文件追踪反映的是实际被包含的内容，
+而不是规则所声称的内容。
 
-Caches live under `Intermediates/Obj/<Platform>/<Type>-<Config>/.buildtool/`. Deleting them costs
-a rebuild and nothing else.
+缓存位于 `Intermediates/Obj/<Platform>/<Type>-<Config>/.buildtool/` 下。删除它们只需付出一次重建的
+代价，别无其他。
 
-## Unity builds
+## Unity 构建
 
-A module can compile its sources as a few generated files that `#include` the real ones, so a
-shared header is parsed once per group instead of once per source.
+模块可以把它的源文件编译成若干个生成的、`#include` 真实源文件的文件，这样共享头文件按组解析一次，
+而不是按源文件各解析一次。
 
-It is on by default. `TargetRules.bUseUnityBuild` sets the default for a target;
-`ModuleRules.bUseUnityBuild` is a nullable override, so a module only has to say something when it
-disagrees.
+它默认开启。`TargetRules.bUseUnityBuild` 设置某个目标的默认值；
+`ModuleRules.bUseUnityBuild` 是一个可空覆盖项，因此模块只在不同意时才需要表态。
 
-Vendored libraries are merged too, but individually rather than as a category: of 33 third-party
-modules, 27 merge and 6 are opted out in their own `Build.cs` with the error that made them opt
-out. Five fail to compile when merged, each in a way that is characteristic of the technique:
+内置的第三方库也会被合并，但逐个处理而非作为一整类：33 个第三方模块中有 27 个合并，
+6 个在各自的 `Build.cs` 中选择退出，并附上导致其退出的错误。有五个在合并后编译失败，
+每一个的失败方式都是这门技术所特有的：
 
-| module | why |
+| 模块 | 原因 |
 | --- | --- |
-| `BasicUniversal` | `astc_6x6_hdr` becomes ambiguous across merged sources |
-| `ImGui` | the Vulkan backend expects to be the TU that includes the Vulkan headers |
-| `MSDFGen` | `_USE_MATH_DEFINES` only affects the first `<cmath>` include, so `M_PI` vanishes |
-| `Recast` | file-scope names collide, binding an initializer to a function |
-| `RmlUi` | `CommonSource.h` defines non-inline variables at namespace scope |
+| `BasicUniversal` | 合并源文件后 `astc_6x6_hdr` 变得有歧义 |
+| `ImGui` | Vulkan 后端期望自己就是包含 Vulkan 头文件的那个 TU |
+| `MSDFGen` | `_USE_MATH_DEFINES` 只影响第一次 `<cmath>` 包含，导致 `M_PI` 消失 |
+| `Recast` | 文件作用域名称冲突，把一个初始化器绑定到了函数上 |
+| `RmlUi` | `CommonSource.h` 在命名空间作用域定义了非 inline 变量 |
 
-The sixth, `EA`, is different and worth knowing about: it compiles and then fails to *link*. A
-static library lets the linker take only the objects it needs, and EASTL depends on that, since the
-engine supplies its own `eastl::AssertionFailure` in `EASTLImpl.cpp`. Merging puts EASTL's copy in
-the same object as symbols the engine does reference, so it is always pulled in and collides.
-Merging changes link granularity, not just compilation, and a compile-only sweep will not find it.
+第六个 `EA` 情况不同，值得了解：它能编译，但随后*链接*失败。静态库让链接器只取它需要的对象，
+而 EASTL 依赖这一点，因为引擎在 `EASTLImpl.cpp` 中提供了自己的 `eastl::AssertionFailure`。
+合并会把 EASTL 的那份副本与引擎确实引用的符号放进同一个对象，于是它总是被拉入并产生冲突。
+合并改变的是链接粒度，而不仅仅是编译，因此一次只做编译的排查不会发现它。
 
-What it costs is isolation. Sources in one unity file share a translation unit, so a file-scope
-static, an anonymous namespace, a `using namespace` or a macro left defined reaches its neighbors,
-and two files that each defined the same internal helper now collide. Turning it on for the engine
-surfaced four such collisions in `Runtime` and four in `Editor`; each one was duplicated code or a
-name shadowing an engine symbol, and all were fixed in the sources rather than worked around here.
-A module that genuinely cannot take it sets `bUseUnityBuild = false` and says why.
+它的代价是隔离性。同一个 unity 文件中的源文件共享一个翻译单元，因此文件作用域的 static、
+匿名命名空间、一个 `using namespace` 或一个遗留为定义状态的宏都会波及相邻文件，
+而两个各自定义了相同内部辅助函数的文件现在会冲突。为引擎开启它时，在 `Runtime` 中暴露出四处
+这类冲突，在 `Editor` 中也有四处；每一处都是重复代码或某个名称遮蔽了引擎符号，
+并且全都在源文件中修复，而不是在这里绕过去。确实无法接受它的模块会设置
+`bUseUnityBuild = false` 并说明原因。
 
-Some sources can never be merged, and those are held back automatically rather than by anyone
-remembering to list them:
+有些源文件永远不能合并，这些会被自动排除，而不是靠谁记得把它们列出来：
 
-- anything with `PerFileCompilerOptions`, which would otherwise silently lose the flag it asked
-  for (`JobScheduler.cpp` needs `/GT`, and losing it is a crash, not an error),
-- the precompiled header source, which has to run `/Yc` in its own translation unit,
-- `PerImageSourceFiles`, which are per loaded image rather than per module,
-- the reflection shards, which are already generated as unity files.
+- 任何带有 `PerFileCompilerOptions` 的文件，否则它会静默丢掉自己要求的标志
+  （`JobScheduler.cpp` 需要 `/GT`，丢掉它意味着崩溃而非报错），
+- 预编译头的源文件，它必须在自己的翻译单元中运行 `/Yc`，
+- `PerImageSourceFiles`，它们是按已加载 image 而非按模块划分的，
+- 反射分片（reflection shard），它们本身就已经是作为 unity 文件生成的。
 
-`ModuleRules.ExcludeFromUnity` covers what only the code knows: a source carrying a single-header
-library's implementation macro must be the only translation unit that does, so `StbImageImpl.cpp`
-and the plugin's `RymlImpl.cpp` name themselves there.
+`ModuleRules.ExcludeFromUnity` 覆盖那些只有代码本身才知道的情况：一个承载着单头文件库实现宏的
+源文件必须成为唯一这样做的翻译单元，因此 `StbImageImpl.cpp` 和插件的 `RymlImpl.cpp` 会在这里
+自我声明。
 
-Grouping is by source bytes (`UnityBuildBytesPerFile`, 384 KB) rather than a file count, because
-sizes within a module vary by orders of magnitude. Files are sorted before grouping, so the same
-tree produces the same groups on any machine and an untouched module keeps the objects it has.
-Modules with fewer than `MinFilesForUnityBuild` mergeable sources compile file by file.
+分组依据是源文件字节数（`UnityBuildBytesPerFile`，384 KB）而非文件数量，因为一个模块内部的
+文件大小可能相差几个数量级。文件在分组前会先排序，因此同一棵目录树在任何机器上都会产生相同的分组，
+未改动的模块会保留它已有的对象。可合并源文件少于 `MinFilesForUnityBuild` 的模块会逐文件编译。
 
-Each generated file declares its members as build inputs, so editing a merged source rebuilds the
-group that holds it on the very first build, before any header scan has run. Generated IDE
-projects list real sources and never these files.
+每个生成的文件都会把其成员声明为构建输入，因此编辑某个被合并的源文件会在第一次构建时就重建包含
+它的那个分组，早于任何头文件扫描运行。生成出的 IDE 项目列出真实源文件，而绝不会列出这些文件。
 
-`-NoUnity` compiles everything file by file for one build, which is the first thing to try when a
-compile error appears only in a unity configuration.
+`-NoUnity` 会在一次构建中逐文件编译所有内容，当某个编译错误只在 unity 配置下出现时，
+这是首先要尝试的手段。
 
-Measured on a clean Development Editor build: 590 actions in 77.3s with unity, 1035 actions in
-103.2s with `-NoUnity`.
+在一次干净的 Development Editor 构建上测得：开启 unity 时为 590 个 action / 77.3 秒，
+使用 `-NoUnity` 时为 1035 个 action / 103.2 秒。
 
-## Architecture
+## 架构
 
 ```
-Core/           Logging, command line, interned file handles with cached timestamps, hashing
-Configuration/  The rules API: TargetRules, ModuleRules, PluginDescriptor, directory layout
-Rules/          Discovery of rules files and their Roslyn compilation into a cached assembly
-Graph/          Source discovery, module and target resolution, dependency propagation, actions
-Toolchain/      IToolchain plus the MSVC implementation and its compiler and SDK locators
-Platform/       IBuildPlatform: naming conventions and toolchain selection per platform
-Execution/      Action graph, timestamp and command caches, parallel executor
-ProjectFiles/   IProjectFileGenerator plus the Visual Studio implementation
-Modes/          Build, Clean, Query and GenerateProjectFiles entry points
+Core/           日志、命令行、带缓存时间戳的内化文件句柄、哈希
+Configuration/  规则 API：TargetRules、ModuleRules、PluginDescriptor、目录布局
+Rules/          规则文件的发现，及其通过 Roslyn 编译为缓存程序集
+Graph/          源文件发现、模块与目标解析、依赖传播、action
+Toolchain/      IToolchain 以及 MSVC 实现及其编译器和 SDK 定位器
+Platform/       IBuildPlatform：各平台的命名约定与工具链选择
+Execution/      action 图、时间戳与命令缓存、并行执行器
+ProjectFiles/   IProjectFileGenerator 以及 Visual Studio 实现
+Modes/          Build、Clean、Query 和 GenerateProjectFiles 入口点
 ```
 
-The boundaries that matter:
+真正重要的边界：
 
-- **Nothing outside `Toolchain/` knows a compiler flag.** The graph deals in include paths,
-  definitions and libraries; the toolchain turns those into command lines.
-- **Nothing outside `Platform/` knows a file extension.** Adding a platform means implementing
-  `IBuildPlatform` and `IToolchain` and registering the platform, with no core changes.
-- **`Execution/` does not know what an action means.** It knows inputs, outputs and a command,
-  which is why the same executor handles compiling, archiving, linking and code generation.
-- **`Rules/` is the only place that reflects over user types.** Everything downstream works with
-  resolved data.
+- **`Toolchain/` 之外没有任何代码知道编译器标志。** 依赖图处理的是 include 路径、
+  定义和库；由工具链把它们转成命令行。
+- **`Platform/` 之外没有任何代码知道文件扩展名。** 添加一个平台意味着实现
+  `IBuildPlatform` 和 `IToolchain` 并注册该平台，核心无需改动。
+- **`Execution/` 不知道一个 action 意味着什么。** 它只知道输入、输出和一条命令，
+  这正是同一个执行器能处理编译、归档、链接和代码生成的原因。
+- **`Rules/` 是唯一对用户类型做反射的地方。** 下游的一切都使用已解析的数据。
 
-## Generated IDE projects
+## 生成的 IDE 项目
 
-Projects are NMake projects: building one from the IDE calls back into LuminaBuildTool rather than
-reimplementing the build in MSBuild.
+项目是 NMake 项目：从 IDE 构建某个项目会回调 LuminaBuildTool，而不是在 MSBuild 中重新实现构建。
 
-There are three kinds, and the split matters:
+共有三种，这种划分很重要：
 
-- **Target projects** (`Lumina`, `Reflector`, `Tests`) build. One project drives one
-  target, which is what keeps a parallel solution build from starting several tool instances
-  against the same output.
-- **Module projects** are for browsing and editing. Each carries its own module's include paths,
-  definitions and force-includes so IntelliSense is exactly right, and builds nothing: a module is
-  not independently buildable, and giving it the target's build command is what previously made a
-  solution build launch one full build per module.
-- **`LuminaRules`** is a C# project holding every `Target.cs`, `Build.cs` and `BuildRules.cs`.
-  Rules files are ordinary C# compiled against this tool, but an IDE only treats them that way if
-  some project claims them; without one they open as plain text with no highlighting, no completion
-  on `ModuleRules` and no error until a build fails. It is mapped into the solution with an
-  `ActiveCfg` but no `Build.0`, so it never builds: the build system compiles the same files itself,
-  and building them twice could fail for reasons a real build does not care about. Its settings
-  mirror `RulesCompiler` deliberately, including `ImplicitUsings=disable`, so what the editor
-  reports and what a build reports are the same thing.
+- **Target 项目**（`Lumina`、`Reflector`、`Tests`）负责构建。一个项目驱动一个
+  目标，这能避免并行解决方案构建针对同一份输出启动多个工具实例。
+- **Module 项目**用于浏览和编辑。每个都带有自身模块的 include 路径、
+  定义和强制包含，因此 IntelliSense 完全准确，但不构建任何东西：模块本身不可独立构建，
+  而给它套上目标的构建命令，正是以前会让一次解决方案构建为每个模块启动一次完整构建的原因。
+- **`LuminaRules`** 是一个 C# 项目，包含所有的 `Target.cs`、`Build.cs` 和 `BuildRules.cs`。
+  规则文件是针对该工具编译的普通 C#，但只有当某个项目认领它们时，IDE 才会把它们当作 C# 对待；
+  没有这样一个项目，它们就会以纯文本打开，没有语法高亮、没有对 `ModuleRules` 的补全，
+  也没有任何错误提示，直到构建失败。它通过 `ActiveCfg` 映射到解决方案中，但没有 `Build.0`，
+  因此它从不构建：构建系统会自行编译这些相同的文件，而编译两次可能因为真实构建并不关心的原因
+  而失败。它的设置刻意与 `RulesCompiler` 保持一致，包括 `ImplicitUsings=disable`，
+  这样编辑器报告的内容与构建报告的内容是同一回事。
 
-A target sets `bBuildByDefault = false` to stay out of whole-solution builds while remaining
-individually buildable; `Tests` does, so Build Solution builds the engine and the
-reflection generator rather than everything.
+目标可以设置 `bBuildByDefault = false`，从而不参与整个解决方案的构建但仍可单独构建；
+`Tests` 就是这么做的，因此 Build Solution 构建的是引擎和反射生成器，而不是所有东西。
 
-### Running from the IDE
+### 从 IDE 运行
 
-A solution file has no startup-project field, so the IDE runs whichever project is listed first
-until the user picks another. The target that sets `bIsStartupTarget` is written first, and the
-rest of the buildable targets follow, so run and debug land on a real target rather than on
-whichever module sorted first alphabetically.
+解决方案文件没有启动项目字段，因此在用户另行选择之前，IDE 运行的是第一个列出的项目。
+设置了 `bIsStartupTarget` 的目标会被写在最前面，其余可构建目标紧随其后，
+因此运行和调试落在的是一个真正的目标上，而不是按字母顺序排在最前的某个模块。
 
-What running a target means is the target's own decision, because it is not always "launch what
-this target built":
+运行一个目标意味着什么，由该目标自己决定，因为它并不总是“启动这个目标所构建的东西”：
 
 | | `DebuggerCommand` |
 | --- | --- |
-| Default | the launch module's executable |
-| Game project | the editor, with `--Project=<name>.lproject` |
+| 默认 | 启动模块的可执行文件 |
+| 游戏项目 | 编辑器，并带 `--Project=<name>.lproject` |
 
-A game target builds a library the editor loads, so launching that library would be meaningless.
-`LuminaGameTargetRules` points it at the engine instead and `SetProjectFileToOpen` supplies the
-project. Settings are written to both the `.vcxproj` and a generated `.vcxproj.user`, which is
-where Visual Studio and Rider read them from.
+游戏目标构建的是供编辑器加载的库，因此启动那个库毫无意义。
+`LuminaGameTargetRules` 把它指向引擎，并由 `SetProjectFileToOpen` 提供项目。
+设置会同时写入 `.vcxproj` 和一个生成的 `.vcxproj.user`，Visual Studio 和 Rider
+正是从后者读取它们。
 
-Independently of project shape, concurrent builds that would write the same output serialize on a
-lock file rather than racing. The lock is keyed on the output root, platform, target type and
-configuration, so different configurations still build in parallel. It is a file handle rather
-than a named mutex because the build holds it across awaits and the operating system has to
-release it if a build dies.
+与项目形态无关的是，会写入同一份输出的并发构建会在一个锁文件上串行化，而不是相互竞争。
+该锁以输出根、平台、目标类型和配置为键，因此不同配置仍可并行构建。它使用文件句柄而非命名
+mutex，因为构建会在多个 await 之间持有它，而操作系统必须在构建进程死亡时释放它。
 
-## Reflection
+## 反射
 
-Modules with `bEnableReflection` are collected into one generator run per target. The tool writes
-the Reflector's input document, declares every reflected header as an input and every generated
-unity shard as an output, and lets the ordinary action graph sequence it: the shards are compile
-inputs, so nothing needs to know that a generator produced them.
+启用了 `bEnableReflection` 的模块会按目标汇总到一次生成器运行中。该工具写出 Reflector 的输入文档、
+把每个被反射的头文件声明为输入、把每个生成的 unity 分片声明为输出，并让普通的 action 图来编排
+顺序：这些分片是编译输入，因此无需任何东西知道某个生成器产生了它们。
 
-Because the Reflector rewrites a generated file only when its content changes, a header edit that
-changes no reflected type regenerates nothing, and the compiles that would have followed are
-dropped at execution time rather than run pointlessly. Editing one engine header rebuilds the
-handful of translation units that included it, not the module.
+由于 Reflector 只在内容变化时才重写生成的文件，一次不改变任何被反射类型的头文件编辑不会重新生成
+任何东西，而那些本会随之进行的编译会在执行时被丢弃，而不是白白运行。编辑一个引擎头文件只会重建
+包含它的那少数几个翻译单元，而不是整个模块。
 
-Generated C# bindings default to `Intermediates/CSharpBindings`, which compiles them into
-`LuminaSharp`. A plugin or game module sets `CSharpBindingsDirectory` to route them into its own
-script assembly instead.
+生成的 C# 绑定默认写到 `Intermediates/CSharpBindings`，并会把它们编译进
+`LuminaSharp`。插件或游戏模块可以设置 `CSharpBindingsDirectory`，把它们改为写入自己的脚本程序集。
 
-Generated C++ is per target, under
-`Intermediates/Reflection/<Platform>/<Target>/<Type>-<Config>/<Module>`, for the same reason
-object files are: two targets that share a module do not necessarily generate the same code for
-it, and one shared directory makes each build look stale to the other. The build passes that path
-to the generator explicitly, so the layout is the build system's decision rather than a convention
-baked into the tool.
+生成的 C++ 按目标划分，位于
+`Intermediates/Reflection/<Platform>/<Target>/<Type>-<Config>/<Module>`，原因与目标文件相同：
+两个共享同一模块的目标不一定会为它生成相同的代码，而共用一个目录会让彼此的构建看起来是过期的。
+构建会显式把该路径传给生成器，因此布局是构建系统的决定，而不是固化在工具里的约定。
 
-## Optional features
+## 可选特性
 
-`Engine/Build/BuildConfiguration.json` sets each feature to `auto`, `on` or `off`, and a command
-line switch of the same name overrides it. What `auto` means per feature is engine policy and
-lives in `Engine/Build/LuminaFeatures.BuildRules.cs`, not in the tool.
+`Engine/Build/BuildConfiguration.json` 把每个特性设为 `auto`、`on` 或 `off`，同名的命令行开关会
+覆盖它。`auto` 对每个特性的含义属于引擎策略，位于 `Engine/Build/LuminaFeatures.BuildRules.cs`，
+而不在该工具中。
 
 ```bash
 LuminaBuild.bat Build Lumina -TargetType=Editor -Tracy=off
 ```
 
-Because feature state reaches the build as preprocessor definitions, flipping one invalidates
-exactly the work whose command lines changed.
+由于特性状态是以预处理器定义的形式传到构建中的，翻转某个特性只会使命令行发生变化的那部分工作失效。
 
-## Game projects
+## 游戏项目
 
-A project builds against the engine tree rather than a prebuilt copy of it:
+项目是针对引擎目录树而不是它的预编译副本进行构建的：
 
 ```bash
 LuminaBuild.bat Build MyGame -Project=C:\Path\To\MyGame
 ```
 
-Engine modules keep their intermediates and binaries in the engine tree, so the engine is built
-once and shared by every project, while project modules land in the project's own `Binaries` and
-`Intermediates`. Building a game project therefore also keeps the engine current instead of
-silently linking against a stale one.
+引擎模块把中间产物和二进制保留在引擎目录树中，因此引擎只构建一次并被每个项目共享，
+而项目模块则落在项目自己的 `Binaries` 和 `Intermediates` 中。因此构建一个游戏项目同时也会让引擎
+保持最新，而不是静默地链接到过期的引擎。
 
-Project modules derive from `LuminaGameModuleRules` and project targets from
-`LuminaGameTargetRules`, both in `Engine/Build/LuminaGameProject.BuildRules.cs`.
+项目模块派生自 `LuminaGameModuleRules`，项目目标派生自
+`LuminaGameTargetRules`，两者都位于 `Engine/Build/LuminaGameProject.BuildRules.cs`。
 
-`GenerateProjectFiles -Project=<path>` writes the project's own solution, and the NMake commands it
-emits carry that `-Project` through, so building from the project's IDE resolves the project's
-targets and not just the engine's.
+`GenerateProjectFiles -Project=<path>` 会写出项目自己的解决方案，并且它生成的 NMake 命令会
+把该 `-Project` 一路带下去，因此从项目的 IDE 构建时解析的是项目的目标，而不只是引擎的目标。
 
-### Module export macros
+### 模块导出宏
 
-`<MODULENAME>_API` is defined by the build system, not written down anywhere. Every module gets one
-for itself and for every shared library in its dependency closure, resolved from the graph:
-`DLL_EXPORT` while compiling the module that owns it, `DLL_IMPORT` for everything that consumes it,
-and empty under a monolithic link.
+`<MODULENAME>_API` 由构建系统定义，而不是写在任何地方。每个模块都会为自己、以及其依赖闭包中的
+每个共享库获得一个，从依赖图中解析得出：在编译拥有它的模块时为 `DLL_EXPORT`，
+对每个使用它的东西为 `DLL_IMPORT`，在单体链接下则为空。
 
-This is what makes a game or plugin module able to export anything at all. A list of macros in an
-engine header could only ever name the modules that shipped with the engine, and nothing out of
-tree can add itself to it.
+这正是游戏或插件模块得以导出任何东西的原因。引擎头文件中的一份宏列表永远只能列出随引擎一同发布
+的模块，而树外的东西无法把自己加进去。
 
-## Layout conventions
+## 布局约定
 
-Source files are discovered by walking the module's source directories. A subdirectory containing
-its own `Build.cs` belongs to another module and is skipped, so modules never fight over sources.
-A module's source root is part of its public surface: dependents include its headers at the path
-they sit at. Third-party modules declare their include roots explicitly instead.
+源文件通过遍历模块的源目录来发现。一个包含自身 `Build.cs` 的子目录属于另一个模块并被跳过，
+因此模块之间从不会争抢源文件。模块的源根目录是其公开接口的一部分：依赖方以头文件所在的路径来
+包含它们。第三方模块则显式声明其 include 根目录。
 
-Binaries land in `Binaries/<Platform>` using the platform's directory name, `Windows64` rather
-than `Win64`. That string is baked into the engine as `LUMINA_PLATFORM_NAME` and is what the
-runtime uses to resolve plugin and project module DLLs, so it cannot be changed on one side alone.
+二进制落在 `Binaries/<Platform>`，使用平台的目录名，即 `Windows64` 而非 `Win64`。该字符串以
+`LUMINA_PLATFORM_NAME` 的形式固化在引擎中，运行时正是用它来解析插件和项目模块 DLL，
+因此不能只改动其中一侧。
 
-### Precompiled headers
+### 预编译头
 
-A module's PCH is named after the module: `RuntimePCH.h`, `EditorPCH.h`. Because a module's source
-root is on the include path of everything downstream, a generic name there is a name every
-dependent then has to avoid. When both were `pch.h`, `EditorPCH.h`'s `#include "pch.h"` resolved to
-the includer's own directory and Runtime's never arrived, which is why the Editor's had to be
-renamed rather than the other way round.
+模块的 PCH 以该模块命名：`RuntimePCH.h`、`EditorPCH.h`。由于模块的源根目录位于所有下游内容的
+include 路径上，那里一个通用的名称就会变成每个依赖方都必须避开的名称。当两者都叫 `pch.h` 时，
+`EditorPCH.h` 中的 `#include "pch.h"` 会解析到包含者自己的目录，Runtime 的那个永远不会到达，
+这就是为什么必须重命名 Editor 的那个，而不是反过来。
 
-No translation unit needs to include its PCH: the toolchain force-includes it ahead of everything
-else, which is also what lets `/Yu` find its marker in a generated file nobody wrote by hand. The
-explicit include at the top of each source is convention, and it has to name the module's own PCH.
+没有翻译单元需要包含自己的 PCH：工具链会在其他一切之前强制包含它，这也让 `/Yu` 能在一个并非
+手写的生成文件中找到它的标记。每个源文件顶部的那条显式 include 只是约定，而且它必须写出模块
+自己的 PCH 名称。
 
-The same applies to generated code. The reflection generator is told each module's PCH through the
-reflection input document and emits that, or nothing when the module has none. It used to emit a
-literal `pch.h`, which only ever worked because Runtime happened to be on everyone's include path.
+同样的情况也适用于生成的代码。反射生成器通过反射输入文档获知每个模块的 PCH 并据此生成，
+或在模块没有 PCH 时什么都不生成。它过去会生成字面量 `pch.h`，那只在 Runtime 恰好位于所有人
+include 路径上时才行得通。
 
-### Rules that name a file
+### 按文件名引用的规则
 
-`PerFileCompilerOptions` and `ExcludeFromUnity` are keyed by bare file name, so a rename would
-silently drop whatever was attached to the old one. The scanner fails the build when either names a
-file the module does not have. Silence is the wrong outcome here: `JobScheduler.cpp` losing `/GT`
-is a fiber-scheduler crash rather than a diagnostic.
+`PerFileCompilerOptions` 和 `ExcludeFromUnity` 以裸文件名为键，因此一次重命名会静默丢掉挂在旧
+文件名上的任何东西。当其中任一规则引用了一个模块并不拥有的文件时，扫描器会让构建失败。
+在这里保持沉默是错误的结果：`JobScheduler.cpp` 丢掉 `/GT` 会导致 fiber 调度器崩溃，
+而不是给出一条诊断信息。
 
-## Current state
+## 当前状态
 
-Everything the engine needs is in place: rules discovery and compilation, module and plugin graph
-resolution with public and private propagation, MSVC toolchain detection, C and C++ compilation
-with precompiled headers, reflection code generation, static library archiving, shared library and
-executable linking, monolithic Shipping with whole-archive module registration, .NET project
-builds, runtime dependency staging, header-accurate incremental builds, parallel execution, and
-Visual Studio project and solution generation.
+引擎所需的一切都已就绪：规则发现与编译、带 public 与 private 传播的模块与插件图解析、
+MSVC 工具链探测、带预编译头的 C 和 C++ 编译、反射代码生成、静态库归档、共享库与可执行文件链接、
+带 whole-archive 模块注册的单体 Shipping、.NET 项目构建、运行时依赖归置、头文件精确的增量构建、
+并行执行，以及 Visual Studio 项目与解决方案生成。
 
-The engine builds through it in every configuration and target type, as do `Reflector` and `Tests`.
+引擎在每一种配置和每一种目标类型下都能通过它构建，`Reflector` 和 `Tests` 也一样。
 
-Verified: every target builds and then reports zero outdated actions on the next run, across
-`Lumina` in Editor and Game for all three configurations, plus `Reflector` and `Tests`.
+已验证：每个目标都能构建，并在下一次运行时报告零个过期 action，覆盖了
+Editor 和 Game 下三种配置的 `Lumina`，以及 `Reflector` 和 `Tests`。
 
-Known scope limits:
+已知范围限制：
 
-- Windows and MSVC only. Adding a platform means implementing `IBuildPlatform` and `IToolchain`
-  and registering it; nothing in the core needs to change.
-- Editor targets are never monolithic. `Runtime` and `Editor` each carry their own copy of the
-  stb_image_write implementation, which is correct in separate images and a duplicate symbol in
-  one. A shipping game, which excludes the editor modules, links monolithically as intended.
-- The outdated-action count printed before a build is an upper bound. Actions whose inputs turn
-  out not to have changed are dropped as the build runs, and the summary reports how many.
-- The first build after generated code is created records the input high-water marks that make it
-  current, so a freshly generated target settles on the second run rather than the first.
+- 仅支持 Windows 和 MSVC。添加一个平台意味着实现 `IBuildPlatform` 和 `IToolchain`
+  并注册它；核心无需任何改动。
+- Editor 目标永远不是单体的。`Runtime` 和 `Editor` 各自带有一份
+  stb_image_write 实现的副本，这在分离的 image 中是正确做法，而在同一个 image 中则是重复符号。
+  排除了编辑器模块的 Shipping 游戏会按预期以单体方式链接。
+- 构建前打印的过期 action 计数是一个上界。那些输入最终并未发生变化的 action 会在构建运行时被丢弃，
+  摘要会报告丢弃了多少个。
+- 生成代码创建之后的第一次构建会记录使其保持最新的输入高水位标记，因此一个新生成的目标会在第二次
+  运行而非第一次时稳定下来。
