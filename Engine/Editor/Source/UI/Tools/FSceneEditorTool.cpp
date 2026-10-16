@@ -338,6 +338,8 @@ namespace Lumina
 
     namespace
     {
+        FString FriendlyComponentName(const FString& Title);
+
         // Sections are drawn whole while anything in the window is being edited or a keyboard move is looking for its target.
         bool IsSectionOutsideView(float Height)
         {
@@ -365,11 +367,21 @@ namespace Lumina
         {
             if (bFiltering)
             {
+                const FString Friendly = FriendlyComponentName(Entry.Title);
+                const FString Category = Entry.ReflectedType->HasMeta("Category")
+                    ? Entry.ReflectedType->GetMeta("Category") : FString();
+                const FString MetadataName = Entry.ReflectedType->HasMeta("DisplayName")
+                    ? Entry.ReflectedType->GetMeta("DisplayName") : FString();
+                const std::initializer_list<FStringView> Fields = {
+                    Entry.Title, Friendly, Entry.ReflectedType->GetName().c_str(), MetadataName,
+                    LOC(Entry.Title.c_str()), LOC(Friendly.c_str()), LOC(MetadataName.c_str()),
+                    Category, LOC_CTX(Category.c_str(), "category")};
                 // A name match shows the component in full, since that is what searching for it means.
-                const bool bTitleMatches = ImGuiX::PassSearchFilter(DetailsFilter, Entry.Title.c_str());
+                const bool bTitleMatches = ImGuiX::PassSearchFilter(DetailsFilter, Fields);
 
                 if (Entry.Table)
                 {
+                    Entry.Table->SetSearchContext(Fields);
                     Entry.Table->SetSearchText(bTitleMatches ? FStringView() : FStringView(DetailsFilter.InputBuf));
 
                     // Drawing an empty header leaves sections to scroll past, which is what a search removes.
@@ -2599,15 +2611,18 @@ namespace Lumina
                 return;
             }
 
-            FFixedString DisplayName = Struct->MakeDisplayName();
-            if (!ImGuiX::PassSearchFilter(Filter, DisplayName.c_str()))
-            {
-                return;
-            }
-
             FString CategoryName = Struct->HasMeta("Category")
                 ? Struct->GetMeta("Category")
                 : DefaultCategoryName;
+            const FFixedString SourceName = Struct->MakeDisplayName();
+            const FString Friendly = FriendlyComponentName(SourceName.c_str());
+            const FString MetadataName = Struct->HasMeta("DisplayName") ? Struct->GetMeta("DisplayName") : FString();
+            if (!ImGuiX::PassSearchFilter(Filter, {SourceName.c_str(), Friendly, Struct->GetName().c_str(), MetadataName,
+                    LOC(SourceName.c_str()), LOC(Friendly.c_str()), LOC(MetadataName.c_str()),
+                    CategoryName, LOC_CTX(CategoryName.c_str(), "category")}))
+            {
+                return;
+            }
 
             FComponentEntry NewEntry;
             NewEntry.MetaType = MetaType;
@@ -3985,18 +4000,10 @@ namespace Lumina
 
             ImGui::SameLine();
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - ButtonWidth - Style.FramePadding.x);
-            EntityFilterState.FilterName.Draw("##Search");
+            EntityFilterState.FilterName.DrawWithHint("##Search", LOC_ICON(LE_ICON_FILE_SEARCH, "Search entities..."));
 
             ImGui::PopStyleVar();
 
-            if (!EntityFilterState.FilterName.IsActive())
-            {
-                ImDrawList* DrawList = ImGui::GetWindowDrawList();
-                ImVec2 TextPos = ImGui::GetItemRectMin();
-                TextPos.x += Style.FramePadding.x + 2.0f;
-                TextPos.y += Style.FramePadding.y;
-                DrawList->AddText(TextPos, EditorColors::U32(EditorColors::TextMuted()), LOC_ICON(LE_ICON_FILE_SEARCH, "Search entities..."));
-            }
 
             ImGui::SameLine();
 
@@ -4103,20 +4110,11 @@ namespace Lumina
 
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
             ImGui::SetNextItemWidth(-1);
-            AddEntityComponentFilter.Draw("##Search");
+            AddEntityComponentFilter.DrawWithHint("##Search", LOC_ICON(LE_ICON_FOLDER_SEARCH, "Search components..."));
             if (ImGui::IsWindowAppearing())
             {
                 AddEntityComponentFilter.Clear();
                 ImGui::SetKeyboardFocusHere(-1);
-            }
-            if (!AddEntityComponentFilter.IsActive())
-            {
-                ImGuiStyle& Style = ImGui::GetStyle();
-                ImDrawList* DrawList = ImGui::GetWindowDrawList();
-                ImVec2 TextPos = ImGui::GetItemRectMin();
-                TextPos.x += Style.FramePadding.x + 2.0f;
-                TextPos.y += Style.FramePadding.y;
-                DrawList->AddText(TextPos, EditorColors::U32(EditorColors::TextMuted()), LOC_ICON(LE_ICON_FOLDER_SEARCH, "Search components..."));
             }
             ImGui::PopStyleVar();
 
@@ -4151,7 +4149,8 @@ namespace Lumina
                                 continue;
                             }
 
-                            if (ImGuiX::PassSearchFilter(AddEntityComponentFilter, Data->AssetName.c_str()))
+                            if (ImGuiX::PassSearchFilter(AddEntityComponentFilter,
+                                    {Data->AssetName.c_str(), "Prefabs", LOC("Prefabs")}))
                             {
                                 FilteredPrefabs.push_back(Data);
                             }
@@ -4210,7 +4209,8 @@ namespace Lumina
                     FilteredPrimitives.reserve(IM_ARRAYSIZE(PrimitiveEntries));
                     for (const FPrimitiveEntry& Entry : PrimitiveEntries)
                     {
-                        if (ImGuiX::PassSearchFilter(AddEntityComponentFilter, Entry.Name))
+                        if (ImGuiX::PassSearchFilter(AddEntityComponentFilter,
+                                {Entry.Name, LOC(Entry.Name), "Primitives", LOC("Primitives")}))
                         {
                             FilteredPrimitives.push_back(&Entry);
                         }

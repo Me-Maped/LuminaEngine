@@ -274,7 +274,12 @@ namespace Lumina::Reflection
 
         std::string MakeProjectCSharpDir(const std::string& WorkspacePath, const FReflectedProject& Project)
         {
-            return WorkspacePath + R"(\Intermediates\CSharpBindings\)" + Project.Name;
+            return WorkspacePath + "/Intermediates/CSharpBindings/" + Project.Name;
+        }
+
+        std::string CSharpRouteStampPath(const std::string& WorkspacePath, const FReflectedProject& Project)
+        {
+            return ProjectGeneratedDir(WorkspacePath, Project) + "/CSharpRoute.txt";
         }
 
         constexpr const char* kUnityStubContents =
@@ -413,6 +418,37 @@ namespace Lumina::Reflection
 
         // A stamp that disagrees means the shared bindings were last written for another layout, so every one is re-emitted.
         std::unordered_set<const FReflectedProject*> StaleBindings;
+        std::unordered_set<const FReflectedProject*> RouteChanged;
+        std::unordered_set<std::string> AbandonedCSharpDirs;
+        std::unordered_set<std::string> LiveCSharpRoutes;
+        for (auto& Project : Workspace->ReflectedProjects)
+        {
+            if (!Project->CSharpBindingsDir.empty())
+            {
+                LiveCSharpRoutes.insert(Project->CSharpBindingsDir);
+            }
+        }
+        for (auto& Project : Workspace->ReflectedProjects)
+        {
+            if (Project->bReferenceOnly)
+            {
+                continue;
+            }
+            const std::string Current = Project->CSharpBindingsDir;
+            const std::string StampPath = CSharpRouteStampPath(Workspace->GetPath(), *Project);
+            const std::string Previous = ReadTextFile(StampPath);
+            if (Previous == Current)
+            {
+                continue;
+            }
+            RouteChanged.insert(Project.get());
+            WriteTextFile(StampPath, Current);
+            // A directory nobody routes to anymore is not visited by the live sweep.
+            if (!Previous.empty() && LiveCSharpRoutes.find(Previous) == LiveCSharpRoutes.end())
+            {
+                AbandonedCSharpDirs.insert(Previous);
+            }
+        }
         for (auto& Project : Workspace->ReflectedProjects)
         {
             const bool bHasTypes = std::any_of(ReflectionDatabase->ReflectedTypes.begin(), ReflectionDatabase->ReflectedTypes.end(),
@@ -469,8 +505,8 @@ namespace Lumina::Reflection
                 DirtyProjects.insert(Header->Project);
                 Jobs.push_back({ Header, bRouteTypes, true });
             }
-            else if (StaleBindings.count(Header->Project) != 0 || !std::filesystem::exists(
-                MakeGeneratedCSharpPath(Workspace->GetPath(), *Header, bRouteTypes).c_str()))
+            else if (StaleBindings.count(Header->Project) != 0 || RouteChanged.count(Header->Project) != 0
+                || !std::filesystem::exists(MakeGeneratedCSharpPath(Workspace->GetPath(), *Header, bRouteTypes).c_str()))
             {
                 // Routing changed under an unchanged header, and the old copy is swept either way, so re-emit.
                 Jobs.push_back({ Header, bRouteTypes, false });
@@ -494,13 +530,24 @@ namespace Lumina::Reflection
 
             auto& Expected = ExpectedArtifacts[Header->Project];
             Expected.insert(Header->FileName + ".generated.cpp");
-            // The .cs is routed to the plugin/game dir (not the default), tracked separately for its sweep.
-            RoutedArtifacts[Header->Project->CSharpBindingsDir].insert(Header->FileName + ".generated.cs");
+            // Match MakeGeneratedCSharpPath: engine modules without a route use the default directory.
+            if (Header->Project->CSharpBindingsDir.empty())
+            {
+                Expected.insert(Header->FileName + ".generated.cs");
+            }
+            else
+            {
+                RoutedArtifacts[Header->Project->CSharpBindingsDir].insert(Header->FileName + ".generated.cs");
+            }
 
             if (Header->bDirty)
             {
                 DirtyProjects.insert(Header->Project);
-                // free-function-only, so it routes to the plugin or game and needs no generated.h
+            }
+            if (Header->bDirty || RouteChanged.count(Header->Project) != 0 || !std::filesystem::exists(
+                MakeGeneratedCSharpPath(Workspace->GetPath(), *Header, /*bRoutable*/ true).c_str()))
+            {
+                // Existence is not freshness: routing back onto an old file must still rewrite it.
                 FreeFunctionJobs.push_back(Header);
             }
         }
@@ -559,7 +606,10 @@ namespace Lumina::Reflection
                 }
 
                 std::filesystem::remove(Entry.path(), Ec);
-                DirtyProjects.insert(Project);
+                if (Project != nullptr)
+                {
+                    DirtyProjects.insert(Project);
+                }
             }
         };
 
@@ -590,6 +640,11 @@ namespace Lumina::Reflection
                 const auto* Routed = RIt != RoutedArtifacts.end() ? &RIt->second : nullptr;
                 SweepOrphanDir(Project.get(), Project->CSharpBindingsDir, Routed, ".generated.cs", nullptr);
             }
+        }
+
+        for (const std::string& Dir : AbandonedCSharpDirs)
+        {
+            SweepOrphanDir(nullptr, Dir, nullptr, ".generated.cs", nullptr);
         }
 
         for (auto* DirtyProject : DirtyProjects)

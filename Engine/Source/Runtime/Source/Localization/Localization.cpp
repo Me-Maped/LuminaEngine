@@ -155,6 +155,16 @@ namespace Lumina
         return FLocalizationSnapshot(ActiveTable);
     }
 
+    FLocalizationSnapshot FLocalization::ReadForCurrentFrame() const
+    {
+        return CurrentRead();
+    }
+
+    bool FLocalizationSnapshot::HasSameTable(const FLocalizationSnapshot& Other) const
+    {
+        return Table.Get() == Other.Table.Get();
+    }
+
     void FLocalization::Publish(TSharedPtr<const FLocalizationTable> NewTable)
     {
         // Parse/I/O and destruction stay outside the short publication lock.

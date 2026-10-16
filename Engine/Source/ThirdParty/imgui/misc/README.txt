@@ -1,23 +1,28 @@
 
 misc/cpp/
-  InputText() wrappers for C++ standard library (STL) type: std::string.
-  This is also an example of how you may wrap your own similar types.
+  InputText() 对 C++ 标准库 (STL) 类型 std::string 的封装。
+  这也是一个示例，展示你可以如何为自己的类似类型做封装。
 
 misc/debuggers/
-  Helper files for popular debuggers (Visual Studio, GDB, LLDB).
-  e.g. With the .natvis file, types like ImVector<> will be displayed nicely in Visual Studio debugger.
+  面向常用调试器（Visual Studio、GDB、LLDB）的辅助文件。
+  例如，借助 .natvis 文件，ImVector<> 等类型可在 Visual Studio 调试器中良好显示。
 
 misc/fonts/
-  Fonts loading/merging instructions (e.g. How to handle glyph ranges, how to merge icons fonts).
-  Command line tool "binary_to_compressed_c" to create compressed arrays to embed data in source code.
-  Suggested fonts and links.
+  字体加载/合并说明（例如如何处理字形范围、如何合并图标字体）。
+  命令行工具 "binary_to_compressed_c"，用于创建压缩数组以便将数据嵌入源代码。
+  推荐的字体与链接。
 
 misc/freetype/
-  Font atlas builder/rasterizer using FreeType instead of stb_truetype.
-  Benefit from better FreeType rasterization, in particular for small fonts.
+  使用 FreeType 而非 stb_truetype 的字体图集构建/光栅化程序。
+  可获得更好的 FreeType 光栅化效果，尤其是对小字号字体。
 
 misc/single_file/
-  Single-file header stub.
-  We use this to validate compiling all *.cpp files in a same compilation unit.
-  Users of that technique (also called "Unity builds") can generally provide this themselves,
-  so we don't really recommend you use this in your projects.
+  单文件头文件存根（stub）。
+  我们用它来验证在同一编译单元中编译所有 *.cpp 文件。
+  使用该技术（也称为 "Unity builds"）的用户通常可以自己提供这一文件，
+  因此我们并不太建议你在自己的项目中使用它。
+
+misc/themes/
+  本仓库新增的应用层主题模块：五套可编辑主题与 00 原生只读基准。
+  只依赖 imgui.h 与 C++ 标准库，提供外观应用、INI 配置和语义按钮封装。
+  使用说明见 examples/example_theme_studio/README.md，验证截图见 docs/themes/README.md。

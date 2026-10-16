@@ -299,6 +299,36 @@ TEST(Localization, ReadSnapshotKeepsPointersAndContextAfterPublication)
     EXPECT_STREQ(Service.Read().Translate("Save"), "Save");
 }
 
+TEST(Localization, SnapshotIdentityChangesOnSameLanguageReload)
+{
+    auto& Service = FLocalization::Get();
+    ASSERT_TRUE(Service.SetLanguageFromString(ELanguage::ChineseSimplified, kChineseTable));
+    const auto Before = Service.Read();
+    EXPECT_TRUE(Before.HasSameTable(Service.Read()));
+    ASSERT_TRUE(Service.SetLanguageFromString(ELanguage::ChineseSimplified, R"({"Save":"另存"})"));
+    const auto After = Service.Read();
+    EXPECT_FALSE(Before.HasSameTable(After));
+    EXPECT_STREQ(Before.Translate("Save"), "保存");
+    EXPECT_STREQ(After.Translate("Save"), "另存");
+    Service.ClearTable();
+}
+
+TEST(Localization, SearchCacheSnapshotFollowsThePinnedFrame)
+{
+    auto& Service = FLocalization::Get();
+    ASSERT_TRUE(Service.SetLanguageFromString(ELanguage::ChineseSimplified, kChineseTable));
+    const auto Before = Service.Read();
+    {
+        FLocalizationFrameScope Frame;
+        ASSERT_TRUE(Service.SetLanguageFromString(ELanguage::English, "{}"));
+        EXPECT_TRUE(Service.ReadForCurrentFrame().HasSameTable(Before));
+        EXPECT_STREQ(Service.ReadForCurrentFrame().Translate("Save"), LOC("Save"));
+        EXPECT_FALSE(Service.Read().HasSameTable(Before));
+    }
+    EXPECT_TRUE(Service.ReadForCurrentFrame().HasSameTable(Service.Read()));
+    Service.ClearTable();
+}
+
 TEST(Localization, FrameSwitchesOnlyAfterItsSnapshotIsReleased)
 {
     auto& Service = FLocalization::Get();

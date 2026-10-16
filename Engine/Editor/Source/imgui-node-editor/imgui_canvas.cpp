@@ -490,7 +490,8 @@ void ImGuiEx::Canvas::EnterLocalSpace()
 
     auto& fringeScale = ImFringeScaleRef(m_DrawList);
     m_LastFringeScale = fringeScale;
-    fringeScale *= m_View.InvScale;
+    // Keep ImGui's inverse density and integer-density fast-path caches in sync.
+    m_DrawList->_SetPixelDensity(m_View.Scale / fringeScale);
 }
 
 void ImGuiEx::Canvas::LeaveLocalSpace()
@@ -563,8 +564,7 @@ void ImGuiEx::Canvas::LeaveLocalSpace()
             m_DrawList->CmdBuffer.erase(m_DrawList->CmdBuffer.Data + m_DrawListCommadBufferSize - 1);
     }
 
-    auto& fringeScale = ImFringeScaleRef(m_DrawList);
-    fringeScale = m_LastFringeScale;
+    m_DrawList->_SetPixelDensity(1.0f / m_LastFringeScale);
 
     // And pop \o/
     ImGui::PopClipRect();

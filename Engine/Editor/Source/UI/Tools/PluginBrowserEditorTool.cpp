@@ -16,6 +16,7 @@
 #include "Tools/UI/ImGui/ImGuiAllocator.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiFonts.h"
+#include "Tools/UI/ImGui/ImGuiX.h"
 #include "UI/Tools/EditorToolContext.h"
 
 #include "imgui.h"
@@ -104,8 +105,9 @@ namespace Lumina
 
             if (!SearchFilter.empty())
             {
-                FStringView Name = P->GetName();
-                if (Name.find(SearchFilter.c_str()) == FStringView::npos)
+                const FPluginDescriptor& Descriptor = P->GetDescriptor();
+                if (!ImGuiX::PassSearchFilter(SearchFilter, { P->GetName(), Descriptor.Category, Descriptor.Description,
+                    bEngine ? "Engine" : "Project", bEngine ? LOC("Engine") : LOC("Project") }))
                 {
                     continue;
                 }

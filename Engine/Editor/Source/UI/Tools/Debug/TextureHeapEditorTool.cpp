@@ -6,6 +6,20 @@
 
 namespace Lumina
 {
+    static const char* HeapTextureTypeSourceName(RHI::ETextureType Type)
+    {
+        switch (Type)
+        {
+        case RHI::ETextureType::Tex1D:        return "1D";
+        case RHI::ETextureType::Tex2D:        return "2D";
+        case RHI::ETextureType::Tex3D:        return "3D";
+        case RHI::ETextureType::TexCube:      return "Cube";
+        case RHI::ETextureType::Tex2DArray:   return "2D Array";
+        case RHI::ETextureType::TexCubeArray: return "Cube Array";
+        }
+        return "?";
+    }
+
     static const char* HeapTextureTypeName(RHI::ETextureType Type)
     {
         switch (Type)
@@ -223,9 +237,8 @@ namespace Lumina
             {
                 char SlotText[16];
                 snprintf(SlotText, sizeof(SlotText), "%u", Info.Slot);
-                const bool bMatch = FString(FormatName).find(Filter) != FString::npos
-                                 || FString(HeapTextureTypeName(Desc.Type)).find(Filter) != FString::npos
-                                 || FStringView(SlotText) == FilterView;
+                const bool bMatch = ImGuiX::PassSearchFilter(FilterView,
+                    { FormatName, HeapTextureTypeName(Desc.Type), HeapTextureTypeSourceName(Desc.Type), SlotText });
                 if (!bMatch)
                 {
                     continue;

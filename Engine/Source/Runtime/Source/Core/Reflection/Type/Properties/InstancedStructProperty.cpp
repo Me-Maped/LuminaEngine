@@ -9,11 +9,11 @@
 
 namespace Lumina
 {
-    FInstancedStructProperty::FInstancedStructProperty(const FPropertyDesc& Desc)
-        : FProperty(Desc)
+    FInstancedStructProperty::FInstancedStructProperty(const FPropertyDesc& InDesc)
+        : FProperty(InDesc)
     {
         // Null for a bare FInstancedStruct, which constrains nothing and accepts any reflected struct.
-        MetaStruct = Desc.Type->GetStruct();
+        MetaStruct = InDesc.Type->GetStruct();
         bResolvedStructBase = MetaStruct != nullptr;
         SetElementSize(sizeof(FInstancedStruct));
     }

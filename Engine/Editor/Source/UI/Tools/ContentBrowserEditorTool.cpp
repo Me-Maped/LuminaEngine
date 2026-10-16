@@ -1,4 +1,4 @@
-﻿#include "ContentBrowserEditorTool.h"
+#include "ContentBrowserEditorTool.h"
 #include "Core/CoreEditorDelegates.h"
 #include "Localization/Localization.h"
 
@@ -1422,12 +1422,16 @@ namespace Lumina
                     }
                 }
 
-                // Folders are navigation, so only a name search hides them, and type is searchable for everything else.
+                // Keep user names/path bytes intact; translated type labels also retain their source tag.
                 if (!Search.empty())
                 {
-                    const FStringView Name = VFS::FileName(Entry.Info.PathSource, true);
-                    const bool bTypeMatches = !Entry.Info.IsDirectory() && !Entry.TypeLabel.IsNone() && ImGuiX::PassSearchFilter(Search, FStringView(Entry.TypeLabel.c_str()));
-                    if (!ImGuiX::PassSearchFilter(Search, Name) && !bTypeMatches)
+                    // This listing is one folder. The shared parent path would make "a" match every row via "/Game".
+                    const FStringView Stem = VFS::FileName(Entry.Info.PathSource, true);
+                    const FStringView FileName(Entry.Info.Name.c_str(), Entry.Info.Name.size());
+                    const FStringView Type = Entry.Info.IsDirectory() || Entry.TypeLabel.IsNone()
+                        ? FStringView() : FStringView(Entry.TypeLabel.c_str());
+                    if (!ImGuiX::PassSearchFilter(Search, { Stem, FileName,
+                        Type, TypeTagDisplayText(Type), Entry.AssetClass.IsNone() ? "" : Entry.AssetClass.c_str() }))
                     {
                         continue;
                     }
@@ -1682,6 +1686,16 @@ namespace Lumina
 
     void FContentBrowserEditorTool::Update(const FUpdateContext& UpdateContext)
     {
+        const FLocalizationSnapshot Localization = FLocalization::Get().ReadForCurrentFrame();
+        if (!SearchLocalization.HasSameTable(Localization))
+        {
+            SearchLocalization = Localization;
+            if (!SearchText.empty())
+            {
+                // Refilter the cached listing without rereading the directory.
+                ContentBrowserTileView.MarkTreeDirty();
+            }
+        }
         // The watcher runs on its own thread, so its change is only applied to the listing here.
         if (bDiskListingChanged.exchange(false, std::memory_order_acquire))
         {

@@ -146,7 +146,8 @@ namespace Lumina
                 Filter.Clear();
                 ImGui::SetKeyboardFocusHere();
             }
-            Filter.Draw("##ActionFilter", ImGui::GetContentRegionAvail().x);
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            Filter.DrawWithHint("##ActionFilter", LOC("Search..."));
             ImGui::Separator();
 
             bool bPicked = false;

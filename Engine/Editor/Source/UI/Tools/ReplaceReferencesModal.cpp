@@ -84,7 +84,8 @@ namespace Lumina::ReplaceReferences
                 Filter.Clear();
             }
 
-            Filter.Draw("##Search", -1.0f);
+            ImGui::SetNextItemWidth(-1.0f);
+            Filter.DrawWithHint("##Search", LOC("Search..."));
 
             if (ImGui::Selectable(LOC("Clear reference (null)"), !Entry.ReplacementGUID.IsValid()))
             {
@@ -122,7 +123,7 @@ namespace Lumina::ReplaceReferences
 
             for (const FAssetData* Candidate : Candidates)
             {
-                if (!ImGuiX::PassSearchFilter(Filter, Candidate->AssetName.c_str()))
+                if (!ImGuiX::PassSearchFilter(Filter, { Candidate->AssetName.c_str(), Candidate->Path.c_str(), Candidate->AssetClass.c_str() }))
                 {
                     continue;
                 }

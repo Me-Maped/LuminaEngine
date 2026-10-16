@@ -50,9 +50,9 @@ namespace ImGradient
       color.w = 1.f;
       draw_list->AddRectFilled(p1, p2, ImColor(color));
       if (editing)
-         draw_list->AddRect(p1, p2, 0xFFFFFFFF, 2.f, 2.5f, ImDrawFlags_RoundCornersAll);
+         draw_list->AddRect(p1, p2, 0xFFFFFFFF, 2.f, 2.5f, ImDrawFlags_RoundAll);
       else
-         draw_list->AddRect(p1, p2, 0x80FFFFFF, 2.f, 1.25f, ImDrawFlags_RoundCornersAll);
+         draw_list->AddRect(p1, p2, 0x80FFFFFF, 2.f, 1.25f, ImDrawFlags_RoundAll);
 
       if (rc.Contains(io.MousePos))
       {

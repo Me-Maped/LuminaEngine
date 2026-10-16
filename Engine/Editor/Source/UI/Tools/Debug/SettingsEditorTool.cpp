@@ -212,19 +212,20 @@ namespace Lumina
             ImGui::TextUnformatted(LE_ICON_MAGNIFY);
             ImGui::PopStyleColor();
             ImGui::SameLine();
-            SettingsFilter.Draw("##SettingsSearch", ImGui::GetContentRegionAvail().x);
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            SettingsFilter.DrawWithHint("##SettingsSearch", LOC("Search..."));
 
             for (const FString& Category : Categories)
             {
                 bool bHeaderDrawn = false;
                 for (CClass* Class : ByCategory[Category])
                 {
-                    // The reflected display name is the English source; typing either language in the
-                    // search box has to match, so both spellings are tested.
+                    // Each term can hit either spelling, the category, or the reflected class name.
                     const FString DisplayName = DisplayNameOf(Class);
                     const char* Label = LOC(DisplayName.c_str());
-                    if (!ImGuiX::PassSearchFilter(SettingsFilter, Label)
-                        && !ImGuiX::PassSearchFilter(SettingsFilter, FStringView(DisplayName.c_str(), DisplayName.size())))
+                    if (!ImGuiX::PassSearchFilter(SettingsFilter,
+                            {Label, DisplayName, Class->GetName().c_str(),
+                             Category, LOC_CTX(Category.c_str(), "category")}))
                     {
                         continue;
                     }

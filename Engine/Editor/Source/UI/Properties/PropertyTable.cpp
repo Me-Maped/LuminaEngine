@@ -501,16 +501,17 @@ namespace Lumina
         Children.clear();
     }
 
-    void FPropertyRow::UpdateRow()
+    void FPropertyRow::UpdateRow(bool bIncludeCollapsedChildren)
     {
         Update();
 
-        // Children only accumulate ChangeOp when drawn, and a huge array gets expensive.
-        if (bExpanded)
+        // Ordinary drawing skips collapsed subtrees. Search also needs external changes/new rows
+        // beneath collapsed headers before deciding whether those headers contain a match.
+        if (bExpanded || bIncludeCollapsedChildren)
         {
             for (const TUniquePtr<FPropertyRow>& Child : Children)
             {
-                Child->UpdateRow();
+                Child->UpdateRow(bIncludeCollapsedChildren);
             }
         }
     }
@@ -922,38 +923,82 @@ namespace Lumina
         }
     }
 
-    bool FPropertyRow::ApplyFilter(const ImGuiTextFilter& Filter, bool bFilterActive, bool bJustActivated, bool bJustCleared)
+    bool FPropertyRow::ApplyFilter(const ImGuiTextFilter& Filter, bool bFilterActive, bool bJustActivated, bool bJustCleared,
+        TSpan<const FStringView> SearchContext, bool bAncestorMatches)
     {
         // Without this a search would silently expand the whole tree and leave it that way.
-        if (bJustActivated)
+        if (bFilterActive && !bFilterStateActive)
         {
             bExpandedSaved = bExpanded;
         }
+        const bool bRestoreExpansion = !bFilterActive && bFilterStateActive;
+        bFilterStateActive = bFilterActive;
+
+        bool bSelfMatches = false;
+        if (bFilterActive && !bAncestorMatches)
+        {
+            const FStringView Label = GetFilterLabel();
+            // Copy immediately. Numbered FName::c_str() uses a 4-slot thread-local buffer, so holding
+            // several of those views across later c_str() calls aliases them onto the same bytes.
+            TVector<FString> OwnedFields;
+            const auto AddField = [&OwnedFields](FStringView Field)
+            {
+                if (!Field.empty())
+                {
+                    OwnedFields.emplace_back(Field.data(), Field.size());
+                }
+            };
+            // Categories stay visible through descendant matches, including a query combining a
+            // category's original spelling with a property's translated label (or the reverse).
+            AddField(Label);
+            AddField(GetFilterSourceLabel());
+            AddField(GetFilterInternalName());
+            for (FStringView Field : SearchContext)
+            {
+                AddField(Field);
+            }
+            for (const FPropertyRow* Ancestor = ParentRow; Ancestor != nullptr; Ancestor = Ancestor->ParentRow)
+            {
+                if (Ancestor->IsCategory())
+                {
+                    AddField(Ancestor->GetFilterSourceLabel());
+                    AddField(Ancestor->GetFilterLabel());
+                }
+            }
+            TVector<FStringView> Fields;
+            Fields.reserve(OwnedFields.size());
+            for (const FString& Field : OwnedFields)
+            {
+                Fields.emplace_back(Field.c_str(), Field.size());
+            }
+            bSelfMatches = !Label.empty() && ImGuiX::PassSearchFilter(Filter, TSpan<const FStringView>(Fields));
+        }
+
+        // A matching property's content belongs to that result, including unnamed map entries.
+        // Categories still use the normal descendant/alias matching rules.
+        const bool bShowSubtree = bFilterActive && (bAncestorMatches || (bSelfMatches && !IsCategory()));
 
         bool bAnyChildPasses = false;
         for (const TUniquePtr<FPropertyRow>& Child : Children)
         {
             // Not short-circuited, since every descendant needs its own flag updated.
-            bAnyChildPasses |= Child->ApplyFilter(Filter, bFilterActive, bJustActivated, bJustCleared);
+            bAnyChildPasses |= Child->ApplyFilter(Filter, bFilterActive, bJustActivated, bJustCleared, SearchContext, bShowSubtree);
         }
 
         if (!bFilterActive)
         {
             bPassesFilter = true;
-            if (bJustCleared)
+            if (bRestoreExpansion)
             {
                 bExpanded = bExpandedSaved;
             }
             return true;
         }
 
-        const FStringView Label = GetFilterLabel();
-        const bool bSelfMatches = !Label.empty() && ImGuiX::PassSearchFilter(Filter, Label);
-
-        bPassesFilter = bSelfMatches || bAnyChildPasses;
+        bPassesFilter = bAncestorMatches || bSelfMatches || bAnyChildPasses;
 
         // A row that matched on its own name stays as the user left it rather than dumping its subtree.
-        if (bAnyChildPasses)
+        if (bAnyChildPasses && !bShowSubtree)
         {
             bExpanded = true;
         }
@@ -1075,14 +1120,36 @@ namespace Lumina
         ChangeOp = EPropertyChangeOp::None;
     }
 
-    FStringView FPropertyPropertyRow::GetFilterLabel() const
+    FStringView FPropertyRow::GetFilterLabel() const
     {
         // Array elements are labeled by index, which nobody searches, but a descendant match still passes.
-        if (IsArrayElementProperty() || PropertyHandle == nullptr || PropertyHandle->Property == nullptr)
+        if (IsArrayElementProperty() || PropertyHandle == nullptr || PropertyHandle->Property == nullptr
+            || PropertyHandle->OwnerArray != nullptr || PropertyHandle->OwnerMap != nullptr)
         {
             return FStringView();
         }
         return FStringView(LocalizedPropertyName(PropertyHandle->Property));
+    }
+
+    FStringView FPropertyRow::GetFilterSourceLabel() const
+    {
+        if (IsArrayElementProperty() || PropertyHandle == nullptr || PropertyHandle->Property == nullptr
+            || PropertyHandle->OwnerArray != nullptr || PropertyHandle->OwnerMap != nullptr)
+        {
+            return FStringView();
+        }
+        const FCStringView Source = PropertyHandle->Property->GetPropertyDisplayName();
+        return FStringView(Source.c_str(), Source.size());
+    }
+
+    FStringView FPropertyRow::GetFilterInternalName() const
+    {
+        if (IsArrayElementProperty() || PropertyHandle == nullptr || PropertyHandle->Property == nullptr
+            || PropertyHandle->OwnerArray != nullptr || PropertyHandle->OwnerMap != nullptr)
+        {
+            return FStringView();
+        }
+        return FStringView(PropertyHandle->Property->GetPropertyName().c_str());
     }
 
     void FPropertyPropertyRow::DrawHeader(float Offset, const FPropertyDrawArgs& Args)
@@ -2013,7 +2080,11 @@ namespace Lumina
             [&Candidates](int32 Index) -> FFixedString
             {
                 return (Index == 0) ? FFixedString(LOC("None")) : FFixedString(InstancedStructLabel(Candidates[Index - 1]));
-            }, LE_ICON_CUBE_OUTLINE);
+            }, LE_ICON_CUBE_OUTLINE, nullptr,
+            [&Candidates](int32 Index) -> FFixedString
+            {
+                return Index == 0 ? FFixedString("None") : FFixedString(Candidates[Index - 1]->GetName().c_str());
+            });
         ImGui::PopItemWidth();
 
         if (Picked != Constants::kIndexNone)
@@ -2435,6 +2506,8 @@ namespace Lumina
             ImGui::PopID();
         }
 
+        // Apply queued/external changes before filtering; new child rows need visibility state too.
+        UpdateRows();
         ApplyFilterState();
 
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4, 3));
@@ -2463,8 +2536,6 @@ namespace Lumina
 
             for (auto& [Name, Row] : CategoryMap)
             {
-                // UpdateRow drains queued array mutations, so skipping it strands an edit made before the search.
-                Row->UpdateRow();
                 if (Row->PassesFilter())
                 {
                     Row->DrawRow(0.0f, Args);
@@ -2485,9 +2556,10 @@ namespace Lumina
         {
             return;
         }
+        const bool bFiltering = ImGuiX::IsSearchFilterActive(PropertyFilter);
         for (auto& [Name, Row] : CategoryMap)
         {
-            Row->UpdateRow();
+            Row->UpdateRow(bFiltering);
         }
     }
 
@@ -2529,7 +2601,7 @@ namespace Lumina
 
     void FPropertyTable::ApplyFilterState()
     {
-        const bool bFiltering   = PropertyFilter.IsActive();
+        const bool bFiltering   = ImGuiX::IsSearchFilterActive(PropertyFilter);
         const bool bJustActive  = bFiltering && !bWasFiltering;
         const bool bJustCleared = !bFiltering && bWasFiltering;
         bWasFiltering = bFiltering;
@@ -2537,9 +2609,26 @@ namespace Lumina
         // The tree is rebuilt underneath by array edits and object swaps, so a stale flag would hide a row.
         if (bFiltering || bJustCleared)
         {
+            TVector<FStringView> ContextFields;
+            for (const FString& Field : SearchContext)
+            {
+                ContextFields.push_back(Field);
+            }
             for (auto& [Name, Row] : CategoryMap)
             {
-                Row->ApplyFilter(PropertyFilter, bFiltering, bJustActive, bJustCleared);
+                Row->ApplyFilter(PropertyFilter, bFiltering, bJustActive, bJustCleared, TSpan<const FStringView>(ContextFields));
+            }
+        }
+    }
+
+    void FPropertyTable::SetSearchContext(std::initializer_list<FStringView> Fields)
+    {
+        SearchContext.clear();
+        for (FStringView Field : Fields)
+        {
+            if (!Field.empty())
+            {
+                SearchContext.emplace_back(Field.data(), Field.size());
             }
         }
     }
@@ -2566,9 +2655,10 @@ namespace Lumina
             return true;
         }
 
+        UpdateRows();
         ApplyFilterState();
 
-        if (!PropertyFilter.IsActive())
+        if (!ImGuiX::IsSearchFilterActive(PropertyFilter))
         {
             return true;
         }

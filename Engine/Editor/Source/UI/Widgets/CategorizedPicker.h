@@ -3,6 +3,7 @@
 #include "Containers/Function.h"
 #include "Containers/String.h"
 #include "Containers/Vector.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -15,6 +16,9 @@ namespace Lumina
         FString     Category;
         FString     Tooltip;
         const char* Icon = nullptr;
+        // Owned untranslated search aliases. Display names and user data remain caller-controlled.
+        FString     SourceName;
+        FString     SourceCategory;
     };
 
     // A searchable list filed into expandable categories, where a search opens every category holding a match and preselects the best one.
@@ -42,20 +46,21 @@ namespace Lumina
         struct FCategory
         {
             FString        Label;
+            FString        Identity;
             TVector<int32> Children;
             TVector<int32> Items;
             int32          TotalCount = 0;
             int32          MatchCount = 0;
         };
 
-        void Rebuild(const FGatherItems& Gather);
-        int32 FindOrAddChild(int32 Parent, FStringView Label);
+        void Rebuild(const FGatherItems& Gather, const FLocalizationSnapshot& Snapshot);
+        int32 FindOrAddChild(int32 Parent, FStringView Label, FStringView SourceLabel);
         void CompressChains(int32 CategoryIndex);
         int32 CountItems(int32 CategoryIndex, bool bMatchesOnly);
         void Rescore();
         void DrawCategory(int32 CategoryIndex, int32& OutPicked);
         void DrawItem(int32 ItemIndex, int32& OutPicked);
-        bool IsSearching() const { return Query[0] != '\0'; }
+        bool IsSearching() const;
 
         TVector<FPickerItem>     Items;
         // Index 0 is the root, which is never drawn itself.
@@ -68,6 +73,7 @@ namespace Lumina
         TVector<int32>           DrawingOrder;
         char                     Query[128] = {};
         FString                  ScoredQuery;
+        FLocalizationSnapshot    ItemsSnapshot;
         int32                    SelectedItem = -1;
         bool                     bOpenCategoriesByDefault = false;
         bool                     bScrollToSelected = false;

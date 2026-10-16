@@ -226,7 +226,7 @@ namespace Lumina
         
         ImGui::SetNextItemWidth(-1);
         
-        Filter.TextFilter.Draw("##LogFilter");
+        Filter.TextFilter.DrawWithHint("##LogFilter", LOC("Search..."));
 
         ImGui::Spacing();
 

@@ -212,8 +212,8 @@ namespace Lumina
     {
     public:
 
-        explicit FNumericProperty(const FPropertyDesc& Desc)
-            :FProperty(Desc)
+        explicit FNumericProperty(const FPropertyDesc& InDesc)
+            :FProperty(InDesc)
         {}
 
         RUNTIME_API virtual void SetIntPropertyValue(void* Data, uint64 Value) const { }
@@ -267,8 +267,8 @@ namespace Lumina
 
         using TTypeInfo = TPropertyTypeLayout<TCPPType>;
         
-        explicit TProperty(const FPropertyDesc& Desc)
-            :TBacking(Desc)
+        explicit TProperty(const FPropertyDesc& InDesc)
+            :TBacking(InDesc)
         {
             this->ElementSize = TTypeInfo::Size;
         }
@@ -295,8 +295,8 @@ namespace Lumina
         using TTypeInfo = TPropertyTypeLayout<TCPPType>;
         using Super = TProperty<FNumericProperty, TCPPType>;
 
-        explicit TProperty_Numeric(const FPropertyDesc& Desc)
-            :Super(Desc)
+        explicit TProperty_Numeric(const FPropertyDesc& InDesc)
+            :Super(InDesc)
         {}
 
         virtual FString ToString(const void* Data) const override;
@@ -360,8 +360,8 @@ namespace Lumina
     public:
         using Super = TProperty_Numeric<bool>;
 
-        explicit FBoolProperty(const FPropertyDesc& Desc)
-            : Super(Desc)
+        explicit FBoolProperty(const FPropertyDesc& InDesc)
+            : Super(InDesc)
         {}
 
         // Tight: a bool is one bit on the wire.
@@ -373,8 +373,8 @@ namespace Lumina
     public:
         using Super = TProperty_Numeric<int8>;
 
-        explicit FInt8Property(const FPropertyDesc& Desc)
-            : Super(Desc)
+        explicit FInt8Property(const FPropertyDesc& InDesc)
+            : Super(InDesc)
         {}
     };
 
@@ -383,8 +383,8 @@ namespace Lumina
     public:
         using Super = TProperty_Numeric<int16>;
 
-        explicit FInt16Property(const FPropertyDesc& Desc)
-            : Super(Desc)
+        explicit FInt16Property(const FPropertyDesc& InDesc)
+            : Super(InDesc)
         {}
     };
 
@@ -393,8 +393,8 @@ namespace Lumina
     public:
         using Super = TProperty_Numeric<int32>;
 
-        explicit FInt32Property(const FPropertyDesc& Desc)
-            : Super(Desc)
+        explicit FInt32Property(const FPropertyDesc& InDesc)
+            : Super(InDesc)
         {}
     };
 
@@ -403,8 +403,8 @@ namespace Lumina
     public:
         using Super = TProperty_Numeric<int64>;
 
-        explicit FInt64Property(const FPropertyDesc& Desc)
-            : Super(Desc)
+        explicit FInt64Property(const FPropertyDesc& InDesc)
+            : Super(InDesc)
         {}
     };
 
@@ -413,8 +413,8 @@ namespace Lumina
     public:
         using Super = TProperty_Numeric<uint8>;
 
-        explicit FUInt8Property(const FPropertyDesc& Desc)
-            : Super(Desc)
+        explicit FUInt8Property(const FPropertyDesc& InDesc)
+            : Super(InDesc)
         {}
     };
 
@@ -423,8 +423,8 @@ namespace Lumina
     public:
         using Super = TProperty_Numeric<uint16>;
 
-        explicit FUInt16Property(const FPropertyDesc& Desc)
-            : Super(Desc)
+        explicit FUInt16Property(const FPropertyDesc& InDesc)
+            : Super(InDesc)
         {}
     };
 
@@ -433,8 +433,8 @@ namespace Lumina
     public:
         using Super = TProperty_Numeric<uint32>;
 
-        explicit FUInt32Property(const FPropertyDesc& Desc)
-            : Super(Desc)
+        explicit FUInt32Property(const FPropertyDesc& InDesc)
+            : Super(InDesc)
         {}
     };
 
@@ -444,8 +444,8 @@ namespace Lumina
     public:
         using Super = TProperty_Numeric<uint32>;
 
-        explicit FEntityProperty(const FPropertyDesc& Desc)
-            : Super(Desc)
+        explicit FEntityProperty(const FPropertyDesc& InDesc)
+            : Super(InDesc)
         {}
 
         // Routed through the archive so a save game can translate ids between worlds.
@@ -460,8 +460,8 @@ namespace Lumina
     public:
         using Super = TProperty_Numeric<uint64>;
 
-        explicit FUInt64Property(const FPropertyDesc& Desc)
-            : Super(Desc)
+        explicit FUInt64Property(const FPropertyDesc& InDesc)
+            : Super(InDesc)
         {}
     };
 
@@ -470,8 +470,8 @@ namespace Lumina
     public:
         using Super = TProperty_Numeric<float>;
 
-        explicit FFloatProperty(const FPropertyDesc& Desc)
-            : Super(Desc)
+        explicit FFloatProperty(const FPropertyDesc& InDesc)
+            : Super(InDesc)
         {}
     };
 
@@ -480,8 +480,8 @@ namespace Lumina
     public:
         using Super = TProperty_Numeric<double>;
 
-        explicit FDoubleProperty(const FPropertyDesc& Desc)
-            : Super(Desc)
+        explicit FDoubleProperty(const FPropertyDesc& InDesc)
+            : Super(InDesc)
         {}
     };
 

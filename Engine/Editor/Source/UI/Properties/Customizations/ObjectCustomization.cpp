@@ -111,22 +111,15 @@ namespace Lumina
 
             if (bComboOpen)
             {
-                SearchFilter.Draw("##Search", ComboDropDownSize.x - 30.0f);
+                ImGui::SetNextItemWidth(ComboDropDownSize.x - 30.0f);
+                SearchFilter.DrawWithHint("##Search", LOC_ICON(LE_ICON_FILE_SEARCH, "Search Assets..."));
                 
                 if (ImGui::IsWindowAppearing())
                 {
                     ImGui::SetKeyboardFocusHere(-1);
                 }
                 
-                if (!SearchFilter.IsActive())
-                {
-                    ImDrawList* DrawList = ImGui::GetWindowDrawList();
-                    ImVec2 TextPos = ImGui::GetItemRectMin();
-                    TextPos.x += Style.FramePadding.x + 2.0f;
-                    TextPos.y += Style.FramePadding.y;
-                    DrawList->AddText(TextPos, IM_COL32(100, 100, 110, 255), LOC_ICON(LE_ICON_FILE_SEARCH, "Search Assets..."));
-                }
-                
+
                 ImGui::SameLine();
                 AssetPickerFilter::DrawFilterButton(30.0f);
                 ImGui::SetNextWindowSizeConstraints(ImVec2(200, 200), ComboDropDownSize);
@@ -149,7 +142,7 @@ namespace Lumina
                         
                         for (const FAssetData* Asset : Assets)
                         {
-                            if (!ImGuiX::PassSearchFilter(SearchFilter, Asset->AssetName.c_str()))
+                            if (!ImGuiX::PassSearchFilter(SearchFilter, { Asset->AssetName.c_str(), Asset->Path.c_str(), Asset->AssetClass.c_str() }))
                             {
                                 continue;
                             }

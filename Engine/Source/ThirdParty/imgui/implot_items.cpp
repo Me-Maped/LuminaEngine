@@ -66,8 +66,8 @@ static IMPLOT_INLINE float  ImInvSqrt(float x) { return 1.0f / sqrtf(x); }
 #define IMPLOT_NORMALIZE2F_OVER_ZERO(VX,VY) do { float d2 = VX*VX + VY*VY; if (d2 > 0.0f) { float inv_len = ImInvSqrt(d2); VX *= inv_len; VY *= inv_len; } } while (0)
 
 // Support for pre-1.82 versions. Users on 1.82+ can use 0 (default) flags to mean "all corners" but in order to support older versions we are more explicit.
-#if (IMGUI_VERSION_NUM < 18102) && !defined(ImDrawFlags_RoundCornersAll)
-#define ImDrawFlags_RoundCornersAll ImDrawCornerFlags_All
+#if (IMGUI_VERSION_NUM < 18102) && !defined(ImDrawFlags_RoundAll)
+#define ImDrawFlags_RoundAll ImDrawCornerFlags_All
 #endif
 
 //-----------------------------------------------------------------------------
@@ -119,18 +119,13 @@ struct MaxIdx { static const unsigned int Value; };
 template <> const unsigned int MaxIdx<unsigned short>::Value = 65535;
 template <> const unsigned int MaxIdx<unsigned int>::Value   = 4294967295;
 
-IMPLOT_INLINE void GetLineRenderProps(const ImDrawList& draw_list, float& half_weight, ImVec2& tex_uv0, ImVec2& tex_uv1) {
-    const bool aa = ImHasFlag(draw_list.Flags, ImDrawListFlags_AntiAliasedLines) &&
-                    ImHasFlag(draw_list.Flags, ImDrawListFlags_AntiAliasedLinesUseTex);
-    if (aa) {
-        ImVec4 tex_uvs = draw_list._Data->TexUvLines[(int)(half_weight*2)];
-        tex_uv0 = ImVec2(tex_uvs.x, tex_uvs.y);
-        tex_uv1 = ImVec2(tex_uvs.z, tex_uvs.w);
-        half_weight += 1;
-    }
-    else {
-        tex_uv0 = tex_uv1 = draw_list._Data->TexUvWhitePixel;
-    }
+IMPLOT_INLINE void GetLineRenderProps(ImDrawList& draw_list, float& half_weight, ImVec2& tex_uv0, ImVec2& tex_uv1) {
+    // ImGui 1.93 packs line UVs differently and selects textures in physical pixels.
+    // Share its selector so fractional widths, DPI scaling and AA use the same atlas contract.
+    const float screen_weight = ImMax(half_weight * 2.0f * draw_list._InvFringeScale, 1.0f);
+    float fringe = 0.0f;
+    draw_list._SelectLineTexture(screen_weight, &tex_uv0, &tex_uv1, &fringe, draw_list.Flags);
+    half_weight = (screen_weight * draw_list._FringeScale + fringe) * 0.5f;
 }
 
 IMPLOT_INLINE void PrimLine(ImDrawList& draw_list, const ImVec2& P1, const ImVec2& P2, float half_weight, ImU32 col, const ImVec2& tex_uv0, const ImVec2 tex_uv1) {

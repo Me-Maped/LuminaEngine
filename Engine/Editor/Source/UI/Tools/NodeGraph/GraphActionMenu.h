@@ -3,6 +3,7 @@
 #include "Containers/Vector.h"
 #include "Containers/String.h"
 #include "GraphActionMenuSearch.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -24,6 +25,9 @@ namespace Lumina
         // Filled by the fuzzy matcher; cleared when the query is empty.
         int32               Score = 0;
         TVector<uint16>     MatchIndices;
+        FString             SourceName;
+        FString             SourceCategory;
+        FString             Key;
     };
 
     // Incremental fuzzy search over the graph's registered node classes (keyboard nav, highlighting,
@@ -41,12 +45,13 @@ namespace Lumina
 
     private:
 
-        void RebuildActions(CEdNodeGraph* Graph);
+        void RebuildActions(CEdNodeGraph* Graph, const FLocalizationSnapshot& Snapshot);
         void Rescore();
         void ClampSelection();
 
         char                    QueryBuffer[128] = {};
         FString                 CachedQueryForScore;
+        FLocalizationSnapshot   ActionsSnapshot;
         TVector<FGraphAction>   Actions;
         TVector<int32>          VisibleIndices;
         int32                   SelectedIndex = 0;

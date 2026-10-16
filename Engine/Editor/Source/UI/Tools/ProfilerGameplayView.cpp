@@ -791,7 +791,7 @@ namespace Lumina
             Rows.reserve(GameplayFrame.Entries.size());
             for (const FGameplayProfileEntry& Entry : GameplayFrame.Entries)
             {
-                if (Filter[0] == '\0' || Entry.Name.find(Filter) != FFixedString::npos)
+                if (ImGuiX::PassSearchFilter(FStringView(Filter), FStringView(Entry.Name.c_str())))
                 {
                     Rows.push_back(&Entry);
                 }

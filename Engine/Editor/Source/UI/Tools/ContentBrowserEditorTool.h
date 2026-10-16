@@ -4,6 +4,7 @@
 #include "Core/LuminaCommonTypes.h"
 #include "FileSystem/FileSystem.h"
 #include "Memory/SmartPtr.h"
+#include "Localization/Localization.h"
 #include "Paths/Paths.h"
 #include "Platform/Filesystem/DirectoryWatcher.h"
 #include "Tools/Actions/DeferredActions.h"
@@ -335,8 +336,9 @@ namespace Lumina
         // survive the rebuild.
         THashMap<FName, bool>       FilterState;
 
-        // Substring match over the tile name, case-insensitive. Empty shows everything.
+        // All search terms may match the name, path, or source/translated type label.
         FFixedString                SearchText;
+        FLocalizationSnapshot      SearchLocalization;
 
         // The browsed folder as last read from disk, sorted and labeled, which the tiles refer into.
         struct FListingEntry

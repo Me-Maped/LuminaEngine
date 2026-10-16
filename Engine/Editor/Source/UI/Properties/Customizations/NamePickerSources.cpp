@@ -1,4 +1,4 @@
-﻿#include "EditorPCH.h"
+#include "EditorPCH.h"
 #include "Localization/Localization.h"
 #include "InputActionCustomization.h"
 #include "UI/Properties/NamePicker.h"
@@ -25,7 +25,7 @@ namespace Lumina
         int32 BuildBoneTree(FTreeListView& Tree, const FSkeletonResource& Skeleton, const ImGuiTextFilter& Filter, const FName& Current)
         {
             const int32 NumBones = Skeleton.GetNumBones();
-            const bool bFiltering = Filter.IsActive();
+            const bool bFiltering = ImGuiX::IsSearchFilterActive(Filter);
             int32 Count = 0;
 
             TVector<FTreeNodeID> BoneNodes;
@@ -134,7 +134,8 @@ namespace Lumina
 
         void DrawFilterRow(const FNamePickerArgs& Args)
         {
-            if (Args.State->Filter.Draw("##Filter", kBoneTreeSize.x))
+            ImGui::SetNextItemWidth(kBoneTreeSize.x);
+            if (Args.State->Filter.DrawWithHint("##Filter", LOC("Search...")))
             {
                 Args.State->Tree.MarkTreeDirty();
             }

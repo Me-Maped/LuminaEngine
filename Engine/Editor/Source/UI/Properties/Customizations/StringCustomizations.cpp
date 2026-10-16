@@ -193,7 +193,8 @@ namespace Lumina
 
             if (ImGui::BeginPopup("##FilePathPicker"))
             {
-                SearchFilter.Draw("##Search", 250.0f);
+                ImGui::SetNextItemWidth(250.0f);
+                SearchFilter.DrawWithHint("##Search", LOC("Search..."));
                 if (ImGui::IsWindowAppearing())
                 {
                     ImGui::SetKeyboardFocusHere(-1);

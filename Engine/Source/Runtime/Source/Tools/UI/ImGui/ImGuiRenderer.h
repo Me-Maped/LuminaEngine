@@ -25,6 +25,9 @@ namespace Lumina
         virtual void Initialize();
         virtual void Deinitialize();
 
+        // The backend already destroyed the ImGui context. Drops style bookkeeping without destroying it again.
+        void ReleaseDestroyedContext();
+
         void StartFrame(const FUpdateContext& UpdateContext);
 
         // ImGui::Render() then hand back the live draw data. Valid until the next NewFrame, which is

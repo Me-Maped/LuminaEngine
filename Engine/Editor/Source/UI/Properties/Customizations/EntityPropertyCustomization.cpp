@@ -110,7 +110,7 @@ namespace Lumina
                     return FFixedString(LOC("None"));
                 }
                 return MakeEntityLabel(Registry, Candidates[Index]);
-            }, LE_ICON_CUBE);
+            }, LE_ICON_CUBE, nullptr, [](int32 Index) { return Index == 0 ? FFixedString("None") : FFixedString(); });
 
         ImGui::PopItemWidth();
 

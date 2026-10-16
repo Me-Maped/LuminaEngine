@@ -372,19 +372,6 @@ namespace Lumina
             OutCol = Col;
         }
 
-        bool ContainsCI(const FString& Haystack, const char* Needle)
-        {
-            if (Needle == nullptr || *Needle == '\0')
-            {
-                return true;
-            }
-            std::string H(Haystack.c_str(), Haystack.size());
-            std::string N(Needle);
-            Algo::Transform(H, H.begin(), [](unsigned char C){ return (char)std::tolower(C); });
-            Algo::Transform(N, N.begin(), [](unsigned char C){ return (char)std::tolower(C); });
-            return H.find(N) != std::string::npos;
-        }
-
         std::string TrimStr(const std::string& S)
         {
             size_t A = 0, B = S.size();
@@ -998,8 +985,7 @@ namespace Lumina
             }
 
             const FRmlHierarchyItem& Data = Tree.Get<FRmlHierarchyItem>(Item);
-            return ContainsCI(FString(Data.Tag.c_str(), Data.Tag.size()), HierarchySearch)
-                || (!Data.Id.empty() && ContainsCI(FString(Data.Id.c_str(), Data.Id.size()), HierarchySearch));
+            return ImGuiX::PassSearchFilter(FStringView(HierarchySearch), { Data.Tag.c_str(), Data.Id.c_str() });
         };
 
         HierarchyContext.ItemSelectedFunction = [this](FTreeListView& Tree, FTreeNodeID Item, bool)

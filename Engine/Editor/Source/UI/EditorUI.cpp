@@ -3143,20 +3143,14 @@ namespace Lumina
             }
 
             ImGui::SetNextItemWidth(-1.0f);
-            Filter.Draw("##AssetSearch");
-            if (!Filter.IsActive())
-            {
-                const ImVec2 TextPos = ImGui::GetItemRectMin() + ImGui::GetStyle().FramePadding + ImVec2(2.0f, 0.0f);
-                ImGui::GetWindowDrawList()->AddText(TextPos, EditorColors::U32(EditorColors::TextMuted()),
-                    LOC_ICON(LE_ICON_FILE_SEARCH, "Search assets..."));
-            }
+            Filter.DrawWithHint("##AssetSearch", LOC_ICON(LE_ICON_FILE_SEARCH, "Search assets..."));
 
             // Rebuilt each frame, since the filter changes per keystroke over a few thousand short strings.
             TVector<const FEntry*> Matches;
             Matches.reserve(Entries.size());
             for (const FEntry& Entry : Entries)
             {
-                if (ImGuiX::PassSearchFilter(Filter, Entry.Name.c_str()) || ImGuiX::PassSearchFilter(Filter, Entry.Path.c_str()))
+                if (ImGuiX::PassSearchFilter(Filter, { Entry.Name.c_str(), Entry.Path.c_str() }))
                 {
                     Matches.push_back(&Entry);
                 }
@@ -4021,21 +4015,25 @@ namespace Lumina
         
         if (ImGui::BeginMenu(LOC_ICON(LE_ICON_PALETTE, "Theme")))
         {
-            if (ImGui::MenuItem(LOC("Dark"), nullptr, true))  // Currently selected
+            CEditorSettings* Settings = GetMutableDefault<CEditorSettings>();
+            const auto SelectTheme = [Settings](const char* Label, EEditorTheme Theme)
             {
-                // Apply dark theme
-            }
-            
-            if (ImGui::MenuItem(LOC("Light"), nullptr, false))
-            {
-                // Apply light theme
-            }
-            
-            if (ImGui::MenuItem(LOC("Custom..."), nullptr, false))
-            {
-                // Open theme editor
-            }
-            
+                if (ImGui::MenuItem(Label, nullptr, Settings->Theme == Theme))
+                {
+                    Settings->Theme = Theme;
+                    GConfig->SaveSettings(CEditorSettings::StaticClass());
+                    // The renderer applies this before the next NewFrame, including DPI and palette.
+                }
+            };
+            SelectTheme(LOC("Lumina (Custom Colors)"), EEditorTheme::Lumina);
+            ImGui::Separator();
+            SelectTheme(LOC("ImGui Default"), EEditorTheme::ImGuiDefault);
+            SelectTheme(LOC("Cyberpunk"), EEditorTheme::Cyberpunk);
+            SelectTheme(LOC("Minimal"), EEditorTheme::Minimal);
+            SelectTheme(LOC("Precision Lines"), EEditorTheme::Wireframe);
+            SelectTheme(LOC("Neo Brutalism"), EEditorTheme::Brutalist);
+            SelectTheme(LOC("Dark Bento"), EEditorTheme::Bento);
+
             ImGui::EndMenu();
         }
         

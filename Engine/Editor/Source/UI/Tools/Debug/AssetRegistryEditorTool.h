@@ -38,6 +38,7 @@ namespace Lumina
             FGuid           GUID;
             FName           Name;
             FName           Class;
+            FFixedString    Path;
             uint64          DiskBytes   = 0;
             uint64          CpuBytes    = 0;
             int32           RefCount    = 0;

@@ -2289,8 +2289,8 @@ namespace Lumina
 
         DrawList->AddRectFilled(Min + ImVec2(0.0f, 3.0f), Max + ImVec2(0.0f, 6.0f), IM_COL32(0, 0, 0, 38), kCommentRounding + 2.0f);
         DrawList->AddRectFilled(Min, Max, Comment->GetTint(bSelected ? 0.20f : 0.13f), kCommentRounding);
-        DrawList->AddRectFilled(Min, HeaderMax, Comment->GetTint(0.95f), kCommentRounding, ImDrawFlags_RoundCornersTop);
-        DrawList->AddRectFilled(Min, ImVec2(HeaderMax.x, Min.y + kCommentHeaderHeight * 0.5f), IM_COL32(255, 255, 255, 22), kCommentRounding, ImDrawFlags_RoundCornersTop);
+        DrawList->AddRectFilled(Min, HeaderMax, Comment->GetTint(0.95f), kCommentRounding, ImDrawFlags_RoundTop);
+        DrawList->AddRectFilled(Min, ImVec2(HeaderMax.x, Min.y + kCommentHeaderHeight * 0.5f), IM_COL32(255, 255, 255, 22), kCommentRounding, ImDrawFlags_RoundTop);
         DrawList->AddLine(ImVec2(Min.x + 1.0f, HeaderMax.y), ImVec2(HeaderMax.x - 1.0f, HeaderMax.y), IM_COL32(0, 0, 0, 80), 1.0f);
         DrawList->AddRect(Min, Max, Comment->GetTint(bHovered || bSelected ? 1.0f : 0.7f), kCommentRounding, 1.5f);
 
@@ -2360,7 +2360,7 @@ namespace Lumina
 
                 // Laid over the comment's own title bar, so it can never land on a neighboring comment.
                 const ImVec2 BarMax(Max.x, Min.y + TextSize.y + 12.0f);
-                Background->AddRectFilled(Min, BarMax, Comment->GetTint(Fade), 4.0f, ImDrawFlags_RoundCornersTop);
+                Background->AddRectFilled(Min, BarMax, Comment->GetTint(Fade), 4.0f, ImDrawFlags_RoundTop);
                 Foreground->PushClipRect(Min, BarMax, true);
                 Foreground->AddText(ImVec2(Min.x + 12.0f, Min.y + 6.0f), ScaleCommentAlpha(Comment->GetTitleTextColor(), Fade),
                     Title.c_str(), Title.c_str() + Title.size());

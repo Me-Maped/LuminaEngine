@@ -321,15 +321,6 @@ namespace Lumina::Reflection
             return EnumHasAnyFlags(Prop.PropertyFlags, EPropertyFlags::ScriptHidden);
         }
         
-        void EmitThunkField(FCodeWriter& Writer, const std::string& Module, const std::string& EntryPoint,
-            const std::string& Fn, const std::string& ParamTypesCsv, const std::string& RetType)
-        {
-            const std::string Sig = ParamTypesCsv.empty() ? RetType : (ParamTypesCsv + ", " + RetType);
-            Writer.Linef("private static readonly delegate* unmanaged[Cdecl]<%s> %s =", Sig.c_str(), Fn.c_str());
-            Writer.Linef("    (delegate* unmanaged[Cdecl]<%s>)global::LuminaSharp.NativeBindings.Resolve(\"%s\", \"%s\");",
-                Sig.c_str(), Module.c_str(), EntryPoint.c_str());
-        }
-
         // A reflected type that exists in the database and is allowed in the C# API.
         bool IsExposed(const FReflectionDatabase& Db, const std::string& Qualified)
         {
@@ -1158,6 +1149,7 @@ namespace Lumina::Reflection
                     EmitOffsetField(Writer, OffName, Prop, TypeName);
                     break;
                 }
+                case EBind::Pointer: // Only function arguments/returns classify as raw pointers.
                 case EBind::Span:
                 case EBind::None:
                     break;

@@ -1,4 +1,4 @@
-﻿#include "GameplayTagPropertyCustomization.h"
+#include "GameplayTagPropertyCustomization.h"
 #include "Localization/Localization.h"
 
 
@@ -47,16 +47,10 @@ namespace Lumina
             }
 
             // Search box. Any edit re-filters the tree on the next Draw.
-            if (TagFilter.Draw("##filter", PopupWidth - ImGui::CalcTextSize(LOC("Clear")).x - Style.FramePadding.x * 2.0f - Spacing))
+            ImGui::SetNextItemWidth(PopupWidth - ImGui::CalcTextSize(LOC("Clear")).x - Style.FramePadding.x * 2.0f - Spacing);
+            if (TagFilter.DrawWithHint("##filter", LOC_ICON(LE_ICON_MAGNIFY, "Search...")))
             {
                 TagTree.MarkTreeDirty();
-            }
-            if (!TagFilter.IsActive())
-            {
-                ImVec2 HintPos = ImGui::GetItemRectMin();
-                HintPos.x += Style.FramePadding.x + 2.0f;
-                HintPos.y += Style.FramePadding.y;
-                ImGui::GetWindowDrawList()->AddText(HintPos, ImGui::GetColorU32(ImGuiCol_TextDisabled), LOC_ICON(LE_ICON_MAGNIFY, "Search..."));
             }
 
             // Clear back to None.
@@ -94,7 +88,7 @@ namespace Lumina
             if (LastBuiltCount == 0)
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-                ImGui::TextUnformatted(TagFilter.IsActive() ? LOC("No matching tags.") : LOC("No tags. Use + to add one."));
+                ImGui::TextUnformatted(ImGuiX::IsSearchFilterActive(TagFilter) ? LOC("No matching tags.") : LOC("No tags. Use + to add one."));
                 ImGui::PopStyleColor();
             }
 
@@ -174,7 +168,7 @@ namespace Lumina
             }
         }
 
-        const bool bFiltering = TagFilter.IsActive();
+        const bool bFiltering = ImGuiX::IsSearchFilterActive(TagFilter);
         const FString Current = Value.TagName.IsNone() ? FString() : FString(Value.TagName.c_str());
 
         THashMap<FString, FTreeNodeID> PathToNode;

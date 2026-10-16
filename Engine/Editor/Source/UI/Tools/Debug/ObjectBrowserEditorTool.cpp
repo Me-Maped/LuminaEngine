@@ -38,13 +38,6 @@ namespace Lumina
             return EditorColors::TextMuted();
         }
 
-        void DrawFilterHint(const char* Hint)
-        {
-            const ImVec2 Min = ImGui::GetItemRectMin();
-            const ImVec2 Pad = ImGui::GetStyle().FramePadding;
-            ImGui::GetWindowDrawList()->AddText(ImVec2(Min.x + Pad.x, Min.y + Pad.y),
-                ImGui::GetColorU32(ImGuiCol_TextDisabled), Hint);
-        }
     }
 
     void FObjectBrowserEditorTool::OnInitialize()
@@ -262,13 +255,11 @@ namespace Lumina
         bool bFilterChanged = false;
 
         ImGui::SetNextItemWidth(200.0f);
-        bFilterChanged |= NameFilter.Draw("##NameFilter");
-        if (!NameFilter.IsActive()) { DrawFilterHint(LOC_ICON(LE_ICON_MAGNIFY, "Name...")); }
+        bFilterChanged |= NameFilter.DrawWithHint("##NameFilter", LOC_ICON(LE_ICON_MAGNIFY, "Name..."));
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(200.0f);
-        bFilterChanged |= ClassFilter.Draw("##ClassFilter");
-        if (!ClassFilter.IsActive()) { DrawFilterHint(LOC_ICON(LE_ICON_MAGNIFY, "Class...")); }
+        bFilterChanged |= ClassFilter.DrawWithHint("##ClassFilter", LOC_ICON(LE_ICON_MAGNIFY, "Class..."));
 
         ImGui::SameLine();
         bFilterChanged |= ImGui::Checkbox(LOC("Defaults"), &Filter.bShowDefaults);

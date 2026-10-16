@@ -1,5 +1,6 @@
 #include "RuntimePCH.h"
 #include "NavClusterGraph.h"
+#include <cfloat>
 
 #if defined(LUMINA_HAS_RECAST)
     #include <DetourNavMesh.h>

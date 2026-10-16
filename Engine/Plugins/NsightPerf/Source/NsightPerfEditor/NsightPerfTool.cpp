@@ -13,6 +13,7 @@
 
 #include "imgui.h"
 #include "Tools/UI/ImGui/EditorColors.h"
+#include "Tools/UI/ImGui/ImGuiX.h"
 
 #include "Containers/String.h"
 #include "Core/CommandLine/CommandLine.h"
@@ -99,15 +100,8 @@ namespace Lumina
             {
                 return true;
             }
-            std::string Needle(Filter);
-            auto Lower = [](std::string S)
-            {
-                for (char& C : S) { C = (char)((C >= 'A' && C <= 'Z') ? (C - 'A' + 'a') : C); }
-                return S;
-            };
-            Needle = Lower(Needle);
-            return Lower(Label).find(Needle) != std::string::npos
-                || Lower(Metric).find(Needle) != std::string::npos;
+            return ImGuiX::PassSearchFilter(FStringView(Filter),
+                { FStringView(Label.data(), Label.size()), FStringView(Metric.data(), Metric.size()) });
         }
     }
 

@@ -277,7 +277,8 @@ namespace Lumina
             return false;
         }
 
-        if (!SearchFilter.empty() && !ImGuiX::PassSearchFilter(FStringView(SearchFilter.c_str(), SearchFilter.size()), FStringView(Row.Name.c_str())))
+        if (!SearchFilter.empty() && !ImGuiX::PassSearchFilter(FStringView(SearchFilter.c_str(), SearchFilter.size()),
+            { Row.Name.c_str(), Row.Path.c_str(), Row.Class.c_str() }))
         {
             return false;
         }
@@ -322,6 +323,7 @@ namespace Lumina
                 Row.GUID      = Data->AssetGUID;
                 Row.Name      = Data->AssetName;
                 Row.Class     = Data->AssetClass;
+                Row.Path      = Data->Path;
                 Row.DiskBytes = Data->FileSize;
 
                 TotalDiskBytes += Row.DiskBytes;

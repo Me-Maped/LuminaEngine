@@ -32,6 +32,7 @@
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
 //  2026-XX-XX: Platform: Added support for multiple windows via the ImGuiPlatformIO interface.
+//  2026-09-15: [Docking] Fixed applying mouse cursor shapes to secondary viewports (broken in 1.92.6, 2025-12-10).
 //  2026-04-21: Added a Win32-specific implementation of ImGui_ImplGlfw_GetContentScaleXXXX functions for legacy GLFW 3.2.
 //  2026-03-25: Mouse cursor is properly restored if changed by user app/code while using glfwSetInputMode(..., GLFW_CURSOR_DISABLED) or ImGuiConfigFlags_NoMouseCursorChange. Amend change from 2025-12-10.
 //  2026-02-10: Try to set IMGUI_IMPL_GLFW_DISABLE_X11 / IMGUI_IMPL_GLFW_DISABLE_WAYLAND automatically if corresponding headers are not accessible. (#9225)
@@ -1002,35 +1003,44 @@ static void ImGui_ImplGlfw_UpdateMouseCursor()
     ImGui_ImplGlfw_Data* bd = ImGui_ImplGlfw_GetBackendData();
     if ((io.ConfigFlags & ImGuiConfigFlags_NoMouseCursorChange) || glfwGetInputMode(bd->Window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED)
     {
-        bd->LastMouseCursor = nullptr;  // Invalidate so that if user changes underlying cursor we will update it next time we can.
+        bd->LastMouseCursor = nullptr; // Invalidate so that if user changes underlying cursor we will update it next time we can.
         return;
     }
 
     ImGuiMouseCursor imgui_cursor = ImGui::GetMouseCursor();
     ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+
+#if GLFW_HAS_CREATECURSOR
+    GLFWcursor* set_mouse_cursor = nullptr;
+    // Lumina patch: None is -1, so never index the cursor array while the OS cursor is hidden.
+    if (imgui_cursor != ImGuiMouseCursor_None && !io.MouseDrawCursor)
+    {
+        set_mouse_cursor = bd->MouseCursors[imgui_cursor] ? bd->MouseCursors[imgui_cursor] : bd->MouseCursors[ImGuiMouseCursor_Arrow];
+        if (bd->LastMouseCursor == set_mouse_cursor)
+            set_mouse_cursor = nullptr;
+        else
+            bd->LastMouseCursor = set_mouse_cursor;
+    }
+    else
+        bd->LastMouseCursor = nullptr;
+#endif
+
     for (int n = 0; n < platform_io.Viewports.Size; n++)
     {
         GLFWwindow* window = (GLFWwindow*)platform_io.Viewports[n]->PlatformHandle;
         if (imgui_cursor == ImGuiMouseCursor_None || io.MouseDrawCursor)
         {
-            if (bd->LastMouseCursor != nullptr)
-            {
-                // Hide OS mouse cursor if imgui is drawing it or if it wants no cursor
-                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
-                bd->LastMouseCursor = nullptr;
-            }
+            // Hide each viewport's cursor; the shared shape cache cannot track visibility per window.
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+            bd->LastMouseCursor = nullptr;
         }
         else
         {
             // Show OS mouse cursor
             // FIXME-PLATFORM: Unfocused windows seems to fail changing the mouse cursor with GLFW 3.2, but 3.3 works here.
 #if GLFW_HAS_CREATECURSOR
-            GLFWcursor* cursor = bd->MouseCursors[imgui_cursor] ? bd->MouseCursors[imgui_cursor] : bd->MouseCursors[ImGuiMouseCursor_Arrow];
-            if (bd->LastMouseCursor != cursor)
-            {
-                glfwSetCursor(window, cursor);
-                bd->LastMouseCursor = cursor;
-            }
+            if (set_mouse_cursor)
+                glfwSetCursor(window, set_mouse_cursor);
 #endif
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         }
@@ -1463,6 +1473,7 @@ static void ImGui_ImplGlfw_CreateWindow(ImGuiViewport* viewport)
         glfwMakeContextCurrent(vd->Window);
         glfwSwapInterval(0);
     }
+    bd->LastMouseCursor = nullptr; // Invalidate so that cursor is set again
 }
 
 static void ImGui_ImplGlfw_DestroyWindow(ImGuiViewport* viewport)

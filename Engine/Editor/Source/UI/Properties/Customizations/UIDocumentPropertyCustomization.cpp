@@ -125,7 +125,8 @@ namespace Lumina
                 {
                     ImGui::SetKeyboardFocusHere();
                 }
-                SearchFilter.Draw("##Search", -1.0f);
+                ImGui::SetNextItemWidth(-1.0f);
+                SearchFilter.DrawWithHint("##Search", LOC("Search..."));
 
                 if (ImGui::Selectable(LOC_ICON(LE_ICON_CLOSE, "None"), !bHasDocument))
                 {

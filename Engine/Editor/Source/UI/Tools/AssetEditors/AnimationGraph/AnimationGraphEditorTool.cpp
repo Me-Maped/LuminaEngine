@@ -1173,14 +1173,14 @@ namespace Lumina
 
     void FAnimationGraphEditorTool::DrawDebugTargetCombo()
     {
-        static auto WorldTypeLabel = [](EWorldType Type) -> const char*
+        static auto WorldTypeLabel = [](EWorldType Type, bool bLocalized = true) -> const char*
         {
             switch (Type)
             {
-            case EWorldType::Game:       return LOC("Game");
-            case EWorldType::Simulation: return LOC("Sim");
-            case EWorldType::Editor:     return LOC("Editor");
-            default:                     return LOC("World");
+            case EWorldType::Game:       return bLocalized ? LOC("Game") : "Game";
+            case EWorldType::Simulation: return bLocalized ? LOC("Sim") : "Sim";
+            case EWorldType::Editor:     return bLocalized ? LOC("Editor") : "Editor";
+            default:                     return bLocalized ? LOC("World") : "World";
             }
         };
 
@@ -1204,8 +1204,10 @@ namespace Lumina
 
         // Flattened into one indexable list so the searchable picker can select by index.
         TVector<FString> Labels;
+        TVector<FString> SourceLabels;
         TVector<TPair<CWorld*, ECS::FEntity>> Targets;
         Labels.push_back(LOC("Preview"));
+        SourceLabels.push_back("Preview");
         Targets.push_back({ nullptr, static_cast<ECS::FEntity>(ECS::NullEntity) });
 
         int32 CurrentIndex = DebugTargetWorld.IsValid() ? Constants::kIndexNone : 0;
@@ -1230,6 +1232,8 @@ namespace Lumina
                     const SNameComponent* Name = CandidateWorld->TryGetComponent<SNameComponent>(Entity);
                     Labels.push_back((Name ? Name->Name.ToString() : FString(LOC("Entity")))
                         + "  (" + WorldTypeLabel(Ctx->Type) + ")");
+                    SourceLabels.push_back((Name ? Name->Name.ToString() : FString("Entity"))
+                        + "  (" + WorldTypeLabel(Ctx->Type, false) + ")");
                     Targets.push_back({ CandidateWorld, Entity });
 
                     if (DebugTargetWorld.Get() == CandidateWorld && DebugTargetEntity == Entity)
@@ -1243,7 +1247,8 @@ namespace Lumina
         ImGui::SameLine();
         ImGui::SetNextItemWidth(220.0f);
         const int32 Picked = ImGuiX::SearchableCombo("##DebugTarget", CurrentLabel.c_str(), (int32)Labels.size(), CurrentIndex,
-            [&Labels](int32 Index) { return FFixedString(Labels[Index].c_str()); });
+            [&Labels](int32 Index) { return FFixedString(Labels[Index].c_str()); }, nullptr, nullptr,
+            [&SourceLabels](int32 Index) { return FFixedString(SourceLabels[Index].c_str()); });
 
         if (Picked != Constants::kIndexNone)
         {
@@ -1371,7 +1376,7 @@ namespace Lumina
         ImGui::TextUnformatted(LOC("Clips"));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 140.0f);
-        ClipFilter.Draw("##ClipFilter");
+        ClipFilter.DrawWithHint("##ClipFilter", LOC("Search..."));
 
         ImGui::SameLine();
         if (ImGui::Checkbox(LOC("Any skeleton"), &bClipBrowserAnySkeleton))
@@ -1447,7 +1452,7 @@ namespace Lumina
         {
             for (const FClipEntry& Entry : ClipEntries)
             {
-                if (!ImGuiX::PassSearchFilter(ClipFilter, Entry.DisplayName.c_str()) && !ImGuiX::PassSearchFilter(ClipFilter, Entry.Path.c_str()))
+                if (!ImGuiX::PassSearchFilter(ClipFilter, { Entry.DisplayName.c_str(), Entry.Path.c_str() }))
                 {
                     continue;
                 }

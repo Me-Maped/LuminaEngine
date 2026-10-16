@@ -10,9 +10,9 @@ namespace Lumina
     class LUMINA_VISIBLE_TYPE FOptionalProperty : public FProperty
     {
     public:
-        explicit FOptionalProperty(const FPropertyDesc& Desc)
-            : FProperty(Desc)
-            , Ops(Desc.Type->GetOptionalOps())
+        explicit FOptionalProperty(const FPropertyDesc& InDesc)
+            : FProperty(InDesc)
+            , Ops(InDesc.Type->GetOptionalOps())
         {
         }
 

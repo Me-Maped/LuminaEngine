@@ -1,14 +1,14 @@
 #include "CategorizedPicker.h"
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "Containers/Algorithm.h"
 #include "Containers/StringFormat.h"
 #include "Core/Math/Math.h"
 #include "Localization/Localization.h"
+#include "Search/TextSearch.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "UI/Tools/NodeGraph/GraphActionMenu.h"
-
-#include <cctype>
 
 namespace Lumina
 {
@@ -20,27 +20,25 @@ namespace Lumina
         // Up to this many items, every category starts open, since collapsing a short list only hides it.
         constexpr int32 kOpenAllBelowCount = 24;
 
-        bool PickerContainsIgnoreCase(FStringView Haystack, const char* Needle)
+        const FString& PickerItemIdentity(const FPickerItem& Item)
         {
-            const size_t NeedleLength = strlen(Needle);
-            if (NeedleLength == 0 || NeedleLength > Haystack.size())
+            return !Item.Key.empty() ? Item.Key : !Item.SourceName.empty() ? Item.SourceName : Item.Name;
+        }
+
+        FStringView NextCategoryPathSegment(FStringView Path, size_t& Cursor)
+        {
+            // Source and display paths may have different leading/repeated separators.
+            // Skip only separators, leaving the caller's folder names unchanged.
+            while (Cursor < Path.size() && Path[Cursor] == '/')
             {
-                return NeedleLength == 0;
+                ++Cursor;
             }
-            for (size_t Start = 0; Start + NeedleLength <= Haystack.size(); ++Start)
+            const size_t Begin = Cursor;
+            while (Cursor < Path.size() && Path[Cursor] != '/')
             {
-                size_t Index = 0;
-                while (Index < NeedleLength
-                    && std::tolower((unsigned char)Haystack[Start + Index]) == std::tolower((unsigned char)Needle[Index]))
-                {
-                    ++Index;
-                }
-                if (Index == NeedleLength)
-                {
-                    return true;
-                }
+                ++Cursor;
             }
-            return false;
+            return Path.substr(Begin, Cursor - Begin);
         }
 
         // The matched characters of a fuzzy search drawn in the accent color, coalesced into runs.
@@ -48,48 +46,22 @@ namespace Lumina
         {
             const ImVec4 MatchColor(1.0f, 0.82f, 0.35f, 1.0f);
             const char* Text = Name.c_str();
-            const size_t Length = Name.size();
-
-            size_t Cursor = 0;
-            size_t MatchCursor = 0;
-            bool bFirstRun = true;
-            while (Cursor < Length)
+            for (const FGraphActionTextSpan& Span : BuildGraphActionHighlightSpans(Text, Matches))
             {
-                const bool bMatched = MatchCursor < Matches.size() && Matches[MatchCursor] == Cursor;
-                size_t RunEnd = Cursor + 1;
-                if (bMatched)
-                {
-                    ++MatchCursor;
-                    while (RunEnd < Length && MatchCursor < Matches.size() && Matches[MatchCursor] == RunEnd)
-                    {
-                        ++RunEnd;
-                        ++MatchCursor;
-                    }
-                }
-                else
-                {
-                    while (RunEnd < Length && (MatchCursor >= Matches.size() || Matches[MatchCursor] != RunEnd))
-                    {
-                        ++RunEnd;
-                    }
-                }
-
-                if (!bFirstRun)
+                if (Span.Begin != 0)
                 {
                     ImGui::SameLine(0.0f, 0.0f);
                 }
-                bFirstRun = false;
 
-                if (bMatched)
+                if (Span.bMatched)
                 {
                     ImGui::PushStyleColor(ImGuiCol_Text, MatchColor);
                 }
-                ImGui::TextUnformatted(Text + Cursor, Text + RunEnd);
-                if (bMatched)
+                ImGui::TextUnformatted(Text + Span.Begin, Text + Span.End);
+                if (Span.bMatched)
                 {
                     ImGui::PopStyleColor();
                 }
-                Cursor = RunEnd;
             }
         }
     }
@@ -129,11 +101,29 @@ namespace Lumina
     const FPickerItem* FCategorizedPicker::DrawContents(const FGatherItems& Gather)
     {
         const bool bAppearing = ImGui::IsWindowAppearing();
-        if (bAppearing)
+        const FLocalizationSnapshot Snapshot = FLocalization::Get().ReadForCurrentFrame();
+        if (bAppearing || !ItemsSnapshot.HasSameTable(Snapshot))
         {
-            Query[0] = '\0';
-            Rebuild(Gather);
+            const FString SelectedIdentity = !bAppearing && SelectedItem >= 0 && SelectedItem < static_cast<int32>(Items.size())
+                ? PickerItemIdentity(Items[SelectedItem]) : FString();
+            if (bAppearing)
+            {
+                Query[0] = '\0';
+            }
+            Rebuild(Gather, Snapshot);
             Rescore();
+            if (!SelectedIdentity.empty())
+            {
+                for (int32 Index = 0; Index < static_cast<int32>(Items.size()); ++Index)
+                {
+                    if (PickerItemIdentity(Items[Index]) == SelectedIdentity && ItemScores[Index] >= 0)
+                    {
+                        SelectedItem = Index;
+                        bScrollToSelected = true;
+                        break;
+                    }
+                }
+            }
         }
 
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 6.0f));
@@ -224,13 +214,14 @@ namespace Lumina
         return Picked >= 0 && Picked < (int32)Items.size() ? &Items[Picked] : nullptr;
     }
 
-    void FCategorizedPicker::Rebuild(const FGatherItems& Gather)
+    void FCategorizedPicker::Rebuild(const FGatherItems& Gather, const FLocalizationSnapshot& Snapshot)
     {
         Items.clear();
         if (Gather)
         {
             Gather(Items);
         }
+        ItemsSnapshot = Snapshot;
 
         Algo::StableSort(Items, [](const FPickerItem& A, const FPickerItem& B) { return A.Name < B.Name; });
 
@@ -240,19 +231,14 @@ namespace Lumina
         {
             int32 Category = 0;
             const FStringView Path(Items[Index].Category);
+            const FStringView SourcePath(Items[Index].SourceCategory.empty() ? Items[Index].Category : Items[Index].SourceCategory);
             size_t Start = 0;
-            while (Start < Path.size())
+            size_t SourceStart = 0;
+            for (FStringView Label = NextCategoryPathSegment(Path, Start); !Label.empty();
+                Label = NextCategoryPathSegment(Path, Start))
             {
-                size_t End = Path.find('/', Start);
-                if (End == FStringView::npos)
-                {
-                    End = Path.size();
-                }
-                if (End > Start)
-                {
-                    Category = FindOrAddChild(Category, Path.substr(Start, End - Start));
-                }
-                Start = End + 1;
+                const FStringView SourceLabel = NextCategoryPathSegment(SourcePath, SourceStart);
+                Category = FindOrAddChild(Category, Label, SourceLabel.empty() ? Label : SourceLabel);
             }
             Categories[Category].Items.push_back(Index);
         }
@@ -273,11 +259,12 @@ namespace Lumina
         DrawnOrder.clear();
     }
 
-    int32 FCategorizedPicker::FindOrAddChild(int32 Parent, FStringView Label)
+    int32 FCategorizedPicker::FindOrAddChild(int32 Parent, FStringView Label, FStringView SourceLabel)
     {
+        const FString Identity = Categories[Parent].Identity + "/" + FString(SourceLabel);
         for (int32 Child : Categories[Parent].Children)
         {
-            if (FStringView(Categories[Child].Label) == Label)
+            if (Categories[Child].Identity == Identity)
             {
                 return Child;
             }
@@ -286,6 +273,7 @@ namespace Lumina
         const int32 Added = (int32)Categories.size();
         FCategory& Category = Categories.emplace_back();
         Category.Label = FString(Label.data(), Label.size());
+        Category.Identity = Identity;
         Categories[Parent].Children.push_back(Added);
         return Added;
     }
@@ -337,6 +325,12 @@ namespace Lumina
         return Count;
     }
 
+    bool FCategorizedPicker::IsSearching() const
+    {
+        const TextSearch::FQuery Parsed(Query);
+        return !Parsed.IsValid() || Parsed.GetTermCount() != 0;
+    }
+
     void FCategorizedPicker::Rescore()
     {
         ScoredQuery = Query;
@@ -350,19 +344,22 @@ namespace Lumina
 
         int32 BestScore = -1;
         SelectedItem = -1;
+        const TextSearch::FQuery SearchQuery(Query);
         for (int32 Index = 0; Index < (int32)Items.size(); ++Index)
         {
+            const FPickerItem& Item = Items[Index];
             int32 Score = 0;
             TVector<uint16> Matches;
-            if (FuzzyMatch(Query, Items[Index].Name.c_str(), Score, Matches))
+            if (FuzzyMatchAliases(SearchQuery, {
+                {Item.Name.c_str(), 1000, true},
+                {Item.SourceName.c_str(), 1000},
+                {Item.Key.c_str(), 500},
+                {Item.Category.c_str()},
+                {Item.SourceCategory.c_str()}}, Score, Matches))
             {
-                // A hit on the name always outranks one that only matched the folder.
-                ItemScores[Index]  = Score + 1000;
+                // Negative scores are reserved for hidden rows; retain fuzzy ranking for visible hits.
+                ItemScores[Index]  = Math::Max(Score, 0);
                 ItemMatches[Index] = Move(Matches);
-            }
-            else if (PickerContainsIgnoreCase(FStringView(Items[Index].Category), Query))
-            {
-                ItemScores[Index] = 0;
             }
             else
             {
@@ -397,7 +394,7 @@ namespace Lumina
             ImGui::SetNextItemOpen(bOpenCategoriesByDefault, ImGuiCond_Once);
         }
 
-        ImGui::PushID(CategoryIndex);
+        ImGui::PushID(Category.Identity.c_str());
         const float RowRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
         const bool bOpen = ImGui::TreeNodeEx("##Category", ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding);
 
@@ -437,7 +434,8 @@ namespace Lumina
         const FPickerItem& Item = Items[ItemIndex];
         const bool bSelected = ItemIndex == SelectedItem;
 
-        ImGui::PushID(ItemIndex);
+        // Display translations and locale-dependent sorting must not change row identity.
+        ImGui::PushID(PickerItemIdentity(Item).c_str());
         const ImVec2 RowStart = ImGui::GetCursorScreenPos();
         if (ImGui::Selectable("##Item", bSelected, ImGuiSelectableFlags_SpanAvailWidth, ImVec2(0.0f, ImGui::GetTextLineHeight() + 4.0f)))
         {

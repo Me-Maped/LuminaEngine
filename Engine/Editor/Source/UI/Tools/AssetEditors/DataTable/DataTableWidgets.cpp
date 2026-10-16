@@ -70,7 +70,7 @@ namespace Lumina::DataTableUI
             [&Candidates](int32 Index) -> FFixedString
             {
                 return (Index == 0) ? FFixedString(LOC("None")) : FFixedString(Candidates[Index - 1]->GetName().c_str());
-            });
+            }, nullptr, nullptr, [](int32 Index) { return Index == 0 ? FFixedString("None") : FFixedString(); });
 
         if (Picked != Constants::kIndexNone)
         {

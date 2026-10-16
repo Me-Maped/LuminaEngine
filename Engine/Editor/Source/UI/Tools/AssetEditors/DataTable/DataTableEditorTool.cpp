@@ -203,20 +203,27 @@ namespace Lumina
         {
             const SDataTableRow& Row = Table->Rows[i];
 
-            if (bFiltering)
+            if (bFiltering && !ImGuiX::PassSearchFilter(Filter, Row.Name.c_str()))
             {
                 // Matches every visible cell, so searching for a value finds the row holding it.
-                bool bMatched = ImGuiX::PassSearchFilter(Filter, Row.Name.c_str());
-                if (!bMatched)
+                TVector<FString> CellText;
+                CellText.reserve(Columns.size());
+                const void* RowMemory = Row.Value.GetMemory();
+                if (RowMemory != nullptr)
                 {
-                    const void* RowMemory = Row.Value.GetMemory();
-                    bMatched = RowMemory != nullptr && Algo::AnyOf(Columns, [&](FProperty* Property)
+                    for (FProperty* Property : Columns)
                     {
-                        return ImGuiX::PassSearchFilter(Filter, Reflection::ToText(Property, RowMemory).c_str());
-                    });
+                        CellText.push_back(Reflection::ToText(Property, RowMemory));
+                    }
                 }
-
-                if (!bMatched)
+                TVector<FStringView> Fields;
+                Fields.reserve(CellText.size() + 1);
+                Fields.emplace_back(Row.Name.c_str());
+                for (const FString& Text : CellText)
+                {
+                    Fields.emplace_back(Text);
+                }
+                if (!ImGuiX::PassSearchFilter(Filter, TSpan<const FStringView>(Fields.data(), Fields.size())))
                 {
                     continue;
                 }
@@ -540,17 +547,9 @@ namespace Lumina
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (Remaining - FilterWidth));
         }
         ImGui::SetNextItemWidth(-1.0f);
-        if (Filter.Draw("##filter"))
+        if (Filter.DrawWithHint("##filter", LOC_ICON(LE_ICON_MAGNIFY, "Search rows...")))
         {
             bDisplayOrderDirty = true;
-        }
-        if (!Filter.IsActive())
-        {
-            // Filter::Draw has no hint parameter, so label the empty box in place.
-            const ImVec2 Min = ImGui::GetItemRectMin();
-            ImGui::GetWindowDrawList()->AddText(
-                ImVec2(Min.x + ImGui::GetStyle().FramePadding.x, Min.y + ImGui::GetStyle().FramePadding.y),
-                ImGui::GetColorU32(ImGuiCol_TextDisabled), LOC_ICON(LE_ICON_MAGNIFY, "Search rows..."));
         }
     }
 

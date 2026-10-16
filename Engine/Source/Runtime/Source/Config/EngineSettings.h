@@ -93,6 +93,18 @@ namespace Lumina
         int32 MaxResidencyChangesPerFrame = 4;
     };
 
+    REFLECT()
+    enum class EEditorTheme : uint8
+    {
+        Lumina,
+        ImGuiDefault,
+        Cyberpunk,
+        Minimal,
+        Wireframe,
+        Brutalist,
+        Bento,
+    };
+
     // Editor-wide preferences + launch state. Lives in the runtime module so the runtime
     // ImGui renderer can read UIScale, while the editor edits it through the Settings panel.
     REFLECT(MinimalAPI, ConfigFile = "/Editor/Config/EditorPreferences.json", DisplayName = "General", Category = "Editor")
@@ -100,6 +112,10 @@ namespace Lumina
     {
         GENERATED_BODY()
     public:
+
+        /** Presets keep your custom Editor Colors intact. Select Lumina to use them again. */
+        PROPERTY(Editable, Category = "Appearance")
+        EEditorTheme Theme = EEditorTheme::Lumina;
 
         /** Editor UI scale. 0 = auto (monitor DPI + resolution); otherwise an explicit factor (1.0 = 100%).
             Stepped (no click-drag) so the whole editor doesn't relayout continuously while adjusting. */

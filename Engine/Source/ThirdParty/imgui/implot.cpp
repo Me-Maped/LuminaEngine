@@ -135,8 +135,8 @@ You can read releases logs https://github.com/epezent/implot/releases for more d
 #include <stdlib.h>
 
 // Support for pre-1.82 versions. Users on 1.82+ can use 0 (default) flags to mean "all corners" but in order to support older versions we are more explicit.
-#if (IMGUI_VERSION_NUM < 18102) && !defined(ImDrawFlags_RoundCornersAll)
-#define ImDrawFlags_RoundCornersAll ImDrawCornerFlags_All
+#if (IMGUI_VERSION_NUM < 18102) && !defined(ImDrawFlags_RoundAll)
+#define ImDrawFlags_RoundAll ImDrawCornerFlags_All
 #endif
 
 // Support for pre-1.89.7 versions.
@@ -3111,7 +3111,7 @@ void EndPlot() {
 
     // render border
     if (render_border)
-        DrawList.AddRect(plot.PlotRect.Min, plot.PlotRect.Max, GetStyleColorU32(ImPlotCol_PlotBorder), 0, gp.Style.PlotBorderSize, ImDrawFlags_RoundCornersAll);
+        DrawList.AddRect(plot.PlotRect.Min, plot.PlotRect.Max, GetStyleColorU32(ImPlotCol_PlotBorder), 0, gp.Style.PlotBorderSize, ImDrawFlags_RoundAll);
 
     // render tags
     for (int i = 0; i < gp.Tags.Size; ++i) {
@@ -5015,7 +5015,8 @@ void ShowStyleEditor(ImPlotStyle* ref) {
             ImGui::SameLine(); ImGui::Checkbox("Only Modified Colors", &output_only_modified);
 
             static ImGuiTextFilter filter;
-            filter.Draw("Filter colors", ImGui::GetFontSize() * 16);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+            filter.Draw("Filter colors");
 
             static ImGuiColorEditFlags alpha_flags = ImGuiColorEditFlags_AlphaPreviewHalf;
 #if IMGUI_VERSION_NUM < 19173

@@ -306,7 +306,7 @@ namespace Lumina
             if (!FilterView.empty())
             {
                 const FString Name = Row.Name.ToString();
-                if (Name.find(Filter) == FString::npos && Row.PackagePath.find(Filter) == FString::npos)
+                if (!ImGuiX::PassSearchFilter(FilterView, { Name, Row.PackagePath }))
                 {
                     continue;
                 }

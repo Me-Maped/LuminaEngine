@@ -289,6 +289,18 @@ namespace Lumina
         uint64   ContentId = 0;
     };
 
+    // Stored by FNavSourceTracker, which has external linkage.
+    struct FNavSourceEntry
+    {
+        uint64          Key = 0;
+        FNavSourcePrim  Prim;
+        FVector3        AABBMin = FVector3( FLT_MAX);
+        FVector3        AABBMax = FVector3(-FLT_MAX);
+
+        // Identifies the geometry behind the AABB; a change dirties the tiles exactly like a move.
+        uint64          ContentId = 0;
+    };
+
     namespace
     {
         const CNavigationSettings& NavSettings()
@@ -722,17 +734,6 @@ namespace Lumina
         {
             return Type == ENavColliderType::AreaVolume || Type == ENavColliderType::OffMeshLink;
         }
-
-        struct FNavSourceEntry
-        {
-            uint64          Key = 0;
-            FNavSourcePrim  Prim;
-            FVector3        AABBMin = FVector3( FLT_MAX);
-            FVector3        AABBMax = FVector3(-FLT_MAX);
-
-            // Identifies the geometry behind the AABB; a change dirties the tiles exactly like a move.
-            uint64          ContentId = 0;
-        };
 
         void EmitNavSourcePrim(const FNavSourcePrim& P, const FVector3& BakeMin, const FVector3& BakeMax, FGatherAccumulator& Acc)
         {

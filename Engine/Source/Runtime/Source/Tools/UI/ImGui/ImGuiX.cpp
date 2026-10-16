@@ -1,5 +1,6 @@
-﻿#include "Containers/StringFormat.h"
+#include "Containers/StringFormat.h"
 #include "Localization/Localization.h"
+#include "Search/TextSearch.h"
 #include "RuntimePCH.h"
 #include <iterator>
 #include "ImGuiX.h"
@@ -581,7 +582,7 @@ namespace Lumina::ImGuiX
             const float FillRight = ImClamp(KnobX, TrackMin.x + Rounding, TrackMax.x);
             if (FillRight > TrackMin.x)
             {
-                DL->AddRectFilled(TrackMin, ImVec2(FillRight, TrackMax.y), FillCol, Rounding, ImDrawFlags_RoundCornersLeft);
+                DL->AddRectFilled(TrackMin, ImVec2(FillRight, TrackMax.y), FillCol, Rounding, ImDrawFlags_RoundLeft);
                 if (EnumHasAnyFlags(Flags, ESliderFlags::FillGradient))
                 {
                     // Overlay a left->knob gradient; color at the knob reflects its position along the full range.
@@ -607,14 +608,16 @@ namespace Lumina::ImGuiX
             DL->AddCircle(KnobCenter, KnobRadius, LerpColor(FillCol, IM_COL32(0, 0, 0, 255), 0.15f), 0, ImMax(1.0f, 1.5f * Scale));
 
             // Optional value readout, right-aligned over the track.
+            const bool MixedValue = (g.LastItemData.ItemFlags & ImGuiItemFlags_MixedValue) != 0;
+            const char* DisplayFormat = MixedValue && g.MixedValueLabel != nullptr ? g.MixedValueLabel : Format;
             if (EnumHasAnyFlags(Flags, ESliderFlags::AlwaysValue))
             {
                 char Buf[64];
-                const char* BufEnd = Buf + ImGui::DataTypeFormatString(Buf, IM_ARRAYSIZE(Buf), DataType, Value, Format);
+                const char* BufEnd = Buf + ImGui::DataTypeFormatString(Buf, IM_ARRAYSIZE(Buf), DataType, Value, DisplayFormat);
                 const ImVec2 TextSize = ImGui::CalcTextSize(Buf, BufEnd);
                 const ImVec2 TextPos(FrameBB.Max.x - TextSize.x, CenterY - TextSize.y * 0.5f);
                 DL->AddText(TextPos + ImVec2(1, 1), IM_COL32(0, 0, 0, 110), Buf, BufEnd);
-                DL->AddText(TextPos, ImGui::GetColorU32(ImGuiCol_Text), Buf, BufEnd);
+                DL->AddText(TextPos, ImGui::GetColorU32(MixedValue ? ImGuiCol_TextMixedValue : ImGuiCol_Text), Buf, BufEnd);
             }
 
             // Trailing label.
@@ -626,7 +629,7 @@ namespace Lumina::ImGuiX
             if (EnumHasAnyFlags(Flags, ESliderFlags::ValueOnHover) && (Held || Hovered))
             {
                 char Buf[64];
-                ImGui::DataTypeFormatString(Buf, IM_ARRAYSIZE(Buf), DataType, Value, Format);
+                ImGui::DataTypeFormatString(Buf, IM_ARRAYSIZE(Buf), DataType, Value, DisplayFormat);
                 ImGuiX::TextTooltip("{}", Buf);
             }
 
@@ -654,14 +657,7 @@ namespace Lumina::ImGuiX
         const float Avail  = ImGui::GetContentRegionAvail().x;
 
         ImGui::SetNextItemWidth(Math::Max(Avail - ButtonWidth - Style.ItemSpacing.x - Margin, 48.0f));
-        bool bChanged = Filter.Draw(StrId);
-
-        if (Hint != nullptr && !Filter.IsActive())
-        {
-            const ImVec2 Min = ImGui::GetItemRectMin();
-            ImGui::GetWindowDrawList()->AddText(ImVec2(Min.x + Style.FramePadding.x, Min.y + Style.FramePadding.y),
-                ImGui::GetColorU32(ImGuiCol_TextDisabled), Hint);
-        }
+        bool bChanged = Filter.DrawWithHint(StrId, Hint);
 
         ImGui::SameLine();
 
@@ -678,49 +674,47 @@ namespace Lumina::ImGuiX
         return bChanged;
     }
 
+    bool IsSearchFilterActive(const ImGuiTextFilter& Filter)
+    {
+        const TextSearch::FQuery Query(Filter.InputBuf);
+        return !Query.IsValid() || Query.GetTermCount() != 0;
+    }
+
+    bool PassSearchFilter(FStringView Query, TSpan<const FStringView> Fields)
+    {
+        // A list tests many rows against the same query. Parse only when the query changes,
+        // own its bytes, and keep no borrowed candidate or localization pointers between calls.
+        thread_local TextSearch::FQuery Parsed;
+        Parsed.SetText(static_cast<std::string_view>(Query));
+        return Parsed.MatchesFields(Fields);
+    }
+
+    bool PassSearchFilter(const ImGuiTextFilter& Filter, TSpan<const FStringView> Fields)
+    {
+        return PassSearchFilter(FStringView(Filter.InputBuf), Fields);
+    }
+
+    bool PassSearchFilter(FStringView Query, std::initializer_list<FStringView> Fields)
+    {
+        return PassSearchFilter(Query, TSpan<const FStringView>(Fields.begin(), Fields.size()));
+    }
+
+    bool PassSearchFilter(const ImGuiTextFilter& Filter, std::initializer_list<FStringView> Fields)
+    {
+        return PassSearchFilter(FStringView(Filter.InputBuf), Fields);
+    }
+
     bool PassSearchFilter(FStringView Query, FStringView Text)
     {
-        const char* Word      = Query.data();
-        const char* QueryEnd  = Query.data() + Query.size();
-        const char* TextBegin = Text.data();
-        const char* TextEnd   = Text.data() + Text.size();
-
-        while (Word < QueryEnd)
-        {
-            while (Word < QueryEnd && *Word == ' ')
-            {
-                ++Word;
-            }
-
-            const char* WordEnd = Word;
-            while (WordEnd < QueryEnd && *WordEnd != ' ')
-            {
-                ++WordEnd;
-            }
-
-            if (WordEnd == Word)
-            {
-                break;
-            }
-
-            if (TextBegin == TextEnd || ImStristr(TextBegin, TextEnd, Word, WordEnd) == nullptr)
-            {
-                return false;
-            }
-
-            Word = WordEnd;
-        }
-
-        // An empty box, or one holding only spaces, filters nothing out.
-        return true;
+        return PassSearchFilter(Query, {Text});
     }
 
     bool PassSearchFilter(const ImGuiTextFilter& Filter, FStringView Text)
     {
-        return PassSearchFilter(FStringView(Filter.InputBuf), Text);
+        return PassSearchFilter(FStringView(Filter.InputBuf), {Text});
     }
 
-    int32 SearchableCombo(const char* StrId, const char* Preview, int32 ItemCount, int32 CurrentIndex, const TFunction<FFixedString(int32)>& GetItemLabel, const char* ItemIcon, FFixedString* OutCreatedText)
+    int32 SearchableCombo(const char* StrId, const char* Preview, int32 ItemCount, int32 CurrentIndex, const TFunction<FFixedString(int32)>& GetItemLabel, const char* ItemIcon, FFixedString* OutCreatedText, const TFunction<FFixedString(int32)>& GetSearchAlias)
     {
         int32 Result = Constants::kIndexNone;
         if (OutCreatedText != nullptr)
@@ -771,16 +765,8 @@ namespace Lumina::ImGuiX
             {
                 ImGui::SetKeyboardFocusHere();
             }
-            Filter.Draw("##filter", PopupWidth);
-
-            // Gray magnify hint while the search box is empty.
-            if (!Filter.IsActive())
-            {
-                ImVec2 HintPos = ImGui::GetItemRectMin();
-                HintPos.x += Style.FramePadding.x + 2.0f;
-                HintPos.y += Style.FramePadding.y;
-                ImGui::GetWindowDrawList()->AddText(HintPos, ImGui::GetColorU32(ImGuiCol_TextDisabled), LE_ICON_MAGNIFY " Search...");
-            }
+            ImGui::SetNextItemWidth(PopupWidth);
+            Filter.DrawWithHint("##filter", LOC_ICON(LE_ICON_MAGNIFY, "Search..."));
 
             ImGui::Separator();
 
@@ -822,7 +808,8 @@ namespace Lumina::ImGuiX
                 for (int32 i = 0; i < ItemCount; ++i)
                 {
                     const FFixedString Label = GetItemLabel(i);
-                    if (!PassSearchFilter(Filter, Label.c_str()))
+                    const FFixedString Alias = GetSearchAlias ? GetSearchAlias(i) : FFixedString();
+                    if (!PassSearchFilter(Filter, {Label.c_str(), Alias.c_str()}))
                     {
                         continue;
                     }
@@ -921,7 +908,8 @@ namespace Lumina::ImGuiX
         const char* Preview = (CurrentIndex != Constants::kIndexNone) ? Assets[CurrentIndex]->AssetName.c_str() : "Select an asset...";
 
         const int32 Picked = SearchableCombo(StrId, Preview, (int32)Assets.size(), CurrentIndex,
-            [&Assets](int32 Index) { return FFixedString(Assets[Index]->AssetName.c_str()); }, ItemIcon);
+            [&Assets](int32 Index) { return FFixedString(Assets[Index]->AssetName.c_str()); }, ItemIcon, nullptr,
+            [&Assets](int32 Index) { return FFixedString(Assets[Index]->Path.c_str()); });
 
         if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
         {
@@ -979,7 +967,15 @@ namespace Lumina::ImGuiX
             [&Candidates, Offset](int32 Index) -> FFixedString
             {
                 return (Index < Offset) ? FFixedString("None") : FFixedString(Candidates[Index - Offset]->GetName().c_str());
-            }, ItemIcon);
+            }, ItemIcon, nullptr,
+            [&Candidates, Offset](int32 Index) -> FFixedString
+            {
+                if (Index < Offset) { return FFixedString(LOC("None")); }
+                const auto Source = Candidates[Index - Offset]->MakeDisplayName();
+                const auto Snapshot = FLocalization::Get().ReadForCurrentFrame();
+                const FStringView Translated = Snapshot.TranslateView(Source);
+                return FFixedString(Translated.data(), Translated.size());
+            });
 
         if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
         {
@@ -1040,7 +1036,15 @@ namespace Lumina::ImGuiX
             [&Candidates, Offset](int32 Index) -> FFixedString
             {
                 return (Index < Offset) ? FFixedString("None") : FFixedString(Candidates[Index - Offset]->GetName().c_str());
-            }, ItemIcon);
+            }, ItemIcon, nullptr,
+            [&Candidates, Offset](int32 Index) -> FFixedString
+            {
+                if (Index < Offset) { return FFixedString(LOC("None")); }
+                const auto Source = Candidates[Index - Offset]->MakeDisplayName();
+                const auto Snapshot = FLocalization::Get().ReadForCurrentFrame();
+                const FStringView Translated = Snapshot.TranslateView(Source);
+                return FFixedString(Translated.data(), Translated.size());
+            });
 
         if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
         {
@@ -1163,7 +1167,7 @@ namespace Lumina::ImGuiX
 		{
 			ImGuiContext& g = *GImGui;
 			ImVec2 new_size = size_desired;
-			if (g.NextWindowData.WindowFlags & ImGuiNextWindowDataFlags_HasSizeConstraint)
+			if (g.NextWindowData.HasFlags & ImGuiNextWindowDataFlags_HasSizeConstraint)
 			{
 				// Using -1,-1 on either X/Y axis to preserve the current size.
 				ImRect cr = g.NextWindowData.SizeConstraintRect;

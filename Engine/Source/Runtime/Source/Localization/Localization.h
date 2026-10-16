@@ -33,6 +33,8 @@ namespace Lumina
         const char* Translate(FStringView Source, FStringView Context) const;
         FStringView TranslateView(FStringView Source) const;
         FStringView TranslateView(FStringView Source, FStringView Context) const;
+        // Identity includes a reload of the same language. Both snapshots own their tables.
+        bool HasSameTable(const FLocalizationSnapshot& Other) const;
 
     private:
         friend class FLocalization;
@@ -84,6 +86,10 @@ namespace Lumina
 
         /** Obtain a reader-owned table without holding a lock while formatting or running a task. */
         FLocalizationSnapshot Read() const;
+
+        // UI caches must use the same table as LOC during a pinned frame. Outside a frame,
+        // this is a normal owning read; no borrowed thread-local pointer escapes.
+        FLocalizationSnapshot ReadForCurrentFrame() const;
 
         // Sets the active language from an in-memory table instead of the file system. Exists for
         // tests, tools and future cooked string tables that never touch disk.

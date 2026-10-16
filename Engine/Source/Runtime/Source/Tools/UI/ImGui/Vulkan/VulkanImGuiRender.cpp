@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "VulkanImGuiRender.h"
 
 #include "imgui.h"
@@ -6,7 +6,7 @@
 #include "backends/imgui_impl_glfw.h"
 
 #include "Core/Windows/GLFWInclude.h"
-#include <algorithm>
+#include <cmath>
 
 #include "Core/Engine/Engine.h"
 #include "Core/Profiler/Profile.h"
@@ -21,6 +21,11 @@ namespace Lumina
 {
     // The single live backend instance, so the static ImGuiPlatformIO::Renderer_* hooks can reach it.
     static FVulkanImGuiRender* GImGuiBackend = nullptr;
+
+    // Identifiers interpreted by RecordDrawLists, as in the official renderer backends.
+    static void ImGuiDrawCallbackResetRenderState(const ImDrawList*, const ImDrawCmd*) {}
+    static void ImGuiDrawCallbackSetSamplerLinear(const ImDrawList*, const ImDrawCmd*) {}
+    static void ImGuiDrawCallbackSetSamplerNearest(const ImDrawList*, const ImDrawCmd*) {}
 
     // Mirrors FImGuiArgs in ImGuiVert/Pixel.slang (48 B scalar).
     struct FNewImGuiArgs
@@ -55,10 +60,16 @@ namespace Lumina
         ImGuiPlatformIO& PlatformIO = ImGui::GetPlatformIO();
         PlatformIO.Renderer_CreateWindow  = &FVulkanImGuiRender::OnRendererCreateWindow;
         PlatformIO.Renderer_DestroyWindow = &FVulkanImGuiRender::OnRendererDestroyWindow;
+        PlatformIO.DrawCallback_ResetRenderState = &ImGuiDrawCallbackResetRenderState;
+        PlatformIO.DrawCallback_SetSamplerLinear = &ImGuiDrawCallbackSetSamplerLinear;
+        PlatformIO.DrawCallback_SetSamplerNearest = &ImGuiDrawCallbackSetSamplerNearest;
         GImGuiBackend = this;
 
         // The shader hard-codes the field offsets, so the vertex layout is pinned here.
         static_assert(sizeof(ImDrawVert) == 20, "ImDrawVert layout drifted; ImGuiVert.slang must be updated.");
+        static_assert(offsetof(ImDrawVert, pos) == 0 && offsetof(ImDrawVert, uv) == 8 && offsetof(ImDrawVert, col) == 16,
+            "ImDrawVert field offsets must match ImGuiVert.slang.");
+        static_assert(sizeof(ImDrawIdx) == 2 || sizeof(ImDrawIdx) == 4, "Unsupported ImDrawIdx width.");
     }
 
     void FVulkanImGuiRender::Deinitialize()
@@ -86,6 +97,7 @@ namespace Lumina
         ImPlot::DestroyContext();
         ImGui::DestroyContext();
         GImGuiBackend = nullptr;
+        ReleaseDestroyedContext();
     }
 
     void FVulkanImGuiRender::OnStartFrame(const FUpdateContext& UpdateContext)
@@ -114,6 +126,13 @@ namespace Lumina
         {
             if (Tex->Status == ImTextureStatus_WantCreate || Tex->Status == ImTextureStatus_WantUpdates)
             {
+                // The atlas supplies RGBA32 by default, including its baked AA lines and corners.
+                IM_ASSERT(Tex->Format == ImTextureFormat_RGBA32);
+                if (Tex->Format != ImTextureFormat_RGBA32 || Tex->GetPixels() == nullptr)
+                {
+                    continue;
+                }
+
                 auto It = NewFontTextures.find(Tex->UniqueID);
                 if (It == NewFontTextures.end())
                 {
@@ -124,17 +143,23 @@ namespace Lumina
                         .Format = EFormat::RGBA8_UNORM,
                         .DebugName = "ImGui.FontAtlas",
                     });
+                    if (!Created.IsValid() || Created.ResourceID() == RHI::kInvalidHeapSlot)
+                    {
+                        RHI::Textures::Release(Created);
+                        continue;
+                    }
                     It = NewFontTextures.insert_or_assign(Tex->UniqueID, Created).first;
-                    Tex->SetTexID((ImTextureID)(uint32)Created.ResourceID());
                 }
 
-                if (Tex->GetPixels() != nullptr)
+                // RHI uploads the complete atlas; acknowledge updates only when the upload was queued.
+                // Failed uploads retain their request so the next frame can retry.
+                const uint64 Bytes = (uint64)Tex->Width * (uint64)Tex->Height * Tex->BytesPerPixel;
+                if (RHI::Textures::Upload(It->second, 0, Tex->GetPixels(), Bytes, (uint32)Tex->Width))
                 {
-                    const uint64 Bytes = (uint64)Tex->Width * (uint64)Tex->Height * 4;
-                    bUploaded |= RHI::Textures::Upload(It->second, 0, Tex->GetPixels(), Bytes, (uint32)Tex->Width);
+                    bUploaded = true;
+                    Tex->SetTexID((ImTextureID)(uint32)It->second.ResourceID());
+                    Tex->SetStatus(ImTextureStatus_OK);
                 }
-
-                Tex->SetStatus(ImTextureStatus_OK);
             }
             else if (Tex->Status == ImTextureStatus_WantDestroy && Tex->UnusedFrames >= (int)(RHI::kFramesInFlight * 2))
             {
@@ -203,7 +228,8 @@ namespace Lumina
 
     void FVulkanImGuiRender::RecordDrawLists(RHI::FCmdListH CL, ImDrawData* DrawData, float FBW, float FBH)
     {
-        if (DrawData != nullptr && DrawData->TotalVtxCount > 0 && DrawData->TotalIdxCount > 0 && FBW > 0.0f && FBH > 0.0f && NewPipeline)
+        if (DrawData != nullptr && DrawData->TotalVtxCount > 0 && DrawData->TotalIdxCount > 0 &&
+            DrawData->DisplaySize.x > 0.0f && DrawData->DisplaySize.y > 0.0f && FBW > 0.0f && FBH > 0.0f && NewPipeline)
         {
             const int32 TotalVtx = DrawData->TotalVtxCount;
             const int32 TotalIdx = DrawData->TotalIdxCount;
@@ -222,25 +248,32 @@ namespace Lumina
                 IdxDst += List->IdxBuffer.Size;
             }
 
-            FNewImGuiArgs Args;
+            FNewImGuiArgs Args{};
             Args.Scale[0]     = 2.0f / DrawData->DisplaySize.x;
             Args.Scale[1]     = 2.0f / DrawData->DisplaySize.y;
             Args.Translate[0] = -1.0f - DrawData->DisplayPos.x * Args.Scale[0];
             Args.Translate[1] = -1.0f - DrawData->DisplayPos.y * Args.Scale[1];
-            Args.SamplerIndex = (uint32)RHI::EStockSampler::LinearWrap;
-            Args.DisplayMode  = 0;      // UI atlases hold display-encoded bytes
-            Args.Exposure     = 1.0f;
-            Args.ArraySlice   = 0;
-            Args.bIsArray     = 0;      // the overwhelming majority of ImGui draws are plain Texture2D
             Args.VertexAddr   = VB.Gpu;
 
             // Resolved once, since the preview stamps this marker and the draws match on identity.
             const ImDrawCallback DisplayStateCallback = ImGuiX::Detail::GetDisplayStateCallback();
 
-            RHI::CmdSetDepthStencil(CL, RHI::FDepthStencilDesc{});
-            RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
-            RHI::CmdSetFrontFace(CL, RHI::EFrontFace::CCW);
-            RHI::CmdSetPipeline(CL, NewPipeline);
+            const auto ResetRenderState = [&]()
+            {
+                // Linear filtering is required by the atlas's baked AA lines/corners. Clamp UV edges.
+                Args.SamplerIndex = (uint32)RHI::EStockSampler::LinearClamp;
+                Args.DisplayMode  = 0; // UI atlases hold display-encoded bytes
+                Args.Exposure     = 1.0f;
+                Args.ArraySlice   = 0;
+                Args.bIsArray     = 0;
+                RHI::CmdSetDepthStencil(CL, RHI::FDepthStencilDesc{});
+                RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
+                RHI::CmdSetFrontFace(CL, RHI::EFrontFace::CCW);
+                RHI::CmdSetPipeline(CL, NewPipeline);
+                RHI::CmdSetTextureHeap(CL, RHI::GetGlobalHeap());
+                RHI::CmdSetViewport(CL, RHI::FRect{ 0, (int)FBW, 0, (int)FBH });
+            };
+            ResetRenderState();
 
             const ImVec2 ClipOff   = DrawData->DisplayPos;
             const ImVec2 ClipScale = DrawData->FramebufferScale;
@@ -255,8 +288,19 @@ namespace Lumina
                     const ImDrawCmd& Cmd = List->CmdBuffer[c];
                     if (Cmd.UserCallback != nullptr)
                     {
-                        // It carries no geometry, so it updates state for the draws that follow and contributes nothing.
-                        if (Cmd.UserCallback == DisplayStateCallback &&
+                        if (Cmd.UserCallback == ImGuiDrawCallbackResetRenderState)
+                        {
+                            ResetRenderState();
+                        }
+                        else if (Cmd.UserCallback == ImGuiDrawCallbackSetSamplerLinear)
+                        {
+                            Args.SamplerIndex = (uint32)RHI::EStockSampler::LinearClamp;
+                        }
+                        else if (Cmd.UserCallback == ImGuiDrawCallbackSetSamplerNearest)
+                        {
+                            Args.SamplerIndex = (uint32)RHI::EStockSampler::PointClamp;
+                        }
+                        else if (Cmd.UserCallback == DisplayStateCallback &&
                             Cmd.UserCallbackData != nullptr &&
                             Cmd.UserCallbackDataSize == (int)sizeof(ImGuiX::Detail::FImGuiDisplayState))
                         {
@@ -265,6 +309,10 @@ namespace Lumina
                             Args.Exposure    = State->Exposure;
                             Args.ArraySlice  = State->ArraySlice;
                             Args.bIsArray    = State->bIsArray;
+                        }
+                        else
+                        {
+                            Cmd.UserCallback(List, &Cmd);
                         }
                         continue;
                     }
@@ -280,11 +328,17 @@ namespace Lumina
 
                     RHI::CmdSetScissor(CL, RHI::FRect{ (int)MinX, (int)MaxX, (int)MinY, (int)MaxY });
 
+                    // A failed first upload remains pending; do not sample an uninitialized atlas.
+                    if (Cmd.TexRef._TexData != nullptr && Cmd.TexRef.GetTexID() == ImTextureID_Invalid)
+                    {
+                        continue;
+                    }
                     const int32 RawTexID = (int32)Cmd.GetTexID();
                     Args.TextureID = (RawTexID >= 0) ? (uint32)RawTexID : DefaultTex;
                     const RHI::GPUPtr ArgsPtr = RHI::CopyTransient(Args);
 
-                    RHI::CmdDrawIndexed(CL, IB, ArgsPtr, Cmd.ElemCount, 1, Cmd.IdxOffset + GlobalIdx, (int32)(Cmd.VtxOffset + GlobalVtx), 0, RHI::EIndexType::Uint16);
+                    constexpr RHI::EIndexType IndexType = sizeof(ImDrawIdx) == 2 ? RHI::EIndexType::Uint16 : RHI::EIndexType::Uint32;
+                    RHI::CmdDrawIndexed(CL, IB, ArgsPtr, Cmd.ElemCount, 1, Cmd.IdxOffset + GlobalIdx, (int32)(Cmd.VtxOffset + GlobalVtx), 0, IndexType);
                 }
                 GlobalVtx += List->VtxBuffer.Size;
                 GlobalIdx += List->IdxBuffer.Size;
@@ -339,8 +393,9 @@ namespace Lumina
             return;
         }
 
-        const float ReqW = DrawData->DisplaySize.x * DrawData->FramebufferScale.x;
-        const float ReqH = DrawData->DisplaySize.y * DrawData->FramebufferScale.y;
+        // Match upstream framebuffer rounding at fractional DPI; truncation can lose a pixel.
+        const float ReqW = std::round(DrawData->DisplaySize.x * DrawData->FramebufferScale.x);
+        const float ReqH = std::round(DrawData->DisplaySize.y * DrawData->FramebufferScale.y);
         if (ReqW <= 0.0f || ReqH <= 0.0f)
         {
             return;

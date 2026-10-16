@@ -1,5 +1,7 @@
 #include "GraphActionMenuSearch.h"
+#include "Search/TextSearch.h"
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 
@@ -65,16 +67,16 @@ namespace Lumina
         FORCEINLINE bool IsUpper(uint32 C) { return C >= 'A' && C <= 'Z'; }
     }
 
-    bool FuzzyMatch(const char* Query, const char* Target, int32& OutScore, TVector<uint16>& OutMatchIndices)
+    static bool FuzzyMatchView(std::string_view Query, std::string_view Target, int32& OutScore, TVector<uint16>& OutMatchIndices)
     {
         OutScore = 0;
         OutMatchIndices.clear();
 
-        if (Query == nullptr || Query[0] == '\0')
+        if (Query.empty())
         {
             return true;
         }
-        if (Target == nullptr)
+        if (Target.empty())
         {
             return false;
         }
@@ -88,8 +90,8 @@ namespace Lumina
         const int32 UnmatchedPenalty  = -1;
 
         int32 Score = 0;
-        const size_t QueryLength = strlen(Query);
-        const size_t TargetLength = strlen(Target);
+        const size_t QueryLength = Query.size();
+        const size_t TargetLength = Target.size();
         size_t QueryIdx = 0;
         size_t TargetIdx = 0;
         int32 CharacterIndex = 0;
@@ -100,8 +102,8 @@ namespace Lumina
         while (TargetIdx < TargetLength && QueryIdx < QueryLength
             && TargetIdx <= std::numeric_limits<uint16>::max())
         {
-            const FUtf8Character QC = DecodeCharacter(Query + QueryIdx, QueryLength - QueryIdx);
-            const FUtf8Character TC = DecodeCharacter(Target + TargetIdx, TargetLength - TargetIdx);
+            const FUtf8Character QC = DecodeCharacter(Query.data() + QueryIdx, QueryLength - QueryIdx);
+            const FUtf8Character TC = DecodeCharacter(Target.data() + TargetIdx, TargetLength - TargetIdx);
             if (QC.Value == InvalidCodepoint)
             {
                 break;
@@ -159,7 +161,7 @@ namespace Lumina
             ++CharacterIndex;
         }
 
-        if (Query[QueryIdx] != '\0')
+        if (QueryIdx != QueryLength)
         {
             OutMatchIndices.clear();
             OutScore = 0;
@@ -167,6 +169,59 @@ namespace Lumina
         }
 
         OutScore = Score;
+        return true;
+    }
+
+    bool FuzzyMatch(const char* Query, const char* Target, int32& OutScore, TVector<uint16>& OutMatchIndices)
+    {
+        return FuzzyMatchView(Query != nullptr ? std::string_view(Query) : std::string_view(),
+            Target != nullptr ? std::string_view(Target) : std::string_view(), OutScore, OutMatchIndices);
+    }
+
+    bool FuzzyMatchAliases(const TextSearch::FQuery& Query, std::initializer_list<FFuzzySearchAlias> Aliases,
+        int32& OutScore, TVector<uint16>& OutDisplayMatches)
+    {
+        OutScore = 0;
+        OutDisplayMatches.clear();
+        if (!Query.IsValid())
+        {
+            return false;
+        }
+        TVector<uint16> Matches;
+        for (size_t TermIndex = 0; TermIndex < Query.GetTermCount(); ++TermIndex)
+        {
+            bool bMatched = false;
+            int32 BestScore = std::numeric_limits<int32>::min();
+            for (const FFuzzySearchAlias& Alias : Aliases)
+            {
+                int32 Score = 0;
+                if (!FuzzyMatchView(Query.GetTerm(TermIndex), Alias.Text, Score, Matches))
+                {
+                    continue;
+                }
+                bMatched = true;
+                BestScore = std::max(BestScore, Score + Alias.ScoreBonus);
+                if (Alias.bDisplayText)
+                {
+                    for (uint16 Match : Matches)
+                    {
+                        OutDisplayMatches.push_back(Match);
+                    }
+                }
+            }
+            if (!bMatched)
+            {
+                OutScore = 0;
+                OutDisplayMatches.clear();
+                return false;
+            }
+            OutScore += BestScore;
+        }
+        if (!OutDisplayMatches.empty())
+        {
+            std::sort(OutDisplayMatches.begin(), OutDisplayMatches.end());
+            OutDisplayMatches.erase(std::unique(OutDisplayMatches.begin(), OutDisplayMatches.end()), OutDisplayMatches.end());
+        }
         return true;
     }
 

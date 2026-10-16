@@ -3,11 +3,13 @@
 #include "Containers/Vector.h"
 #include "Containers/Function.h"
 #include "Containers/String.h"
+#include "Containers/Span.h"
 #include "Core/Reflection/PropertyChangedEvent.h"
 #include "Core/Reflection/PropertyCustomization/PropertyCustomization.h"
 #include "Memory/SmartPtr.h"
 #include "Scripting/ManagedTypeRegistry.h"
 #include "imgui.h"
+#include <initializer_list>
 
 namespace Lumina
 {
@@ -117,7 +119,7 @@ namespace Lumina
         void DestroyChildren();
 
         virtual void Update() { }
-        void UpdateRow();
+        void UpdateRow(bool bIncludeCollapsedChildren = false);
         void DrawRow(float Offset, const FPropertyDrawArgs& Args);
         virtual void DrawChildren(float ChildOffset, const FPropertyDrawArgs& Args);
 
@@ -142,7 +144,9 @@ namespace Lumina
         // Label this row is matched against by the table's search box. A row with no label (array
         // elements, which are numbered) never matches on its own but can still survive on a
         // descendant's match.
-        virtual FStringView GetFilterLabel() const { return FStringView(); }
+        virtual FStringView GetFilterLabel() const;
+        virtual FStringView GetFilterSourceLabel() const;
+        virtual FStringView GetFilterInternalName() const;
 
         // Recomputes visibility for this row and its subtree. A row survives when it matches OR any
         // descendant does -- filtering to a leaf has to keep its ancestors, or the match is unreachable.
@@ -150,7 +154,8 @@ namespace Lumina
         // Also owns the expansion save/restore: while filtering, surviving rows are force-opened so
         // matches are visible without hunting; when the filter clears, every row's manual collapse state
         // is put back exactly as the user left it.
-        bool ApplyFilter(const ImGuiTextFilter& Filter, bool bFilterActive, bool bJustActivated, bool bJustCleared);
+        bool ApplyFilter(const ImGuiTextFilter& Filter, bool bFilterActive, bool bJustActivated, bool bJustCleared,
+            TSpan<const FStringView> SearchContext = {}, bool bAncestorMatches = false);
 
         bool PassesFilter() const { return bPassesFilter; }
 
@@ -202,6 +207,8 @@ namespace Lumina
         // filter, since filtering overwrites bExpanded to reveal matches.
         bool                                    bPassesFilter = true;
         bool                                    bExpandedSaved = true;
+        // A row can be created while the table is already filtering; capture its own initial state.
+        bool                                    bFilterStateActive = false;
 
         // The row's own height when it was last drawn, which an offscreen row reserves instead of drawing.
         float                                   LastDrawnHeight = 0.0f;
@@ -210,8 +217,6 @@ namespace Lumina
     class FPropertyPropertyRow : public FPropertyRow
     {
     public:
-
-        FStringView GetFilterLabel() const override;
 
         FPropertyPropertyRow(const TSharedPtr<FPropertyHandle>& InPropHandle, FPropertyRow* InParentRow, const FPropertyChangedEventCallbacks& Callbacks);
         void Update() override;
@@ -425,6 +430,7 @@ namespace Lumina
 
         FName GetCategoryName() const { return Category; }
         FStringView GetFilterLabel() const override;
+        FStringView GetFilterSourceLabel() const override { return FStringView(Category.c_str()); }
         bool IsCategory() const override { return true; }
 
         void DrawHeader(float Offset, const FPropertyDrawArgs& Args) override;
@@ -485,6 +491,8 @@ namespace Lumina
         // (the scene editor's component list). Pair with SetShowSearchBar(false) so the panel's box is the
         // only one on screen.
         void SetSearchText(FStringView Text);
+        // Owning aliases supplied by the enclosing component section. Terms may match these or a row.
+        void SetSearchContext(std::initializer_list<FStringView> Fields);
 
         // Builds the tree if needed, applies the current filter, and reports whether anything survived.
         // Lets a caller skip drawing a section header for a table that would come back empty -- a list of
@@ -509,6 +517,7 @@ namespace Lumina
         bool                           bObjectEditSessionActive = false;
 
         ImGuiTextFilter                PropertyFilter;
+        TVector<FString>               SearchContext;
         bool                           bShowSearchBar = true;
         // Edge detection: the save/restore of per-row expansion has to happen exactly once on each
         // transition, not every frame the filter happens to be active.

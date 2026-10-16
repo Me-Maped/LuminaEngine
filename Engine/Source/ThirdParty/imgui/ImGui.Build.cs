@@ -29,6 +29,7 @@ public class ImGui : LuminaThirdPartyModuleRules
             "imgui_tables.cpp",
             "imgui_widgets.cpp",
             "imgui_demo.cpp",
+            "misc/themes/imgui_themes.cpp",
 
             "implot.cpp",
             "implot_items.cpp",

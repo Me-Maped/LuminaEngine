@@ -11,10 +11,10 @@ namespace Lumina
     class FArrayProperty : public FProperty
     {
     public:
-        explicit FArrayProperty(const FPropertyDesc& Desc)
-            : FProperty(Desc)
+        explicit FArrayProperty(const FPropertyDesc& InDesc)
+            : FProperty(InDesc)
         {
-            Ops = Desc.Type->GetVectorOps();
+            Ops = InDesc.Type->GetVectorOps();
             SetElementSize(Ops != nullptr ? Ops->ContainerSize : 0);
         }
         

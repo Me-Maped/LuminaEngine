@@ -16,6 +16,7 @@ namespace Lumina::ImGuiX
             ImGuiContext* Context = nullptr;
             ImGuiID Id = 0;
             char Buffer[256] = {};
+            char InitialBuffer[256] = {};
             bool FocusNext = false;
         };
 
@@ -41,6 +42,7 @@ namespace Lumina::ImGuiX
             Edit.FocusNext = FocusNext;
             const ImGuiDataTypeInfo* Info = ImGui::DataTypeGetInfo(DataType);
             ImGui::DataTypeFormatString(Edit.Buffer, IM_ARRAYSIZE(Edit.Buffer), DataType, Data, Info->PrintFmt);
+            std::memcpy(Edit.InitialBuffer, Edit.Buffer, sizeof(Edit.InitialBuffer));
             ActiveEdits.push_back(Edit);
         }
 
@@ -124,7 +126,7 @@ namespace Lumina::ImGuiX
                     }
                     ++At;
                     double Right;
-                    if (!Unary(Right) || Right == 0.0 && Operator != '*')
+                    if (!Unary(Right) || (Right == 0.0 && Operator != '*'))
                     {
                         return false;
                     }
@@ -287,7 +289,23 @@ namespace Lumina::ImGuiX
             bool Changed = false;
             if (Commit)
             {
-                Changed = ApplyInput(Edit->Buffer, DataType, Data, Format);
+                bool MixedValidated = false;
+                if (GImGui->LastItemData.ItemFlags & ImGuiItemFlags_MixedValue)
+                {
+                    if (ImGuiInputTextState* State = ImGui::GetInputTextState(Id))
+                    {
+                        MixedValidated = State->ValidatedThisFrame;
+                    }
+                }
+                // Escape restores the initial text, which may have less precision than Data.
+                // Do not round the backing value by reparsing an unchanged or reverted buffer.
+                if (MixedValidated || std::strcmp(Edit->Buffer, Edit->InitialBuffer) != 0)
+                {
+                    Changed = ApplyInput(Edit->Buffer, DataType, Data, Format);
+                }
+                // Like ImGui::InputScalar, explicit mixed-value validation assigns to all
+                // selected objects even when the representative value itself is unchanged.
+                Changed |= MixedValidated;
                 // Either side alone clamps, but a pair with no range is unclamped as ImGui's drag reads it, or every typed value commits as zero.
                 const bool bNoRange = Min != nullptr && Max != nullptr && ImGui::DataTypeCompare(DataType, Min, Max) >= 0;
                 if (Changed && (Min != nullptr || Max != nullptr) && !bNoRange)
@@ -296,7 +314,7 @@ namespace Lumina::ImGuiX
                 }
                 EndEdit(Id);
             }
-            if (!Commit)
+            if (!Changed)
             {
                 GImGui->LastItemData.StatusFlags &= ~ImGuiItemStatusFlags_Edited;
             }
@@ -374,16 +392,16 @@ namespace Lumina::ImGuiX
         const float Spacing = ImGui::GetStyle().ItemInnerSpacing.x;
         ImGui::SetNextItemWidth(ImMax(1.0f, ImGui::CalcItemWidth() - (ButtonSize + Spacing) * 2.0f));
         Changed |= DrawExpressionText("", DataType, Data, Format, nullptr, nullptr, Flags);
+        const void* ChosenStep = StepFast != nullptr && ImGui::GetIO().KeyCtrl ? StepFast : Step;
         ImGui::SameLine(0.0f, Spacing);
         if (ImGui::Button("-", ImVec2(ButtonSize, ButtonSize)))
         {
-            ImGui::DataTypeApplyOp(DataType, '-', Data, Data, Step);
+            ImGui::DataTypeApplyOp(DataType, '-', Data, Data, ChosenStep);
             Changed = true;
         }
         ImGui::SameLine(0.0f, Spacing);
         if (ImGui::Button("+", ImVec2(ButtonSize, ButtonSize)))
         {
-            const void* ChosenStep = StepFast != nullptr && ImGui::GetIO().KeyCtrl ? StepFast : Step;
             ImGui::DataTypeApplyOp(DataType, '+', Data, Data, ChosenStep);
             Changed = true;
         }

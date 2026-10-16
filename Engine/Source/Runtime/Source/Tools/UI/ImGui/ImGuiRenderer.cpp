@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "ImGuiRenderer.h"
 
 #include "ImGuiDesignIcons.h"
@@ -115,6 +115,9 @@ namespace Lumina
         ImGuiStyle GBaseStyle;
         bool       GBaseStyleValid = false;
         float      GAppliedScale   = -1.0f;
+        EEditorTheme GAppliedTheme = EEditorTheme::Lumina;
+        ImGuiThemes::Theme GActivePreset;
+        bool GHasActivePreset = false;
     	
         constexpr float kAutoScaleBias = 0.85f;
     	
@@ -132,7 +135,7 @@ namespace Lumina
             const float Override = GetDefault<CEditorSettings>()->UIScale;
             if (Override > 0.0f)
             {
-                return Override;
+                return EditorThemes::ClampScale(Override);
             }
 
             float Scale = 1.0f;
@@ -141,11 +144,26 @@ namespace Lumina
                 Scale = Window->GetContentScale();
                 Scale *= ResolutionFactor(static_cast<float>(Window->GetMonitorResolution().y));
             }
-            Scale = (Scale > 0.0f ? Scale : 1.0f) * kAutoScaleBias;
+            Scale = EditorThemes::ClampScale((Scale > 0.0f ? Scale : 1.0f) * kAutoScaleBias);
         	
         	GetMutableDefault<CEditorSettings>()->UIScale = Scale;
         	
-            return Math::Max(Scale, 0.5f);
+            return Scale;
+        }
+
+        bool TryThemePreset(EEditorTheme Theme, ImGuiThemes::Id& OutId)
+        {
+            switch (Theme)
+            {
+            case EEditorTheme::ImGuiDefault: OutId = ImGuiThemes::Id::Default; return true;
+            case EEditorTheme::Cyberpunk:    OutId = ImGuiThemes::Id::Cyberpunk; return true;
+            case EEditorTheme::Minimal:      OutId = ImGuiThemes::Id::Minimal; return true;
+            case EEditorTheme::Wireframe:    OutId = ImGuiThemes::Id::Wireframe; return true;
+            case EEditorTheme::Brutalist:    OutId = ImGuiThemes::Id::Brutalist; return true;
+            case EEditorTheme::Bento:        OutId = ImGuiThemes::Id::Bento; return true;
+            case EEditorTheme::Lumina:       break;
+            }
+            return false;
         }
 
         void ApplyUIScale()
@@ -156,18 +174,27 @@ namespace Lumina
             }
 
             const float Scale = ResolveUIScale();
-            ImGuiStyle& Style = ImGui::GetStyle();
-            Style = GBaseStyle;             // reset to unscaled reference (keeps colors)
-            Style.ScaleAllSizes(Scale);
-            Style.FontScaleMain = Scale;    // 1.92 dynamic fonts rasterize at the scaled size
+            const EEditorTheme Selected = GetDefault<CEditorSettings>()->Theme;
+            ImGuiThemes::Id PresetId = ImGuiThemes::Id::Default;
+            GHasActivePreset = TryThemePreset(Selected, PresetId);
+            if (GHasActivePreset)
+            {
+                GActivePreset = ImGuiThemes::Make(PresetId);
+            }
+            const bool Applied = EditorThemes::ApplyStyle(GBaseStyle,
+                GHasActivePreset ? &GActivePreset : nullptr, Scale,
+                (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0);
+            DEBUG_ASSERT(Applied);
             GAppliedScale = Scale;
+            GAppliedTheme = Selected;
 
             ImGuiX::SetUIScale(Scale);
         }
     	
         void RefreshUIScaleIfNeeded()
         {
-            if (GBaseStyleValid && ResolveUIScale() != GAppliedScale)
+            if (GBaseStyleValid && (ResolveUIScale() != GAppliedScale
+                || GetDefault<CEditorSettings>()->Theme != GAppliedTheme))
             {
                 ApplyUIScale();
             }
@@ -178,16 +205,18 @@ namespace Lumina
         void ApplyPaletteColors(ImGuiStyle& Style)
         {
             using namespace EditorColors;
-            const ImVec4 Acc   = Accent();
-            const ImVec4 Win   = WindowBg();
-            const ImVec4 Frame = FrameBg();
-            const ImVec4 Title = TitleBg();
-            const ImVec4 Btn   = Button();
-            const ImVec4 Hdr   = Header();
-            const ImVec4 Bord  = Border();
+            // Always derive the Lumina baseline from saved user colors, never the active preset.
+            const CEditorColorSettings& Palette = *GetDefault<CEditorColorSettings>();
+            const ImVec4 Acc   = ToImVec4(Palette.Accent);
+            const ImVec4 Win   = ToImVec4(Palette.WindowBg);
+            const ImVec4 Frame = ToImVec4(Palette.FrameBg);
+            const ImVec4 Title = ToImVec4(Palette.TitleBg);
+            const ImVec4 Btn   = ToImVec4(Palette.Button);
+            const ImVec4 Hdr   = ToImVec4(Palette.Header);
+            const ImVec4 Bord  = ToImVec4(Palette.Border);
 
-            Style.Colors[ImGuiCol_Text]             = TextPrimary();
-            Style.Colors[ImGuiCol_TextDisabled]     = TextMuted();
+            Style.Colors[ImGuiCol_Text]             = ToImVec4(Palette.TextPrimary);
+            Style.Colors[ImGuiCol_TextDisabled]     = ToImVec4(Palette.TextMuted);
             Style.Colors[ImGuiCol_WindowBg]         = Win;
             Style.Colors[ImGuiCol_ChildBg]          = Win;
             Style.Colors[ImGuiCol_PopupBg]          = Win;
@@ -247,9 +276,15 @@ namespace Lumina
         }
     }
 
+    const ImGuiThemes::Theme* EditorThemes::GetActivePreset()
+    {
+        return GHasActivePreset ? &GActivePreset : nullptr;
+    }
+
     void IImGuiRenderer::Initialize()
     {
         IMGUI_CHECKVERSION();
+        GHasActivePreset = false;
 
         // Before CreateContext, so even ImGui's first internal allocation goes through our allocator.
         ImGuiX::InstallImGuiAllocator();
@@ -438,11 +473,19 @@ namespace Lumina
     	ApplyUIScale();
     }
 
+    void IImGuiRenderer::ReleaseDestroyedContext()
+    {
+        GHasActivePreset = false;
+        GBaseStyleValid = false;
+        Context = nullptr;
+        PlotContext = nullptr;
+        CJKFontData.clear();
+    }
+
     void IImGuiRenderer::Deinitialize()
     {
         ImGui::DestroyContext(Context);
-        Context = nullptr;
-        CJKFontData.clear();
+        ReleaseDestroyedContext();
     }
 
     void IImGuiRenderer::StartFrame(const FUpdateContext& UpdateContext)

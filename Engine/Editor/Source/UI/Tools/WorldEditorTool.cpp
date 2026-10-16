@@ -2675,7 +2675,7 @@ namespace Lumina
             ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.2f, 0.2f, 0.21f, 1.0f));
 
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-            Filter->Draw(LOC_ICON(LE_ICON_BRIEFCASE_SEARCH, "Search Components..."), ImGui::GetContentRegionAvail().x);
+            Filter->DrawWithHint(LOC_ICON(LE_ICON_BRIEFCASE_SEARCH, "Search Components..."), LOC("Search..."));
 
             ImGui::PopStyleColor(3);
             ImGui::PopStyleVar(2);
@@ -4693,6 +4693,15 @@ namespace Lumina
 
         ImGuiX::SearchBar("##SystemSearch", SystemsFilter, LOC_ICON(LE_ICON_MAGNIFY, "Search systems..."));
 
+        const auto MatchesSystem = [&](const CWorld::FSystemInfo& Info, uint8 Stage)
+        {
+            const FString InternalName = Info.Name.ToString();
+            const FString SourceName = FriendlySystemName(InternalName);
+            return ImGuiX::PassSearchFilter(SystemsFilter,
+                {SourceName, LOC(SourceName.c_str()), InternalName,
+                 kSystemStages[Stage].Label, LOC(kSystemStages[Stage].Label)});
+        };
+
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
         const int32 DisabledCount = (int32)CachedSystemInfos.size() - EnabledCount;
         if (DisabledCount > 0)
@@ -4727,7 +4736,7 @@ namespace Lumina
                 for (const FSystemScheduleEntry& Entry : Schedule)
                 {
                     const CWorld::FSystemInfo* Info = Entry.Stage == Stage ? FindInfo(Entry.Name) : nullptr;
-                    if (Info != nullptr && ImGuiX::PassSearchFilter(SystemsFilter, FriendlySystemName(Info->Name.ToString()).c_str()))
+                    if (Info != nullptr && MatchesSystem(*Info, Stage))
                     {
                         Rows.push_back({ Info, &Entry });
                     }
@@ -4740,7 +4749,7 @@ namespace Lumina
                 {
                     const bool bInStage = Stage == kNoUpdateStage ? Info.Stages.empty() : Algo::Contains(Info.Stages, (EUpdateStage)Stage);
                     const bool bScheduled = Algo::AnyOf(Rows, [&Info](const FStageRow& Row) { return Row.Info == &Info; });
-                    if (bInStage && !bScheduled && ImGuiX::PassSearchFilter(SystemsFilter, FriendlySystemName(Info.Name.ToString()).c_str()))
+                    if (bInStage && !bScheduled && MatchesSystem(Info, Stage))
                     {
                         Rows.push_back({ &Info, nullptr });
                     }

@@ -11,8 +11,8 @@ namespace Lumina
     class FDelegateProperty : public FProperty
     {
     public:
-        explicit FDelegateProperty(const FPropertyDesc& Desc)
-            : FProperty(Desc)
+        explicit FDelegateProperty(const FPropertyDesc& InDesc)
+            : FProperty(InDesc)
         {
             SetElementSize(sizeof(FScriptDelegate));
         }

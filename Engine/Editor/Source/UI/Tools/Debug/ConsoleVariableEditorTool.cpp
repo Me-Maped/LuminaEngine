@@ -69,7 +69,7 @@ namespace Lumina
             return true;
         }
 
-        return ImGuiX::PassSearchFilter(SearchFilter, Name) || ImGuiX::PassSearchFilter(SearchFilter, Hint);
+        return ImGuiX::PassSearchFilter(SearchFilter, { Name, Hint });
     }
 
     void FConsoleVariableEditorTool::DrawWindow(bool bIsFocused)

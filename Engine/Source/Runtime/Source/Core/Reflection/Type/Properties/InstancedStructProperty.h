@@ -11,7 +11,7 @@ namespace Lumina
     class FInstancedStructProperty : public FProperty
     {
     public:
-        explicit FInstancedStructProperty(const FPropertyDesc& Desc);
+        explicit FInstancedStructProperty(const FPropertyDesc& InDesc);
 
         RUNTIME_API void Serialize(FArchive& Ar, void* Value) override;
         RUNTIME_API void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;

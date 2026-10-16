@@ -118,14 +118,13 @@ struct FringeScaleScope
     FringeScaleScope(float scale)
         : m_LastFringeScale(ax::NodeEditor::Detail::ImFringeScaleRef(ImGui::GetWindowDrawList()))
     {
-        // Qualified: imgui_canvas.cpp declares a global ImFringeScaleRef(ImDrawList*), and ADL makes the
-        // unqualified call ambiguous whenever both land in one unity translation unit.
-        ax::NodeEditor::Detail::ImFringeScaleRef(ImGui::GetWindowDrawList()) = scale;
+        // ImGui 1.93 also caches inverse density and whether the density is integral.
+        ImGui::GetWindowDrawList()->_SetPixelDensity(1.0f / scale);
     }
 
     ~FringeScaleScope()
     {
-        ax::NodeEditor::Detail::ImFringeScaleRef(ImGui::GetWindowDrawList()) = m_LastFringeScale;
+        ImGui::GetWindowDrawList()->_SetPixelDensity(1.0f / m_LastFringeScale);
     }
 
 private:

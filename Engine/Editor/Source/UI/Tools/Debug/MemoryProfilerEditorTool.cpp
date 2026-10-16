@@ -673,12 +673,6 @@ namespace Lumina
         TVector<const RHI::FGPUAllocationInfo*> Visible;
         Visible.reserve(GPUAllocations.size());
 
-        char FilterLower[sizeof(GPUFilter)];
-        for (size_t i = 0; i < sizeof(GPUFilter); ++i)
-        {
-            FilterLower[i] = (char)std::tolower((unsigned char)GPUFilter[i]);
-        }
-
         for (const RHI::FGPUAllocationInfo& Alloc : GPUAllocations)
         {
             const bool bTexture = Alloc.Kind == RHI::EGPUAllocationKind::Texture;
@@ -687,19 +681,11 @@ namespace Lumina
                 continue;
             }
 
-            if (FilterLower[0] != '\0')
+            if (!ImGuiX::PassSearchFilter(FStringView(GPUFilter),
+                { Alloc.Name, Alloc.Name[0] == '\0' ? "<unnamed>" : "", Alloc.Name[0] == '\0' ? LOC("<unnamed>") : "",
+                    bTexture ? "Texture" : "Buffer", bTexture ? LOC("Texture") : LOC("Buffer") }))
             {
-                char NameLower[RHI::kMaxGPUAllocationName];
-                size_t n = 0;
-                for (; n + 1 < sizeof(NameLower) && Alloc.Name[n] != '\0'; ++n)
-                {
-                    NameLower[n] = (char)std::tolower((unsigned char)Alloc.Name[n]);
-                }
-                NameLower[n] = '\0';
-                if (std::strstr(NameLower, FilterLower) == nullptr)
-                {
-                    continue;
-                }
+                continue;
             }
 
             Visible.push_back(&Alloc);

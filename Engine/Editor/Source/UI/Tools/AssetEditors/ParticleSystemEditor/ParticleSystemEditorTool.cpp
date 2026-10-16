@@ -447,14 +447,16 @@ namespace Lumina
         const FPickerItem* Picked = EmitterAssetPicker.DrawButton("##AddEmitterAsset", LOC_ICON(LE_ICON_PLUS, "Add Emitter Asset"), [](TVector<FPickerItem>& Items)
         {
             const FName EmitterClass = CParticleEmitter::StaticClass()->GetName();
-            for (const FAssetData* Data : FAssetRegistry::Get().FindByPredicate([&](const FAssetData& Asset) { return Asset.AssetClass == EmitterClass; }))
+            for (const FAssetData* Data : FAssetRegistry::Get().FindByPredicate([&](const FAssetData& Candidate) { return Candidate.AssetClass == EmitterClass; }))
             {
                 const FStringView Path(Data->Path.c_str(), Data->Path.size());
                 FPickerItem& Item = Items.emplace_back();
                 Item.Name     = Data->AssetName.c_str();
+                Item.SourceName = Item.Name;
                 Item.Key      = Data->AssetGUID.ToString();
                 const FStringView Folder = VFS::Parent(Path, true);
                 Item.Category = FString(Folder.data(), Folder.size());
+                Item.SourceCategory = Item.Category;
                 Item.Tooltip  = FString(Path.data(), Path.size());
                 Item.Icon     = LE_ICON_SHIMMER;
             }

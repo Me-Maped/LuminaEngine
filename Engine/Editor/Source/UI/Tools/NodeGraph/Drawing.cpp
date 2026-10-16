@@ -122,7 +122,7 @@ namespace Lumina
                     const auto p1 = rect_center + ImVec2(r, r);
 
 #if IMGUI_VERSION_NUM > 18101
-                    drawList->AddRectFilled(p0, p1, color, 0, ImDrawFlags_RoundCornersAll);
+                    drawList->AddRectFilled(p0, p1, color, 0, ImDrawFlags_RoundAll);
 #else
                     drawList->AddRectFilled(p0, p1, color, 0, 15);
 #endif
@@ -136,16 +136,16 @@ namespace Lumina
                     if (innerColor & 0xFF000000)
                     {
 #if IMGUI_VERSION_NUM > 18101
-                        drawList->AddRectFilled(p0, p1, innerColor, 0, ImDrawFlags_RoundCornersAll);
+                        drawList->AddRectFilled(p0, p1, innerColor, 0, ImDrawFlags_RoundAll);
 #else
                         drawList->AddRectFilled(p0, p1, innerColor, 0, 15);
 #endif
                     }
 
 #if IMGUI_VERSION_NUM > 18101
-                    drawList->AddRect(p0, p1, color, 0, 2.0f * outline_scale, ImDrawFlags_RoundCornersAll);
+                    drawList->AddRect(p0, p1, color, 0, 2.0f * outline_scale, ImDrawFlags_RoundAll);
 #else
-                    drawList->AddRect(p0, p1, color, 0, 2.0f * outline_scale, ImDrawFlags_RoundCornersAll);
+                    drawList->AddRect(p0, p1, color, 0, 2.0f * outline_scale, ImDrawFlags_RoundAll);
 #endif
                 }
             }
@@ -190,7 +190,7 @@ namespace Lumina
                     const auto p1 = rect_center + ImVec2(r, r);
 
 #if IMGUI_VERSION_NUM > 18101
-                    drawList->AddRectFilled(p0, p1, color, cr, ImDrawFlags_RoundCornersAll);
+                    drawList->AddRectFilled(p0, p1, color, cr, ImDrawFlags_RoundAll);
 #else
                     drawList->AddRectFilled(p0, p1, color, cr, 15);
 #endif
@@ -205,16 +205,16 @@ namespace Lumina
                     if (innerColor & 0xFF000000)
                     {
 #if IMGUI_VERSION_NUM > 18101
-                        drawList->AddRectFilled(p0, p1, innerColor, cr, ImDrawFlags_RoundCornersAll);
+                        drawList->AddRectFilled(p0, p1, innerColor, cr, ImDrawFlags_RoundAll);
 #else
                         drawList->AddRectFilled(p0, p1, innerColor, cr, 15);
 #endif
                     }
 
 #if IMGUI_VERSION_NUM > 18101
-                    drawList->AddRect(p0, p1, color, cr, 2.0f * outline_scale, ImDrawFlags_RoundCornersAll);
+                    drawList->AddRect(p0, p1, color, cr, 2.0f * outline_scale, ImDrawFlags_RoundAll);
 #else
-                    drawList->AddRect(p0, p1, color, cr, 2.0f * outline_scale, ImDrawFlags_RoundCornersAll);
+                    drawList->AddRect(p0, p1, color, cr, 2.0f * outline_scale, ImDrawFlags_RoundAll);
 #endif
                 }
             }
@@ -332,7 +332,7 @@ void Graph::GraphNodeBuilder::End(bool bWantsTitlebar)
             UV,
             HeaderColor, 
             NodeRounding, 
-            ImDrawFlags_RoundCornersTop
+            ImDrawFlags_RoundTop
         );
     }
 

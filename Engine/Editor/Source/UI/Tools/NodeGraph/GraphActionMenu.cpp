@@ -3,6 +3,7 @@
 #include "EdGraphNode.h"
 #include "EdNodeGraph.h"
 #include "Localization/Localization.h"
+#include "Search/TextSearch.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "Core/Object/Cast.h"
@@ -13,6 +14,12 @@ namespace Lumina
 {
     namespace
     {
+        bool GraphQueryIsActive(const char* Text)
+        {
+            const TextSearch::FQuery Query(Text != nullptr ? Text : "");
+            return !Query.IsValid() || Query.GetTermCount() != 0;
+        }
+
         void DrawHighlightedText(const char* Text, const TVector<uint16>& MatchIndices, const ImVec4& MatchColor)
         {
             if (Text == nullptr)
@@ -76,7 +83,7 @@ namespace Lumina
         }
     }
 
-    void FGraphActionMenu::RebuildActions(CEdNodeGraph* Graph)
+    void FGraphActionMenu::RebuildActions(CEdNodeGraph* Graph, const FLocalizationSnapshot& Snapshot)
     {
         Actions.clear();
         VisibleIndices.clear();
@@ -99,16 +106,17 @@ namespace Lumina
 
             FGraphAction Action;
             Action.NodeClass   = NodeClass;
-            // Read out of the table rather than through the LOC_VIEW family: all three are stored
-            // on the action instead of being drawn on the spot, and a tooltip runs to several
-            // hundred characters, well past the rotating buffer that family writes through.
-            Action.DisplayName = FString(FLocalization::Get().TranslateView(
-                CDO->GetNodeDisplayName(), FStringView("node")));
-            Action.Category    = FString(FLocalization::Get().TranslateView(CDO->GetNodeCategory()));
-            Action.Tooltip     = FString(FLocalization::Get().TranslateView(CDO->GetNodeTooltip()));
+            Action.SourceName = CDO->GetNodeDisplayName();
+            Action.SourceCategory = CDO->GetNodeCategory();
+            Action.Key = NodeClass->GetName().ToString();
+            // Own both languages and translate all retained labels from one immutable table.
+            Action.DisplayName = FString(Snapshot.TranslateView(Action.SourceName, FStringView("node")));
+            Action.Category = FString(Snapshot.TranslateView(Action.SourceCategory));
+            Action.Tooltip = FString(Snapshot.TranslateView(CDO->GetNodeTooltip()));
             Actions.push_back(Move(Action));
         }
 
+        ActionsSnapshot = Snapshot;
         bActionsDirty = false;
     }
 
@@ -117,7 +125,8 @@ namespace Lumina
         VisibleIndices.clear();
         VisibleIndices.reserve(Actions.size());
 
-        const bool bHasQuery = QueryBuffer[0] != '\0';
+        const TextSearch::FQuery Query(QueryBuffer);
+        const bool bHasQuery = GraphQueryIsActive(QueryBuffer);
 
         for (int32 i = 0; i < static_cast<int32>(Actions.size()); ++i)
         {
@@ -131,28 +140,14 @@ namespace Lumina
                 continue;
             }
 
-            int32 NameScore = 0;
-            TVector<uint16> NameIndices;
-            const bool bNameMatched = FuzzyMatch(QueryBuffer, Action.DisplayName.c_str(), NameScore, NameIndices);
-
-            int32 CategoryScore = 0;
-            TVector<uint16> CategoryIndices;
-            const bool bCategoryMatched = FuzzyMatch(QueryBuffer, Action.Category.c_str(), CategoryScore, CategoryIndices);
-
-            if (!bNameMatched && !bCategoryMatched)
+            if (!FuzzyMatchAliases(Query, {
+                {Action.DisplayName.c_str(), 100, true},
+                {Action.SourceName.c_str(), 100},
+                {Action.Key.c_str(), 50},
+                {Action.Category.c_str()},
+                {Action.SourceCategory.c_str()}}, Action.Score, Action.MatchIndices))
             {
                 continue;
-            }
-
-            if (bNameMatched && (!bCategoryMatched || NameScore >= CategoryScore))
-            {
-                Action.Score = NameScore + 100;
-                Action.MatchIndices = Move(NameIndices);
-            }
-            else
-            {
-                Action.Score = CategoryScore;
-                Action.MatchIndices.clear();
             }
 
             VisibleIndices.push_back(i);
@@ -196,10 +191,31 @@ namespace Lumina
             return false;
         }
 
-        if (bActionsDirty)
+        const FLocalizationSnapshot Snapshot = FLocalization::Get().ReadForCurrentFrame();
+        if (bActionsDirty || !ActionsSnapshot.HasSameTable(Snapshot))
         {
-            RebuildActions(Graph);
+            CClass* SelectedClass = SelectedIndex >= 0 && SelectedIndex < static_cast<int32>(VisibleIndices.size())
+                ? Actions[VisibleIndices[SelectedIndex]].NodeClass : nullptr;
+            RebuildActions(Graph, Snapshot);
             Rescore();
+            bool bRestored = false;
+            if (SelectedClass != nullptr)
+            {
+                for (int32 Index = 0; Index < static_cast<int32>(VisibleIndices.size()); ++Index)
+                {
+                    if (Actions[VisibleIndices[Index]].NodeClass == SelectedClass)
+                    {
+                        SelectedIndex = Index;
+                        bRestored = true;
+                        break;
+                    }
+                }
+            }
+            if (!bRestored)
+            {
+                SelectedIndex = 0;
+            }
+            bPendingScrollToSelected = bRestored;
         }
 
         constexpr ImVec2 PopupSize(360, 460);
@@ -282,7 +298,7 @@ namespace Lumina
         if (ImGui::BeginChild("##GraphActionList", ListSize, false))
         {
             FString CurrentCategory;
-            const bool bGroupByCategory = QueryBuffer[0] == '\0';
+            const bool bGroupByCategory = !GraphQueryIsActive(QueryBuffer);
 
             for (int32 Position = 0; Position < static_cast<int32>(VisibleIndices.size()); ++Position)
             {
@@ -310,7 +326,7 @@ namespace Lumina
 
                 const bool bIsSelected = (Position == SelectedIndex);
 
-                ImGui::PushID(ActionIdx);
+                ImGui::PushID(Action.NodeClass);
 
                 if (bIsSelected)
                 {

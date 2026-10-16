@@ -458,7 +458,8 @@ namespace Lumina
         if (ImGui::CollapsingHeader(LOC_ID("Entities")))
         {
             static ImGuiTextFilter Filter;
-            Filter.Draw(LOC("Filter (name)"), 180.0f);
+            ImGui::SetNextItemWidth(180.0f);
+            Filter.DrawWithHint(LOC("Filter (name)"), LOC("Search..."));
 
             constexpr int MaxRows = 256;
             int Shown = 0, Total = 0;

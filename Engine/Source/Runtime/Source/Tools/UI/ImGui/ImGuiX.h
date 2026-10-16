@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "Containers/StringFormat.h"
 #include <iterator>
@@ -7,6 +7,7 @@
 #include "imgui_internal.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Containers/Function.h"
+#include "Containers/Span.h"
 #include "Core/LuminaMacros.h"
 #include "Core/Math/Math.h"
 #include "Core/Templates/LuminaTemplate.h"
@@ -228,19 +229,29 @@ namespace Lumina::ImGuiX
     RUNTIME_API bool SliderInt(const char* Label, int32* Value, int32 Min, int32 Max, ESliderFlags Flags = ESliderFlags::None, const char* Format = "%d", const FSliderStyle* Style = nullptr);
     
     // Filter input + trailing clear button, sized so the button cannot clip against the panel edge.
-    // Hint is drawn inside the empty box (ImGuiTextFilter::Draw takes no hint of its own). Returns true
+    // Hint is rendered by the input itself, so it is clipped and never overlaid on text. Returns true
     // when the filter text changed this frame, including via the clear button.
     RUNTIME_API bool SearchBar(const char* StrId, ImGuiTextFilter& Filter, const char* Hint = nullptr);
 
-    // ImGuiTextFilter only splits on commas, so "pine tree" is matched as one contiguous run and finds
-    // nothing. Treats spaces as separators too and passes only text containing every word.
+    // Engine search treats spaces as separators and requires every word, independently of
+    // ImGuiTextFilter's include/exclude/quoted-phrase parser.
+    // Active when the box holds a real term, or bytes that are not valid UTF-8. Whitespace alone,
+    // including tabs and ideographic spaces, is not a search. Do not use ImGuiTextFilter::IsActive()
+    // for this: its parser drops "-", "," and empty quotes, which are ordinary literal terms here.
+    RUNTIME_API bool IsSearchFilterActive(const ImGuiTextFilter& Filter);
     RUNTIME_API bool PassSearchFilter(FStringView Query, FStringView Text);
     RUNTIME_API bool PassSearchFilter(const ImGuiTextFilter& Filter, FStringView Text);
+    // Each query term may match a different alias; sources and translated labels stay separate.
+    RUNTIME_API bool PassSearchFilter(FStringView Query, TSpan<const FStringView> Fields);
+    RUNTIME_API bool PassSearchFilter(const ImGuiTextFilter& Filter, TSpan<const FStringView> Fields);
+    RUNTIME_API bool PassSearchFilter(FStringView Query, std::initializer_list<FStringView> Fields);
+    RUNTIME_API bool PassSearchFilter(const ImGuiTextFilter& Filter, std::initializer_list<FStringView> Fields);
 
     // A searchable single-select dropdown. Pass OutCreatedText for a list the user may extend: an entry
     // offering the typed text appears whenever it matches no item, and the pick lands there instead of
-    // in the return value, which stays Constants::kIndexNone.
-    RUNTIME_API int32 SearchableCombo(const char* StrId, const char* Preview, int32 ItemCount, int32 CurrentIndex, const TFunction<FFixedString(int32)>& GetItemLabel, const char* ItemIcon = nullptr, FFixedString* OutCreatedText = nullptr);
+    // in the return value, which stays Constants::kIndexNone. GetSearchAlias may supply an
+    // original name or path independently from a localized display label.
+    RUNTIME_API int32 SearchableCombo(const char* StrId, const char* Preview, int32 ItemCount, int32 CurrentIndex, const TFunction<FFixedString(int32)>& GetItemLabel, const char* ItemIcon = nullptr, FFixedString* OutCreatedText = nullptr, const TFunction<FFixedString(int32)>& GetSearchAlias = {});
 
     // Searchable combo for picking an asset of (or deriving from) FilterClass from the registry.
     // Writes the chosen asset's GUID into InOutGUID and returns true when it changes.

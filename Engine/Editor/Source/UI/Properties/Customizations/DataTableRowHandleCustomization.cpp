@@ -103,7 +103,8 @@ namespace Lumina
         const ImVec2 DropdownSize = ImMax(ImVec2(220, 240), ImVec2(TextWidth, 320.0f));
         if (ImGui::BeginCombo("##TablePick", "", ImGuiComboFlags_HeightLarge | ImGuiComboFlags_PopupAlignLeft | ImGuiComboFlags_NoPreview))
         {
-            TableFilter.Draw("##Search", DropdownSize.x - 30.0f);
+            ImGui::SetNextItemWidth(DropdownSize.x - 30.0f);
+            TableFilter.DrawWithHint("##Search", LOC("Search..."));
             if (ImGui::IsWindowAppearing())
             {
                 ImGui::SetKeyboardFocusHere(-1);
@@ -114,7 +115,7 @@ namespace Lumina
             {
                 for (const FAssetData* Asset : GatherDataTables())
                 {
-                    if (!ImGuiX::PassSearchFilter(TableFilter, Asset->AssetName.c_str()))
+                    if (!ImGuiX::PassSearchFilter(TableFilter, { Asset->AssetName.c_str(), Asset->Path.c_str(), Asset->AssetClass.c_str() }))
                     {
                         continue;
                     }
@@ -162,7 +163,7 @@ namespace Lumina
             [Table](int32 Index) -> FFixedString
             {
                 return Index == 0 ? FFixedString(LOC("None")) : FFixedString(Table->Rows[Index - 1].Name.c_str());
-            }, LE_ICON_TABLE_ROW);
+            }, LE_ICON_TABLE_ROW, nullptr, [](int32 Index) { return Index == 0 ? FFixedString("None") : FFixedString(); });
 
         if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
         {

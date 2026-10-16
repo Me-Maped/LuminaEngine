@@ -6,10 +6,10 @@
 
 namespace Lumina
 {
-    FComponentRefProperty::FComponentRefProperty(const FPropertyDesc& Desc)
-        : FProperty(Desc)
+    FComponentRefProperty::FComponentRefProperty(const FPropertyDesc& InDesc)
+        : FProperty(InDesc)
     {
-        ComponentStruct = Desc.Type->GetStruct();
+        ComponentStruct = InDesc.Type->GetStruct();
         SetElementSize(sizeof(FComponentRef));
         EnumAddFlags(Flags, EPropertyFlags::NoSerialize);
     }

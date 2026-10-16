@@ -60,6 +60,7 @@ namespace Lumina::EntityScriptPicker
 
             FPickerItem& Item = Out.emplace_back();
             Item.Name = Class->HasMeta("DisplayName") ? Class->GetMeta("DisplayName") : FString(Short.data(), Short.size());
+            Item.SourceName = Item.Name;
             Item.Key  = FullName;
             Item.Icon = bManaged ? LE_ICON_LANGUAGE_CSHARP : LE_ICON_LANGUAGE_CPP;
 
@@ -97,6 +98,7 @@ namespace Lumina::EntityScriptPicker
             {
                 Item.Category = Class->GetMeta("Category");
             }
+            Item.SourceCategory = Item.Category;
             if (Class->HasMeta("ToolTip"))
             {
                 Item.Tooltip = Lumina::Format("{}\n{}", Class->GetMeta("ToolTip"), Item.Tooltip);

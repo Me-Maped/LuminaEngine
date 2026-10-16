@@ -11,10 +11,10 @@ namespace Lumina
     class LUMINA_VISIBLE_TYPE FMapProperty : public FProperty
     {
     public:
-        explicit FMapProperty(const FPropertyDesc& Desc)
-            : FProperty(Desc)
+        explicit FMapProperty(const FPropertyDesc& InDesc)
+            : FProperty(InDesc)
         {
-            Ops = Desc.Type->GetMapOps();
+            Ops = InDesc.Type->GetMapOps();
             SetElementSize(Ops != nullptr ? Ops->ContainerSize : 0);
         }
 

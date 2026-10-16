@@ -145,7 +145,7 @@ static const auto  c_MaxMoveOverEdgeSpeed       = 10.0f;
 static const auto  c_MaxMoveOverEdgeDistance    = 300.0f;
 
 #if IMGUI_VERSION_NUM > 18101
-static const auto  c_AllRoundCornersFlags = ImDrawFlags_RoundCornersAll;
+static const auto  c_AllRoundCornersFlags = ImDrawFlags_RoundAll;
 #else
 static const auto  c_AllRoundCornersFlags = 15;
 #endif

@@ -8,10 +8,10 @@ namespace Lumina
     class FStructProperty : public FProperty
     {
     public:
-        explicit FStructProperty(const FPropertyDesc& Desc)
-            : FProperty(Desc)
+        explicit FStructProperty(const FPropertyDesc& InDesc)
+            : FProperty(InDesc)
         {
-            CStruct* InternalStruct = Desc.Type->GetStruct();
+            CStruct* InternalStruct = InDesc.Type->GetStruct();
             ASSERT(InternalStruct);
             SetStruct(InternalStruct);
             SetElementSize(Struct->GetAlignedSize());

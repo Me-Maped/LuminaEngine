@@ -2,6 +2,7 @@
 #include "ProfilerViewCommon.h"
 
 #include "imgui.h"
+#include "Tools/UI/ImGui/ImGuiX.h"
 
 #if USING(WITH_EDITOR)
 
@@ -115,7 +116,7 @@ namespace Lumina
         for (const FAssetLoadStat& Stat : Stats)
         {
             const FString Name = Stat.Name.ToString();
-            if (AssetFilter[0] != '\0' && Name.find(AssetFilter) == FString::npos)
+            if (!ImGuiX::PassSearchFilter(FStringView(AssetFilter), FStringView(Name)))
             {
                 continue;
             }
@@ -232,7 +233,7 @@ namespace Lumina
                 {
                     const FAssetLoadRecord& Record = AssetRecent[Index - 1];
                     const FString Name = Record.Name.ToString();
-                    if (AssetFilter[0] != '\0' && Name.find(AssetFilter) == FString::npos)
+                    if (!ImGuiX::PassSearchFilter(FStringView(AssetFilter), FStringView(Name)))
                     {
                         continue;
                     }
