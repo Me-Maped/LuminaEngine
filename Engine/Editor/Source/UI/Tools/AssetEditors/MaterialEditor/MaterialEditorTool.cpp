@@ -172,6 +172,17 @@ namespace Lumina
         World->EmplaceComponent<SParticleSystemComponent>(ParticleEntity);
 
         const STransformComponent& MeshTransform = World->GetComponent<STransformComponent>(MeshEntity);
+
+        LightFunctionSpotEntity = World->ConstructEntity("LightFunctionPreview");
+        SSpotLightComponent& Spot = World->EmplaceComponent<SSpotLightComponent>(LightFunctionSpotEntity);
+        Spot.Intensity      = 0.0f;
+        Spot.Attenuation    = 10.0f;
+        Spot.OuterConeAngle = 30.0f;
+        Spot.InnerConeAngle = 28.0f;
+        const FVector3 SpotPosition = MeshTransform.GetLocation() + FVector3(0.0f, 2.0f, 3.0f);
+        STransformComponent& SpotTransform = World->GetComponent<STransformComponent>(LightFunctionSpotEntity);
+        SpotTransform.SetLocation(SpotPosition);
+        SpotTransform.SetRotation(Math::FindLookAtRotation(MeshTransform.GetLocation(), SpotPosition));
         SetOrbitTarget(MeshTransform.GetLocation(), 2.0f);
         SetCameraMode(EEditorCameraMode::Orbit);
 
@@ -211,12 +222,21 @@ namespace Lumina
                                        ? GetOrCreatePreviewParticleSystem(MaterialInterface)
                                        : nullptr;
 
+        const bool bLightFunction = MaterialType == EMaterialType::LightFunction;
+        SSpotLightComponent& Spot = World->GetComponent<SSpotLightComponent>(LightFunctionSpotEntity);
+        Spot.Intensity             = bLightFunction ? 60.0f : 0.0f;
+        Spot.LightFunctionMaterial = bLightFunction ? MaterialInterface : nullptr;
+
         if (MaterialType == EMaterialType::PostProcess)
         {
             if (Camera)
             {
                 Camera->PostProcessMaterials.push_back(MaterialInterface);
             }
+        }
+        else if (bLightFunction)
+        {
+            StaticMeshComponent.MaterialOverrides.clear();
         }
         else if (MaterialType == EMaterialType::UI)
         {
@@ -447,7 +467,46 @@ namespace Lumina
 
     void FMaterialEditorTool::DrawMaterialGraph()
     {
+        DrawCompileErrorBanner();
         NodeGraph->DrawGraph();
+    }
+
+    void FMaterialEditorTool::DrawCompileErrorBanner()
+    {
+        // Opening never compiles, so a material saved broken says so before anyone thinks to press Compile.
+        const CMaterial* Material = Cast<CMaterial>(Asset.Get());
+        const bool bBrokenOnOpen = !bHasCompiled && Material != nullptr && !Material->IsReadyForRender();
+        if (!CompilationResult.bIsError && !bBrokenOnOpen)
+        {
+            return;
+        }
+
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.30f, 0.09f, 0.09f, 1.0f));
+        ImGui::BeginChild("##compile_error_banner", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_NoScrollbar);
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.75f, 0.75f, 1.0f));
+        if (CompilationResult.bIsError)
+        {
+            ImGui::Text(LOC_ICON(LE_ICON_ALERT, "Material failed to compile (%d error%s), so it and every instance of it render nothing."),
+                static_cast<int>(CompilationResult.Errors.size()), CompilationResult.Errors.size() == 1 ? "" : LOC_S);
+        }
+        else
+        {
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_ALERT, "This material has no usable shaders, so it and every instance of it render nothing."));
+        }
+        ImGui::PopStyleColor();
+
+        if (CompilationResult.bIsError)
+        {
+            DrawDiagnosticRows(CompilationResult.Errors, true);
+        }
+        else if (ImGui::SmallButton(LOC("Compile")))
+        {
+            Compile(true);
+        }
+
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
     }
 
     void FMaterialEditorTool::DrawMaterialProperties()
@@ -551,9 +610,9 @@ namespace Lumina
                 Hash *= 1099511628211ull;
             };
 
-            for (const FCustomSlangPin& Pin : Node->Inputs)  { Mix(Pin.Name.c_str()); }
+            for (const SCustomSlangPin& Pin : Node->Inputs)  { Mix(Pin.Name.c_str()); }
             Mix("|");
-            for (const FCustomSlangPin& Pin : Node->Outputs) { Mix(Pin.Name.c_str()); }
+            for (const SCustomSlangPin& Pin : Node->Outputs) { Mix(Pin.Name.c_str()); }
             return Hash;
         }
     }
@@ -581,11 +640,11 @@ namespace Lumina
         // A misspelled output is otherwise a silent no-op that only surfaces as nothing changing.
         if (Node != nullptr)
         {
-            for (const FCustomSlangPin& Pin : Node->Inputs)
+            for (const SCustomSlangPin& Pin : Node->Inputs)
             {
                 CodeEditorLanguage.identifiers.insert(Pin.Name.c_str());
             }
-            for (const FCustomSlangPin& Pin : Node->Outputs)
+            for (const SCustomSlangPin& Pin : Node->Outputs)
             {
                 CodeEditorLanguage.identifiers.insert(Pin.Name.c_str());
             }
@@ -642,7 +701,7 @@ namespace Lumina
         ImGui::SameLine(0.0f, 12.0f);
 
         FFixedString Signature;
-        for (const FCustomSlangPin& In : Node->Inputs)
+        for (const SCustomSlangPin& In : Node->Inputs)
         {
             Signature += (Signature.empty() ? LOC("in: ") : ", ");
             Signature += In.Name.c_str();
@@ -651,7 +710,7 @@ namespace Lumina
         {
             Signature += Signature.empty() ? LOC("out: ") : LOC("  |  out: ");
             bool bFirst = true;
-            for (const FCustomSlangPin& Out : Node->Outputs)
+            for (const SCustomSlangPin& Out : Node->Outputs)
             {
                 if (!bFirst) { Signature += ", "; }
                 Signature += Out.Name.c_str();
@@ -830,7 +889,7 @@ namespace Lumina
         // The deferred permutation shades opaque geometry, so its register count is the one that matters.
         const struct { const char* Label; FShaderH Entry; } Lanes[] =
         {
-            { LOC("Deferred (VisBuffer)"), Material->GetDeferredShader() },
+            { LOC("Deferred (VisBuffer)"), Material->GetStage(EMaterialShaderStage::Deferred) },
             { LOC("Forward Pixel"),        Material->GetPixelShader()    },
         };
 

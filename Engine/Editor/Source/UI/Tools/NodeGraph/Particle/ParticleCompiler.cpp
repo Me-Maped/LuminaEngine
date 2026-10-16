@@ -15,7 +15,7 @@ namespace Lumina
     // An lvalue, and in bounds because the buffer holds PARTICLE_ATTR_FLOATS per slot of MaxParticles.
     static FString AttributeSlotExpr(int32 Slot)
     {
-        return FString("SpanAt(PAttr(), Index * PARTICLE_ATTR_FLOATS + ") + Format("{}", Slot).c_str() + "u)[0]";
+        return FString("PAttr().At(Index * PARTICLE_ATTR_FLOATS + ") + Format("{}", Slot).c_str() + "u)[0]";
     }
 
     // A single pass, so inserted text is not rescanned.
@@ -121,6 +121,12 @@ namespace Lumina
         uint64 Hash = 0;
         Hash::HashCombine(Hash, FStringView(SpawnChunks.data(), SpawnChunks.size()));
         Hash::HashCombine(Hash, FStringView(UpdateChunks.data(), UpdateChunks.size()));
+        // The attribute block is spliced into the source too, so it keys the artifact cache alongside the stacks.
+        for (const FAttributeDecl& Attribute : Attributes)
+        {
+            Hash::HashCombine(Hash, FStringView(Attribute.Name.data(), Attribute.Name.size()));
+            Hash::HashCombine(Hash, FStringView(Attribute.DefaultExpr.data(), Attribute.DefaultExpr.size()));
+        }
         return Hash;
     }
 

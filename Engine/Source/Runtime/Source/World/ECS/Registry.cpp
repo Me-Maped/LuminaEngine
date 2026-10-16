@@ -83,6 +83,44 @@ namespace Lumina::ECS
         return Types.size();
     }
 
+    void FComponentTypeRegistry::Relayout(FComponentTypeID TypeID, const FComponentTypeInfo& Info, FMigrateComponentValue Migrate)
+    {
+        ASSERT(TypeID < Types.size());
+        FComponentTypeInfo& Stored = *Types[TypeID];
+        Stored = Info;
+        Stored.TypeID = TypeID;
+        Stored.bRuntimeLayout = true;
+
+        FScopeLock Lock(PoolLock);
+        for (FSparseSet* Pool : RuntimeLayoutPools)
+        {
+            if (Pool->GetTypeID() == TypeID)
+            {
+                Pool->Relayout(Stored, Migrate);
+            }
+        }
+    }
+
+    void FComponentTypeRegistry::TrackPool(FSparseSet* Pool)
+    {
+        FScopeLock Lock(PoolLock);
+        RuntimeLayoutPools.push_back(Pool);
+    }
+
+    void FComponentTypeRegistry::UntrackPool(FSparseSet* Pool)
+    {
+        FScopeLock Lock(PoolLock);
+        for (size_t Index = 0; Index < RuntimeLayoutPools.size(); ++Index)
+        {
+            if (RuntimeLayoutPools[Index] == Pool)
+            {
+                RuntimeLayoutPools[Index] = RuntimeLayoutPools.back();
+                RuntimeLayoutPools.pop_back();
+                return;
+            }
+        }
+    }
+
 
 
     // Slots past EntityRecords.size() up to NextAppendIndex are handed out but not yet stored, so a reservation never reallocates the records a reader may be walking.
@@ -291,6 +329,7 @@ namespace Lumina::ECS
         }
 
         EntityDestroyed.Broadcast(*this, Entity);
+        DestroyHierarchyLinks(Entity);
         DetachFromAllStorages(Entity);
 
         const uint32 Index = Entity.GetIndex();
@@ -301,6 +340,85 @@ namespace Lumina::ECS
             FreeEntityHead = Index;
         }
         --LiveEntityCount;
+    }
+
+    void FRegistry::DestroyHierarchyLinks(FEntity Entity)
+    {
+        if (!Hierarchy.IsLinked(Entity))
+        {
+            Hierarchy.Forget(Entity);
+            return;
+        }
+
+        const FEntity Parent = Hierarchy.GetParent(Entity);
+        Hierarchy.Unlink(Entity);
+        if (!Parent.IsNull())
+        {
+            HierarchyChanged.Broadcast(*this, Parent);
+        }
+
+        if (bDestroyDescendantsWithParent)
+        {
+            TVector<FEntity> Subtree;
+            Hierarchy.ForEachDescendant(Entity, [&](FEntity Descendant) { Subtree.push_back(Descendant); });
+
+            // Reversed, so every child goes before its parent, and unlinked first, since nobody is left to tell.
+            for (size_t Index = Subtree.size(); Index-- > 0;)
+            {
+                Hierarchy.Unlink(Subtree[Index]);
+                Destroy(Subtree[Index]);
+            }
+        }
+        else
+        {
+            Hierarchy.ForEachChild(Entity, [&](FEntity Orphan)
+            {
+                Hierarchy.Unlink(Orphan);
+                HierarchyChanged.Broadcast(*this, Orphan);
+            });
+        }
+
+        Hierarchy.Forget(Entity);
+    }
+
+    bool FRegistry::AttachChild(FEntity Child, FEntity Parent, uint32 Position)
+    {
+        if (Child == Parent || !IsValid(Child) || !IsValid(Parent) || Hierarchy.IsDescendantOf(Parent, Child))
+        {
+            return false;
+        }
+
+        const bool bSameParent = Hierarchy.GetParent(Child) == Parent;
+        if (bSameParent && Position == FHierarchy::AppendPosition)
+        {
+            return true;
+        }
+
+        const FEntity OldParent = Hierarchy.GetParent(Child);
+        Hierarchy.Unlink(Child);
+        Hierarchy.Link(Child, Parent, Position);
+        if (!bSameParent)
+        {
+            HierarchyChanged.Broadcast(*this, Child);
+            HierarchyChanged.Broadcast(*this, Parent);
+            if (!OldParent.IsNull())
+            {
+                HierarchyChanged.Broadcast(*this, OldParent);
+            }
+        }
+        return true;
+    }
+
+    void FRegistry::DetachFromParent(FEntity Child)
+    {
+        const FEntity OldParent = Hierarchy.GetParent(Child);
+        if (OldParent.IsNull())
+        {
+            return;
+        }
+        Hierarchy.Unlink(Child);
+        HierarchyChanged.Broadcast(*this, Child);
+        HierarchyChanged.Broadcast(*this, OldParent);
     }
 
     void FRegistry::DetachFromAllStorages(FEntity Entity)
@@ -323,6 +441,7 @@ namespace Lumina::ECS
             Storage->ClearAll();
         }
 
+        Hierarchy.Reset();
         EntityRecords.clear();
         FreeEntityHead = NoFreeSlot;
         LiveEntityCount = 0;
@@ -350,6 +469,7 @@ namespace Lumina::ECS
         ActiveStorages.swap(Other.ActiveStorages);
         NamedStorages.swap(Other.NamedStorages);
         Context.Swap(Other.Context);
+        std::swap(Hierarchy, Other.Hierarchy);
 
         const uint32 FreeHead = FreeEntityHead;
         FreeEntityHead = Other.FreeEntityHead;
@@ -391,6 +511,56 @@ namespace Lumina::ECS
         // Joins the walk so a destroy detaches from it too, but never the by-type-id index, which one pool owns.
         ActiveStorages.push_back(Raw);
         return Raw;
+    }
+
+    FSparseSet& FRegistry::AssureStorage(FComponentTypeID TypeID)
+    {
+        if (TypeID >= StoragesByTypeID.size() || StoragesByTypeID[TypeID] == nullptr)
+        {
+            CreateStorage(TypeID);
+        }
+        return *StoragesByTypeID[TypeID];
+    }
+
+    void* FRegistry::GetOrEmplaceRaw(FComponentTypeID TypeID, FEntity Entity)
+    {
+        FSparseSet& Storage = AssureStorage(TypeID);
+        if (Storage.Contains(Entity))
+        {
+            return Storage.GetRaw(Entity);
+        }
+        void* Value = Storage.EmplaceDefaultRaw(Entity);
+        Storage.Signals.OnConstruct.Broadcast(*this, Entity);
+        return Value;
+    }
+
+    void* FRegistry::EmplaceOrReplaceRaw(FComponentTypeID TypeID, FEntity Entity, const void* Source)
+    {
+        FSparseSet& Storage = AssureStorage(TypeID);
+        const bool bExisted = Storage.Contains(Entity);
+        void* Value = Storage.EmplaceCopyRaw(Entity, Source);
+        (bExisted ? Storage.Signals.OnUpdate : Storage.Signals.OnConstruct).Broadcast(*this, Entity);
+        return Value;
+    }
+
+    bool FRegistry::RemoveRaw(FComponentTypeID TypeID, FEntity Entity)
+    {
+        FSparseSet* Storage = FindStorage(TypeID);
+        if (Storage == nullptr || !Storage->Contains(Entity))
+        {
+            return false;
+        }
+        Storage->Signals.OnDestroy.Broadcast(*this, Entity);
+        return Storage->RemoveEntity(Entity);
+    }
+
+    void FRegistry::PatchRaw(FComponentTypeID TypeID, FEntity Entity)
+    {
+        FSparseSet* Storage = FindStorage(TypeID);
+        if (Storage != nullptr && !Storage->IsTagOnly() && Storage->Contains(Entity))
+        {
+            Storage->Signals.OnUpdate.Broadcast(*this, Entity);
+        }
     }
 
     void FRegistry::CreateStorage(FComponentTypeID TypeID)

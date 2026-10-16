@@ -705,6 +705,44 @@ namespace Lumina::Algo
         Private::InsertionSort(First, Last, Pred);
     }
 
+    // Sifts the element at Last - 1 into the heap before it, where the front is the greatest under Pred.
+    template <typename TIt, typename TPred = FLess>
+    constexpr void PushHeap(TIt First, TIt Last, TPred Pred = {})
+    {
+        Private::TDiff<TIt> Hole = (Last - First) - 1;
+        if (Hole <= 0)
+        {
+            return;
+        }
+
+        Private::TValue<TIt> Value = std::move(First[Hole]);
+        while (Hole > 0)
+        {
+            const Private::TDiff<TIt> Parent = (Hole - 1) / 2;
+            if (!Pred(First[Parent], Value))
+            {
+                break;
+            }
+            First[Hole] = std::move(First[Parent]);
+            Hole = Parent;
+        }
+        First[Hole] = std::move(Value);
+    }
+
+    // Moves the front of the heap to Last - 1 and restores the heap over the rest.
+    template <typename TIt, typename TPred = FLess>
+    constexpr void PopHeap(TIt First, TIt Last, TPred Pred = {})
+    {
+        const Private::TDiff<TIt> Count = Last - First;
+        if (Count < 2)
+        {
+            return;
+        }
+
+        Private::IterSwap(First, Last - 1);
+        Private::SiftDown(First, 0, Count - 1, Pred);
+    }
+
     /** Bottom-up merge sort through one heap buffer; keeps equal elements in their original order. */
     template <typename TIt, typename TPred = FLess>
     void StableSort(TIt First, TIt Last, TPred Pred = {})
@@ -792,6 +830,17 @@ namespace Lumina::Algo
         }
 
         Private::InsertionSort(First, Last, Pred);
+    }
+
+    // Sorts the smallest Middle - First elements into the front, leaving the rest after them in no order.
+    template <typename TIt, typename TPred = FLess>
+    constexpr void PartialSort(TIt First, TIt Middle, TIt Last, TPred Pred = {})
+    {
+        if (Middle != Last)
+        {
+            NthElement(First, Middle, Last, Pred);
+        }
+        Sort(First, Middle, Pred);
     }
 
     /** Moves everything Pred accepts to the front, keeping relative order on both sides. */

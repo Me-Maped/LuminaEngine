@@ -45,7 +45,7 @@ namespace Lumina
 
     /** Offline voxelization + region build settings. */
     REFLECT()
-    struct RUNTIME_API FNavBuildSettings
+    struct RUNTIME_API SNavBuildSettings
     {
         GENERATED_BODY()
 
@@ -145,6 +145,9 @@ namespace Lumina
     {
         int32 X = 0;
         int32 Y = 0;
+
+        // The FNavTileCache generation the tile's geometry was gathered at, which a cached heightfield has to match.
+        uint32 CacheGeneration = 0;
     };
 
     namespace NavTile
@@ -174,17 +177,17 @@ namespace Lumina
 
     /** Per-tile baked blob in the format dtNavMesh::addTile expects. */
     REFLECT()
-    struct RUNTIME_API FNavTileData
+    struct RUNTIME_API SNavTileData
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         int32 X = 0;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         int32 Y = 0;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         TVector<uint8> Blob;
     };
 
@@ -263,37 +266,37 @@ namespace Lumina
 
     /** Outcome of a surface walk along a straight line. */
     REFLECT()
-    struct FNavRaycastResult
+    struct SNavRaycastResult
     {
         GENERATED_BODY()
 
         /** Where the walk stopped, so the wall it hit, or End when nothing blocked it. */
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Point = FVector3(0.0f);
 
         /** Wall normal at the hit; zero when unobstructed. */
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Normal = FVector3(0.0f);
 
         /** Fraction along Start to End at which the walk stopped, and one when unobstructed. */
-        PROPERTY()
+        PROPERTY(Hidden)
         float T = 1.0f;
 
         /** True when a navmesh edge blocked the walk. */
-        PROPERTY()
+        PROPERTY(Hidden)
         bool bHit = false;
     };
 
     /** A point query's answer, carrying the found flag a by-value result cannot express as an optional. */
     REFLECT()
-    struct FNavPoint
+    struct SNavPoint
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Point = FVector3(0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         bool bFound = false;
     };
 

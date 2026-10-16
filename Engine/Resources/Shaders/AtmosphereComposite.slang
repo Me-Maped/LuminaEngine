@@ -5,38 +5,38 @@
 #include "Includes/Fog.slang"
 #include "Includes/Froxel.slang"
 #include "Includes/CloudCommon.slang"
-#include "Includes/GlobalRHIStorage.slang"
+#include "Includes/GlobalRHI.slang"
 
-// Aerial perspective, clouds and fog in one HDR read-modify-write, in the order the old passes ran.
+// Aerial perspective, clouds and fog in one HDR read-modify-write.
 
 static const uint kAtmosphereTermOff = 0xFFFFFFFFu;
 
 struct FPushConstants
 {
-    uint  HDRUAV;
-    uint  DepthIndex;
-    uint  ScreenW;
-    uint  ScreenH;
+    FRWTexture2D HDR;
+    FTexture2D   Depth;
+    uint         ScreenW;
+    uint         ScreenH;
 
-    uint  AerialInScatterIndex;      // kAtmosphereTermOff disables aerial perspective
-    uint  AerialTransmittanceIndex;
-    float AerialRange;               // must match the LUT build
-    float AerialIntensity;
+    FTexture3D AerialInScatter;      // kAtmosphereTermOff disables aerial perspective
+    FTexture3D AerialTransmittance;
+    float      AerialRange;               // must match the LUT build
+    float      AerialIntensity;
 
-    uint  CloudScatterIndex;         // kAtmosphereTermOff disables clouds
-    uint  bFog;
-    uint  FroxelIntegratedIndex;
-    uint  GridZ;
+    FTexture2D CloudScatter;         // kAtmosphereTermOff disables clouds
+    uint       bFog;
+    FTexture3D FroxelIntegrated;
+    uint       GridZ;
 
     float NearPlane;
     float FogRange;
     uint  bVolumetric;               // froxel volume valid this frame
     float FarShaftDistance;
 
-    uint  FogShaftIndex;             // kAtmosphereTermOff keeps the far field closed-form and unshadowed
-    uint  FogShaftDepthIndex;        // raw depth each half-res shaft texel was marched against
-    uint  CloudDepthIndex;           // raw depth each half-res cloud texel was marched against
-    float CloudFloor;                // altitude of the cloud layer's base
+    FTexture2D FogShaft;             // kAtmosphereTermOff keeps the far field closed-form and unshadowed
+    FTexture2D FogShaftDepth;        // raw depth each half-res shaft texel was marched against
+    FTexture2D CloudDepth;           // raw depth each half-res cloud texel was marched against
+    float      CloudFloor;                // altitude of the cloud layer's base
 };
 FPushConstants* Pass() { return GetPassArgs<FPushConstants>(); }
 
@@ -61,8 +61,8 @@ FHDRTerm AerialPerspectiveTerm(float2 UV, float3 ViewPos)
 
     float3 UVW       = float3(UV, W);
     // Explicit level, since an implicit one needs compute derivatives and the LUT has a single mip anyway.
-    float3 InScatter = SampleTexture3DLevel(Pass().AerialInScatterIndex,     SAMPLER_LINEAR_CLAMP, UVW, 0.0).rgb;
-    float3 Trans     = SampleTexture3DLevel(Pass().AerialTransmittanceIndex, SAMPLER_LINEAR_CLAMP, UVW, 0.0).rgb;
+    float3 InScatter = Pass().AerialInScatter.SampleLevel(Samplers::LinearClamp, UVW, 0.0).rgb;
+    float3 Trans     = Pass().AerialTransmittance.SampleLevel(Samplers::LinearClamp, UVW, 0.0).rgb;
 
     const float Intensity = saturate(Pass().AerialIntensity);
     FHDRTerm Term;
@@ -71,7 +71,6 @@ FHDRTerm AerialPerspectiveTerm(float2 UV, float3 ViewPos)
     return Term;
 }
 
-// Returns in-scatter in rgb and the clamped fog opacity in a, the pair the old blend state consumed.
 // A texel marched against a nearer surface stopped short, so blending it into a pixel behind that surface leaves a clear halo.
 static const float kCloudDepthMismatch  = 1.0e6;
 static const float kCloudDepthSharpness = 32.0;
@@ -100,12 +99,18 @@ float CloudDepthError(float PixelRaw, float PixelLinear, float TexelRaw)
     return abs(LinearizeSceneDepth(TexelRaw) - PixelLinear) / PixelLinear;
 }
 
+// One texel of a GatherRed quad, whose components run (0,1), (1,1), (1,0), (0,0).
+float GatherTexel(float4 Quad, int2 Texel)
+{
+    return Texel.y == 0 ? (Texel.x == 0 ? Quad.w : Quad.z) : (Texel.x == 0 ? Quad.x : Quad.y);
+}
+
 // Bilinear over the four nearest half-res texels, weighted toward those marched against this pixel's depth.
 float4 UpsampleClouds(float2 UV, float Depth)
 {
     uint Width;
     uint Height;
-    gTextures2D[Pass().CloudScatterIndex].GetDimensions(Width, Height);
+    Pass().CloudScatter.GetDimensions(Width, Height);
     int2 MaxTexel = int2(Width, Height) - 1;
 
     float2 Coord = UV * float2(Width, Height) - 0.5;
@@ -119,14 +124,24 @@ float4 UpsampleClouds(float2 UV, float Depth)
     float4 Closest    = float4(0.0, 0.0, 0.0, 1.0);
     float  ClosestErr = 3.0e38;
 
+    // Clamp-to-edge gathers cover the 4x4 depths in four fetches and clamp the border exactly like the loads do.
+    const float2 InvSize = 1.0 / float2(Width, Height);
+    float4 DepthQuads[4];
+    [unroll]
+    for (int q = 0; q < 4; ++q)
+    {
+        DepthQuads[q] = Pass().CloudDepth.GatherRed(Samplers::PointClamp, (float2(Base) + float2(q & 1, q >> 1) * 2.0) * InvSize);
+    }
+
     // A tent wider than bilinear, so the march's per-pixel start jitter averages out on thin wisps.
     [unroll]
     for (int i = 0; i < 16; ++i)
     {
         int2   Offset = int2(i & 3, i >> 2) - 1;
         int2   Texel  = clamp(Base + Offset, int2(0, 0), MaxTexel);
-        float4 Cloud  = gTextures2D[Pass().CloudScatterIndex].Load(int3(Texel, 0));
-        float  Err    = CloudDepthError(Depth, PixelLinear, gTextures2D[Pass().CloudDepthIndex].Load(int3(Texel, 0)).r);
+        float4 Cloud  = Pass().CloudScatter.Load(int3(Texel, 0));
+        int2   InQuad = Offset + 1;
+        float  Err    = CloudDepthError(Depth, PixelLinear, GatherTexel(DepthQuads[(InQuad.y >> 1) * 2 + (InQuad.x >> 1)], InQuad & 1));
 
         float2 Axis   = max(kCloudTentRadius - abs(float2(Offset) - Frac), 0.0);
         float  Weight = Axis.x * Axis.y / (1.0 + Err * kCloudDepthSharpness);
@@ -149,7 +164,7 @@ float4 UpsampleFogShafts(float2 UV, float Depth)
 {
     uint Width;
     uint Height;
-    gTextures2D[Pass().FogShaftIndex].GetDimensions(Width, Height);
+    Pass().FogShaft.GetDimensions(Width, Height);
     const int2 MaxTexel = int2(Width, Height) - 1;
 
     const float2 Coord = UV * float2(Width, Height) - 0.5;
@@ -163,13 +178,15 @@ float4 UpsampleFogShafts(float2 UV, float Depth)
     float4 Closest    = float4(0.0, 0.0, 0.0, 1.0);
     float  ClosestErr = 3.0e38;
 
+    const float4 DepthQuad = Pass().FogShaftDepth.GatherRed(Samplers::PointClamp, (float2(Base) + 1.0) / float2(Width, Height));
+
     [unroll]
     for (int i = 0; i < 4; ++i)
     {
         const int2   Offset = int2(i & 1, i >> 1);
         const int2   Texel  = clamp(Base + Offset, int2(0, 0), MaxTexel);
-        const float4 Shaft  = gTextures2D[Pass().FogShaftIndex].Load(int3(Texel, 0));
-        const float  Err    = CloudDepthError(Depth, PixelLinear, gTextures2D[Pass().FogShaftDepthIndex].Load(int3(Texel, 0)).r);
+        const float4 Shaft  = Pass().FogShaft.Load(int3(Texel, 0));
+        const float  Err    = CloudDepthError(Depth, PixelLinear, GatherTexel(DepthQuad, Offset));
 
         const float2 Axis   = lerp(1.0 - Frac, Frac, float2(Offset));
         const float  Weight = Axis.x * Axis.y / (1.0 + Err * kCloudDepthSharpness);
@@ -226,7 +243,7 @@ float4 IntegrateFog(float2 UV, float2 PixelPos, float Depth, float3 SurfaceViewP
         // Dithering the depth sample by under half a slice breaks exponential-Z banding into grain.
         W = saturate(W + (InterleavedGradientNoise(PixelPos) - 0.5) / float(Pass().GridZ));
 
-        float4 Froxel = gTextures3D[Pass().FroxelIntegratedIndex].SampleLevel(gSamplers[SAMPLER_LINEAR_CLAMP], float3(UV, W), 0.0);
+        float4 Froxel = Pass().FroxelIntegrated.SampleLevel(Samplers::LinearClamp, float3(UV, W), 0.0);
         InScatter = Froxel.rgb;
         Trans     = saturate(Froxel.a);
     }
@@ -253,7 +270,7 @@ float4 IntegrateFog(float2 UV, float2 PixelPos, float Depth, float3 SurfaceViewP
 
     // Marched at half resolution by FogShafts, because the closed form cannot carry a shadow term.
     float TMarchEnd = T0;
-    if (SPEC_ATMOS_SHAFTS != 0 && bSunVolumetric && Pass().FogShaftIndex != kAtmosphereTermOff)
+    if (SPEC_ATMOS_SHAFTS != 0 && bSunVolumetric && Pass().FogShaft.IsValid())
     {
         const float Reach = T0 + Pass().FarShaftDistance;
         TMarchEnd = bSky ? Reach : min(T1, Reach);
@@ -311,7 +328,7 @@ void ComputeMain(uint3 DTid : SV_DispatchThreadID)
     float2 PixelPos = float2(DTid.xy) + 0.5;
     float2 UV       = PixelPos / float2(Size);
 
-    float Depth = gTextures2D[Pass().DepthIndex].Load(int3(P, 0)).r;
+    float Depth = Pass().Depth.Load(int3(P, 0)).r;
 
     FHDRTerm Total;
     Total.Scale  = float3(1.0);
@@ -321,7 +338,7 @@ void ComputeMain(uint3 DTid : SV_DispatchThreadID)
     const float3 ViewPos = Depth > 0.0 ? ReconstructViewPos(UV, Depth, GetInverseCameraProjection()) : float3(0.0, 0.0, 0.0);
 
     // Sky already carries the full atmosphere integral, and reverse-Z leaves it at depth 0.
-    if (SPEC_ATMOS_AERIAL != 0 && Pass().AerialInScatterIndex != kAtmosphereTermOff && Depth > 0.0)
+    if (SPEC_ATMOS_AERIAL != 0 && Pass().AerialInScatter.IsValid() && Depth > 0.0)
     {
         const FHDRTerm Aerial = AerialPerspectiveTerm(UV, ViewPos);
         ComposeTerm(Total, Aerial.Scale, Aerial.Offset);
@@ -332,7 +349,7 @@ void ComputeMain(uint3 DTid : SV_DispatchThreadID)
     const float CloudGap       = max(Pass().CloudFloor - GetCameraPosition().y, 0.0) * PlanetCurvatureMargin;
     const bool  bCloudReachable = Depth <= 0.0
         || length(ViewPos) >= CloudGap;
-    if (SPEC_ATMOS_CLOUDS != 0 && Pass().CloudScatterIndex != kAtmosphereTermOff && bCloudReachable)
+    if (SPEC_ATMOS_CLOUDS != 0 && Pass().CloudScatter.IsValid() && bCloudReachable)
     {
         float4 Cloud = UpsampleClouds(UV, Depth);
         if (Cloud.a <= 0.999)
@@ -350,7 +367,7 @@ void ComputeMain(uint3 DTid : SV_DispatchThreadID)
     // HDR is only read and written where some term changes it.
     if (any(Total.Scale != 1.0) || any(Total.Offset != 0.0))
     {
-        const float4 Color = gRWTextures2D[Pass().HDRUAV][P];
-        gRWTextures2D[Pass().HDRUAV][P] = float4(Color.rgb * Total.Scale + Total.Offset, Color.a);
+        const float4 Color = Pass().HDR[P];
+        Pass().HDR[P] = float4(Color.rgb * Total.Scale + Total.Offset, Color.a);
     }
 }

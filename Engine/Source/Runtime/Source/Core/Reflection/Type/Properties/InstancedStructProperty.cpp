@@ -1,18 +1,19 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "InstancedStructProperty.h"
 #include "Memory/Construct.h"
 
 #include "Core/Object/Class.h"
 #include "Core/Object/InstancedStruct.h"
 #include "Core/Object/ObjectCore.h"
+#include "Scripting/ScriptTypeRegistry.h"
 
 namespace Lumina
 {
-    FInstancedStructProperty::FInstancedStructProperty(const FInstancedStructPropertyParams* Params)
-        : FProperty(Params)
+    FInstancedStructProperty::FInstancedStructProperty(const FPropertyDesc& Desc)
+        : FProperty(Desc)
     {
         // Null for a bare FInstancedStruct, which constrains nothing and accepts any reflected struct.
-        MetaStruct = Params->StructFunc != nullptr ? Params->StructFunc() : nullptr;
+        MetaStruct = Desc.Type->GetStruct();
         bResolvedStructBase = MetaStruct != nullptr;
         SetElementSize(sizeof(FInstancedStruct));
     }
@@ -44,18 +45,18 @@ namespace Lumina
 
             if (Type != nullptr)
             {
-                Type->SerializeTaggedProperties(Ar, Instance->GetMutableMemory());
+                Type->SerializeProperties(Ar, Instance->GetMutableMemory());
             }
         }
         else
         {
             CStruct* Type = Instance->GetScriptStruct();
-            FName StructKey = Type ? InstancedStructKey(Type) : NAME_None;
+            FName StructKey = Type ? StructIdentity(Type) : NAME_None;
             Ar << StructKey;
 
             if (Type != nullptr)
             {
-                Type->SerializeTaggedProperties(Ar, Instance->GetMutableMemory());
+                Type->SerializeProperties(Ar, Instance->GetMutableMemory());
             }
         }
     }
@@ -76,19 +77,19 @@ namespace Lumina
             if (Type != nullptr)
             {
                 FArchiveRecord DataRecord = Record.EnterField("Data").EnterRecord();
-                Type->SerializeTaggedProperties(DataRecord, Instance->GetMutableMemory());
+                Type->SerializeProperties(DataRecord, Instance->GetMutableMemory());
             }
         }
         else
         {
             CStruct* Type = Instance->GetScriptStruct();
-            FName StructKey = Type ? InstancedStructKey(Type) : NAME_None;
+            FName StructKey = Type ? StructIdentity(Type) : NAME_None;
             Record << StructuredArchive::TNamedValue<FName>("StructType", StructKey);
 
             if (Type != nullptr)
             {
                 FArchiveRecord DataRecord = Record.EnterField("Data").EnterRecord();
-                Type->SerializeTaggedProperties(DataRecord, Instance->GetMutableMemory());
+                Type->SerializeProperties(DataRecord, Instance->GetMutableMemory());
             }
         }
     }

@@ -30,7 +30,6 @@
 #include "World/Entity/Components/SkyLightComponent.h"
 #include "World/Entity/Components/LightComponent.h"
 #include "World/Entity/Components/NameComponent.h"
-#include "World/Entity/Components/RelationshipComponent.h"
 #include "World/Entity/Components/StaticMeshComponent.h"
 #include "World/Entity/Components/TransformComponent.h"
 #include "World/Entity/EntityUtils.h"
@@ -141,7 +140,7 @@ namespace Lumina
                 ImGui::SetClipboardText(Format("{}", (Data.Entity).Value).c_str());
             }
 
-            if (!bIsRoot && ECS::Utils::IsChild(Registry, Data.Entity))
+            if (!bIsRoot && Registry.GetHierarchy().GetParent(Data.Entity) != ECS::NullEntity)
             {
                 if (ImGui::MenuItem(LOC("Unparent")))
                 {
@@ -152,12 +151,12 @@ namespace Lumina
                 }
             }
 
-            if (ECS::Utils::IsParent(Registry, Data.Entity))
+            if (Registry.GetHierarchy().GetChildCount(Data.Entity) != 0)
             {
                 if (ImGui::MenuItem(LOC("Detach Children")))
                 {
                     TVector<ECS::FEntity> Children;
-                    ECS::Utils::ForEachChild(Registry, Data.Entity, [&](ECS::FEntity Child) { Children.push_back(Child); });
+                    Registry.GetHierarchy().ForEachChild(Data.Entity, [&](ECS::FEntity Child) { Children.push_back(Child); });
                     BeginRelationshipTransaction({ Data.Entity });
                     ECS::Utils::DetachImmediateChildren(Registry, Data.Entity);
                     EndTransaction("Detach Children");
@@ -311,6 +310,9 @@ namespace Lumina
     void FPrefabEditorTool::SetupWorldForTool()
     {
         FEditorTool::SetupWorldForTool();
+
+        // A prefab is edited in its authored pose, so animation preview starts off and the toolbar turns it on.
+        World->SetAnimatesWhilePaused(false);
 
         DirectionalLightEntity = World->ConstructEntity("PreviewLight");
         World->EmplaceComponent<FHideInSceneOutliner>(DirectionalLightEntity);
@@ -503,7 +505,7 @@ namespace Lumina
         Prefab->CapturePreCommitState();
 
         // Replacing the registry frees what an open details panel points at, so the generation moves too.
-        CPrefab::BumpDataGeneration();
+        Prefab->MarkRegistryChanged();
         Prefab->Registry = ECS::FRegistry{};
         THashMap<ECS::FEntity, ECS::FEntity> SrcToDst;
         // Instance tracking belongs to a placed copy; captured into the asset it would spawn as an instance.
@@ -524,23 +526,29 @@ namespace Lumina
 
     void FPrefabEditorTool::OnSave()
     {
+        CPrefab* Prefab = GetPrefab();
+        if (Prefab == nullptr || Prefab->GetPackage() == nullptr || !Prefab->GetPackage()->IsDirty())
+        {
+            return;
+        }
+
         // Persist gizmo prefs alongside the asset save so they survive across editor sessions.
         PersistGizmoSettings();
 
         // Super commits the preview world into the prefab (CommitScene) then saves the package.
         Super::OnSave();
 
-        // Pushes the edits onto live instances now rather than only on the next world load.
-        if (CPrefab* Prefab = GetPrefab())
+        if (Prefab->GetPackage()->IsDirty())
         {
-            Prefab->RefreshInstancesInLoadedWorlds();
-
-            // Descendant variants re-resolve and push on, which is the whole point of a variant.
-            Prefab->PropagateToVariants();
-
-            // Only this save's refresh may compare against the old values; a later world load seeds as before.
             Prefab->ClearPreCommitState();
+            return;
         }
+
+        Prefab->RefreshInstancesInLoadedWorlds();
+
+        Prefab->PropagateToVariants();
+
+        Prefab->ClearPreCommitState();
     }
 
     void FPrefabEditorTool::Update(const FUpdateContext& UpdateContext)
@@ -655,7 +663,7 @@ namespace Lumina
 
             // Drop selection links so the selection set doesn't carry stale entities into next frame.
             RemoveSelectedEntity(Entity);
-            ECS::Utils::ForEachDescendant(ECS::GetWorldRegistry(*World), Entity, [&](ECS::FEntity Desc)
+            ECS::GetWorldRegistry(*World).GetHierarchy().ForEachDescendant(Entity, [&](ECS::FEntity Desc)
             {
                 RemoveSelectedEntity(Desc);
             });
@@ -695,9 +703,8 @@ namespace Lumina
         {
             if (Root != ECS::NullEntity) return;
 
-            const FRelationshipComponent* Rel = WorldRegistry.TryGet<FRelationshipComponent>(E);
-            const bool bHasPrefabParent = Rel && Rel->Parent != ECS::NullEntity &&
-                WorldRegistry.HasAny<SPrefabComponent>(Rel->Parent);
+            const ECS::FEntity Parent = WorldRegistry.GetHierarchy().GetParent(E);
+            const bool bHasPrefabParent = Parent != ECS::NullEntity && WorldRegistry.HasAny<SPrefabComponent>(Parent);
             if (!bHasPrefabParent)
             {
                 Root = E;
@@ -885,15 +892,14 @@ namespace Lumina
 
         // Resolved before adopting, so the subtree being adopted can never become its own parent.
         const ECS::FEntity PrefabRoot = FindPrefabRoot();
-        const FRelationshipComponent* Relationship = Registry.TryGet<FRelationshipComponent>(Root);
-        const bool bHasParent = Relationship != nullptr && Relationship->Parent != ECS::NullEntity;
+        const bool bHasParent = Registry.GetHierarchy().GetParent(Root) != ECS::NullEntity;
         if (!bHasParent && PrefabRoot != ECS::NullEntity && PrefabRoot != Root)
         {
             ECS::Utils::ReparentEntity(Registry, Root, PrefabRoot);
         }
 
         AdoptIntoPrefab(Root);
-        ECS::Utils::ForEachDescendant(Registry, Root, [this](ECS::FEntity Descendant)
+        Registry.GetHierarchy().ForEachDescendant(Root, [this](ECS::FEntity Descendant)
         {
             AdoptIntoPrefab(Descendant);
         });
@@ -935,7 +941,7 @@ namespace Lumina
             const bool bWasInstance = Registry.HasAny<SPrefabInstanceComponent>(Spawned);
 
             AdoptIntoPrefab(Spawned);
-            ECS::Utils::ForEachDescendant(Registry, Spawned, [this](ECS::FEntity Descendant)
+            Registry.GetHierarchy().ForEachDescendant(Spawned, [this](ECS::FEntity Descendant)
             {
                 AdoptIntoPrefab(Descendant);
             });
@@ -992,11 +998,14 @@ namespace Lumina
             }
         };
         FreshenStableID(NewEntity);
-        ECS::Utils::ForEachDescendant(Registry, NewEntity, FreshenStableID);
+        Registry.GetHierarchy().ForEachDescendant(NewEntity, FreshenStableID);
 
         // Re-parent under the source's parent (or the prefab root if it had none).
-        const FRelationshipComponent* SourceRel = Registry.TryGet<FRelationshipComponent>(Source);
-        ECS::FEntity Parent = (SourceRel && SourceRel->Parent != ECS::NullEntity) ? SourceRel->Parent : FindPrefabRoot();
+        ECS::FEntity Parent = Registry.GetHierarchy().GetParent(Source);
+        if (Parent == ECS::NullEntity)
+        {
+            Parent = FindPrefabRoot();
+        }
         if (Parent != ECS::NullEntity && Parent != NewEntity)
         {
             ECS::Utils::ReparentEntity(Registry, NewEntity, Parent);
@@ -1439,6 +1448,10 @@ namespace Lumina
         {
             ImGui::Checkbox(LOC("World Grid"), &bWorldGridEnabled);
             ImGui::Checkbox(LOC("Component Visualizers"), &bShowComponentVisualizers);
+            ImGui::BeginDisabled(!bShowComponentVisualizers);
+            ImGui::Checkbox(LOC("Visualizers in Whole Hierarchy"), &bShowHierarchyVisualizers);
+            ImGui::SetItemTooltip(LOC("Draws every visualizer in the selected entity's tree, from its root down, not only the selection."));
+            ImGui::EndDisabled();
 
             if (ImGui::Checkbox(LOC("Studio Lighting"), &bStudioLighting))
             {

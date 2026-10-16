@@ -7,7 +7,7 @@
 ## 当前内置
 
 - `SHealthComponent`（`Components/HealthComponent.h`），生命值 + 最大生命值
-  + 可选回复。已反射的 Lua API：`ApplyDamage(float)`、`GiveHealth(float)`。
+  + 可选回复。已反射的脚本 API：`ApplyDamage(float)`、`GiveHealth(float)`。
 
 ## 如何为某个项目禁用
 
@@ -38,6 +38,6 @@
 #endif
 ```
 
-`LUMINA_MONOLITHIC` 仅由 Workspace.lua 在 Shipping 配置下定义；
+`LUMINA_MONOLITHIC` 由 LuminaBuildTool 为单体目标定义；
 在该配置中每个模块都被静态链接进最终的可执行文件，
 dllexport/dllimport 只会产生 LNK4286 警告。

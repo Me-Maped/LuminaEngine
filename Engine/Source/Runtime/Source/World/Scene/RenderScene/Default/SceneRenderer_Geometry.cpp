@@ -172,7 +172,9 @@ namespace Lumina
 
         LUMINA_PROFILE_SECTION_COLORED("VisBuffer Geometry Pass", tracy::Color::Red);
 
-        static const FShaderH VisPixel = FShaderLibrary::Get("VisBufferPixel.slang");
+        static const FString  VertexPathDefine("MESHLET_VERTEX_PATH");
+        static const FShaderH VisPixel = FShaderLibrary::Get("VisBufferPixel.slang",
+            RHI::SupportsMeshShaders() ? TSpan<const FString>() : TSpan<const FString>(&VertexPathDefine, 1));
         bHasDraws = bHasDraws && VisPixel != nullptr;
         if (!bHasDraws && !bClear)
         {
@@ -181,7 +183,7 @@ namespace Lumina
 
         RHI::CmdBarrier(CL,
             RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
-            RHI::EStageFlags::MeshShader | RHI::EStageFlags::IndirectArguments | RHI::EStageFlags::PixelShader,
+            RHI::EStageFlags::MeshShader | RHI::EStageFlags::VertexShader | RHI::EStageFlags::IndirectArguments | RHI::EStageFlags::PixelShader,
             RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite | RHI::EAccessFlags::IndirectRead);
 
         const FSceneImage& VisRT   = GetNamedImage(ENamedImage::VisBuffer);
@@ -301,6 +303,67 @@ namespace Lumina
         return true;
     }
 
+    namespace
+    {
+        TConsoleVar<bool> CVarMultiViewShadowDraws(
+            "r.Shadows.MultiViewDraws",
+            true,
+            "Draw the views of a shadow pass with one indirect draw per batch per group of viewports, instead of one draw per view.");
+    }
+
+    bool FDefaultSceneRenderer::DrawShadowViewsTogether(RHI::FCmdListH CL, const FShadowViewRun& Run, FShaderH PixelShader)
+    {
+        // Consecutive views sit one view of indirect slots apart only while each slice holds a single sub-draw.
+        const uint32 ViewsPerDraw = Math::Min(RHI::GetMaxViewports(), kMaxShadowViewportsPerDraw);
+        // The vertex path writes no viewport index, so it draws its views one at a time.
+        if (!CVarMultiViewShadowDraws.GetValue() || !RHI::SupportsMeshShaders() || Run.Views.empty() || !Run.bContiguous
+            || MeshSubDrawsPerSlice != 1u || ViewsPerDraw < 2u)
+        {
+            return false;
+        }
+
+        const FFrameData& Frame = *RenderFrame;
+        const uint32 NumViews  = (uint32)Run.Views.size();
+        const uint32 NumGroups = (NumViews + ViewsPerDraw - 1u) / ViewsPerDraw;
+        const RHI::TGPUSpan<FShadowRasterViewGPU> AllViews = RHI::CopyTransientArray(Run.Views.data(), Run.Views.size());
+
+        const auto SetGroupViewports = [&](uint32 First)
+        {
+            const uint32 Count = Math::Min(ViewsPerDraw, NumViews - First);
+            RHI::CmdSetViewportArray(CL, TSpan<const RHI::FRect>(Run.Tiles.data() + First, Count));
+        };
+
+        // Batch-outer keeps one pipeline bind per batch, and the viewports only change between groups when there are several.
+        if (NumGroups == 1u)
+        {
+            SetGroupViewports(0u);
+        }
+
+        for (uint32 OpaqueIdx : Frame.Geometry.OpaqueDrawList)
+        {
+            const FMeshDrawCommand& Batch = Frame.Geometry.DrawCommands[OpaqueIdx];
+            if (!BindShadowBatchPipeline(CL, Batch, PixelShader))
+            {
+                continue;
+            }
+
+            for (uint32 First = 0; First < NumViews; First += ViewsPerDraw)
+            {
+                if (NumGroups > 1u)
+                {
+                    SetGroupViewports(First);
+                }
+
+                FMeshletPassContext Ctx;
+                Ctx.CullViewIndex       = Run.FirstCullView + First;
+                Ctx.ShadowViews.Address = AllViews.Address + (RHI::GPUPtr)First * sizeof(FShadowRasterViewGPU);
+                Ctx.ShadowViews.Count   = Math::Min(ViewsPerDraw, NumViews - First);
+                DrawMeshletBatch(CL, Batch, Ctx);
+            }
+        }
+        return true;
+    }
+
     void FDefaultSceneRenderer::DrawShadowBatch(RHI::FCmdListH CL, const FMeshDrawCommand& Batch, bool bUseMesh,
         uint32 CullViewIndex, int32 ShadowDataIndex, int32 ShadowViewIndex,
         const FUIntVector2& ViewportExtent)
@@ -372,7 +435,30 @@ namespace Lumina
         DepthDesc.DepthBiasSlopeFactor = 1.5f;
         RHI::CmdSetDepthStencil(CL, (DepthDesc));
 
-        for (uint32 OpaqueIdx : OpaqueDrawList)
+        FShadowViewRun Run;
+        for (uint32 LightIdx = 0; LightIdx < PointShadows.size(); ++LightIdx)
+        {
+            uint32 FaceView = PointShadowCullViewBases[LightIdx];
+            if (FaceView == Constants::kIndexNoneU32)
+            {
+                continue;
+            }
+
+            const FLightShadowData& ShadowData = Frame.Lighting.Shadows[PointShadows[LightIdx].ShadowDataIndex];
+            for (int32 Face = 0; Face < 6; ++Face)
+            {
+                const int32 ShadowMapIndex = ShadowData.Shadow[Face].ShadowMapIndex;
+                if (ShadowMapIndex != Constants::kIndexNone)
+                {
+                    Run.Add(FaceView++, PointShadows[LightIdx].ShadowDataIndex, Face, AtlasTileRect(AtlasTiles[ShadowMapIndex]));
+                }
+            }
+        }
+
+        // Empty when one draw per batch already covered every view.
+        const TSpan<const uint32> PerViewBatches = DrawShadowViewsTogether(CL, Run, PixelShader)
+            ? TSpan<const uint32>() : TSpan<const uint32>(OpaqueDrawList.data(), OpaqueDrawList.size());
+        for (uint32 OpaqueIdx : PerViewBatches)
         {
             const FMeshDrawCommand& Batch = DrawCommands[OpaqueIdx];
             const bool bUseMesh = BindShadowBatchPipeline(CL, Batch, PixelShader);
@@ -487,8 +573,20 @@ namespace Lumina
 
         const TVector<FLightShadow>& SpotShadows = PackedShadows[(uint32)ELightType::Spot];
 
-        // Batch-outer gives one pipeline bind per batch; per-spot tile viewports are dynamic state.
-        for (uint32 OpaqueIdx : OpaqueDrawList)
+        FShadowViewRun Run;
+        for (uint32 SpotIdx = 0; SpotIdx < SpotShadows.size(); ++SpotIdx)
+        {
+            if (SpotShadowCullViewBases[SpotIdx] != Constants::kIndexNoneU32)
+            {
+                const FLightShadow& Shadow = SpotShadows[SpotIdx];
+                Run.Add(SpotShadowCullViewBases[SpotIdx], Shadow.ShadowDataIndex, 0, AtlasTileRect(AtlasTiles[Shadow.ShadowMapIndex]));
+            }
+        }
+
+        // Empty when one draw per batch already covered every view.
+        const TSpan<const uint32> PerViewBatches = DrawShadowViewsTogether(CL, Run, PixelShader)
+            ? TSpan<const uint32>() : TSpan<const uint32>(OpaqueDrawList.data(), OpaqueDrawList.size());
+        for (uint32 OpaqueIdx : PerViewBatches)
         {
             const FMeshDrawCommand& Batch = DrawCommands[OpaqueIdx];
             const bool bUseMesh = BindShadowBatchPipeline(CL, Batch, PixelShader);
@@ -583,13 +681,25 @@ namespace Lumina
         RHI::CmdSetDepthStencil(CL, (DepthDesc));
 
         const int32 SunShadowDataIndex = Frame.Lighting.Lights[0].ShadowDataIndex;
+        const uint32 NumCascadeViews = Frame.Views.NumCascadeViews;
 
-        for (uint32 OpaqueIdx : OpaqueDrawList)
+        FShadowViewRun Run;
+        for (uint32 c = 0; c < NumCascadeViews; ++c)
+        {
+            const RHI::FRect TileRect{ GCSMCascadeOriginX[c], GCSMCascadeOriginX[c] + GCSMCascadeSizes[c],
+                                       GCSMCascadeOriginY[c], GCSMCascadeOriginY[c] + GCSMCascadeSizes[c] };
+            Run.Add(CascadeViewBase + c, SunShadowDataIndex, (int32)c, TileRect);
+        }
+
+        // Empty when one draw per batch already covered every view.
+        const TSpan<const uint32> PerViewBatches = DrawShadowViewsTogether(CL, Run, FShaderH{})
+            ? TSpan<const uint32>() : TSpan<const uint32>(OpaqueDrawList.data(), OpaqueDrawList.size());
+        for (uint32 OpaqueIdx : PerViewBatches)
         {
             const FMeshDrawCommand& Batch = DrawCommands[OpaqueIdx];
             const bool bUseMesh = BindShadowBatchPipeline(CL, Batch, FShaderH{});
 
-            for (uint32 c = 0; c < (uint32)NumCascades; ++c)
+            for (uint32 c = 0; c < NumCascadeViews; ++c)
             {
                 const int32 TileX = GCSMCascadeOriginX[c];
                 const int32 TileY = GCSMCascadeOriginY[c];
@@ -612,7 +722,7 @@ namespace Lumina
         {
             const EFormat CascadeFormat = GetNamedImage(ENamedImage::Cascade).Desc.Format;
             const FLightShadowData& SunShadow = Frame.Lighting.Shadows[SunShadowDataIndex];
-            for (uint32 c = 0; c < (uint32)NumCascades; ++c)
+            for (uint32 c = 0; c < Frame.Views.NumNearCascadeViews; ++c)
             {
                 const int32 TileX = GCSMCascadeOriginX[c];
                 const int32 TileY = GCSMCascadeOriginY[c];
@@ -1054,7 +1164,7 @@ namespace Lumina
         }
         const FVector3 Origin = FVector3(Terrain.WorldMatrix[3]);
         const float HalfSize = Terrain.TileWorldSize * 0.5f;
-        FAABB Bounds;
+        SAABB Bounds;
         Bounds.Min = FVector3(Origin.x - HalfSize, Origin.y, Origin.z - HalfSize);
         Bounds.Max = FVector3(Origin.x + HalfSize, Origin.y + Terrain.MaxHeight, Origin.z + HalfSize);
         return Frame.CameraFrustum.IsInside(Bounds);
@@ -1182,20 +1292,49 @@ namespace Lumina
                 FGrassGPUState& State = States[Index];
 
                 const FScenePrimitiveSet::FGrassSpeciesBinding Binding =
-                    ScenePrimitives.AcquireGrassSpecies(Species.Mesh, TerrainItem.GrassMaxInstances);
+                    ScenePrimitives.AcquireGrassSpecies(Species.Mesh, Species.ResolveHandle, TerrainItem.GrassMaxInstances);
                 if (!Binding.bValid)
                 {
                     continue;
                 }
 
-                // A species may cap its own radius, and dense grass keeps a bounded candidate grid rather than a huge dispatch.
+                // Dense grass keeps a bounded candidate grid rather than a huge dispatch, which can cut a long radius short.
                 constexpr float GrassMaxGridSide = 2048.0f;
-                const float Radius = Math::Min(Species.CullDistance > 0.0f
-                                   ? Math::Min(Species.CullDistance, TerrainItem.GrassMaxDrawDistance)
-                                   : TerrainItem.GrassMaxDrawDistance, Species.CellSize * GrassMaxGridSide * 0.5f);
+                const float GridRadius = Species.CellSize * GrassMaxGridSide * 0.5f;
+                const float Radius     = Math::Min(Species.CullDistance, GridRadius);
                 if (Radius <= 0.0f || Species.CellSize <= 0.0f)
                 {
                     continue;
+                }
+
+                if (Species.CullDistance > GridRadius && !State.bWarnedGridCap)
+                {
+                    State.bWarnedGridCap = true;
+                    LOG_WARN("Grass: {} reaches {:.0f} m, not its CullDistance of {:.0f} m, because its density fills the "
+                             "2048-cell scatter grid. Lower Density or CullDistance.",
+                             Species.TypeName.ToString(), GridRadius, Species.CullDistance);
+                }
+
+                // Read back from kFramesInFlight ago, which the frame fence has already retired.
+                const uint8 ReadbackSlot = CurrentFrameSlot;
+                if (const uint32* Landed = State.CursorReadback[ReadbackSlot].CpuAs<const uint32>())
+                {
+                    if (*Landed >= Binding.Capacity && !State.bWarnedOverBudget)
+                    {
+                        State.bWarnedOverBudget = true;
+                        LOG_WARN("Grass: {} wanted more than its {} instance budget and lost blades. Raise the terrain's "
+                                 "MaxInstancesPerSpecies, lower Density or CullDistance, or start the thinning nearer with a smaller nonzero FullDensityDistance.",
+                                 Species.TypeName.ToString(), Binding.Capacity);
+                    }
+                }
+                else if (State.CursorReadback[ReadbackSlot].Gpu == 0)
+                {
+                    State.CursorReadback[ReadbackSlot] = RHI::Malloc(sizeof(uint32), RHI::kDefaultAlign, RHI::EMemoryType::CPURead);
+                    RHI::SetDebugName(State.CursorReadback[ReadbackSlot].Gpu, "Readback.GrassCursor");
+                    if (void* Host = State.CursorReadback[ReadbackSlot].Cpu)
+                    {
+                        Memory::Memzero(Host, sizeof(uint32));
+                    }
                 }
 
                 // Candidates cover the square inscribing the radius; the shader rejects the corners.
@@ -1229,6 +1368,7 @@ namespace Lumina
                 Retire.Capacity   = Binding.Capacity;
                 Retire.Cursor     = Cursor;
                 Retire.PrevCursor = State.PrevCursorBuffer;
+                Retire.CursorReadback = State.CursorReadback[ReadbackSlot];
 
                 if (!bAnyDispatched)
                 {
@@ -1264,7 +1404,7 @@ namespace Lumina
                 Push.GridSide           = GridSide;
 
                 // The block is shared by every species on this mesh, so per-type shading flags join here, not in the binding.
-                EInstanceFlags SpeciesFlags = Species.bReceiveShadow ? EInstanceFlags::ReceiveShadow : EInstanceFlags::None;
+                EInstanceFlags SpeciesFlags = EInstanceFlags::Foliage | (Species.bReceiveShadow ? EInstanceFlags::ReceiveShadow : EInstanceFlags::None);
                 if (!Species.bContactShadows)
                 {
                     SpeciesFlags |= EInstanceFlags::NoContactShadows;
@@ -1314,7 +1454,7 @@ namespace Lumina
                     RHI::CmdDispatch(CL, MakeArgs(Push), (Item.Capacity + 63u) / 64u, 1u, 1u);
                 }
 
-                // Four bytes each, on the GPU; the count never comes back to the CPU.
+                // Four bytes each, kept on the GPU for the retire and copied out for the budget warning.
                 RHI::CmdBarrier(CL,
                     RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
                     RHI::EStageFlags::Transfer,
@@ -1322,6 +1462,10 @@ namespace Lumina
                 for (const FGrassRetireItem& Item : GrassRetireScratch)
                 {
                     RHI::CmdMemcpy(CL, { Item.PrevCursor.Gpu, sizeof(uint32) }, Item.Cursor);
+                    if (Item.CursorReadback.Gpu != 0)
+                    {
+                        RHI::CmdMemcpy(CL, { Item.CursorReadback.Gpu, sizeof(uint32) }, Item.Cursor);
+                    }
                 }
                 RHI::CmdBarrier(CL,
                     RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferWrite,

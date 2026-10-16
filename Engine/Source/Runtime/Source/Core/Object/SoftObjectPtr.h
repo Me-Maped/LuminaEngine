@@ -22,6 +22,7 @@ namespace Lumina
             , CachedGUID(InGUID)
         {}
 
+        ~FSoftObjectPath() = default;
         FSoftObjectPath(const FSoftObjectPath& Other)
             : Path(Other.Path), CachedGUID(Other.CachedGUID) {}
         FSoftObjectPath(FSoftObjectPath&& Other) noexcept
@@ -62,8 +63,7 @@ namespace Lumina
         /** Blocking load through FAssetManager; returns nullptr on miss. */
         CObject* LoadSynchronous() const;
 
-        /** Fire-and-forget async load. Callback fires on completion (or
-         *  immediately with nullptr if the path can't be resolved). */
+        // Runs Callback on the game thread once loaded, or right away with null when the path does not resolve.
         void LoadAsync(const TFunction<void(CObject*)>& Callback) const;
 
         bool operator==(const FSoftObjectPath& Other) const

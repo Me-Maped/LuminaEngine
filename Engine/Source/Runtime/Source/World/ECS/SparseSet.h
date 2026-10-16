@@ -65,6 +65,8 @@ namespace Lumina::ECS
 
         FSparseSet(const FSparseSet&) = delete;
         FSparseSet& operator = (const FSparseSet&) = delete;
+        FSparseSet(FSparseSet&&) = delete;
+        FSparseSet& operator=(FSparseSet&&) = delete;
 
 
         //~ Queries
@@ -100,6 +102,9 @@ namespace Lumina::ECS
         NODISCARD FORCEINLINE size_t GetDenseSize() const { return Dense.size(); }
         NODISCARD FORCEINLINE const FEntity* GetDenseData() const { return Dense.data(); }
         NODISCARD FORCEINLINE FEntity GetDenseAt(size_t Index) const { return Dense[Index]; }
+
+        // The highest entity index in the pool, tombstones skipped, or 0 when it holds none. For sizing an index-keyed table.
+        NODISCARD RUNTIME_API uint32 MaxLiveIndex() const;
 
         // The entity whose payload starts at Payload, or null when the address is not a live element of this pool.
         NODISCARD FEntity FindPayloadOwner(const void* Payload) const;
@@ -246,6 +251,9 @@ namespace Lumina::ECS
 
         RUNTIME_API void Reserve(size_t Count);
 
+        // Rebuilds the payload in a new layout of the same type, keeping every entity at its dense index.
+        RUNTIME_API void Relayout(const FComponentTypeInfo& NewInfo, FMigrateComponentValue Migrate);
+
         // Lives on the pool rather than beside it, so a type-erased write fires the same hooks a typed one does.
         FComponentSignals Signals;
 
@@ -269,6 +277,7 @@ namespace Lumina::ECS
         // Unlinks the entity and hands back its dense slot, or InvalidDenseIndex when absent.
         RUNTIME_API uint32 ReleaseSlot(FEntity Entity);
 
+        void ApplyLayout(const FComponentTypeInfo& InTypeInfo);
         RUNTIME_API void GrowPayloadTo(size_t ElementCount);
         RUNTIME_API void BumpLayoutEpoch();
         RUNTIME_API void DestroyLiveElements();

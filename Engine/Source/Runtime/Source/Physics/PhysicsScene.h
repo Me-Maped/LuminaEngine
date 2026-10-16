@@ -9,6 +9,7 @@
 #include "Containers/Span.h"
 #include "Containers/Vector.h"
 #include "Memory/SmartPtr.h"
+#include "Core/Math/AABB.h"
 #include "Core/Math/Matrix/MatrixMath.h"
 #include "Ray/RayCast.h"
 #include "Renderer/SkeletonResource.h"
@@ -35,7 +36,7 @@ namespace Lumina::Physics
         const FSkeletonResource*    Skeleton = nullptr;             // Source skeleton (bone hierarchy + bind pose).
         const TVector<FMatrix4>*    ComponentBoneGlobals = nullptr; // Component-space bone global transforms to spawn at (size == bone count).
         FMatrix4                    EntityToWorld;                  // Entity world matrix (component space -> world).
-        FCollisionProfile           FallbackProfile;               // Applied when Asset is null.
+        SCollisionProfile           FallbackProfile;               // Applied when Asset is null.
         uint32                      CollisionGroupID = 0;           // Unique per ragdoll for parent/child self-collision filtering.
     };
 
@@ -51,62 +52,62 @@ namespace Lumina::Physics
     // Backend-neutral description of one constraint, built by gameplay/editor code and resolved by the scene.
     // World-space frames; a body set to ECS::NullEntity is treated as "fixed to the world".
     REFLECT()
-    struct FConstraintDesc
+    struct SConstraintDesc
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         EPhysicsConstraintType  Type        = EPhysicsConstraintType::Point;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         ECS::FEntity            BodyA       = ECS::NullEntity;            // ECS::NullEntity => world anchor (parent).
 
-        PROPERTY()
+        PROPERTY(Hidden)
         ECS::FEntity            BodyB       = ECS::NullEntity;            // The constrained (child) body.
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3                Anchor      = FVector3(0.0f);        // World pivot (Point/Hinge/Slider/Cone).
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3                Axis        = FVector3(0.0f, 1.0f, 0.0f); // Hinge/Cone axis or Slider direction (world).
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3                AnchorB     = FVector3(0.0f);        // Distance: second attach point (Anchor is the first).
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float                   MinLimit    = 0.0f;                  // Hinge angle (rad) / Slider pos (m) / Distance min.
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float                   MaxLimit    = 0.0f;                  // Hinge angle (rad) / Slider pos (m) / Distance max.
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float                   HalfConeAngle = 0.0f;               // Cone half-angle (rad).
 
-        PROPERTY()
+        PROPERTY(Hidden)
         bool                    bHasLimits  = false;                 // When false, the joint is unlimited on its free axis.
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float                   LimitFrequency = 0.0f;               // Soft-limit spring (0 = hard limit).
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float                   LimitDamping   = 0.0f;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float                   MaxFriction    = 0.0f;               // Hinge friction torque (N m) / Slider friction force (N).
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float                   MotorFrequency = 0.0f;               // Position-motor spring (0 = stiff default).
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float                   MotorDamping   = 0.0f;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float                   MotorForceLimit  = 0.0f;             // Slider motor max force (N), 0 = unlimited.
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float                   MotorTorqueLimit = 0.0f;             // Hinge motor max torque (N m), 0 = unlimited.
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float                   BreakForce  = 0.0f;                  // Disable the joint when applied force exceeds this (N). 0 = unbreakable.
 
     };
@@ -172,6 +173,11 @@ namespace Lumina::Physics
     public:
 
         virtual ~IPhysicsScene() { }
+        IPhysicsScene() = default;
+        IPhysicsScene(const IPhysicsScene&) = delete;
+        IPhysicsScene& operator=(const IPhysicsScene&) = delete;
+        IPhysicsScene(IPhysicsScene&&) = delete;
+        IPhysicsScene& operator=(IPhysicsScene&&) = delete;
         virtual void PreUpdate() = 0;
         virtual void Update(double DeltaTime) = 0;
 
@@ -180,6 +186,10 @@ namespace Lumina::Physics
 
         // Runs around every fixed character step, after input is latched, so netcode can record or replace it.
         void SetCharacterStepHook(TFunction<void(float, bool)> Hook) { CharacterStepHook = Move(Hook); }
+
+        // Collision drawing for this scene alone, so one editor viewport's toggle never reaches another world.
+        void SetDebugDrawEnabled(bool bEnabled) { bDebugDraw = bEnabled; }
+        bool IsDebugDrawEnabled() const { return bDebugDraw; }
 
         virtual bool GetCharacterNetState(ECS::FEntity Entity, FCharacterNetState& Out) const { return false; }
         virtual bool SetCharacterNetState(ECS::FEntity Entity, const FCharacterNetState& State) { return false; }
@@ -193,7 +203,7 @@ namespace Lumina::Physics
         virtual void Simulate() = 0;
         virtual void StopSimulate() = 0;
 
-        // Game-thread drain of step-side events (Lua, ECS::FEventDispatcher). Pair with Update.
+        // Game-thread drain of step-side events (ECS::FEventDispatcher). Pair with Update.
         virtual void DispatchPendingEvents() {}
         
         virtual void DeactivateBody(ECS::FEntity Entity) = 0;
@@ -205,26 +215,61 @@ namespace Lumina::Physics
         
         virtual EPhysicsBodyStatus GetBodyStatus(ECS::FEntity Entity) const = 0;
         virtual bool TryGetBodyState(ECS::FEntity Entity, FPhysicsBodyState& Out) const = 0;
-        virtual bool TryGetTargetState(const FPhysicsBodyTarget& Target, FPhysicsBodyState& Out) const = 0;
-        virtual void AddForceAtTarget(const FPhysicsBodyTarget& Target, const FVector3& Force, const FVector3& Point) = 0;
+        virtual bool TryGetTargetState(const SPhysicsBodyTarget& Target, FPhysicsBodyState& Out) const = 0;
+        virtual void AddForceAtTarget(const SPhysicsBodyTarget& Target, const FVector3& Force, const FVector3& Point) = 0;
         
         virtual TOptional<SRayResult> CastRay(const SRayCastSettings& Settings) = 0;
 
-        // Sweep hits near-to-far; OutHits is CLEARED first, so reusing one buffer keeps the query alloc-free.
-        virtual void CastSphere(const SSphereCastSettings& Settings, TVector<SRayResult>& OutHits) = 0;
+        // Every body the ray crosses, near-to-far (penetrating bullets). OutHits is cleared first.
+        virtual void CastRayAll(const SRayCastSettings& Settings, TVector<SRayResult>& OutHits) = 0;
+
+        // Whether anything blocks the ray, stopping at the first hit rather than finding the nearest.
+        virtual bool CastRayAny(const SRayCastSettings& Settings) = 0;
+
+        // The ray against one entity's body alone, everything else ignored.
+        virtual TOptional<SRayResult> CastRayAgainst(ECS::FEntity Entity, const FVector3& Start, const FVector3& End) = 0;
+
+        // Sweep hits near-to-far; OutHits is cleared first, so reusing one buffer keeps the query alloc-free.
+        virtual void CastShapeAll(const SQueryShape& Shape, const FVector3& Start, const FVector3& End, ECollisionProfiles LayerMask,
+                                  TSpan<const ECS::FEntity> IgnoreEntities, TVector<SRayResult>& OutHits) = 0;
 
         // Nearest sweep hit; lets the backend shrink the query instead of gathering every hit behind it.
-        virtual TOptional<SRayResult> CastSphereClosest(const SSphereCastSettings& Settings) { return {}; }
-
-        // Every body the ray crosses, near-to-far (penetrating bullets). OutHits is CLEARED first.
-        virtual void CastRayAll(const SRayCastSettings& Settings, TVector<SRayResult>& OutHits) { OutHits.clear(); }
-
-        // Distinct entities whose bodies CONTAIN the world point (volume containment, no sweep).
-        virtual int32 CollidePoint(const FVector3& Point, TSpan<const ECS::FEntity> IgnoreEntities, TSpan<ECS::FEntity> OutEntities) { return 0; }
+        virtual TOptional<SRayResult> CastShapeClosest(const SQueryShape& Shape, const FVector3& Start, const FVector3& End,
+                                                       ECollisionProfiles LayerMask, TSpan<const ECS::FEntity> IgnoreEntities) = 0;
 
         // Distinct entities intersecting the shape; returns the count written, == size() means possibly more.
-        virtual int32 OverlapSphere(const FVector3& Center, float Radius, TSpan<const ECS::FEntity> IgnoreEntities, TSpan<ECS::FEntity> OutEntities) = 0;
-        virtual int32 OverlapBox(const FVector3& Center, const FVector3& HalfExtents, const FQuat& Rotation, TSpan<const ECS::FEntity> IgnoreEntities, TSpan<ECS::FEntity> OutEntities) = 0;
+        virtual int32 OverlapShape(const SQueryShape& Shape, const FVector3& Center, ECollisionProfiles LayerMask,
+                                   TSpan<const ECS::FEntity> IgnoreEntities, TSpan<ECS::FEntity> OutEntities) = 0;
+
+        // False when the entity has no body.
+        virtual bool GetClosestPointOnBody(ECS::FEntity Entity, const FVector3& Point, FVector3& OutPoint) const = 0;
+        virtual bool GetBodyBounds(ECS::FEntity Entity, SAABB& OutBounds) const = 0;
+
+        void CastSphere(const SSphereCastSettings& Settings, TVector<SRayResult>& OutHits)
+        {
+            CastShapeAll(SQueryShape::Sphere(Settings.Radius), Settings.Start, Settings.End, Settings.LayerMask, Settings.IgnoreEntities, OutHits);
+        }
+
+        TOptional<SRayResult> CastSphereClosest(const SSphereCastSettings& Settings)
+        {
+            return CastShapeClosest(SQueryShape::Sphere(Settings.Radius), Settings.Start, Settings.End, Settings.LayerMask, Settings.IgnoreEntities);
+        }
+
+        // Distinct entities whose bodies contain the world point, a zero-radius overlap rather than a sweep.
+        int32 CollidePoint(const FVector3& Point, TSpan<const ECS::FEntity> IgnoreEntities, TSpan<ECS::FEntity> OutEntities)
+        {
+            return OverlapShape(SQueryShape::Sphere(0.0f), Point, ECollisionProfiles::All, IgnoreEntities, OutEntities);
+        }
+
+        int32 OverlapSphere(const FVector3& Center, float Radius, TSpan<const ECS::FEntity> IgnoreEntities, TSpan<ECS::FEntity> OutEntities)
+        {
+            return OverlapShape(SQueryShape::Sphere(Radius), Center, ECollisionProfiles::All, IgnoreEntities, OutEntities);
+        }
+
+        int32 OverlapBox(const FVector3& Center, const FVector3& HalfExtents, const FQuat& Rotation, TSpan<const ECS::FEntity> IgnoreEntities, TSpan<ECS::FEntity> OutEntities)
+        {
+            return OverlapShape(SQueryShape::Box(HalfExtents, Rotation), Center, ECollisionProfiles::All, IgnoreEntities, OutEntities);
+        }
         
         virtual void AddForce(ECS::FEntity Entity, const FVector3& Force) = 0;
         virtual void AddImpulse(ECS::FEntity Entity, const FVector3& Impulse) = 0;
@@ -236,10 +281,7 @@ namespace Lumina::Physics
         virtual void SetAngularVelocity(ECS::FEntity Entity, const FVector3& AngularVelocity) = 0;
         virtual void SetGravityFactor(ECS::FEntity Entity, float Factor) = 0;
 
-        // Shape-accurate buoyancy: applies submerged-volume buoyancy + linear/angular drag impulse for
-        // this frame. The caller supplies the fluid surface point + normal (e.g. sampled from the rendered
-        // Gerstner waves), so the fluid plane follows the wave surface instead of being flat. Buoyancy is the
-        // fluid/body density ratio: 1 = neutral, >1 floats. No-op without a dynamic body. Default is a no-op.
+        // Shape-accurate buoyancy.
         virtual void ApplyBuoyancyImpulse(ECS::FEntity Entity, const FVector3& SurfacePosition, const FVector3& SurfaceNormal,
             float Buoyancy, float LinearDrag, float AngularDrag, const FVector3& FluidVelocity, float DeltaTime) {}
 
@@ -289,7 +331,7 @@ namespace Lumina::Physics
         // Constraints / joints. Create returns an opaque non-zero handle (0 == failure); the caller stores it
         // to drive motors, query break state, or destroy the joint. Must be called outside the physics step
         // (gameplay/PrePhysics is fine), mirroring CreateRagdoll. Default no-op.
-        virtual uint32 CreateConstraint(const FConstraintDesc& Desc) { return 0; }
+        virtual uint32 CreateConstraint(const SConstraintDesc& Desc) { return 0; }
         virtual void DestroyConstraint(uint32 ConstraintID) {}
         virtual void SetConstraintEnabled(uint32 ConstraintID, bool bEnabled) {}
         // Drive a Hinge/Slider motor. Target is rad/s|m/s for Velocity, rad|m for Position; ignored for Off.
@@ -304,5 +346,6 @@ namespace Lumina::Physics
 
         TFunction<void(float)> PreStepCallback;
         TFunction<void(float, bool)> CharacterStepHook;
+        bool bDebugDraw = false;
     };
 }

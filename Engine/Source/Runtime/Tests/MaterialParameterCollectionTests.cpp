@@ -21,17 +21,17 @@ namespace Lumina
                 return nullptr;
             }
 
-            FCollectionScalarParameter Wetness;
+            SCollectionScalarParameter Wetness;
             Wetness.ParameterName = "Wetness";
             Wetness.DefaultValue  = 0.25f;
             Collection->ScalarParameters.push_back(Wetness);
 
-            FCollectionScalarParameter Snow;
+            SCollectionScalarParameter Snow;
             Snow.ParameterName = "SnowCoverage";
             Snow.DefaultValue  = 0.5f;
             Collection->ScalarParameters.push_back(Snow);
 
-            FCollectionVectorParameter Tint;
+            SCollectionVectorParameter Tint;
             Tint.ParameterName = "SeasonTint";
             Tint.DefaultValue  = FVector4(0.1f, 0.2f, 0.3f, 1.0f);
             Collection->VectorParameters.push_back(Tint);
@@ -121,7 +121,7 @@ namespace Lumina
         // Slot 0 is the reserved zero collection, so an unbound material reads zeros with no sentinel.
         for (uint32 i = 0; i < MAX_MATERIAL_COLLECTIONS; ++i)
         {
-            EXPECT_EQ(Material->MaterialUniforms.CollectionIndices[i], 0u);
+            EXPECT_EQ(Material->GetMaterialUniforms()->CollectionIndices[i], 0u);
         }
     }
 

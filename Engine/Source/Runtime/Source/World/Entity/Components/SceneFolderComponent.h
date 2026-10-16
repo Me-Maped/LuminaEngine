@@ -4,6 +4,7 @@
 
 
 
+#include "Containers/Algorithm.h"
 #include "Containers/Vector.h"
 #include "Containers/Name.h"
 #include "Core/Object/ObjectMacros.h"
@@ -13,22 +14,22 @@ namespace Lumina
 {
     // One outliner folder: a name, an optional parent folder, and the entities filed under it.
     REFLECT()
-    struct RUNTIME_API FSceneFolder
+    struct RUNTIME_API SSceneFolder
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         uint32 ID = 0;
 
         /** Owning folder, or 0 for a folder that sits at the root of the outliner. */
-        PROPERTY()
+        PROPERTY(Hidden)
         uint32 ParentID = 0;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FName Name;
 
         /** Members, as entity integral ids. Only entities without an entity parent are filed here. */
-        PROPERTY()
+        PROPERTY(Hidden)
         TVector<ECS::FEntity> Entities;
     };
 
@@ -40,16 +41,16 @@ namespace Lumina
 
         static constexpr uint32 NoFolder = 0;
 
-        PROPERTY()
-        TVector<FSceneFolder> Folders;
+        PROPERTY(Hidden)
+        TVector<SSceneFolder> Folders;
 
         /** Monotonic id source; ids are never reused so a stale reference can't alias a new folder. */
-        PROPERTY()
+        PROPERTY(Hidden)
         uint32 NextFolderID = 1;
 
-        NODISCARD FSceneFolder* Find(uint32 FolderID)
+        NODISCARD SSceneFolder* Find(uint32 FolderID)
         {
-            for (FSceneFolder& Folder : Folders)
+            for (SSceneFolder& Folder : Folders)
             {
                 if (Folder.ID == FolderID && FolderID != NoFolder)
                 {
@@ -59,7 +60,7 @@ namespace Lumina
             return nullptr;
         }
 
-        NODISCARD const FSceneFolder* Find(uint32 FolderID) const
+        NODISCARD const SSceneFolder* Find(uint32 FolderID) const
         {
             return const_cast<SSceneFolderComponent*>(this)->Find(FolderID);
         }
@@ -70,7 +71,7 @@ namespace Lumina
         {
             const uint32 ResolvedParent = Find(ParentID) != nullptr ? ParentID : NoFolder;
 
-            FSceneFolder& Folder = Folders.emplace_back();
+            SSceneFolder& Folder = Folders.emplace_back();
             Folder.ID = NextFolderID++;
             Folder.ParentID = ResolvedParent;
             Folder.Name = Name;
@@ -80,7 +81,7 @@ namespace Lumina
         /** Returns the folder of this name under ParentID, created if there is not one yet. */
         uint32 FindOrCreateFolder(const FName& Name, uint32 ParentID = NoFolder)
         {
-            for (const FSceneFolder& Folder : Folders)
+            for (const SSceneFolder& Folder : Folders)
             {
                 if (Folder.Name == Name && Folder.ParentID == ParentID)
                 {
@@ -92,7 +93,7 @@ namespace Lumina
 
         void RenameFolder(uint32 FolderID, const FName& NewName)
         {
-            if (FSceneFolder* Folder = Find(FolderID))
+            if (SSceneFolder* Folder = Find(FolderID))
             {
                 Folder->Name = NewName;
             }
@@ -107,7 +108,7 @@ namespace Lumina
                 {
                     return true;
                 }
-                const FSceneFolder* Folder = Find(Cursor);
+                const SSceneFolder* Folder = Find(Cursor);
                 Cursor = Folder != nullptr ? Folder->ParentID : NoFolder;
             }
             return false;
@@ -116,7 +117,7 @@ namespace Lumina
         /** Reparents a folder. Rejected when the new parent is the folder itself or one of its descendants. */
         bool SetFolderParent(uint32 FolderID, uint32 NewParentID)
         {
-            FSceneFolder* Folder = Find(FolderID);
+            SSceneFolder* Folder = Find(FolderID);
             if (Folder == nullptr || FolderID == NewParentID)
             {
                 return false;
@@ -132,7 +133,7 @@ namespace Lumina
 
         void CollectDescendants(uint32 FolderID, TVector<uint32>& OutFolders) const
         {
-            for (const FSceneFolder& Folder : Folders)
+            for (const SSceneFolder& Folder : Folders)
             {
                 if (Folder.ParentID == FolderID)
                 {
@@ -145,7 +146,7 @@ namespace Lumina
         /** Deletes one folder; its child folders and members are adopted by its parent. */
         void RemoveFolder(uint32 FolderID)
         {
-            const FSceneFolder* Folder = Find(FolderID);
+            const SSceneFolder* Folder = Find(FolderID);
             if (Folder == nullptr)
             {
                 return;
@@ -154,7 +155,7 @@ namespace Lumina
             const uint32 NewParent = Folder->ParentID;
             TVector<ECS::FEntity> Orphans = Folder->Entities;
 
-            for (FSceneFolder& Other : Folders)
+            for (SSceneFolder& Other : Folders)
             {
                 if (Other.ParentID == FolderID)
                 {
@@ -171,7 +172,7 @@ namespace Lumina
                 }
             }
 
-            if (FSceneFolder* Parent = Find(NewParent))
+            if (SSceneFolder* Parent = Find(NewParent))
             {
                 Parent->Entities.insert(Parent->Entities.end(), Orphans.begin(), Orphans.end());
             }
@@ -179,7 +180,7 @@ namespace Lumina
 
         NODISCARD uint32 FindEntityFolder(ECS::FEntity Entity) const
         {
-            for (const FSceneFolder& Folder : Folders)
+            for (const SSceneFolder& Folder : Folders)
             {
                 for (ECS::FEntity Member : Folder.Entities)
                 {
@@ -208,15 +209,25 @@ namespace Lumina
         {
             RemoveEntity(Entity);
 
-            if (FSceneFolder* Folder = Find(FolderID))
+            if (SSceneFolder* Folder = Find(FolderID))
             {
                 Folder->Entities.push_back(Entity);
             }
         }
 
+        // One pass over every folder for a whole batch, where RemoveEntity searches them per entity.
+        template <typename TPredicate>
+        void RemoveEntitiesIf(TPredicate&& ShouldRemove)
+        {
+            for (SSceneFolder& Folder : Folders)
+            {
+                Folder.Entities.erase(Algo::RemoveIf(Folder.Entities, ShouldRemove), Folder.Entities.end());
+            }
+        }
+
         void RemoveEntity(ECS::FEntity Entity)
         {
-            for (FSceneFolder& Folder : Folders)
+            for (SSceneFolder& Folder : Folders)
             {
                 for (auto It = Folder.Entities.begin(); It != Folder.Entities.end(); ++It)
                 {

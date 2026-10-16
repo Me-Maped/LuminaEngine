@@ -10,6 +10,8 @@
 #include "World/Entity/Components/SkyLightComponent.h"
 #include "World/Entity/Components/LightComponent.h"
 #include "World/Entity/Components/SkeletalMeshComponent.h"
+#include "World/Entity/Components/SimpleAnimationComponent.h"
+#include "Assets/AssetTypes/Mesh/Animation/Animation.h"
 #include <UI/Tools/AssetEditors/AssetEditorTool.h>
 #include <UI/Tools/EditorTool.h>
 #include <Lumina.h>
@@ -95,6 +97,7 @@ namespace Lumina
 
     FSkeletalMeshEditorTool::FSkeletalMeshEditorTool(IEditorToolContext* Context, CObject* InAsset)
         : FAssetEditorTool(Context, InAsset->GetName().c_str(), InAsset, NewObject<CWorld>())
+        , PreviewClips(CAnimation::StaticClass())
     {
     }
 
@@ -233,7 +236,7 @@ namespace Lumina
                 ++SelectedBoneTotalPoints;
                 if (SelectedBonePoints.size() < kMaxInfluencePoints)
                 {
-                    SelectedBonePoints.push_back(DecodeMeshletPosition(Meshlet, V));
+                    SelectedBonePoints.push_back(DecodeMeshPosition(MD.PositionGrid, V.Position));
                 }
                 return;
             }
@@ -258,6 +261,17 @@ namespace Lumina
 
         const FMatrix4 EntityMatrix = World->GetComponent<STransformComponent>(MeshEntity).GetWorldMatrix();
         OutTransforms.resize(SkeletonResource->GetNumBones());
+
+        // A playing clip leaves skinning matrices here, and skinning times the global bind is the posed bone.
+        const TVector<FMatrix4>& Pose = World->GetComponent<SSkeletalMeshComponent>(MeshEntity).BoneTransforms;
+        if ((int32)Pose.size() == SkeletonResource->GetNumBones() && SkeletonResource->HasBindGlobalMatrices())
+        {
+            for (int32 i = 0; i < SkeletonResource->GetNumBones(); ++i)
+            {
+                OutTransforms[i] = EntityMatrix * (Pose[i] * SkeletonResource->BindGlobalMatrices[i]);
+            }
+            return;
+        }
 
         // Bones[] is parents-before-children, so one linear pass resolves the whole hierarchy.
         for (int32 i = 0; i < SkeletonResource->GetNumBones(); ++i)
@@ -534,13 +548,28 @@ namespace Lumina
             DrawSkinningPanel();
         });
 
+        CreateToolWindow(AnimationPreviewName, [&](bool bFocused)
+        {
+            DrawAnimationPreviewPanel();
+        });
+
+        CreateToolWindow(HierarchyName, [&](bool bFocused)
+        {
+            SocketHierarchy.DrawTree();
+        });
+
+        CSkeletalMesh* SocketMesh = CastAsserted<CSkeletalMesh>(Asset.Get());
+        SocketHierarchy.Initialize(SocketMesh->Skeleton.Get(), SocketMesh, &GetTransactionManager());
+        SocketHierarchy.OnSocketsEdited = [this]() { PropertyTable.MarkDirty(); };
+        SocketHierarchy.OnBoneSelected = [this](int32 BoneIndex) { SelectedBoneIndex = BoneIndex; };
+
         CreateToolWindow(MeshPropertiesName, [&](bool bFocused)
         {
             CSkeletalMesh* SkeletalMesh = CastAsserted<CSkeletalMesh>(Asset.Get());
 
             FMeshResource& Resource = SkeletalMesh->GetMeshResource();
             const FMeshletData& MD = Resource.MeshletData;
-            const FAABB& BoundingBox = SkeletalMesh->GetAABB();
+            const SAABB& BoundingBox = SkeletalMesh->GetAABB();
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
             ImGui::SeparatorText(LOC("Mesh Statistics"));
@@ -834,7 +863,7 @@ namespace Lumina
         STransformComponent& MeshTransform = World->GetComponent<STransformComponent>(MeshEntity);
 
         // Framed off bounds, or anything but a human-sized rig opens inside the mesh or too far to see.
-        const FAABB Bounds = SkeletalMesh->GetAABB();
+        const SAABB Bounds = SkeletalMesh->GetAABB();
         CreateFloorPlane(MeshTransform.GetLocation().y + Bounds.Min.y);
 
         const FVector3 Center = MeshTransform.GetLocation() + Bounds.GetCenter();
@@ -856,6 +885,146 @@ namespace Lumina
             SkeletalMesh->Skeleton->ComputeBindPoseSkinningMatrices(MeshComponent.BoneTransforms);
             MeshComponent.bRenderBonesDirty = true;
         }
+
+        if (PreviewClip.IsValid())
+        {
+            // Advanced by hand in Update, since the editor world does not tick playback.
+            SSimpleAnimationComponent& AnimComponent = World->EmplaceComponent<SSimpleAnimationComponent>(MeshEntity);
+            AnimComponent.Animation = PreviewClip.Get();
+            AnimComponent.bPlaying  = false;
+            AnimComponent.bLooping  = bPreviewLooping;
+        }
+    }
+
+    void FSkeletalMeshEditorTool::SetPreviewClip(CAnimation* Clip)
+    {
+        PreviewClip = Clip;
+
+        // Removing the clip has to restore the bind pose, which only a fresh entity does cleanly.
+        if (World.IsValid() && MeshEntity != ECS::NullEntity)
+        {
+            World->DestroyEntity(MeshEntity);
+            CreatePreviewMeshEntity();
+        }
+    }
+
+    void FSkeletalMeshEditorTool::AdvancePreviewClip(float DeltaTime)
+    {
+        SSimpleAnimationComponent* AnimComponent = World->TryGetComponent<SSimpleAnimationComponent>(MeshEntity);
+        if (AnimComponent == nullptr || !PreviewClip.IsValid() || !bPreviewPlaying)
+        {
+            return;
+        }
+
+        const float Duration = Math::Max(PreviewClip->GetDuration(), 0.0001f);
+        AnimComponent->CurrentTime += DeltaTime * PreviewPlayRate;
+        if (AnimComponent->CurrentTime >= Duration)
+        {
+            if (bPreviewLooping)
+            {
+                AnimComponent->CurrentTime = fmodf(AnimComponent->CurrentTime, Duration);
+            }
+            else
+            {
+                AnimComponent->CurrentTime = Duration;
+                bPreviewPlaying = false;
+            }
+        }
+        AnimComponent->bDirty = true;
+    }
+
+    void FSkeletalMeshEditorTool::DrawAnimationPreviewPanel()
+    {
+        CSkeletalMesh* SkeletalMesh = Cast<CSkeletalMesh>(Asset.Get());
+        CSkeleton* Skeleton = SkeletalMesh != nullptr ? SkeletalMesh->Skeleton.Get() : nullptr;
+        if (Skeleton == nullptr)
+        {
+            ImGui::TextDisabled(LOC("Assign a skeleton to preview animations on this mesh."));
+            return;
+        }
+
+        const TVector<FCompatibleAssetList::FEntry>& Clips = PreviewClips.Get(Skeleton);
+
+        int32 CurrentIndex = Constants::kIndexNone;
+        for (int32 i = 0; i < (int32)Clips.size(); ++i)
+        {
+            if (PreviewClip.IsValid() && Clips[i].GUID == PreviewClip->GetGUID())
+            {
+                CurrentIndex = i;
+                break;
+            }
+        }
+
+        constexpr float kClearButtonWidth = 70.0f;
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(LOC("Clip"));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(PreviewClip.IsValid() ? ImGui::GetContentRegionAvail().x - kClearButtonWidth : -1.0f);
+
+        const FString Preview = PreviewClip.IsValid() ? PreviewClip->GetName().ToString() : FString(LOC("None (bind pose)"));
+        const int32 Picked = ImGuiX::SearchableCombo("##PreviewClip", Preview.c_str(), (int32)Clips.size(), CurrentIndex,
+            [&Clips](int32 Index) { return FFixedString(Clips[Index].Name.c_str()); }, LE_ICON_ANIMATION);
+
+        if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
+        {
+            if (CAnimation* Clip = Cast<CAnimation>(LoadObject<CObject>(Clips[Picked].GUID)))
+            {
+                bPreviewPlaying = true;
+                SetPreviewClip(Clip);
+            }
+        }
+
+        if (PreviewClip.IsValid())
+        {
+            ImGui::SameLine();
+            if (ImGui::Button(LOC_ICON(LE_ICON_CLOSE, "Clear")))
+            {
+                SetPreviewClip(nullptr);
+            }
+        }
+
+        if (Clips.empty())
+        {
+            ImGui::TextDisabled(LOC("No clips match this skeleton's bones."));
+        }
+
+        SSimpleAnimationComponent* AnimComponent = (World.IsValid() && MeshEntity != ECS::NullEntity)
+            ? World->TryGetComponent<SSimpleAnimationComponent>(MeshEntity)
+            : nullptr;
+        if (!PreviewClip.IsValid() || AnimComponent == nullptr)
+        {
+            return;
+        }
+
+        ImGui::Spacing();
+
+        const float Duration = Math::Max(PreviewClip->GetDuration(), 0.0001f);
+
+        if (ImGui::Button(bPreviewPlaying ? LOC_ICON(LE_ICON_PAUSE, "Pause") : LOC_ICON(LE_ICON_PLAY, "Play")))
+        {
+            if (!bPreviewPlaying && !bPreviewLooping && AnimComponent->CurrentTime >= Duration)
+            {
+                AnimComponent->CurrentTime = 0.0f;
+            }
+            bPreviewPlaying = !bPreviewPlaying;
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Checkbox(LOC_ID("Loop"), &bPreviewLooping))
+        {
+            AnimComponent->bLooping = bPreviewLooping;
+        }
+
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(90.0f);
+        ImGui::DragFloat(LOC("Rate"), &PreviewPlayRate, 0.01f, 0.0f, 4.0f, LOC("%.2fx"));
+
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::SliderFloat("##PreviewTime", &AnimComponent->CurrentTime, 0.0f, Duration, LOC("%.3f s")))
+        {
+            bPreviewPlaying = false;
+            AnimComponent->bDirty = true;
+        }
     }
 
     void FSkeletalMeshEditorTool::Update(const FUpdateContext& UpdateContext)
@@ -875,6 +1044,8 @@ namespace Lumina
         SSkeletalMeshComponent& MeshComponent = World->GetComponent<SSkeletalMeshComponent>(MeshEntity);
         STransformComponent&    Transform     = World->GetComponent<STransformComponent>(MeshEntity);
 
+        AdvancePreviewClip((float)UpdateContext.GetDeltaTime());
+
         // A direct write is not enough, since the retained scene only re-reads primitives reporting a change.
         if (MeshComponent.ForcedLODIndex != PreviewLODIndex)
         {
@@ -886,8 +1057,8 @@ namespace Lumina
 
         if (bShowAABB)
         {
-            FAABB AABB = MeshComponent.GetAABB().ToWorld(EntityMatrix);
-            World->DrawBox(AABB.GetCenter(), AABB.GetSize() * 0.5f, FQuat(1, 0, 0, 0), FColor::Green);
+            SAABB AABB = MeshComponent.GetAABB().ToWorld(EntityMatrix);
+            World->GetDebugInterface()->DrawBox(AABB.GetCenter(), AABB.GetSize() * 0.5f, FQuat(1, 0, 0, 0), FColor::Green);
         }
 
         CSkeletalMesh* SkeletalMesh = Cast<CSkeletalMesh>(Asset.Get());
@@ -922,11 +1093,11 @@ namespace Lumina
                         Hi = Math::Max(Hi, B.Center + FVector3(B.Radius));
                     }
 
-                    FAABB SurfaceAABB;
+                    SAABB SurfaceAABB;
                     SurfaceAABB.Min = Lo;
                     SurfaceAABB.Max = Hi;
                     SurfaceAABB     = SurfaceAABB.ToWorld(EntityMatrix);
-                    World->DrawBox(SurfaceAABB.GetCenter(), SurfaceAABB.GetSize() * 0.5f, FQuat(1, 0, 0, 0), FColor::Yellow, 2.0f);
+                    World->GetDebugInterface()->DrawBox(SurfaceAABB.GetCenter(), SurfaceAABB.GetSize() * 0.5f, FQuat(1, 0, 0, 0), FColor::Yellow, 2.0f);
                 }
             }
         }
@@ -950,11 +1121,11 @@ namespace Lumina
                 const FSkeletonResource::FBoneInfo& Bone = SkeletonResource->GetBone(i);
                 const FVector3 BonePosition = FVector3(BoneWorld[i][3]);
 
-                World->DrawSphere(BonePosition, BoneRadius, FColor::Red, 8);
+                World->GetDebugInterface()->DrawSphere(BonePosition, BoneRadius, FColor::Red, 8);
 
                 if (Bone.ParentIndex != Constants::kIndexNone)
                 {
-                    World->DrawLine(FVector3(BoneWorld[Bone.ParentIndex][3]), BonePosition, FColor::Green);
+                    World->GetDebugInterface()->DrawLine(FVector3(BoneWorld[Bone.ParentIndex][3]), BonePosition, FColor::Green);
                 }
             }
         }
@@ -965,10 +1136,10 @@ namespace Lumina
             const FVector3  Position = FVector3(Selected[3]);
             const float     AxisLength = BoneRadius * 6.0f;
 
-            World->DrawSphere(Position, BoneRadius * 1.8f, FVector4(1.0f, 0.85f, 0.2f, 1.0f), 12, 2.5f, false);
-            World->DrawLine(Position, Position + Math::Normalize(FVector3(Selected[0])) * AxisLength, FVector4(1.0f, 0.2f, 0.2f, 1.0f), 3.0f, false);
-            World->DrawLine(Position, Position + Math::Normalize(FVector3(Selected[1])) * AxisLength, FVector4(0.2f, 1.0f, 0.2f, 1.0f), 3.0f, false);
-            World->DrawLine(Position, Position + Math::Normalize(FVector3(Selected[2])) * AxisLength, FVector4(0.2f, 0.4f, 1.0f, 1.0f), 3.0f, false);
+            World->GetDebugInterface()->DrawSphere(Position, BoneRadius * 1.8f, FVector4(1.0f, 0.85f, 0.2f, 1.0f), 12, 2.5f, false);
+            World->GetDebugInterface()->DrawLine(Position, Position + Math::Normalize(FVector3(Selected[0])) * AxisLength, FVector4(1.0f, 0.2f, 0.2f, 1.0f), 3.0f, false);
+            World->GetDebugInterface()->DrawLine(Position, Position + Math::Normalize(FVector3(Selected[1])) * AxisLength, FVector4(0.2f, 1.0f, 0.2f, 1.0f), 3.0f, false);
+            World->GetDebugInterface()->DrawLine(Position, Position + Math::Normalize(FVector3(Selected[2])) * AxisLength, FVector4(0.2f, 0.4f, 1.0f, 1.0f), 3.0f, false);
 
             RebuildSelectedBonePoints();
 
@@ -987,25 +1158,11 @@ namespace Lumina
             }
         }
 
+        // Fed the live pose, so a socket placed during a playing clip lands where the clip puts the bone.
+        SocketHierarchy.SetBoneWorldTransforms(BoneWorld);
         if (bShowSockets)
         {
-            for (const FMeshSocket& Socket : SkeletalMesh->Skeleton->Sockets)
-            {
-                const int32 BoneIndex = SkeletonResource->FindBoneIndex(Socket.BoneName);
-                if (BoneIndex == Constants::kIndexNone || BoneIndex >= (int32)BoneWorld.size())
-                {
-                    continue;
-                }
-
-                const FMatrix4 SocketMatrix = BoneWorld[BoneIndex] * Socket.RelativeTransform.GetMatrix();
-                const FVector3 Position = FVector3(SocketMatrix[3]);
-                const float AxisLength = BoneRadius * 5.0f;
-
-                World->DrawSphere(Position, BoneRadius * 0.9f, FVector4(1.0f, 0.82f, 0.4f, 1.0f), 12, 2.5f, false);
-                World->DrawLine(Position, Position + Math::Normalize(FVector3(SocketMatrix[0])) * AxisLength, FVector4(1.0f, 0.2f, 0.2f, 1.0f), 3.0f, false);
-                World->DrawLine(Position, Position + Math::Normalize(FVector3(SocketMatrix[1])) * AxisLength, FVector4(0.2f, 1.0f, 0.2f, 1.0f), 3.0f, false);
-                World->DrawLine(Position, Position + Math::Normalize(FVector3(SocketMatrix[2])) * AxisLength, FVector4(0.2f, 0.4f, 1.0f, 1.0f), 3.0f, false);
-            }
+            SocketHierarchy.DrawSocketMarkers(World.Get(), BoneRadius * 0.9f);
         }
     }
 
@@ -1015,7 +1172,19 @@ namespace Lumina
 
     void FSkeletalMeshEditorTool::DrawViewportOverlayElements(const FUpdateContext& UpdateContext, ImTextureRef ViewportTexture, ImVec2 ViewportSize)
     {
+        const ImVec2 ViewportOrigin = ViewportScreenMin;
         DrawCameraModeSelector();
+        SocketHierarchy.TickViewport(World.Get(), ViewportOrigin, ViewportSize, GuizmoOp, bViewportHovered, ShouldSuppressViewportClickInput(), GetBoneDrawRadius() * 0.9f);
+    }
+
+    void FSkeletalMeshEditorTool::OnPostUndoRedo()
+    {
+        FAssetEditorTool::OnPostUndoRedo();
+
+        // Undo can put a different Skeleton back, so the rows are rebound before they rebuild.
+        CSkeletalMesh* SkeletalMesh = CastAsserted<CSkeletalMesh>(Asset.Get());
+        SocketHierarchy.Initialize(SkeletalMesh->Skeleton.Get(), SkeletalMesh, &GetTransactionManager());
+        SocketHierarchy.OnUndoRedo();
     }
 
     void FSkeletalMeshEditorTool::OnAssetLoadFinished()
@@ -1034,6 +1203,9 @@ namespace Lumina
         SelectedBonePoints.clear();
         SelectedSurfaceIndex = -1;
         PreviewLODIndex = -1;
+
+        CSkeletalMesh* SkeletalMesh = CastAsserted<CSkeletalMesh>(Asset.Get());
+        SocketHierarchy.Initialize(SkeletalMesh->Skeleton.Get(), SkeletalMesh, &GetTransactionManager());
     }
 
     void FSkeletalMeshEditorTool::OnPropertyEditFinished(const FPropertyChangedEvent& Event)
@@ -1047,9 +1219,19 @@ namespace Lumina
         // The property table never calls PostPropertyChange, so a Skeleton swap would leave the indices behind.
         SkeletalMesh->RemapJointIndicesToSkeleton();
 
+        if (Event.PropertyName == "Skeleton")
+        {
+            SocketHierarchy.Initialize(SkeletalMesh->Skeleton.Get(), SkeletalMesh, &GetTransactionManager());
+        }
+        else
+        {
+            SocketHierarchy.Refresh();
+        }
+
         // The scene claims a primitive's bone range only when it is new, so a reused preview keeps the old skeleton.
         if (Event.PropertyName == "Skeleton" && MeshEntity != ECS::NullEntity)
         {
+            PreviewClip = nullptr;
             World->DestroyEntity(MeshEntity);
             CreatePreviewMeshEntity();
         }
@@ -1065,6 +1247,10 @@ namespace Lumina
             LOC("Joint indices address the skeleton's bone array by position, so a mesh only works with the "
             "skeleton it was imported against. To bind it to another, reimport with that Target Skeleton "
             "set; the importer rewrites the indices by bone name."));
+        DrawHelpTextRow(LOC("Sockets"),
+            LOC("The Bone Hierarchy lists gold skeleton sockets, shared by every mesh on the skeleton, and teal "
+            "mesh sockets that only this mesh has. A mesh socket replaces a skeleton socket of the same name. "
+            "Right-click a bone to add either kind and a socket to copy, promote or delete it; select one to move it."));
         DrawHelpTextRow(LOC("LODs"),
             LOC("The Preview LOD picker forces a level so you can inspect its geometry; Automatic returns to "
             "distance-based selection."));
@@ -1107,8 +1293,8 @@ namespace Lumina
             if (Skeleton != nullptr && Skeleton->GetSkeletonResource() != nullptr)
             {
                 ImGuiX::Text("{0}", Skeleton->GetName().c_str());
-                ImGuiX::Text(LOCF("{0} bones, {1} sockets"),
-                             Skeleton->GetSkeletonResource()->GetNumBones(), (int32)Skeleton->Sockets.size());
+                ImGuiX::Text(LOCF("{0} bones, {1} skeleton sockets, {2} mesh sockets"),
+                             Skeleton->GetSkeletonResource()->GetNumBones(), (int32)Skeleton->Sockets.size(), (int32)SkeletalMesh->Sockets.size());
             }
             else
             {
@@ -1145,13 +1331,16 @@ namespace Lumina
     {
         ImGui::DockBuilderRemoveNodeChildNodes(InDockspaceID);
 
-        ImGuiID leftDockID = 0, rightDockID = 0;
+        ImGuiID leftDockID = 0, rightDockID = 0, hierarchyDockID = 0;
         ImGui::DockBuilderSplitNode(InDockspaceID, ImGuiDir_Right, 0.3f, &rightDockID, &leftDockID);
+        ImGui::DockBuilderSplitNode(leftDockID, ImGuiDir_Left, 0.25f, &hierarchyDockID, &leftDockID);
 
         ImGui::DockBuilderDockWindow(GetToolWindowName(ViewportWindowName).c_str(), leftDockID);
         // The unwrap wants the same large canvas, and this is an inspect-one-then-the-other workflow.
         ImGui::DockBuilderDockWindow(GetToolWindowName(UVViewerName.data()).c_str(), leftDockID);
         ImGui::DockBuilderDockWindow(GetToolWindowName(MeshPropertiesName.data()).c_str(), rightDockID);
         ImGui::DockBuilderDockWindow(GetToolWindowName(SkinningName.data()).c_str(), rightDockID);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(AnimationPreviewName.data()).c_str(), rightDockID);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(HierarchyName.data()).c_str(), hierarchyDockID);
     }
 }

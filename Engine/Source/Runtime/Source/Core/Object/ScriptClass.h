@@ -7,7 +7,6 @@
 #include "Containers/Vector.h"
 #include "ObjectHandleTyped.h"
 
-RUNTIME_API Lumina::CClass* Construct_CClass_Lumina_CClass();
 #include "Memory/SmartPtr.h"
 
 namespace Lumina
@@ -27,12 +26,10 @@ namespace Lumina
     enum class EScriptTypeDirty : uint8
     {
         None     = 0,
-        /** The property set, order, or types differ, so the appended block has to be torn down and rebuilt. */
+        // The property set, order or types differ, so the appended block needs a new class.
         Layout   = BIT(0),
-        /** Editor-facing data only (tooltip, category, clamps). Reapplied in place. */
+        // Editor-facing data only, such as a tooltip or a clamp, reapplied in place.
         Metadata = BIT(1),
-        /** Declared initializers differ, so the CDO needs the new values replayed onto it. */
-        Defaults = BIT(2),
     };
 
     ENUM_CLASS_FLAGS(EScriptTypeDirty);
@@ -48,7 +45,7 @@ namespace Lumina
     {
     public:
 
-        DECLARE_CLASS(Lumina, CScriptClass, CClass, "/Script/Engine", RUNTIME_API)
+        DECLARE_CLASS(Lumina, CScriptClass, CClass, "/Types/Engine", RUNTIME_API)
         DEFINE_CLASS_FACTORY(CScriptClass)
 
         CScriptClass() = default;
@@ -59,6 +56,28 @@ namespace Lumina
 
         RUNTIME_API CClass* GetMetaClass() const override;
 
+        bool IsAbstract() const override { return bAbstract; }
+        bool IsSuperseded() const override { return bSuperseded; }
+
+        // Every appended property of this class and of its C# parents, which together are an instance's script storage.
+        template<typename TFunc>
+        void ForEachScriptProperty(TFunc&& Func) const
+        {
+            for (const CScriptClass* Class = this; Class != nullptr; Class = Cast<CScriptClass>(Class->GetSuperClass()))
+            {
+                for (FProperty* Property : Class->ScriptProperties)
+                {
+                    Func(Property);
+                }
+            }
+        }
+
+        // Minted from an abstract C# class, so it exists for its subclasses' layout and is never instantiated.
+        bool bAbstract = false;
+
+        // Set while a reload has replaced or removed it, and cleared if the same C# type comes back.
+        bool bSuperseded = false;
+
         /** The events this C# subclass overrides, as real functions on this class whose body is managed.
          *
          *  A map rather than a mask: an override is a function like any other, found by the name it is
@@ -67,7 +86,7 @@ namespace Lumina
         THashMap<FName, FFunction*> ScriptOverrideFunctions;
 
         /** The overriding function for Name, or null when the subclass leaves the native body in place. */
-        RUNTIME_API NODISCARD const FFunction* FindScriptOverride(const FName& Name) const;
+        NODISCARD RUNTIME_API const FFunction* FindScriptOverride(const FName& Name) const;
 
         /** One bit per generated event slot, mirroring ScriptOverrideFunctions so a shim skips the name lookup. */
         TVector<uint64> ScriptOverrideSlots;
@@ -79,14 +98,8 @@ namespace Lumina
             return Word < ScriptOverrideSlots.size() && (ScriptOverrideSlots[Word] & (1ull << (Slot & 63))) != 0;
         }
 
-        /** EScriptUpdatePhase for a minted entity-script class, from its C# [UpdatePhase]. */
+        // EScriptUpdatePhase from the UpdatePhase metadata up the chain, resolved at mint since the script tick reads it per script.
         uint8 ScriptUpdatePhase = 0;
-
-        // From the C# [ParallelUpdate], the managed spelling of REFLECT(ParallelUpdate).
-        bool bScriptParallelUpdate = false;
-
-        // ENetRealm from the C# [HostOnly], [ClientOnly] and [Cosmetic], the managed spelling of the REFLECT specifiers.
-        uint8 ScriptNetRealm = 0;
 
         // The class metadata the C# attributes set last reload, so a removed or changed attribute does not linger on a reused class.
         TVector<FName> ScriptClassMetaKeys;

@@ -134,6 +134,7 @@ namespace Lumina
 		case EMaterialType::Decal:       return "DecalPixelPass.slang";
 		case EMaterialType::Terrain:     return "TerrainBasePixelPass.slang";
 		case EMaterialType::Particle:    return "ParticlePixelPass.slang";
+		case EMaterialType::LightFunction: return "LightFunctionPixelPass.slang";
 		default:                         return "BasePixelPass.slang";
 		}
 	}
@@ -1536,7 +1537,7 @@ namespace Lumina
 		Out = BoundCollections;
 	}
 
-	void FMaterialCompiler::SeedManifest(const TVector<FMaterialParameter>& Params, const FMaterialUniforms& Uniforms,
+	void FMaterialCompiler::SeedManifest(const TVector<SMaterialParameter>& Params, const FMaterialUniforms& Uniforms,
 		const TVector<TStrongObjectPtr<CTexture>>& Textures,
 		const TVector<TStrongObjectPtr<CMaterialParameterCollection>>& Collections)
 	{
@@ -1553,7 +1554,7 @@ namespace Lumina
 		BoundImages.assign(Textures.begin(), Textures.begin() + NumTextures);
 		NumTextureParams = (uint16)NumTextures;
 
-		for (const FMaterialParameter& Param : Params)
+		for (const SMaterialParameter& Param : Params)
 		{
 			switch (Param.Type)
 			{
@@ -1591,7 +1592,7 @@ namespace Lumina
 		}
 
 		auto Existing = Algo::FindIf(StaticSwitches,
-			[&ParamID](const FMaterialStaticSwitch& Switch) { return Switch.ParameterName == ParamID; });
+			[&ParamID](const SMaterialStaticSwitch& Switch) { return Switch.ParameterName == ParamID; });
 
 		if (Existing == StaticSwitches.end())
 		{
@@ -1607,7 +1608,7 @@ namespace Lumina
 				return bDefaultValue;
 			}
 
-			FMaterialStaticSwitch Switch;
+			SMaterialStaticSwitch Switch;
 			Switch.ParameterName = ParamID;
 			Switch.bDefaultValue = bDefaultValue;
 			StaticSwitches.push_back(Switch);
@@ -1628,12 +1629,12 @@ namespace Lumina
 		return Override != StaticSwitchOverrides.end() ? Override->second : Existing->bDefaultValue;
 	}
 
-	void FMaterialCompiler::GetStaticSwitches(TVector<FMaterialStaticSwitch>& OutSwitches) const
+	void FMaterialCompiler::GetStaticSwitches(TVector<SMaterialStaticSwitch>& OutSwitches) const
 	{
 		OutSwitches = StaticSwitches;
 
 		// By name, so adding a node above an existing one does not renumber every instance's key.
-		Algo::Sort(OutSwitches, [](const FMaterialStaticSwitch& A, const FMaterialStaticSwitch& B)
+		Algo::Sort(OutSwitches, [](const SMaterialStaticSwitch& A, const SMaterialStaticSwitch& B)
 		{
 			// Two c_str() calls per compare, well inside FName's 4-slot suffix buffer.
 			return std::strcmp(A.ParameterName.c_str(), B.ParameterName.c_str()) < 0;
@@ -2141,11 +2142,11 @@ namespace Lumina
 		return Stats;
 	}
 
-	void FMaterialCompiler::GetParameters(TVector<FMaterialParameter>& OutParams, FMaterialUniforms& OutUniforms) const
+	void FMaterialCompiler::GetParameters(TVector<SMaterialParameter>& OutParams, FMaterialUniforms& OutUniforms) const
 	{
 		for (const auto& Pair : ScalarParameters)
 		{
-			FMaterialParameter Out;
+			SMaterialParameter Out;
 			Out.ParameterName = Pair.first;
 			Out.Type = EMaterialParameterType::Scalar;
 			Out.Index = Pair.second.Index;
@@ -2160,7 +2161,7 @@ namespace Lumina
 
 		for (const auto& Pair : VectorParameters)
 		{
-			FMaterialParameter Out;
+			SMaterialParameter Out;
 			Out.ParameterName = Pair.first;
 			Out.Type = EMaterialParameterType::Vector;
 			Out.Index = Pair.second.Index;
@@ -2175,7 +2176,7 @@ namespace Lumina
 
 		for (const auto& Pair : TextureParameters)
 		{
-			FMaterialParameter Out;
+			SMaterialParameter Out;
 			Out.ParameterName = Pair.first;
 			Out.Type = EMaterialParameterType::Texture;
 			Out.Index = Pair.second.Index;
@@ -2517,14 +2518,14 @@ namespace Lumina
 			return;
 		}
 
-		// UI and PostProcess are fullscreen passes with no tangent frame and no view ray to displace along.
+		// UI, PostProcess and LightFunction are fullscreen passes with no tangent frame and no view ray to displace along.
 		const EMaterialType Domain = GetMaterialType();
-		if (Domain == EMaterialType::UI || Domain == EMaterialType::PostProcess)
+		if (Domain == EMaterialType::UI || Domain == EMaterialType::PostProcess || Domain == EMaterialType::LightFunction)
 		{
 			EdNodeGraph::FError Error;
 			Error.Node        = Node;
 			Error.Name        = "Parallax Occlusion Mapping";
-			Error.Description = "ParallaxOcclusionMapping needs a surface to displace; it is not available in UI or PostProcess materials.";
+			Error.Description = "ParallaxOcclusionMapping needs a surface to displace; it is not available in UI, PostProcess or LightFunction materials.";
 			AddError(Error);
 			return;
 		}
@@ -2575,6 +2576,106 @@ namespace Lumina
 		// A surface faded to flat normal mapping must not still cast parallax shadows onto itself.
 		AddRaw("\t" + ShadowVar + " = lerp(1.0, " + ShadowVar + ", " + Prefix + "_R.Weight);\n");
 		AddRaw("}\n");
+	}
+
+	void FMaterialCompiler::TriplanarSample(const FString& ID, CMaterialGraphNode* Node, int32 TextureIndex,
+	                                        const FTriplanarInputs& Inputs, FStringView SamplerName, bool bNormalMap)
+	{
+		// Downstream nodes bind by name, so every rejection below must still leave ID declared.
+		const FString Neutral = bNormalMap ? FString("float4(0.5, 0.5, 1.0, 1.0)") : FString("float4(0.0, 0.0, 0.0, 1.0)");
+		auto Reject = [&](const FString& Description)
+		{
+			AddRaw("float4 " + ID + " = " + Neutral + ";\n");
+			RegisterDeriv(ID, EDerivState::Zero);
+			if (HasErrorForNode(Node))
+			{
+				return;
+			}
+			EdNodeGraph::FError Error;
+			Error.Node        = Node;
+			Error.Name        = "Triplanar Sample";
+			Error.Description = Description;
+			AddError(Error);
+		};
+
+		const EMaterialType Domain = GetMaterialType();
+		if (Domain == EMaterialType::UI || Domain == EMaterialType::PostProcess || Domain == EMaterialType::LightFunction)
+		{
+			Reject("TriplanarSample projects onto a surface; it is not available in UI, PostProcess or LightFunction materials.");
+			return;
+		}
+
+		FString TextureStr;
+		if (Inputs.TextureHandle != nullptr && Inputs.TextureHandle->HasConnection())
+		{
+			TextureStr = GetTypedInputValue(Inputs.TextureHandle, "0u").Value;
+		}
+		else if (TextureIndex >= 0)
+		{
+			TextureStr = "GetMaterialTexture(MaterialIndex, " + Format("{}", TextureIndex) + ")";
+		}
+		else
+		{
+			Reject("TriplanarSample needs a 2D texture assigned or a TextureHandle wired in, and a free material "
+			       "texture slot.");
+			return;
+		}
+
+		FInputValue PositionValue  = GetTypedInputValue(Inputs.Position, "WorldPosition");
+		FInputValue NormalValue    = GetTypedInputValue(Inputs.Normal, "WorldNormal");
+		FInputValue TilingValue    = GetTypedInputValue(Inputs.Tiling, 1.0f);
+		FInputValue SharpnessValue = GetTypedInputValue(Inputs.Sharpness, 4.0f);
+
+		auto AsFloat3 = [](const FString& Value, int32 ComponentCount)
+		{
+			return ComponentCount >= 3 ? Value + ".xyz" : "float3(" + Value + ")";
+		};
+
+		// The vertex lane has no screen footprint; zero gradients make SampleGrad read mip 0.
+		FString PDdx = "float3(0.0, 0.0, 0.0)";
+		FString PDdy = PDdx;
+		if (LaneSamplesWithGradients())
+		{
+			if (!Inputs.Position->HasConnection())
+			{
+				PDdx = "WorldPosition_DDX";
+				PDdy = "WorldPosition_DDY";
+			}
+			else if (PositionValue.Deriv == EDerivState::Valid)
+			{
+				PDdx = AsFloat3(PositionValue.DDX, PositionValue.ComponentCount);
+				PDdy = AsFloat3(PositionValue.DDY, PositionValue.ComponentCount);
+			}
+			else if (PositionValue.Deriv == EDerivState::Unknown)
+			{
+				// World position's footprint is right for any position at world scale, and only mip choice is at stake.
+				PDdx = "WorldPosition_DDX";
+				PDdy = "WorldPosition_DDY";
+
+				EdNodeGraph::FError Warning;
+				Warning.Node        = Node;
+				Warning.Name        = "Triplanar Gradient Fallback";
+				Warning.Description = "TriplanarSample's Position ('" + PositionValue.Value + "') has no analytic "
+				                      "derivative, so mips are chosen from World Position's footprint instead. That is "
+				                      "correct for a world-scale position and too fine or too coarse otherwise.";
+				AddWarning(Warning);
+			}
+		}
+
+		const FString SamplerStr(SamplerName.data(), SamplerName.size());
+		const FString Args = TextureStr + ", " + SamplerStr + ", "
+			+ AsFloat3(PositionValue.Value, PositionValue.ComponentCount) + ", " + PDdx + ", " + PDdy + ", "
+			+ AsFloat3(NormalValue.Value, NormalValue.ComponentCount);
+		const FString Tail = "(" + TilingValue.Value + "), (" + SharpnessValue.Value + "));\n";
+
+		if (bNormalMap)
+		{
+			AddRaw("float4 " + ID + " = TriplanarSampleNormal(" + Args + ", WorldTangent, " + Tail);
+		}
+		else
+		{
+			AddRaw("float4 " + ID + " = TriplanarSample(" + Args + ", " + Tail);
+		}
 	}
 
 	namespace
@@ -2945,7 +3046,7 @@ namespace Lumina
 		                   ? FString("Inst.MeshletHeaderSlot")
 		                   : FString("GetInstance(Input.InstanceIndex).MeshletHeaderSlot");
 
-		GetActiveChunk().append("FMeshletHeader* " + HeaderVar + " = SpanAt(MeshletHeaders(), " + Slot + ");\n");
+		GetActiveChunk().append("FMeshletHeader* " + HeaderVar + " = MeshletHeaders().At(" + Slot + ");\n");
 		return HeaderVar;
 	}
 

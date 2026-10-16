@@ -68,6 +68,7 @@ namespace Lumina
         void OnAssetLoadFinished() override;
         void DrawToolMenu(const FUpdateContext& UpdateContext) override;
         void DrawMaterialGraph();
+        void DrawCompileErrorBanner();
         void DrawMaterialProperties();
         void DrawShaderStats();
 
@@ -122,6 +123,8 @@ namespace Lumina
         ECS::FEntity                    DirectionalLightEntity;
         // Always present; its system is null unless the asset is a Particle material, which extract skips.
         ECS::FEntity                    ParticleEntity;
+        // Dark unless the asset is a LightFunction material, which it then projects onto the preview mesh.
+        ECS::FEntity                    LightFunctionSpotEntity;
 
         // Transient spray the Particle domain previews through, built the first time one is opened.
         TStrongObjectPtr<CParticleSystem> PreviewParticleSystem;

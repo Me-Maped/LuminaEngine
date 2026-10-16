@@ -26,10 +26,12 @@ float DefaultCoverage(float2 UV)
 [shader("pixel")]
 PSOutput PixelMain(FParticleVertexOutput In)
 {
+    BeginParticleDraw(In.DrawIndex);
+
     float4 texel;
     if (In.TextureIndex != 0u)
     {
-        texel = SampleTexture2D(In.TextureIndex, SAMPLER_LINEAR_WRAP, In.UV);
+        texel = FTexture2D(In.TextureIndex).Sample(Samplers::LinearWrap, In.UV);
     }
     else
     {
@@ -48,18 +50,27 @@ PSOutput PixelMain(FParticleVertexOutput In)
 
     const float Fade = ParticleSoftFade(In.Position);
     outColor.a *= Fade;
-    if (ParticleBlendMode() == PARTICLE_BLEND_PREMULTIPLIED)
-    {
-        outColor.rgb *= Fade;
-    }
-    else if (ParticleBlendMode() == PARTICLE_BLEND_MULTIPLY)
-    {
-        outColor.rgb = lerp(float3(1.0, 1.0, 1.0), outColor.rgb, Fade);
-    }
-
     if (outColor.a <= 0.001)
     {
         discard;
+    }
+
+    // Alpha, additive and premultiplied share one premultiplied blend state, so their draws batch together.
+    switch (ParticleBlendMode())
+    {
+    case PARTICLE_BLEND_ADDITIVE:
+        outColor.rgb *= outColor.a;
+        outColor.a = 0.0;
+        break;
+    case PARTICLE_BLEND_PREMULTIPLIED:
+        outColor.rgb *= Fade;
+        break;
+    case PARTICLE_BLEND_MULTIPLY:
+        outColor.rgb = lerp(float3(1.0, 1.0, 1.0), outColor.rgb, Fade);
+        break;
+    default:
+        outColor.rgb *= outColor.a;
+        break;
     }
 
     PSOutput Out;

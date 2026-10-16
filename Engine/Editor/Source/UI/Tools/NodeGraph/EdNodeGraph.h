@@ -16,6 +16,7 @@
 namespace Lumina
 {
     class CEdGraphNode;
+    class CEdNode_Comment;
     class CPackage;
     class FTransactionManager;
 }
@@ -52,6 +53,10 @@ namespace Lumina
         
         CEdNodeGraph();
         ~CEdNodeGraph() override;
+        CEdNodeGraph(const CEdNodeGraph&) = delete;
+        CEdNodeGraph& operator=(const CEdNodeGraph&) = delete;
+        CEdNodeGraph(CEdNodeGraph&&) = delete;
+        CEdNodeGraph& operator=(CEdNodeGraph&&) = delete;
 
         virtual void Initialize();
         virtual void Shutdown();
@@ -87,6 +92,12 @@ namespace Lumina
 
         // A load rebuilds every node through AddNode, which is not a content change.
         void NotifyContentChanged() { if (!bIsPostLoading) { ++ContentVersion; } }
+
+        // An edit worth an undo step that leaves the compiled result alone, such as recoloring a comment.
+        void NotifyCosmeticChange() { bLayoutChangedSinceImage = true; }
+
+        // Spawns a comment around the selected nodes, or at the mouse with nothing selected. Must run inside DrawGraph.
+        CEdNode_Comment* WrapSelectionInComment();
 
         // Sums this graph with every sub-graph under it, so an edit inside a state's blend tree counts.
         NODISCARD uint64 GetTreeContentVersion() const;
@@ -280,6 +291,24 @@ namespace Lumina
         // Compact reroute renderer (single dot, no header).
         void DrawRerouteNode(CEdGraphNode* Node);
 
+        // A comment is a node editor group, so it draws behind the graph and its title bar drags what it contains.
+        void DrawCommentNode(CEdNode_Comment* Comment);
+
+        // Restates each comment's title in screen space once the canvas is zoomed out too far to read it.
+        void DrawCommentHints();
+
+        // Spells out a failing node's error right under it, so it is read in the graph rather than found in a log.
+        void DrawNodeErrorBubble(const CEdGraphNode* Node);
+
+        // Pushes a node's stored position, and a comment's stored size, into the canvas.
+        void ApplyNodeLayoutToCanvas(CEdGraphNode* Node);
+
+        // C wraps the selection in a comment. Must run inside DrawGraph's suspended region.
+        void HandleCommentShortcut();
+
+        // Opens the rename box for Node on the next frame, when it has a renamable name.
+        void BeginRenameNode(CEdGraphNode* Node);
+
         // Draws a pin's live debug value inline in the pin row when the debug context supplies one.
         void DrawPinDebugValue(CEdNodeGraphPin* Pin);
 
@@ -336,6 +365,9 @@ namespace Lumina
         // Set while PostLoad rebuilds, so AddNode does not reconcile against links that are not back yet.
         bool           bIsPostLoading = false;
 
+        // Set when C goes down over a selection and cleared by a click, so C plus a click stays a quick-place.
+        bool           bCommentKeyArmed = false;
+
         // F2 rename box, opened a frame after the key since the popup lives in the suspended region.
         bool           bOpenRenamePopup = false;
         int64          RenameNodeID     = 0;
@@ -355,23 +387,23 @@ namespace Lumina
         int64 GenerateUniqueNodeID(int64 PreferredID) const;
 
         // All nodes currently in this graph.
-        PROPERTY()
+        PROPERTY(Hidden)
         TVector<TStrongObjectPtr<CEdGraphNode>>         Nodes;
 
         // Pin-to-pin links, stored as pairs of 32-bit pin ids.
-        PROPERTY()
+        PROPERTY(Hidden)
         TVector<uint32>                                 Connections;
 
         // Node editor layout state, meaning node positions and group sizes.
-        PROPERTY()
+        PROPERTY(Hidden)
         FString GraphSaveData;
 
         // Bumped by NotifyContentChanged. See GetContentVersion.
-        PROPERTY()
+        PROPERTY(Hidden)
         uint64 ContentVersion = 0;
 
         // ContentVersion at the last compile. A legacy graph loads 0 for both and so reads as compiled.
-        PROPERTY()
+        PROPERTY(Hidden)
         uint64 CompiledContentVersion = 0;
         
         // Reach this through GetSupportedNodes(), which fills it from reflection on first use.
@@ -418,6 +450,8 @@ namespace Lumina
 
         FNodeGraphEditScope(const FNodeGraphEditScope&) = delete;
         FNodeGraphEditScope& operator=(const FNodeGraphEditScope&) = delete;
+        FNodeGraphEditScope(FNodeGraphEditScope&&) = delete;
+        FNodeGraphEditScope& operator=(FNodeGraphEditScope&&) = delete;
 
     private:
 

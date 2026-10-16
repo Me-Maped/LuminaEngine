@@ -8,7 +8,7 @@ namespace Lumina
 {
     // One test inside a transition's rule.
     REFLECT()
-    struct FAnimTransitionCondition
+    struct SAnimTransitionCondition
     {
         GENERATED_BODY()
 
@@ -46,31 +46,31 @@ namespace Lumina
 
         // Node IDs of the source / destination State nodes this transition wires
         // together. Used to match the object back to its canvas link.
-        PROPERTY()
+        PROPERTY(Hidden)
         int64 FromStateNodeID = 0;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         int64 ToStateNodeID = 0;
 
         /** Tests gating this transition. An empty list fires the moment the source state is active. */
         PROPERTY(Editable, Category = "Transition")
-        TVector<FAnimTransitionCondition> Conditions;
+        TVector<SAnimTransitionCondition> Conditions;
 
         /** On, every condition must pass; off, any one of them does. */
         PROPERTY(Editable, Category = "Transition")
         bool bRequireAll = true;
 
         //~ Single-compare fields kept only to migrate a graph authored before rules were a list.
-        PROPERTY()
+        PROPERTY(Hidden)
         EAnimTransitionSource ConditionSource = EAnimTransitionSource::Parameter;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FName ConditionParameter;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         EAnimTransitionCompare Compare = EAnimTransitionCompare::Greater;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float CompareValue = 0.0f;
 
         /** Cross-fade length in seconds when this transition fires. 0 snaps instantly. */

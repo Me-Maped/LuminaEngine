@@ -341,7 +341,7 @@ namespace Lumina
                     }
 
                     Transition->MigrateLegacyCondition();
-                    for (const FAnimTransitionCondition& Condition : Transition->Conditions)
+                    for (const SAnimTransitionCondition& Condition : Transition->Conditions)
                     {
                         if (Condition.ConditionSource == EAnimTransitionSource::Parameter && !Condition.ParameterName.IsNone())
                         {
@@ -368,7 +368,7 @@ namespace Lumina
 
     void CAnimationGraphNodeGraph::CompileGraph(FAnimationGraphCompiler& Compiler)
     {
-        // Collect parameters before topo-sort; unconnected Get Parameter nodes would otherwise be invisible to Lua SetFloat().
+        // Collect parameters before topo-sort; unconnected Get Parameter nodes would otherwise be invisible to SetFloat().
         CollectAllParameters(Compiler);
 
         uint16 ResultRegister = 0;

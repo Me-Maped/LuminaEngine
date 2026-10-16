@@ -8,9 +8,11 @@
 #include "Core/Object/ObjectCore.h"
 #include "Scripting/EntityScript.h"
 #include "Scripting/ScriptableObject.h"
+#include "Scripting/ManagedTypeRegistry.h"
+#include "World/World.h"
 #include "Core/Object/ObjectReinstancer.h"
 #include "Core/Reflection/Type/ObjectReferenceVisitor.h"
-#include "ScriptReshapeTestUtil.h"
+#include "ScriptTestUtil.h"
 #include "Scripting/ScriptableTest.h"
 #include "Scripting/ScriptStruct.h"
 #include "Core/Threading/Thread.h"
@@ -91,7 +93,7 @@ namespace
         {
             return nullptr;
         }
-        ProcessNewlyLoadedCObjects();
+        RegisterPendingTypes();
         Minted->GetDefaultObject();
 
         return static_cast<CEntityScriptTest*>(EntityScripts::Attach(Registry, Entity, Minted));
@@ -131,7 +133,7 @@ TEST(EntityScriptUnification, CppScriptRunsThroughTheDriver)
     EXPECT_TRUE(Registry.Get<SEntityScriptComponent>(Entity).Scripts.empty());
 }
 
-// [UpdatePhase(PostPhysics)] moves OnUpdate to the pass after the physics step, keeping OnReady where it was.
+// [Reflect(UpdatePhase = PostPhysics)] moves OnUpdate to the pass after the physics step, keeping OnReady where it was.
 TEST(EntityScriptUnification, UpdatePhaseSelectsWhichPassRunsOnUpdate)
 {
     ECS::FRegistry Registry{};
@@ -191,7 +193,7 @@ TEST(EntityScriptUnification, CopyingTheComponentClonesItsScripts)
 TEST(EntityScriptUnification, CloningAScriptCopiesContainerPropertiesWithoutSmashingTheObject)
 {
     // The property chain is built when the class is finalized; the editor does this at startup.
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
     CEntityScriptTest::StaticClass()->GetDefaultObject();
 
     ECS::FRegistry Registry{};
@@ -229,7 +231,7 @@ TEST(EntityScriptUnification, CloningAScriptCopiesContainerPropertiesWithoutSmas
 // A component whose state lives in a custom serializer is tracked as ONE atomic leaf.
 TEST(EntityScriptUnification, PrefabOverridesTrackAScriptComponentAsOneAtomicValue)
 {
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
     CEntityScriptTest::StaticClass()->GetDefaultObject();
 
     auto MakeScript = []
@@ -364,7 +366,7 @@ TEST(EntityScriptUnification, MintedScriptClassTicksThroughTheSameDriver)
 {
     CScriptClass* Minted = FScriptableRegistry::Mint("EntityScript_GTestMinted", "CEntityScript");
     ASSERT_NE(Minted, nullptr) << "minting failed (is the CEntityScript shim registered?)";
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
     Minted->GetDefaultObject();
 
     EXPECT_TRUE(Minted->IsChildOf(CEntityScript::StaticClass()))
@@ -469,12 +471,13 @@ TEST(EntityScriptUnification, AMintedClassOptsInThroughItsFlag)
 
     CScriptClass* Class = ToScriptClass(Scripts.front()->GetClass());
     ASSERT_NE(Class, nullptr);
-    Class->bScriptParallelUpdate = true;
+    const FName ParallelUpdateName("ParallelUpdate");
+    Class->Metadata.SetValue(ParallelUpdateName, FString());
 
     EntityScripts::Tick(Registry, 0.5f);
     EntityScripts::Tick(Registry, 0.5f);
 
-    Class->bScriptParallelUpdate = false;
+    Class->Metadata.RemoveValue(ParallelUpdateName);
     for (CEntityScriptTest* Script : Scripts)
     {
         EXPECT_EQ(Script->UpdateCount, 2);
@@ -585,7 +588,7 @@ TEST(EntityScriptUnification, ScriptPropertyValuesSurviveTheComponentRoundTrip)
     CScriptClass* Minted = FScriptableRegistry::Mint("EntityScript_GTestValues", "CEntityScript");
     ASSERT_NE(Minted, nullptr);
     ASSERT_GT(Scripting::AppendScriptPropertiesToClass(Minted, Schema), 0u);
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
     Minted->GetDefaultObject();
 
     FProperty* Speed = Minted->GetProperty(FName("Speed"));
@@ -681,7 +684,7 @@ TEST(EntityScriptUnification, ScriptsSurviveAClassLayoutRebuild)
     CScriptClass* Minted = FScriptableRegistry::Mint("EvacTest_Script", "CEntityScript");
     ASSERT_NE(Minted, nullptr);
     Scripting::AppendScriptPropertiesToClass(Minted, Before);
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
     Minted->GetDefaultObject();
 
     ECS::FEntity Entity = Registry.Create();
@@ -770,7 +773,7 @@ TEST(EntityScriptUnification, RenamingAPropertyKeepsItsValueViaAlias)
     CScriptClass* Minted = FScriptableRegistry::Mint("RenameProp_Script", "CEntityScript");
     ASSERT_NE(Minted, nullptr);
     Scripting::AppendScriptPropertiesToClass(Minted, Before);
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
     Minted->GetDefaultObject();
 
     const ECS::FEntity Entity = Registry.Create();
@@ -816,7 +819,7 @@ TEST(EntityScriptUnification, RenamingWithoutAnAliasResetsToDefault)
     CScriptClass* Minted = FScriptableRegistry::Mint("RenameNoAlias_Script", "CEntityScript");
     ASSERT_NE(Minted, nullptr);
     Scripting::AppendScriptPropertiesToClass(Minted, Before);
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
     Minted->GetDefaultObject();
 
     const ECS::FEntity Entity = Registry.Create();
@@ -851,7 +854,7 @@ TEST(EntityScriptUnification, RenamingAScriptClassMovesItsInstances)
     CScriptClass* Old = FScriptableRegistry::Mint("RenameClass_Before", "CEntityScript");
     ASSERT_NE(Old, nullptr);
     Scripting::AppendScriptPropertiesToClass(Old, Schema);
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
     Old->GetDefaultObject();
 
     const ECS::FEntity Entity = Registry.Create();
@@ -873,7 +876,7 @@ TEST(EntityScriptUnification, RenamingAScriptClassMovesItsInstances)
     CScriptClass* New = FScriptableRegistry::Mint("RenameClass_After", "CEntityScript");
     ASSERT_NE(New, nullptr);
     Scripting::AppendScriptPropertiesToClass(New, Schema);
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
     New->GetDefaultObject();
     FScriptableRegistry::RegisterClassRedirect(FName("RenameClass_Before"), FName("RenameClass_After"));
 
@@ -924,7 +927,7 @@ TEST(EntityScriptUnification, SkipHotReloadFieldsResetOnRestore)
     CScriptClass* Minted = FScriptableRegistry::Mint("SkipHotReload_Script", "CEntityScript");
     ASSERT_NE(Minted, nullptr);
     Scripting::AppendScriptPropertiesToClass(Minted, Schema);
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
     Minted->GetDefaultObject();
 
     const ECS::FEntity Entity = Registry.Create();
@@ -1026,7 +1029,7 @@ TEST(EntityScriptUnification, DetachAllInRegistrySurvivesAnOnDetachThatAttachesS
 TEST(EntityScriptUnification, AnUnresolvableScriptClassSkipsOnlyItself)
 {
     // ResolveClass goes through FindObject, so the class has to be registered before the read path runs.
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
     CEntityScriptTest::StaticClass()->GetDefaultObject();
 
     ECS::FRegistry Registry{};
@@ -1100,4 +1103,258 @@ TEST(EntityScriptUnification, AnUnresolvableScriptClassSkipsOnlyItself)
     EXPECT_EQ(RestoredSecond->Values[0], FName("KeptSecond"));
 
     EntityScripts::DetachAll(Registry, Entity);
+}
+
+// Undo and duplicate copy entities through a proxy archive, and a held script's object slots once escaped to the inner one.
+TEST(EntityScriptUnification, AHeldScriptKeepsItsObjectsThroughAProxyArchive)
+{
+    RegisterPendingTypes();
+    CEntityScriptTest* Target = NewObject<CEntityScriptTest>(nullptr, NAME_None, FGuid::New(), OF_Transient);
+    ASSERT_NE(Target, nullptr);
+
+    SEntityScriptComponent Source;
+    SHeldValue& Held = Source.Pending.emplace_back();
+    Held.TypeName = FName("CScriptClassThatIsNotLoaded");
+    Held.Data.Bytes = { 1, 2, 3, 4 };
+    Held.Data.Names.push_back({ 0, FName("HeldName") });
+    Held.Data.Objects.push_back({ 0, Target->GetGUID() });
+
+    TVector<uint8> Bytes;
+    {
+        FMemoryWriter Writer(Bytes);
+        FObjectProxyArchiver Ar(Writer, /*bLoadIfFindFails*/ false);
+        Source.Serialize(Ar);
+    }
+
+    SEntityScriptComponent Restored;
+    {
+        FMemoryReader Reader(Bytes);
+        FObjectProxyArchiver Ar(Reader, /*bLoadIfFindFails*/ true);
+        Restored.Serialize(Ar);
+        EXPECT_FALSE(Ar.HasError());
+    }
+
+    ASSERT_EQ(Restored.Pending.size(), size_t(1));
+    const FPortableBytes& Data = Restored.Pending[0].Data;
+    EXPECT_EQ(Restored.Pending[0].TypeName, FName("CScriptClassThatIsNotLoaded"));
+    EXPECT_EQ(Data.Bytes, Held.Data.Bytes);
+    ASSERT_EQ(Data.Names.size(), size_t(1));
+    EXPECT_EQ(Data.Names[0].Name, FName("HeldName"));
+    ASSERT_EQ(Data.Objects.size(), size_t(1));
+    EXPECT_EQ(Data.Objects[0].Object, Target->GetGUID());
+}
+
+namespace
+{
+    Scripting::FScriptExportSchema IntSchema(const char* FieldName)
+    {
+        Scripting::FScriptExportSchema Schema;
+        Scripting::FScriptExportField& Field = Schema.Fields.emplace_back();
+        Field.Name = FName(FieldName);
+        Field.Type = MakeShared<Scripting::FScriptExportType>();
+        Field.Type->Kind = EPropertyTypeFlags::Int32;
+        return Schema;
+    }
+}
+
+// A C# class derived from another C# class stacks its block after the parent's, so the two never share a slot.
+TEST(ScriptClassInheritance, ASubclassExtendsItsScriptParentsLayout)
+{
+    CScriptClass* Parent = FScriptableRegistry::Mint("Inherit_GTestParent", "CEntityScript");
+    ASSERT_NE(Parent, nullptr);
+    ASSERT_GT(Scripting::AppendScriptPropertiesToClass(Parent, IntSchema("ParentValue")), 0u);
+
+    CScriptClass* Child = FScriptableRegistry::Mint("Inherit_GTestChild", "Inherit_GTestParent");
+    ASSERT_NE(Child, nullptr);
+    ASSERT_GT(Scripting::AppendScriptPropertiesToClass(Child, IntSchema("ChildValue")), 0u);
+    RegisterPendingTypes();
+    Parent->GetDefaultObject();
+    Child->GetDefaultObject();
+
+    EXPECT_EQ(Child->GetSuperClass(), Parent);
+    EXPECT_TRUE(Child->IsChildOf(Parent));
+
+    FProperty* ParentValue = Parent->GetProperty(FName("ParentValue"));
+    FProperty* ChildValue = Child->GetProperty(FName("ChildValue"));
+    ASSERT_NE(ParentValue, nullptr);
+    ASSERT_NE(ChildValue, nullptr);
+    EXPECT_EQ(Child->GetProperty(FName("ParentValue")), ParentValue) << "the child reaches the parent's field through its super";
+    EXPECT_GE(ChildValue->Offset, ParentValue->Offset + sizeof(int32)) << "the child's block must start after the parent's";
+
+    *ParentValue->GetValuePtr<int32>(Parent->GetDefaultObject()) = 0;
+    *ParentValue->GetValuePtr<int32>(Child->GetDefaultObject()) = 41;
+    *ChildValue->GetValuePtr<int32>(Child->GetDefaultObject()) = 42;
+
+    CObject* Instance = NewObject(Child, nullptr, NAME_None, FGuid::New(), OF_Transient);
+    ASSERT_NE(Instance, nullptr);
+    EXPECT_EQ(*ParentValue->GetValuePtr<int32>(Instance), 41) << "an instance takes its inherited defaults from its own class default object";
+    EXPECT_EQ(*ChildValue->GetValuePtr<int32>(Instance), 42);
+}
+
+TEST(ScriptClassInheritance, AnAbstractClassIsNeverInstantiated)
+{
+    CScriptClass* Abstract = FScriptableRegistry::Mint("Inherit_GTestAbstract", "CEntityScript");
+    ASSERT_NE(Abstract, nullptr);
+    Abstract->bAbstract = true;
+    RegisterPendingTypes();
+
+    EXPECT_TRUE(Abstract->IsAbstract());
+    EXPECT_FALSE(CEntityScript::StaticClass()->IsAbstract()) << "a native class is never abstract by this flag";
+    EXPECT_EQ(NewObject(Abstract, nullptr, NAME_None, FGuid::New(), OF_Transient), nullptr);
+
+    CScriptClass* Concrete = FScriptableRegistry::Mint("Inherit_GTestConcrete", "Inherit_GTestAbstract");
+    ASSERT_NE(Concrete, nullptr);
+    RegisterPendingTypes();
+    EXPECT_NE(NewObject(Concrete, nullptr, NAME_None, FGuid::New(), OF_Transient), nullptr);
+}
+
+namespace
+{
+    Scripting::FManagedTypeDefinition ScriptClassDefinition(const char* Name, const char* Base, const char* FieldName, bool bAbstract = false)
+    {
+        Scripting::FManagedTypeDefinition Definition;
+        Definition.Kind           = Scripting::EManagedTypeKind::ScriptableClass;
+        Definition.TypeName       = FName(Name);
+        Definition.NativeBaseName = Base;
+        Definition.bAbstract      = bAbstract;
+        Definition.Schema         = IntSchema(FieldName);
+        Definition.bHasSchema     = true;
+        return Definition;
+    }
+}
+
+namespace
+{
+    // The two class stages of a reload, shells first so other types can name a class before it is laid out.
+    void ReloadClasses(const TVector<Scripting::FManagedTypeDefinition>& Definitions)
+    {
+        FScriptableRegistry::MintNewClasses(Definitions);
+        FScriptableRegistry::RefreshMintedClasses(Definitions);
+        RegisterPendingTypes();
+    }
+
+    uint32 FieldOffset(const char* ClassName, const char* FieldName)
+    {
+        CClass* Class = FindObject<CClass>(FName(ClassName));
+        FProperty* Property = Class != nullptr ? Class->GetProperty(FName(FieldName)) : nullptr;
+        return Property != nullptr ? Property->Offset : 0;
+    }
+}
+
+// A child shell is minted before its parent's block exists, so its own block has to start past the parent's once laid out.
+TEST(ScriptClassInheritance, ANewChildIsLaidOutPastANewParent)
+{
+    TVector<Scripting::FManagedTypeDefinition> Definitions;
+    Definitions.push_back(ScriptClassDefinition("Shell_GTestParent", "CEntityScript", "ParentValue"));
+    Definitions.push_back(ScriptClassDefinition("Shell_GTestChild", "Shell_GTestParent", "ChildValue"));
+    ReloadClasses(Definitions);
+
+    CClass* Parent = FindObject<CClass>(FName("Shell_GTestParent"));
+    ASSERT_NE(Parent, nullptr);
+    EXPECT_GE(FieldOffset("Shell_GTestChild", "ChildValue"), Parent->GetSize());
+    EXPECT_NE(FieldOffset("Shell_GTestChild", "ChildValue"), FieldOffset("Shell_GTestParent", "ParentValue"));
+
+    // A parent reshaped in the same reload that adds a child under it hands that child to the replacement.
+    TVector<Scripting::FManagedTypeDefinition> Second;
+    Second.push_back(ScriptClassDefinition("Shell_GTestParent", "CEntityScript", "WiderParentValue"));
+    Second.push_back(ScriptClassDefinition("Shell_GTestChild", "Shell_GTestParent", "ChildValue"));
+    Second.push_back(ScriptClassDefinition("Shell_GTestLateChild", "Shell_GTestParent", "LateValue"));
+    ReloadClasses(Second);
+
+    CClass* Replacement = FindObject<CClass>(FName("Shell_GTestParent"));
+    ASSERT_NE(Replacement, nullptr);
+    CClass* LateChild = FindObject<CClass>(FName("Shell_GTestLateChild"));
+    ASSERT_NE(LateChild, nullptr);
+    EXPECT_EQ(LateChild->GetSuperClass(), Replacement);
+    EXPECT_EQ(FindObject<CClass>(FName("Shell_GTestChild"))->GetSuperClass(), Replacement);
+    EXPECT_GE(FieldOffset("Shell_GTestLateChild", "LateValue"), Replacement->GetSize());
+}
+
+// The stress harness's crash. A removed parent with no instances of its own was freed while a subclass still linked to it.
+TEST(ScriptClassInheritance, ARemovedParentOutlivesTheSubclassStillOnIt)
+{
+    TVector<Scripting::FManagedTypeDefinition> First;
+    First.push_back(ScriptClassDefinition("Retire_GTestParent", "CEntityScript", "ParentValue", /*bAbstract*/ true));
+    First.push_back(ScriptClassDefinition("Retire_GTestChild", "Retire_GTestParent", "ChildValue"));
+    FScriptableRegistry::RefreshMintedClasses(First);
+
+    CClass* OldChild = FindObject<CClass>(FName("Retire_GTestChild"));
+    ASSERT_NE(OldChild, nullptr);
+    ASSERT_EQ(OldChild->GetSuperClass(), FindObject<CClass>(FName("Retire_GTestParent")));
+
+    // Held by a strong reference no walk can reach, so the reload cannot move it onto the replacement.
+    TStrongObjectPtr<CEntityScript> Script(static_cast<CEntityScript*>(NewObject(OldChild, nullptr, NAME_None, FGuid::New(), OF_Transient)));
+    ASSERT_NE(Script.Get(), nullptr);
+    *OldChild->GetProperty(FName("ChildValue"))->GetValuePtr<int32>(Script.Get()) = 77;
+
+    // The parent goes and the child moves up to the native base, the way the stress run reshaped them.
+    TVector<Scripting::FManagedTypeDefinition> Second;
+    Second.push_back(ScriptClassDefinition("Retire_GTestChild", "CEntityScript", "ChildValue"));
+    FScriptableRegistry::RefreshMintedClasses(Second);
+
+    CClass* NewChild = FindObject<CClass>(FName("Retire_GTestChild"));
+    CClass* Parent = FindObject<CClass>(FName("Retire_GTestParent"));
+    ASSERT_NE(NewChild, nullptr);
+    EXPECT_NE(NewChild, OldChild);
+    EXPECT_EQ(NewChild->GetSuperClass(), CEntityScript::StaticClass());
+
+    ASSERT_NE(Parent, nullptr) << "a parent with a live subclass must not be freed";
+    EXPECT_EQ(OldChild->GetSuperClass(), Parent);
+    EXPECT_TRUE(Script->GetClass()->IsChildOf(CEntityScript::StaticClass()));
+    EXPECT_EQ(*OldChild->GetProperty(FName("ChildValue"))->GetValuePtr<int32>(Script.Get()), 77);
+
+    // With the instance gone, the next refresh retires the old subclass and then the parent it was holding.
+    Script.Reset();
+    FScriptableRegistry::RefreshMintedClasses(Second);
+    EXPECT_EQ(FindObject<CClass>(FName("Retire_GTestParent")), nullptr);
+    EXPECT_EQ(FindObject<CClass>(FName("Retire_GTestChild")), NewChild);
+}
+
+// The third stress crash. A parent minted with no fields gained one after a subclass was laid out at its old size.
+TEST(ScriptClassInheritance, AParentThatGainsItsFirstFieldRebuildsItsSubclasses)
+{
+    Scripting::FManagedTypeDefinition EmptyParent = ScriptClassDefinition("Grow_GTestParent", "CEntityScript", "Unused");
+    EmptyParent.Schema = Scripting::FScriptExportSchema();
+
+    TVector<Scripting::FManagedTypeDefinition> First;
+    First.push_back(EmptyParent);
+    First.push_back(ScriptClassDefinition("Grow_GTestChild", "Grow_GTestParent", "ChildValue"));
+    FScriptableRegistry::RefreshMintedClasses(First);
+
+    CClass* OldChild = FindObject<CClass>(FName("Grow_GTestChild"));
+    ASSERT_NE(OldChild, nullptr);
+
+    TVector<Scripting::FManagedTypeDefinition> Second;
+    Second.push_back(ScriptClassDefinition("Grow_GTestParent", "CEntityScript", "ParentValue"));
+    Second.push_back(ScriptClassDefinition("Grow_GTestChild", "Grow_GTestParent", "ChildValue"));
+    FScriptableRegistry::RefreshMintedClasses(Second);
+
+    CClass* Parent = FindObject<CClass>(FName("Grow_GTestParent"));
+    CClass* Child = FindObject<CClass>(FName("Grow_GTestChild"));
+    ASSERT_NE(Parent, nullptr);
+    ASSERT_NE(Child, nullptr);
+    EXPECT_NE(Child, OldChild) << "the subclass has to be rebuilt after its parent's new block";
+    EXPECT_EQ(Child->GetSuperClass(), Parent);
+
+    FProperty* ParentValue = Child->GetProperty(FName("ParentValue"));
+    FProperty* ChildValue = Child->GetProperty(FName("ChildValue"));
+    ASSERT_NE(ParentValue, nullptr);
+    ASSERT_NE(ChildValue, nullptr);
+    EXPECT_GE(ChildValue->Offset, ParentValue->Offset + sizeof(int32)) << "the two blocks must not overlap";
+}
+
+// A class under a C# parent is minted before that parent registers, and must still find its events on the native ancestor.
+TEST(ScriptClassInheritance, AClassUnderAScriptParentKeepsItsOverrides)
+{
+    Scripting::FManagedTypeDefinition Parent = ScriptClassDefinition("Override_GTestParent", "CEntityScript", "ParentValue");
+    Scripting::FManagedTypeDefinition Child = ScriptClassDefinition("Override_GTestChild", "Override_GTestParent", "ChildValue");
+    Parent.OverriddenEvents.push_back("OnReady");
+    Child.OverriddenEvents.push_back("OnReady");
+    Child.OverriddenEvents.push_back("OnUpdate");
+    ReloadClasses({ Parent, Child });
+
+    const CScriptClass* ChildClass = Cast<CScriptClass>(FindObject<CClass>(FName("Override_GTestChild")));
+    ASSERT_NE(ChildClass, nullptr);
+    EXPECT_NE(ChildClass->FindScriptOverride(FName("OnReady")), nullptr) << "an event overridden in C# under a C# parent must dispatch to it";
+    EXPECT_NE(ChildClass->FindScriptOverride(FName("OnUpdate")), nullptr);
 }

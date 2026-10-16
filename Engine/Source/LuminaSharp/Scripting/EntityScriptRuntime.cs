@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace LuminaSharp;
 
-// Type lookup, editor metadata, and the unload handle set; lifecycle and per-frame dispatch are native, arriving through the Reflector's Scriptable shim on CEntityScript.
+// The live entity scripts of a generation, so a destroy or an unload can cancel what each is still awaiting.
 internal sealed class EntityScriptRuntime
 {
     private readonly TypeLibrary Library;
@@ -15,10 +15,26 @@ internal sealed class EntityScriptRuntime
         this.Library = Library;
     }
 
-    // Registers an instance created by ScriptableRuntime, so FreeAll can detach it.
-    internal void Adopt(GCHandle Handle)
+    // Registers an instance created by ScriptableRuntime, so FreeAll can detach it. Description is set first, since OnAction and the profiler labels read it.
+    internal void Adopt(Lumina.CEntityScript Script, GCHandle Handle)
     {
+        Script.Description = Library.Describe(Script.GetType());
         LiveHandles.Add(Handle);
+
+        // The driver sets the owner before the dispatch that creates the instance, so a null entity is only a defensive case.
+        if (Script.Entity.IsNull)
+        {
+            return;
+        }
+
+        try
+        {
+            Script.Description.EnsureInputComponent(Script);
+        }
+        catch (Exception Exception)
+        {
+            Native.Log(ELogLevel.Error, $"CEntityScript component injection threw: {Exception}");
+        }
     }
 
     // Called before the free, since a kept value gets recycled into an unrelated object's handle.
@@ -33,24 +49,10 @@ internal sealed class EntityScriptRuntime
         LiveHandles.Remove(Handle);
 
         // Every destruction path releases the handle here, so this is where the script's awaits learn it is gone.
-        if (Handle.Target is EntityScript Script)
+        if (Handle.Target is Lumina.CEntityScript Script)
         {
             Script.CancelDestroyToken();
         }
-    }
-
-    public IReadOnlyCollection<string> TypeNames => Library.EntityScriptTypeNames;
-
-    public byte[]? Schema(string TypeName)
-    {
-        TypeDescription? Description = Library.GetEntityScript(TypeName);
-        return Description != null ? Serializer.WriteSchema(Description) : null;
-    }
-
-    public byte[]? Buttons(string TypeName)
-    {
-        TypeDescription? Description = Library.GetEntityScript(TypeName);
-        return Description != null ? Serializer.WriteButtons(Description) : null;
     }
 
     // Detaches every live script and drops the index, ahead of the collectible ALC unload.
@@ -67,7 +69,7 @@ internal sealed class EntityScriptRuntime
 
             // No OnDetach: the script is not detaching, its load context is being replaced. The native
             // driver delivers OnReloaded once the next generation is live.
-            if (Handle.Target is EntityScript Script)
+            if (Handle.Target is Lumina.CEntityScript Script)
             {
                 Script.CancelDestroyToken();
             }

@@ -150,7 +150,7 @@ LLVM 和 Slang 为 Apache-2.0，Tracy 为 BSD，RenderDoc 和 .NET 头文件为 
 
 ## setup 还做了哪些事
 
-- 将 `LUMINA_DIR` 持久化到 `HKCU\Environment`，以便独立游戏项目能找到引擎。用 `reg delete "HKCU\Environment" /v LUMINA_DIR /f` 删除。
+- 在 `HKCU\Software\Classes` 下注册 `.lproject` 和 `.lplugin` 的图标，以及 `.lproject` 的右键菜单动词。
 - 将 `core.hooksPath` 指向 [`BuildScripts/Hooks`](BuildScripts/Hooks)。唯一的 hook 是 `post_merge`，它会在合并后清空 `Binaries/`、`Intermediates/` 以及过期的 IDE 文件。
 - 通过调用 `LuminaBuild.bat GenerateProjectFiles` 生成 IDE 项目文件。
 

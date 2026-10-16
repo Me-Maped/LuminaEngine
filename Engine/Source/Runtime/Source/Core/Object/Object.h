@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "ObjectBase.h"
 #include "Core/Reflection/Type/ObjectReferenceVisitor.h"
@@ -15,7 +15,6 @@ namespace Lumina
     class CObject;
 }
 
-RUNTIME_API Lumina::CClass* Construct_CClass_Lumina_CObject();
 
 namespace Lumina
 {
@@ -27,7 +26,7 @@ namespace Lumina
 
         friend CObject* StaticAllocateObject();
 
-        DECLARE_CLASS(Lumina, CObject, CObject, "/Script/Engine", RUNTIME_API)
+        DECLARE_CLASS(Lumina, CObject, CObject, "/Types/Engine", RUNTIME_API)
         DEFINE_CLASS_FACTORY(CObject)
 
         CObject() = default;
@@ -61,9 +60,6 @@ namespace Lumina
 
         RUNTIME_API virtual bool IsAsset() const { return false; }
 
-        /** Asset binary vs text serialization. */
-        RUNTIME_API virtual bool IsBinary() const { return true; }
-
         RUNTIME_API virtual void PreLoad() {}
         RUNTIME_API virtual void PostLoad() {}
 
@@ -77,6 +73,9 @@ namespace Lumina
 
         // A reference sweep (delete, replace) rewrote at least one object this one points at, so state derived from it is stale.
         RUNTIME_API virtual void OnReferencesReplaced() {}
+
+        // A reload that reshaped this object's class built it to replace Previous, whose values it already carries.
+        RUNTIME_API virtual void OnReinstanced(CObject& Previous) {}
 
         RUNTIME_API virtual bool Rename(const FName& NewName, CPackage* NewPackage = nullptr);
 

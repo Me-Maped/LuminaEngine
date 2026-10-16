@@ -5,11 +5,13 @@
 #include "Assets/AssetTypes/DataTable/DataTableCSV.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/Package/Package.h"
+#include "Core/Delegates/CoreDelegates.h"
 #include "Core/Reflection/PropertyText.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
 #include "Paths/Paths.h"
 #include "Platform/Filesystem/FileHelper.h"
 #include "Platform/Process/PlatformProcess.h"
+#include "Scripting/ScriptTypeRegistry.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "UI/Properties/PropertyTable.h"
@@ -81,6 +83,18 @@ namespace Lumina
         });
         WirePropertyTableUndo(*RowPropertyTable);
 
+        ScriptsWillReloadHandle = FCoreDelegates::OnScriptsWillReload.AddLambda([this]
+        {
+            RowPropertyTable->SetObject(nullptr, nullptr);
+            BoundRowMemory = nullptr;
+            BoundRowStruct = nullptr;
+            PendingRowStruct = nullptr;
+            Columns.clear();
+            CancelCellEdit();
+            DraggingRow = Constants::kIndexNone;
+            bDisplayOrderDirty = true;
+        });
+
         CreateToolWindow(TableWindowName, [this](bool bFocused)
         {
             DrawTableWindow(bFocused);
@@ -101,6 +115,11 @@ namespace Lumina
 
         ImGui::DockBuilderDockWindow(GetToolWindowName(TableWindowName).c_str(), LeftID);
         ImGui::DockBuilderDockWindow(GetToolWindowName(RowDetailsWindowName).c_str(), RightID);
+    }
+
+    void FDataTableEditorTool::OnDeinitialize(const FUpdateContext& /*UpdateContext*/)
+    {
+        FCoreDelegates::OnScriptsWillReload.Remove(ScriptsWillReloadHandle);
     }
 
     void FDataTableEditorTool::MarkDirty()
@@ -124,6 +143,47 @@ namespace Lumina
 
         BoundRowStruct = Table->GetRowStruct();
         GatherColumns(BoundRowStruct, Columns);
+    }
+
+    void FDataTableEditorTool::RefreshRowBindings()
+    {
+        CDataTable* Table = GetAsset<CDataTable>();
+        if (Table == nullptr)
+        {
+            return;
+        }
+
+        const uint64 Generation = FScriptStructRegistry::Get().GetGeneration();
+        CStruct* RowStruct = Table->GetRowStruct();
+        if (Generation == BoundScriptDataGeneration && RowStruct == BoundRowStruct)
+        {
+            return;
+        }
+
+        RowPropertyTable->SetObject(nullptr, nullptr);
+        BoundRowMemory = nullptr;
+        Columns.clear();
+        CancelCellEdit();
+        DraggingRow = Constants::kIndexNone;
+
+        for (SDataTableRow& Row : Table->Rows)
+        {
+            Row.Value.EnsureCurrentType();
+        }
+
+        RebuildColumns();
+        BoundScriptDataGeneration = Generation;
+        PendingRowStruct = RowStruct;
+        if (SelectedRow >= Table->GetRowCount())
+        {
+            SelectedRow = Constants::kIndexNone;
+        }
+        if (SortColumn >= static_cast<int32>(Columns.size()))
+        {
+            SortColumn = Constants::kIndexNone;
+            bSortActive = false;
+        }
+        bDisplayOrderDirty = true;
     }
 
     void FDataTableEditorTool::RebuildDisplayOrder()
@@ -789,20 +849,11 @@ namespace Lumina
 
     void FDataTableEditorTool::DrawTableWindow(bool /*bFocused*/)
     {
+        RefreshRowBindings();
         CDataTable* Table = GetAsset<CDataTable>();
         if (Table == nullptr)
         {
             return;
-        }
-
-        // The row struct can change from the details panel, an import or an undo, so rebuild on mismatch.
-        if (Table->GetRowStruct() != BoundRowStruct)
-        {
-            RebuildColumns();
-            CancelCellEdit();
-            SelectedRow = Table->GetRowCount() > 0 ? 0 : Constants::kIndexNone;
-            BoundRowMemory = nullptr;
-            bDisplayOrderDirty = true;
         }
 
         // Row count changes from anywhere (import, undo) must not leave stale indices in the view.
@@ -840,6 +891,7 @@ namespace Lumina
 
     void FDataTableEditorTool::DrawRowDetailsWindow(bool /*bFocused*/)
     {
+        RefreshRowBindings();
         CDataTable* Table = GetAsset<CDataTable>();
         if (Table == nullptr)
         {
@@ -849,6 +901,7 @@ namespace Lumina
         if (SelectedRow < 0 || SelectedRow >= Table->GetRowCount())
         {
             ImGui::TextDisabled(LOC("Select a row to edit it."));
+            RowPropertyTable->SetObject(nullptr, nullptr);
             BoundRowMemory = nullptr;
             return;
         }
@@ -860,6 +913,7 @@ namespace Lumina
         if (RowMemory == nullptr || RowStruct == nullptr)
         {
             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f), LOC("This row has no value."));
+            RowPropertyTable->SetObject(nullptr, nullptr);
             BoundRowMemory = nullptr;
             return;
         }
@@ -872,7 +926,7 @@ namespace Lumina
         ImGui::Spacing();
 
         // Rows reallocate on add/remove/import, so re-point rather than trusting the last binding.
-        if (RowMemory != BoundRowMemory)
+        if (RowMemory != BoundRowMemory || RowPropertyTable->GetType() != RowStruct)
         {
             BoundRowMemory = RowMemory;
             RowPropertyTable->SetObject(RowMemory, RowStruct);
@@ -956,7 +1010,7 @@ namespace Lumina
             bShowChangeRowStruct = false;
         }
 
-        ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_Always);
         if (!ImGui::BeginPopupModal("Row Struct", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
         {
             return;
@@ -994,6 +1048,7 @@ namespace Lumina
         if (ImGui::Button(bWouldDiscard ? LOC("Change and Discard Rows") : LOC("Change"), ImVec2(200.0f, 0.0f)))
         {
             CancelCellEdit();
+            RowPropertyTable->SetObject(nullptr, nullptr);
 
             Table->SetRowStruct(PendingRowStruct);
 
@@ -1021,6 +1076,8 @@ namespace Lumina
     void FDataTableEditorTool::OnPostUndoRedo()
     {
         FAssetEditorTool::OnPostUndoRedo();
+        RowPropertyTable->SetObject(nullptr, nullptr);
+        BoundRowMemory = nullptr;
 
         // A restore can drop the selected row or change the row struct the columns came from.
         if (CDataTable* Table = GetAsset<CDataTable>())

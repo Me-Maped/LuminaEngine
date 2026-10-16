@@ -8,9 +8,12 @@
 #include "ImGuizmo.h"
 #include "MeshUVViewer.h"
 #include "UI/Tools/AssetEditors/AssetEditorTool.h"
+#include "SocketHierarchy.h"
+#include "UI/Tools/AssetEditors/Animation/AnimPreview.h"
 
 namespace Lumina
 {
+    class CAnimation;
     class CSkeleton;
     struct FSkeletonResource;
 
@@ -62,6 +65,8 @@ namespace Lumina
         FStringView MeshPropertiesName = "MeshProperties";
         FStringView UVViewerName = "UVs";
         FStringView SkinningName = "Skinning";
+        FStringView AnimationPreviewName = "Animation";
+        FStringView HierarchyName = "Bone Hierarchy";
 
         LUMINA_EDITOR_TOOL(FSkeletalMeshEditorTool)
 
@@ -85,6 +90,7 @@ namespace Lumina
         void DrawViewportOverlayElements(const FUpdateContext& UpdateContext, ImTextureRef ViewportTexture, ImVec2 ViewportSize) override;
         void OnAssetDataChangedExternally() override;
         void OnPropertyEditFinished(const FPropertyChangedEvent& Event) override;
+        void OnPostUndoRedo() override;
         void CreatePreviewMeshEntity();
         void InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const override;
         bool ShouldGenerateThumbnailOnSave() const override { return true; }
@@ -105,12 +111,18 @@ namespace Lumina
         void  RebuildSkinningAnalysis();
         void  RebuildSelectedBonePoints();
         void  DrawSkinningPanel();
+        void  DrawAnimationPreviewPanel();
+        void  SetPreviewClip(CAnimation* Clip);
+        void  AdvancePreviewClip(float DeltaTime);
         float GetBoneDrawRadius() const;
 
         /** Bind-pose bone transforms in world space, sized to the skeleton; empty when there is none. */
         void  BuildBonePoseTransforms(TVector<FMatrix4>& OutTransforms) const;
 
         FSkinningAnalysis Skinning;
+
+        // Rebound whenever the mesh's Skeleton changes, since its rows are that skeleton's bones.
+        FSocketHierarchy SocketHierarchy;
 
         // -1 = none. Drives the viewport bone highlight and the influenced-vertex overlay.
         int32 SelectedBoneIndex = -1;
@@ -127,5 +139,11 @@ namespace Lumina
 
         // -1 = automatic (distance-driven), 0..MAX_MESH_LODS-1 = forced.
         int32 PreviewLODIndex = -1;
+
+        FCompatibleAssetList         PreviewClips;
+        TStrongObjectPtr<CAnimation> PreviewClip;
+        bool                         bPreviewPlaying = true;
+        bool                         bPreviewLooping = true;
+        float                        PreviewPlayRate = 1.0f;
     };
 }

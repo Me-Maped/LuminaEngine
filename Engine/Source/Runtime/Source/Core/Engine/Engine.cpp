@@ -1,8 +1,9 @@
 ﻿#include "Platform/Time/PlatformTime.h"
-#include "World/ECS/ECSReferenceProvider.h"
+#include "World/Entity/PersistentEntities.h"
 #include "RuntimePCH.h"
 #include <string>
 #include "Engine.h"
+#include "Core/Object/ObjectReferenceProvider.h"
 #include "FrameStats.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Core/Diagnostics/HangWatchdog.h"
@@ -62,7 +63,6 @@
 #include "World/World.h"
 #include "World/WorldContext.h"
 #include "UI/RmlUiBridge.h"
-#include "GameInstance.h"
 #include "Core/CommandLine/CommandLine.h"
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
@@ -70,6 +70,7 @@
 
 #if USING(WITH_EDITOR)
 #include "Tools/UI/ImGui/ImGuiX.h"   // editor toast for a refused project module (NotifyError)
+#include "Tools/Dialogs/Dialogs.h"
 #include "Log/Log.h"
 #endif
 
@@ -259,15 +260,13 @@ namespace Lumina
             BootLast = Now;
         };
 
-        // Both before anything can build an object, so a reinstance always sees every holder.
-        FObjectReferenceProviders::Register(this);
-        FECSObjectReferenceProvider::Register();
+        // Before anything can build an object, so a reinstance always sees every holder.
         if (GConfig != nullptr)
         {
             FObjectReferenceProviders::Register(GConfig);
         }
 
-        // Must run before renderer/Lua so Earliest/Core-phase plugins can wedge in ahead.
+        // Must run before the renderer so Earliest/Core-phase plugins can wedge in ahead.
         FPluginManager::Get().DiscoverEnginePlugins();
         BootMark("DiscoverEnginePlugins");
 
@@ -364,13 +363,13 @@ namespace Lumina
         BootMark("Phase Core");
 
         // Threads rather than jobs, since a CLR and a COM apartment both outlive the fiber a job runs on.
-        FThread BasisuThread([]
+        FThread BasisuThread(FThreadOptions{ "Basisu Init" }, []
         {
             basisu::basisu_encoder_init();
         });
 
         // Started past this stretch's last module load, whose static initializers race the layout registry.
-        FThread DotNetThread([]
+        FThread DotNetThread(FThreadOptions{ "DotNet Init" }, []
         {
             DotNet::Initialize();
         });
@@ -378,7 +377,7 @@ namespace Lumina
         FThread AudioThread;
         if (!GIsHeadless)
         {
-            AudioThread = FThread([]
+            AudioThread = FThread(FThreadOptions{ "Audio Init" }, []
             {
                 Audio::Initialize();
             });
@@ -407,12 +406,12 @@ namespace Lumina
         DotNetThread.Join();
         BootMark("Join parallel init");
 
-        ProcessNewlyLoadedCObjects();
-        BootMark("ProcessNewlyLoadedCObjects");
+        RegisterPendingTypes();
+        BootMark("RegisterPendingTypes");
 
         // Post-reflection so module initializers do not null-deref, and pre WorldManager for what they spawn.
         FPluginManager::Get().LoadModulesForPhase(EPluginLoadingPhase::PreEngineInit);
-        ProcessNewlyLoadedCObjects();
+        RegisterPendingTypes();
         BootMark("Phase PreEngineInit");
 
         // Built-in primitive meshes must exist before any world deserializes.
@@ -429,7 +428,7 @@ namespace Lumina
         BootMark("WorldManager");
 
         FPluginManager::Get().LoadModulesForPhase(EPluginLoadingPhase::EngineInit);
-        ProcessNewlyLoadedCObjects();
+        RegisterPendingTypes();
         BootMark("Phase EngineInit");
 
         if (bStartupProjectMounted)
@@ -458,7 +457,7 @@ namespace Lumina
         BootMark("DeveloperToolUI");
 
         FPluginManager::Get().LoadModulesForPhase(EPluginLoadingPhase::EditorInit);
-        ProcessNewlyLoadedCObjects();
+        RegisterPendingTypes();
         BootMark("Phase EditorInit");
         #endif
 
@@ -469,7 +468,7 @@ namespace Lumina
         }
 
         FPluginManager::Get().LoadModulesForPhase(EPluginLoadingPhase::PostEngineInit);
-        ProcessNewlyLoadedCObjects();
+        RegisterPendingTypes();
 
         FCoreDelegates::OnPostEngineInit.BroadcastAndClear();
         BootMark("Phase PostEngineInit");
@@ -500,8 +499,6 @@ namespace Lumina
         DeveloperToolUI->Deinitialize(UpdateContext);
         DeveloperToolUI.Reset();
         #endif
-
-        DestroyGameInstance();
 
         Memory::Delete(GWorldManager);
 		GWorldManager = nullptr;
@@ -957,7 +954,15 @@ namespace Lumina
             return false;
         }
 
-        ProjectPath                     .assign(VFS::Parent(Paths::Normalize(Descriptor)));
+        const FFixedString NormalizedDescriptor = Paths::Normalize(Descriptor);
+        const FFixedString Directory(VFS::Parent(NormalizedDescriptor));
+        if (!ClaimProject(Directory))
+        {
+            return false;
+        }
+
+        ProjectFile                     = NormalizedDescriptor;
+        ProjectPath                     = Directory;
         ProjectName                     = Data["Name"].get<std::string>().c_str();
 
         FFixedString ConfigDir          = Paths::Combine(ProjectPath, "Config");
@@ -1040,6 +1045,41 @@ namespace Lumina
         return true;
     }
 
+#if WITH_EDITOR
+    // The editor cannot relink binaries it has loaded, so it closes and the build tool reopens the project once built.
+    static bool OfferProjectRebuild(FStringView Name, FStringView ProjectFile, FStringView Reason)
+    {
+        const FString Script = Paths::GetBuildToolScript();
+        if (Script.empty() || GIsHeadless || GCommandLine->Has("benchmark"))
+        {
+            return false;
+        }
+
+        if (!Dialogs::Confirmation("Rebuild Project", "The code for {} {}.\n\nRebuild it now? The editor closes, builds the project, then opens it again.", Name, Reason))
+        {
+            return false;
+        }
+
+        #if defined(LE_PLATFORM_WINDOWS)
+        // The window stays open after a failed build so its errors can be read.
+        const FString Executable = "cmd.exe";
+        const FString Params = Format("/c \"\"{}\" Open \"{}\" -WaitForEditor || pause\"", Script, ProjectFile);
+        #else
+        const FString& Executable = Script;
+        const FString Params = Format("Open \"{}\" -WaitForEditor", ProjectFile);
+        #endif
+
+        if (const int Error = Platform::LaunchProcess(UTF8_TO_TCHAR(Executable.c_str()), UTF8_TO_TCHAR(Params.c_str())); Error != 0)
+        {
+            LOG_ERROR("Could not start the project rebuild (system error {}).", Error);
+            return false;
+        }
+
+        FApplication::RequestExit();
+        return true;
+    }
+#endif
+
     void FEngine::StartProject()
     {
         GConfig->DiscoverAndLoadSettings();
@@ -1070,7 +1110,7 @@ namespace Lumina
         {
             if (FModuleManager::Get().LoadModule(DLLPath) != nullptr)
             {
-                ProcessNewlyLoadedCObjects();
+                RegisterPendingTypes();
             }
             else
             {
@@ -1079,6 +1119,10 @@ namespace Lumina
                 {
                     LOG_ERROR("Project module '{}' was not loaded: {}", ProjectName, LoadError);
 #if WITH_EDITOR
+                    if (OfferProjectRebuild(ProjectName, ProjectFile, Format("does not match this editor ({})", LoadError)))
+                    {
+                        return;
+                    }
                     ImGuiX::Notifications::NotifyError(
                         "Project '{}' code was not loaded: {}. Rebuild the project for this engine (matching configuration/platform).",
                         ProjectName, LoadError);
@@ -1090,10 +1134,17 @@ namespace Lumina
                 }
             }
         }
+#if WITH_EDITOR
+        else if (Paths::Exists(Paths::Combine(ProjectPath, "Source", FFixedString(ProjectName.c_str()).append(".Target.cs")))
+            && OfferProjectRebuild(ProjectName, ProjectFile, "has not been built yet"))
+        {
+            return;
+        }
+#endif
 
         // Project DLL is now in; plugin modules that wire up to project types load here.
         FPluginManager::Get().LoadModulesForPhase(EPluginLoadingPhase::PostProjectLoad);
-        ProcessNewlyLoadedCObjects();
+        RegisterPendingTypes();
 
         // The compiler's Initialize ran before any project, so these roots compile here rather than stalling.
         Shaders::PrecompileNewRoots();
@@ -1107,18 +1158,14 @@ namespace Lumina
         // Must run after GConfig->LoadPath but before any OnReady script body.
         FInputActionMap::Get().RebuildFromSettings();
 
-        // Compile/load C# scripts before creating the GameInstance.
+        // Before the startup map, so its scripts are minted when it loads.
         DotNet::ReloadScripts();
-
-        // A TSubclassOf naming a C# subclass could not resolve at first config load, since scripts were unminted.
-        GConfig->ReloadSettings(CProjectSettings::StaticClass());
 
         // Before the startup map builds any bodies, since Box3D reads its tolerances as shapes are made.
         Physics::SetLengthUnitsPerMeter(GetDefault<CProjectSettings>()->PhysicsLengthUnitsPerMeter);
 
         RefreshWindowTitle();
         ApplyUserSettings();
-        CreateGameInstance();
         LoadStartupMap();
 
         OnProjectLoaded.Broadcast();
@@ -1130,30 +1177,6 @@ namespace Lumina
         #if !USING(WITH_EDITOR)
         CGameUserSettings::Get().Apply();
         #endif
-    }
-
-    void FEngine::CreateGameInstance()
-    {
-        // Gotta tear down any prior instance first.
-        DestroyGameInstance();
-        
-        CClass* InstanceClass = GetDefault<CProjectSettings>()->GameInstanceClass.Get();
-        if (InstanceClass == nullptr)
-        {
-            InstanceClass = CGameInstance::StaticClass();
-        }
-
-        GameInstance = Cast<CGameInstance>(NewObject(InstanceClass, nullptr, NAME_None, FGuid::New(), OF_Transient));
-        if (GameInstance == nullptr)
-        {
-            // The class resolved but is not a CGameInstance, and Init must never run through a null cast.
-            LOG_WARN("GameInstance class '{}' is not a CGameInstance; using base CGameInstance.", InstanceClass->GetName().ToString().c_str());
-            GameInstance = Cast<CGameInstance>(NewObject(CGameInstance::StaticClass(), nullptr, NAME_None, FGuid::New(), OF_Transient));
-        }
-        GameInstance->Init();
-
-        // DISPLAY so it survives Shipping and proves which class actually backs the instance.
-        LOG_DISPLAY("GameInstance created: class '{}'.", GameInstance->GetClass()->GetName().ToString().c_str());
     }
 
     void FEngine::LoadBotWorlds(FStringView MapName)
@@ -1188,7 +1211,6 @@ namespace Lumina
                 continue;
             }
             Context->SourceWorld  = SourceWorld;
-            Context->GameInstance = GameInstance.Get();
             Context->MapPath      = FString(MapName.data(), MapName.size());
             Context->NetHost      = Host;
             Context->NetPort      = Port;
@@ -1280,7 +1302,6 @@ namespace Lumina
             return;
         }
         Context->SourceWorld  = SourceWorld;
-        Context->GameInstance = GameInstance.Get();
 
         if (FInputViewport* Primary = GApp ? GApp->GetPrimaryViewport() : nullptr)
         {
@@ -1390,7 +1411,6 @@ namespace Lumina
             FWorldContext* NewContext = GWorldManager->CreateWorldContext(ColdWorld, EWorldType::Game, ColdNetMode);
             if (NewContext != nullptr)
             {
-                NewContext->GameInstance = GameInstance.Get();
                 NewContext->SourceWorld  = WorldAsset;
                 NewContext->MapPath      = FString(MapName.c_str());
                 if (bPendingHostOverride)
@@ -1415,7 +1435,6 @@ namespace Lumina
         const bool                      bPIE           = OldContext->bPIE;
         const FString                   OldNetHost     = OldContext->NetHost;
         uint16                          NetPort        = OldContext->NetPort;
-        CGameInstance* const            SavedInstance  = OldContext->GameInstance != nullptr ? OldContext->GameInstance : GameInstance.Get();
         CWorld* const                   OldWorld       = OldContext->World.Get();
 
         // A host-level OpenLevel overrides the role/port on the world it travels to.
@@ -1451,6 +1470,9 @@ namespace Lumina
             return;
         }
 
+        FPersistentCarry Carry;
+        Carry.Lift(OldWorld);
+
         GWorldManager->DestroyWorldContext(OldWorld);
 
         FWorldContext* NewContext = GWorldManager->CreateWorldContext(NewWorld, Type, NetMode);
@@ -1458,7 +1480,6 @@ namespace Lumina
         {
             NewContext->bPIE         = bPIE;
             NewContext->SourceWorld  = WorldAsset; // NewWorld was duplicated from WorldAsset -> that's its source
-            NewContext->GameInstance = SavedInstance;
             NewContext->MapPath      = FString(MapName.c_str());
             NewContext->NetHost      = OldNetHost;
             NewContext->NetPort      = NetPort;
@@ -1469,6 +1490,11 @@ namespace Lumina
         if (FInputViewport* Primary = GApp ? GApp->GetPrimaryViewport() : nullptr; Primary != nullptr && OldWorld == nullptr)
         {
             Primary->SetWorld(NewWorld);
+        }
+
+        if (NewContext != nullptr)
+        {
+            Carry.Land(NewWorld);
         }
 
         // OldWorld memory still alive (only TeardownWorld has run); safe to compare identity, do not inspect state.
@@ -1702,7 +1728,7 @@ namespace Lumina
             {
                 if (FModuleManager::Get().LoadModule(DLLPath))
                 {
-                    ProcessNewlyLoadedCObjects();
+                    RegisterPendingTypes();
                 }
             }
             else
@@ -1714,15 +1740,11 @@ namespace Lumina
         // After the project DLL so its types exist, and before the startup map so scripts are registered.
         DotNet::LoadCookedScripts();
 
-        // Cooked settings loaded before the scripts minted, so re-resolve now that a C# class exists.
-        GConfig->ReloadSettings(CProjectSettings::StaticClass());
-
         // Before the startup map builds any bodies, since Box3D reads its tolerances as shapes are made.
         Physics::SetLengthUnitsPerMeter(GetDefault<CProjectSettings>()->PhysicsLengthUnitsPerMeter);
 
         RefreshWindowTitle();
         ApplyUserSettings();
-        CreateGameInstance();
         LoadStartupMap();
         return true;
     }
@@ -1757,54 +1779,6 @@ namespace Lumina
         #else
         (void)AverageFrameSeconds;
         #endif
-    }
-
-    // Mirrors the rule CreateWorldContext uses, so a restore lands on exactly the contexts that had one.
-    void FEngine::RepointGameInstanceContexts(CGameInstance* Instance)
-    {
-        if (GWorldManager == nullptr)
-        {
-            return;
-        }
-
-        for (const TUniquePtr<FWorldContext>& Context : GWorldManager->GetContexts())
-        {
-            if (Context->Type == EWorldType::Game || Context->Type == EWorldType::Simulation)
-            {
-                Context->GameInstance = Instance;
-            }
-        }
-    }
-
-    void FEngine::VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func)
-    {
-        CGameInstance* const Current = GameInstance.Get();
-        if (Current == nullptr)
-        {
-            return;
-        }
-
-        CObject* const Replacement = Func(Current);
-        if (Replacement == Current)
-        {
-            return;
-        }
-
-        // The world contexts mirror this pointer, so they move with it rather than keeping the retired one.
-        CGameInstance* const Replaced = Cast<CGameInstance>(Replacement);
-        GameInstance = Replaced;
-        RepointGameInstanceContexts(Replaced);
-    }
-
-    void FEngine::DestroyGameInstance()
-    {
-        if (GameInstance == nullptr)
-        {
-            return;
-        }
-
-        GameInstance->Shutdown();
-        GameInstance = nullptr;
     }
 
     FFixedString FEngine::GetProjectContentDirectory() const

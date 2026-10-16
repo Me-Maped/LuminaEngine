@@ -1,17 +1,12 @@
 #pragma once
 #include "Includes/MeshletGeometry.slang"
 
-// VisBuffer geometry MESH shader, compiled TWICE via VISBUFFER_MASKED_GEOM: the two cases need
-// different OUTPUT TYPES, which a spec constant cannot change. VisID is per-PRIMITIVE, stored +1.
-
-// One CmdDrawMeshTasksIndirect covers a batch; SV_DrawIndex selects the sub-draw. The per-draw base
-// comes from ViewDrawOffsets, the same GPU-built array the task stage appended through.
+// Compiled twice via VISBUFFER_MASKED_GEOM since the cases need different output types; VisID is per primitive, stored +1.
 
 struct FVisPrimitive
 {
     uint VisID          : SV_PrimitiveID;
-    // Declaring every triangle and flagging the dead ones beats compacting: output storage is reserved
-    // from the DECLARED array size either way, so compaction only ever cost.
+    // Flagging dead triangles beats compacting, since output storage is reserved from the declared size either way.
     bool CullPrimitive  : SV_CullPrimitive;
 };
 
@@ -22,9 +17,6 @@ typedef FMaskedVertexOutput    FVisVertexOutput;
 typedef FDepthOnlyVertexOutput FVisVertexOutput;
 #endif
 
-
-// Sized to the VERTEX phase (64), not the triangle cap: the vertex phase is the expensive one, so all
-// 64 lanes must do it. The material vertex token is emitted ONCE, outside the loop.
 FMaterialVertexInputs EvalMaterialVertex(FGPUInstance* Inst, float4x4 ModelMatrix, FVertexData VertexData,
                                          float4 WorldPos, float3 NormalWS, float3 TangentWS,
                                          float TangentSignWS)
@@ -32,6 +24,52 @@ FMaterialVertexInputs EvalMaterialVertex(FGPUInstance* Inst, float4x4 ModelMatri
     FMaterialVertexInputs Material;
     $MATERIAL_VERTEX_INPUTS
     return Material;
+}
+
+// What every vertex of one meshlet reads alike, loaded once per mesh workgroup and once per vertex on the vertex path.
+struct FVisVertexContext
+{
+    float4x4 ModelMatrix;
+    float3x3 NormalMatrix;
+    float4x4 CameraView;
+    float4x4 CameraProj;
+#ifdef VISBUFFER_MASKED_GEOM
+    uint     MaterialIndex;
+#endif
+};
+
+FVisVertexContext LoadVisVertexContext(FMeshletRef Ref)
+{
+    FVisVertexContext Ctx;
+    Ctx.ModelMatrix   = Ref.ModelMatrix;
+    Ctx.NormalMatrix  = CalculateNormalMatrix(Ctx.ModelMatrix);
+    Ctx.CameraView    = GetCameraView();
+    Ctx.CameraProj    = GetCameraProjection();
+#ifdef VISBUFFER_MASKED_GEOM
+    Ctx.MaterialIndex = Ref.Inst.MaterialIndex;
+#endif
+    return Ctx;
+}
+
+// Both entry points emit their vertices through this, so the mesh and vertex paths place geometry identically.
+FVisVertexOutput VisBufferVertex(FMeshletRef Ref, uint LocalVertex, FVisVertexContext Ctx)
+{
+    FVertexData VertexData = LoadMeshletVertexData(Ref, LocalVertex);
+    FMeshletWorldVertex W  = TransformMeshletVertex(VertexData, Ctx.ModelMatrix, Ctx.NormalMatrix);
+
+    float4 WorldPos = float4(W.WorldPos, 1.0);
+    const FMaterialVertexInputs Material =
+        EvalMaterialVertex(Ref.Inst, Ctx.ModelMatrix, VertexData, WorldPos,
+                           W.NormalWS, W.TangentWS.xyz, W.TangentWS.w);
+    WorldPos.xyz += Material.WorldPositionOffset;
+
+#ifdef VISBUFFER_MASKED_GEOM
+    return MakeMaskedVertexOutput(Ref, W, WorldPos.xyz, Ctx.CameraView, Ctx.CameraProj, Ctx.MaterialIndex);
+#else
+    FVisVertexOutput VOut = (FVisVertexOutput)0;
+    VOut.Position = CameraClipPosition(CameraViewPosition(WorldPos.xyz, Ctx.CameraView), Ctx.CameraProj);
+    return VOut;
+#endif
 }
 
 [shader("mesh")]
@@ -45,24 +83,17 @@ void MeshMain(
     out indices    uint3            Tris[MESHLET_MAX_TRIANGLES],
     out primitives FVisPrimitive    Prims[MESHLET_MAX_TRIANGLES])
 {
-    // One workgroup per survivor MeshletCull.slang compacted into this bucket's slice. The slot is the
-    // draw-list index itself now, which is what VisID packs and DeferredMaterial resolves back through.
+    // The slot is the draw-list index, which VisID packs and DeferredMaterial resolves back through.
     uint MeshletSlot;
     FMeshletRef Ref = ResolveMeshletForWorkgroup(DrawIndex, GroupID.x, MeshletSlot);
 
     const uint VertCount = Ref.M.VertexCount;
     const uint TriCount  = Ref.M.TriangleCount;
 
-    // FIRST, ahead of the vertex fetch. This is what reserves output storage in the geometry engine, so
-    // issuing it here overlaps that allocation with the whole vertex phase instead of stalling behind it.
-    // Both counts come straight off the meshlet header -- nothing below can change them. (It used to sit
-    // after the vertex phase because primitives were COMPACTED and the count was not known until then;
-    // SV_CullPrimitive replaced compaction and that constraint went with it.)
+    // Issued ahead of the vertex fetch so the output allocation overlaps the vertex phase.
     SetMeshOutputCounts(VertCount, TriCount);
 
-    // The only thing the vertex phase carries in registers now: ShuffleMeshletClip reads it out of the
-    // OWNING LANE, so it is indexed by lane, not by vertex slot. The vertex output itself is exported
-    // as it is produced.
+    // Indexed by lane, not vertex slot, since ShuffleMeshletClip reads it from the owning lane.
     float4 Clip[MESHLET_VERT_ITERS];
 
     [ForceUnroll]
@@ -71,54 +102,23 @@ void MeshMain(
         Clip[v] = float4(0.0, 0.0, 0.0, 0.0);
     }
 
-    // Workgroup-UNIFORM, so this branch is free and no lane diverges on it. It stays because a meshlet
-    // that failed to resolve leaves VertCount at 0 and Instances() may be null, making Ref.Inst null+0.
+    // Workgroup-uniform; an unresolved meshlet leaves VertCount 0 and Ref.Inst possibly null.
     if (VertCount > 0u)
     {
-        // Every workgroup-uniform matrix load is issued HERE, before the vertex fetch, so all four requests
-        // are in flight together. Strung end to end, this pass sat at 93% long-scoreboard.
-        const float4x4 ModelMatrix  = Ref.ModelMatrix;
-        const float3x3 NormalMatrix = CalculateNormalMatrix(ModelMatrix);
-        const float4x4 CameraView   = GetCameraView();
-        const float4x4 CameraProj   = GetCameraProjection();
-#ifdef VISBUFFER_MASKED_GEOM
-        const uint     MaterialIndex = Ref.Inst.MaterialIndex;
-#endif
+        // Every workgroup-uniform load is issued before the vertex fetch so they are in flight together.
+        const FVisVertexContext Ctx = LoadVisVertexContext(Ref);
 
         [ForceUnroll]
         for (uint v = 0; v < MESHLET_VERT_ITERS; ++v)
         {
-            // TWO indices on purpose. The EXPORT index must stay a static affine function of the lane
-            // (ThreadID + v*GroupSize) or the compiler cannot prove lane i owns vertex i and pushes every
-            // export through LDS -- a clamp against a runtime count is not provable. RDNA2 already pays
-            // that for v>0 (one export per thread, the rest carried by hidden threads), and RDNA3's
-            // wave-offset export needs the same i / i+N shape to kick in. The LOAD still clamps: surplus
-            // lanes redundantly reprocess the last vertex instead of sitting masked, and every lane must
-            // stay active for ShuffleMeshletClip below.
+            // The export index must stay affine in the lane or every export goes through LDS; the load clamps so all lanes stay active for the shuffle.
             const uint StoreSlot = ThreadID + v * MESHLET_MESH_GROUP_SIZE;
             const uint LoadSlot  = min(StoreSlot, VertCount - 1u);
 
-            FVertexData VertexData = LoadMeshletVertexData(Ref, LoadSlot);
-            FMeshletWorldVertex W  = TransformMeshletVertex(VertexData, ModelMatrix, NormalMatrix);
+            const FVisVertexOutput VOut = VisBufferVertex(Ref, LoadSlot, Ctx);
+            Clip[v] = VOut.Position;
 
-            float4 WorldPos = float4(W.WorldPos, 1.0);
-            const FMaterialVertexInputs Material =
-                EvalMaterialVertex(Ref.Inst, ModelMatrix, VertexData, WorldPos,
-                                   W.NormalWS, W.TangentWS.xyz, W.TangentWS.w);
-            WorldPos.xyz += Material.WorldPositionOffset;
-
-#ifdef VISBUFFER_MASKED_GEOM
-            FVisVertexOutput VOut = MakeMaskedVertexOutput(Ref, W, WorldPos.xyz, CameraView, CameraProj, MaterialIndex);
-            Clip[v] = VOut.Position;   // the same two muls; taken from the output so they cannot drift
-#else
-            FVisVertexOutput VOut = (FVisVertexOutput)0;
-            Clip[v]       = CameraClipPosition(CameraViewPosition(WorldPos.xyz, CameraView), CameraProj);
-            VOut.Position = Clip[v];
-#endif
-
-            // Dropping the clamped lanes' store is what keeps the index provable; they only ever
-            // duplicated the last vertex anyway. Clip[] is still written by EVERY lane -- the shuffle
-            // reads it by lane, and for any V < VertCount the owning lane holds the unclamped value.
+            // Clamped lanes skip the store but still write Clip[], which the shuffle reads by lane.
             if (StoreSlot < VertCount)
             {
                 Verts[StoreSlot] = VOut;
@@ -126,17 +126,13 @@ void MeshMain(
         }
     }
 
-    // Triangle phase. Every triangle is declared and the dead ones carry SV_CullPrimitive, so there is no
-    // compaction pass, no shared bitmask and no second barrier.
-    // Workgroup-UNIFORM, so no lane diverges on it; TriCount - 1u below needs the non-zero case.
+    // Workgroup-uniform, and the clamp below needs a non-zero TriCount.
     if (TriCount > 0u)
     {
         [ForceUnroll]
         for (uint i = 0; i < MESHLET_TRI_ITERS; ++i)
         {
-            // Same split as the vertex phase: the cull test runs on the CLAMPED index so every lane stays
-            // active for ShuffleMeshletClip's WaveReadLaneAt, while the export index stays affine. Where
-            // the store survives, StoreT < TriCount, so t == StoreT and Idx is that triangle.
+            // The cull test uses the clamped index so every lane stays active for WaveReadLaneAt, while the export index stays affine.
             const uint  StoreT = ThreadID + i * MESHLET_MESH_GROUP_SIZE;
             const uint  t      = min(StoreT, TriCount - 1u);
             const uint3 Idx    = UnpackMeshletTriangleSafe(Ref, t);
@@ -149,12 +145,34 @@ void MeshMain(
 
             if (StoreT < TriCount)
             {
-                // The slot IS the source triangle index now, so VisID needs no separate mapping: the
-                // deferred pass re-fetches the triangle out of the meshlet's own array.
+                // The slot is the source triangle index, so the deferred pass re-fetches it from the meshlet's own array.
                 Tris[StoreT]                = Idx;
-                Prims[StoreT].VisID         = ((MeshletSlot << 7u) | (StoreT & 0x7Fu)) + 1u;
+                Prims[StoreT].VisID         = PackVisID(MeshletSlot, StoreT);
                 Prims[StoreT].CullPrimitive = bCull;
             }
         }
     }
+}
+
+struct FVisVertexStageOutput
+{
+    FVisVertexOutput     Vertex;
+    nointerpolation uint VisID : VISID;
+};
+
+// The fallback without mesh shading, one instance per surviving meshlet, with an invalid corner left at the origin with no area.
+[shader("vertex")]
+FVisVertexStageOutput VertexMain(uint VertexIndex   : SV_VulkanVertexID,
+                                 uint InstanceIndex : SV_VulkanInstanceID,
+                                 uint DrawIndex     : SV_DrawIndex)
+{
+    const FMeshletCorner Corner = ResolveMeshletCorner(DrawIndex, InstanceIndex, VertexIndex);
+
+    FVisVertexStageOutput Out = (FVisVertexStageOutput)0;
+    Out.VisID = PackVisID(Corner.MeshletSlot, Corner.TriIdx);
+    if (Corner.bValid)
+    {
+        Out.Vertex = VisBufferVertex(Corner.Ref, Corner.LocalVertex, LoadVisVertexContext(Corner.Ref));
+    }
+    return Out;
 }

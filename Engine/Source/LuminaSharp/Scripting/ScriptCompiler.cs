@@ -86,8 +86,8 @@ internal static class ScriptCompiler
         return null;
     }
 
-    // The generated IDE project adds the same import as a Using item, so IntelliSense agrees with this compile.
-    public const string ObjectCoreGlobalUsing = "global using static LuminaSharp.ObjectCore;";
+    // The generated IDE project adds the same imports as Using items, so IntelliSense agrees with this compile.
+    public const string ScriptGlobalUsings = "global using static LuminaSharp.ObjectCore;\nglobal using static LuminaSharp.ESpecifier;";
 
     /// Compiles all sources into a PE plus its PDB, or null on error (diagnostics logged). ExtraReferences are the dependency units' emitted images.
     public static FScriptImage? Compile(string AssemblyName, IReadOnlyList<(string Path, string Text)> Sources,
@@ -108,10 +108,10 @@ internal static class ScriptCompiler
             Trees = Trees.Append(Marshalling).ToArray();
         }
 
-        // Object loading reads as it does in C++, LoadObject<T>(Path) with no qualifier, in every script.
-        SyntaxTree ObjectCoreImport = CSharpSyntaxTree.ParseText(
-            SourceText.From(ObjectCoreGlobalUsing, Encoding.UTF8), ParseOptions, path: AssemblyName + ".ObjectCore.g.cs");
-        Trees = Trees.Append(ObjectCoreImport).ToArray();
+        // LoadObject<T>(Path) and [Property(Editable)] read as they do in C++, with no qualifier, in every script.
+        SyntaxTree GlobalUsings = CSharpSyntaxTree.ParseText(
+            SourceText.From(ScriptGlobalUsings, Encoding.UTF8), ParseOptions, path: AssemblyName + ".GlobalUsings.g.cs");
+        Trees = Trees.Append(GlobalUsings).ToArray();
 
         MetadataReference[] AllReferences = References;
         if (ExtraReferences != null && ExtraReferences.Count > 0)
@@ -132,14 +132,7 @@ internal static class ScriptCompiler
                 .ToArray();
         }
 
-        // Turn each [Property] field into the native-backed property it has to be. This is the one thing a
-        // source generator could not do -- it may only ADD members -- and it is why script authors no longer
-        // write `partial`. Done here rather than anywhere else because this compilation is the only one whose
-        // output is ever loaded: the generated .csproj is IntelliSense-only, and packaging stages what this
-        // emits (ProjectPackager copies FScriptUnit::AssemblyPath).
-        //
-        // The probe compilation exists only to give the rewriter a semantic model, so it can tell a string
-        // from a struct from an enum. Binding is lazy, so this costs the trees it actually inspects.
+        // Each stored field becomes its native-backed property here, the only compilation ever loaded, the probe compilation just giving the rewriter a semantic model.
         var RewriteErrors = new List<string>();
         var Probe = CSharpCompilation.Create(AssemblyName, Trees, AllReferences,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
@@ -210,8 +203,7 @@ internal static class ScriptCompiler
         return null;
     }
 
-    // CS0234 names the missing member, never the shadowing namespace that actually caused it.
-    // An [Element] field is filled when its UIScript's document loads, so "never assigned" is wrong about it.
+    // An [Element] field is filled when its UI document loads, so a never-assigned warning is wrong about it.
     private static bool IsAssignedByEngine(Diagnostic Diagnostic)
     {
         if (Diagnostic.Id != "CS0649" || Diagnostic.Location.SourceTree is not { } Tree)
@@ -224,6 +216,7 @@ internal static class ScriptCompiler
             .Any(Attribute => Attribute.Name.ToString() is "Element" or "ElementAttribute" or "LuminaSharp.Element");
     }
 
+    // CS0234 names the missing member, never the shadowing namespace that actually caused it.
     private static void ExplainShadowedGameNamespace(Diagnostic Diagnostic)
     {
         string Message = Diagnostic.GetMessage();
@@ -240,20 +233,16 @@ internal static class ScriptCompiler
 
     private static ImmutableArray<ISourceGenerator>? CachedGenerators;
 
-    // Source generators run on every script compile (loaded once).
-    //
-    // An explicit allow-list, NOT "every IIncrementalGenerator in the assembly": ManagedExportGenerator is
-    // engine-only and emits its attribute definition into whatever compilation it runs in, so letting it into
-    // a script compile duplicates a type LuminaSharp already exports (CS0101).
+    // An explicit list, since ManagedExportGenerator is engine-only and would duplicate a type LuminaSharp exports.
     private static readonly string[] ScriptGeneratorNames =
     {
         "NativeCallGenerator",      // [NativeCall] -> the native binding glue
-        // Emits nothing; ScriptPropertyRewriter produces the accessors. It runs here anyway for the one thing
-        // the rewriter cannot report: a [Property] declared as a partial property is invisible to it, and
-        // would surface as a bare CS9248 "must have an implementation part" with nothing naming the cause.
+        // Emits nothing but reports a [Property] declared as a partial property, which would otherwise surface as a bare CS9248.
         "ScriptPropertyGenerator",
-        "ScriptFunctionInvokerGenerator",   // [ScriptFunction] -> the typed frame invoker
+        "ScriptFunctionInvokerGenerator",   // [Function] -> the typed frame invoker
         "ContainerIndexerWriteGenerator",   // rejects a write through a TVector indexer that reads a held copy
+        "ScriptStructGenerator",            // gives a [Reflect] script struct the handle it views native memory through
+        "ComponentStorageGenerator",        // rejects a component held or created as a C# value, since it only exists in storage
     };
 
     private static ImmutableArray<ISourceGenerator> SourceGenerators => CachedGenerators ??= LoadGenerators();
@@ -300,8 +289,7 @@ internal static class ScriptCompiler
                 }
             }
 
-            // A generator that silently fails to load looks like "the language feature does not work": every
-            // [Property] partial in every script becomes CS9248 with nothing pointing at the cause. Say so.
+            // A generator that fails to load looks like a missing language feature, so it is named here.
             if (Missing.Count > 0)
             {
                 Native.Log(ELogLevel.Error,

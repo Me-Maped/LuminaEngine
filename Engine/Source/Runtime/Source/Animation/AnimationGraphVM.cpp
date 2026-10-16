@@ -304,6 +304,49 @@ namespace Lumina
         State.bInitialized = true;
     }
 
+    namespace
+    {
+        // Per-call scratch that forgets everything between calls without touching it, by stamping each entry with the call that wrote it.
+        template<typename T>
+        struct TCallScratch
+        {
+            TVector<T>      Entries;
+            TVector<uint32> Stamps;
+            uint32          Stamp = 0;
+            T               DefaultEntry{};
+
+            void BeginCall(SIZE_T Count)
+            {
+                if (Entries.size() < Count)
+                {
+                    Entries.resize(Count);
+                    Stamps.resize(Count, 0u);
+                }
+                if (++Stamp == 0u)
+                {
+                    std::fill(Stamps.begin(), Stamps.end(), 0u);
+                    Stamp = 1u;
+                }
+            }
+
+            NODISCARD FORCEINLINE const T& Read(SIZE_T Index) const
+            {
+                return Stamps[Index] == Stamp ? Entries[Index] : DefaultEntry;
+            }
+
+            // The first touch in a call starts the entry from its default, as a cleared array would have.
+            NODISCARD FORCEINLINE T& Write(SIZE_T Index)
+            {
+                if (Stamps[Index] != Stamp)
+                {
+                    Entries[Index] = DefaultEntry;
+                    Stamps[Index]  = Stamp;
+                }
+                return Entries[Index];
+            }
+        };
+    }
+
     void FAnimationGraphVM::BuildTasks(const CAnimationGraph* Graph, FSkeletonResource* Skeleton, float DeltaTime, FAnimGraphVMState& State, FAnimTaskList& OutTasks, FAnimGraphRootMotion& RootMotionInOut, TVector<FAnimNotifyEvent>* OutEvents, const FAnimMontagePlayer* Montages, const FAnimGraphSceneContext* SceneContext)
     {
         LUMINA_PROFILE_SCOPE();
@@ -370,10 +413,6 @@ namespace Lumina
 
         float* RESTRICT Scalars = State.ScalarRegisters.data();
 
-        // Writing a register records which task produces that pose, and reading one wires a dependency.
-        thread_local TVector<int16> PoseTasks;
-        PoseTasks.assign(NumPose, FAnimTask::NoTask);
-
         // Object registers are pure dataflow within one call, so they are scratch, not per-instance state.
         const SIZE_T NumObjectRegs = Graph->NumObjectRegisters;
         const SIZE_T NumObjectParams = State.ObjectParameters.size();
@@ -394,64 +433,55 @@ namespace Lumina
             bool IsEmpty() const { return End <= Start; }
         };
 
-        thread_local TVector<FRootMotionDelta> ClockDeltas;
-        thread_local TVector<FRootMotionDelta> PoseDeltas;
-        thread_local TVector<FEventRange> ClockEvents;
-        thread_local TVector<FEventRange> PoseEvents;
         thread_local TVector<FAnimNotifyEvent> EventScratch;
 
         const bool bExtractRootMotion = RootMotionInOut.Mode == ERootMotionLockMode::FromAsset &&
                                         RootMotionInOut.RootBoneIndex != Constants::kIndexNone;
 
-        ClockDeltas.assign(NumScalar, FRootMotionDelta());
-        PoseDeltas.assign(NumPose, FRootMotionDelta());
-        ClockEvents.assign(NumScalar, FEventRange());
-        PoseEvents.assign(NumPose, FEventRange());
         EventScratch.clear();
 
-        const auto UnionEvents = [](const FEventRange& A, const FEventRange& B) -> FEventRange
+        // Copy FAnimNotifyEvent instead of scaling in place as a pose can be reused on both sides of a blend.
+        const auto MixEvents = [](const FEventRange& A, float MulA, const FEventRange& B, float MulB, bool bSum) -> FEventRange
         {
-            if (A.IsEmpty())
+            const uint16 Start = (uint16)EventScratch.size();
+            const auto Append = [&](const FEventRange& Range, float Mul)
             {
-                return B;
-            }
-            if (B.IsEmpty())
-            {
-                return A;
-            }
-            return FEventRange{ Math::Min(A.Start, B.Start), Math::Max(A.End, B.End) };
-        };
+                for (uint16 i = Range.Start; i < Range.End && i < Start; ++i)
+                {
+                    FAnimNotifyEvent Event = EventScratch[i];
+                    Event.Weight *= Mul;
 
-        const auto ScaleEventWeights = [](const FEventRange& Range, float Mul)
-        {
-            for (uint16 i = Range.Start; i < Range.End && i < (uint16)EventScratch.size(); ++i)
-            {
-                EventScratch[i].Weight *= Mul;
-            }
+                    FAnimNotifyEvent* Same = nullptr;
+                    for (uint16 j = Start; j < (uint16)EventScratch.size(); ++j)
+                    {
+                        const FAnimNotifyEvent& Other = EventScratch[j];
+                        if (Other.Notify == Event.Notify && Other.State == Event.State && Other.Animation == Event.Animation
+                            && Other.Type == Event.Type && Other.Name == Event.Name && Other.Track == Event.Track)
+                        {
+                            Same = &EventScratch[j];
+                            break;
+                        }
+                    }
+
+                    if (Same == nullptr)
+                    {
+                        EventScratch.push_back(Event);
+                    }
+                    else
+                    {
+                        Same->Weight = bSum ? Same->Weight + Event.Weight : Math::Max(Same->Weight, Event.Weight);
+                    }
+                }
+            };
+
+            Append(A, MulA);
+            Append(B, MulB);
+            return FEventRange{ Start, (uint16)EventScratch.size() };
         };
 
         const auto ReadScalar = [&](uint16 Reg, float Default) -> float
         {
             return Reg < NumScalar ? Scalars[Reg] : Default;
-        };
-
-        const auto DeltaOf = [&](uint16 Reg) -> FRootMotionDelta
-        {
-            return Reg < NumPose ? PoseDeltas[Reg] : FRootMotionDelta();
-        };
-
-        const auto EventsOf = [&](uint16 Reg) -> FEventRange
-        {
-            return Reg < NumPose ? PoseEvents[Reg] : FEventRange();
-        };
-
-        const auto SetPoseTags = [&](uint16 Reg, const FRootMotionDelta& Delta, const FEventRange& Events)
-        {
-            if (Reg < NumPose)
-            {
-                PoseDeltas[Reg] = Delta;
-                PoseEvents[Reg] = Events;
-            }
         };
 
         // Lets a blend refine the group's blended duration and track from its alpha, consumed next update.
@@ -462,21 +492,63 @@ namespace Lumina
             const FSyncTrack* Track = nullptr;
         };
 
-        thread_local TVector<FSyncTag> ClockSync;
-        thread_local TVector<FSyncTag> PoseSync;
-        ClockSync.assign(NumScalar, FSyncTag());
-        PoseSync.assign(NumPose, FSyncTag());
+        // An advanced clock tags its scalar, and the sample that reads that scalar adopts the tags.
+        struct FClockTag
+        {
+            FRootMotionDelta Delta;
+            FEventRange      Events;
+            FSyncTag         Sync;
+        };
+
+        // Writing a pose register records which task produces it, and reading one wires a dependency.
+        struct FPoseTag
+        {
+            int16            Task = FAnimTask::NoTask;
+            FRootMotionDelta Delta;
+            FEventRange      Events;
+            FSyncTag         Sync;
+        };
+
+        thread_local TCallScratch<FClockTag> ClockTags;
+        thread_local TCallScratch<FPoseTag>  PoseTags;
+        ClockTags.BeginCall(NumScalar);
+        PoseTags.BeginCall(NumPose);
+
+        const auto ClockTagOf = [&](uint16 Reg) -> const FClockTag&
+        {
+            return Reg < NumScalar ? ClockTags.Read(Reg) : ClockTags.DefaultEntry;
+        };
+
+        const auto DeltaOf = [&](uint16 Reg) -> FRootMotionDelta
+        {
+            return Reg < NumPose ? PoseTags.Read(Reg).Delta : FRootMotionDelta();
+        };
+
+        const auto EventsOf = [&](uint16 Reg) -> FEventRange
+        {
+            return Reg < NumPose ? PoseTags.Read(Reg).Events : FEventRange();
+        };
+
+        const auto SetPoseTags = [&](uint16 Reg, const FRootMotionDelta& Delta, const FEventRange& Events)
+        {
+            if (Reg < NumPose)
+            {
+                FPoseTag& Tag = PoseTags.Write(Reg);
+                Tag.Delta  = Delta;
+                Tag.Events = Events;
+            }
+        };
 
         const auto SyncOf = [&](uint16 Reg) -> FSyncTag
         {
-            return Reg < NumPose ? PoseSync[Reg] : FSyncTag();
+            return Reg < NumPose ? PoseTags.Read(Reg).Sync : FSyncTag();
         };
 
         const auto SetPoseSync = [&](uint16 Reg, const FSyncTag& Tag)
         {
             if (Reg < NumPose)
             {
-                PoseSync[Reg] = Tag;
+                PoseTags.Write(Reg).Sync = Tag;
             }
         };
 
@@ -496,9 +568,19 @@ namespace Lumina
         // Every op that blends poses blends the curves identically, so a value tracks its branch weight.
         const SIZE_T NumCurves = Graph->CurveNames.size();
 
-        thread_local TVector<float> PoseCurves;
-        thread_local TVector<float> CurveScratch;
-        PoseCurves.assign(NumPose * NumCurves, 0.0f);
+        // A register's curve row is zeroed the first time this call touches it rather than every row up front.
+        thread_local TVector<float>  PoseCurves;
+        thread_local TVector<uint32> PoseCurveStamps;
+        thread_local TVector<float>  CurveScratch;
+        if (PoseCurves.size() < NumPose * NumCurves)
+        {
+            PoseCurves.resize(NumPose * NumCurves);
+        }
+        if (PoseCurveStamps.size() < NumPose)
+        {
+            PoseCurveStamps.resize(NumPose, 0u);
+        }
+        const uint32 CurveStamp = PoseTags.Stamp;
         CurveScratch.assign(NumCurves, 0.0f);
 
         if (!State.CurveValues.empty())
@@ -508,7 +590,17 @@ namespace Lumina
 
         const auto CurvesOf = [&](uint16 Reg) -> float*
         {
-            return (NumCurves > 0 && Reg < NumPose) ? PoseCurves.data() + (SIZE_T)Reg * NumCurves : nullptr;
+            if (NumCurves == 0 || Reg >= NumPose)
+            {
+                return nullptr;
+            }
+            float* Row = PoseCurves.data() + (SIZE_T)Reg * NumCurves;
+            if (PoseCurveStamps[Reg] != CurveStamp)
+            {
+                Memory::Memset(Row, 0, NumCurves * sizeof(float));
+                PoseCurveStamps[Reg] = CurveStamp;
+            }
+            return Row;
         };
 
         const auto SampleClipCurvesInto = [&](float* RESTRICT Dst, const CAnimation* Clip, const FAnimGraphClipCurveMap* Map, float Time)
@@ -694,9 +786,9 @@ namespace Lumina
         // Reading a never-written register wires a bind-pose leaf, so malformed graphs degrade cleanly.
         const auto PoseTaskFor = [&](uint16 Reg) -> int16
         {
-            if (Reg < NumPose && PoseTasks[Reg] != FAnimTask::NoTask)
+            if (Reg < NumPose && PoseTags.Read(Reg).Task != FAnimTask::NoTask)
             {
-                return PoseTasks[Reg];
+                return PoseTags.Read(Reg).Task;
             }
             FAnimTask Ref;
             Ref.Type = EAnimTaskType::ReferencePose;
@@ -707,7 +799,7 @@ namespace Lumina
         {
             if (Reg < NumPose)
             {
-                PoseTasks[Reg] = TaskIdx;
+                PoseTags.Write(Reg).Task = TaskIdx;
             }
         };
 
@@ -764,11 +856,11 @@ namespace Lumina
 
             // Any matching edge when stable, only interruptible ones mid-transition, first passing edge wins.
             const bool bTransitioning = Out.From >= 0;
-            for (const FAnimGraphTransition& Transition : SM.Transitions)
+            const auto TryTransition = [&](const FAnimGraphTransition& Transition) -> bool
             {
                 if (bTransitioning && !Transition.bCanInterrupt)
                 {
-                    continue;
+                    return false;
                 }
                 const bool bFromMatches = (Transition.FromState == Out.Current) || (Transition.FromState < 0);
                 if (!bFromMatches ||
@@ -776,15 +868,40 @@ namespace Lumina
                     Transition.ToState < 0 ||
                     Transition.ToState >= NumStates)
                 {
-                    continue;
+                    return false;
                 }
-                if (Detail::EvalTransitionCondition(Transition, Graph, State.Parameters, TransitionContext))
+                if (!Detail::EvalTransitionCondition(Transition, Graph, State.Parameters, TransitionContext))
                 {
-                    Out.From       = Out.Current;
-                    Out.Current    = Transition.ToState;
-                    Inert.Duration = Math::Max(Transition.BlendDuration, 0.0f);
-                    Out.bStart     = true;
-                    break;
+                    return false;
+                }
+                Out.From       = Out.Current;
+                Out.Current    = Transition.ToState;
+                Inert.Duration = Math::Max(Transition.BlendDuration, 0.0f);
+                Out.bStart     = true;
+                return true;
+            };
+
+            // The per-state table skips every edge leaving some other state, and a graph built without it scans them all.
+            if (SM.TransitionsByStateStart.size() == (SIZE_T)NumStates + 1)
+            {
+                const uint32 First = SM.TransitionsByStateStart[Out.Current];
+                const uint32 End   = SM.TransitionsByStateStart[Out.Current + 1];
+                for (uint32 i = First; i < End; ++i)
+                {
+                    if (TryTransition(SM.Transitions[SM.TransitionsByState[i]]))
+                    {
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                for (const FAnimGraphTransition& Transition : SM.Transitions)
+                {
+                    if (TryTransition(Transition))
+                    {
+                        break;
+                    }
                 }
             }
             return Out;
@@ -934,10 +1051,12 @@ namespace Lumina
                     const float Duration = Clip ? Clip->GetDuration() : 0.0f;
 
                     // Seeding waits for a clip, so a dynamic clip that resolves late still starts where it was asked to.
+                    bool bStartedThisUpdate = false;
                     if (Clip != nullptr && SeededSlot < NumState && State.StateSlots[SeededSlot] < 0.5f)
                     {
                         State.StateSlots[SeededSlot] = 1.0f;
                         State.StateSlots[StateIdx]   = Math::Clamp(ReadScalar(StartPosReg, 0.0f), 0.0f, Duration);
+                        bStartedThisUpdate = true;
                     }
 
                     const float PrevClock = State.StateSlots[StateIdx];
@@ -1018,7 +1137,7 @@ namespace Lumina
 
                         if (bSynced)
                         {
-                            ClockSync[DstClock] = FSyncTag{ (int32)SyncGroup, Duration, &Clip->GetSyncTrack() };
+                            ClockTags.Write(DstClock).Sync = FSyncTag{ (int32)SyncGroup, Duration, &Clip->GetSyncTrack() };
                         }
 
                         // bHasMotion stays set even on a paused frame, so the branch keeps reading as root-motion driven.
@@ -1032,15 +1151,17 @@ namespace Lumina
                                                                          PrevSampleTime, Clock, bLooping, Duration);
                             }
                             ClipDelta.bHasMotion   = true;
-                            ClockDeltas[DstClock] = ClipDelta;
+                            ClockTags.Write(DstClock).Delta = ClipDelta;
                         }
 
                         // Point notifies crossed by this advance, tagged the same way.
                         if (OutEvents != nullptr && Clip != nullptr && Clock != PrevSampleTime && Clip->HasNotifies())
                         {
+                            // Crossing is (Prev, Cur], so a just-started clip would never fire a notify sitting on its start.
+                            const float NotifyFromTime = bStartedThisUpdate ? PrevSampleTime - 1e-4f : PrevSampleTime;
                             const uint16 EventStart = (uint16)EventScratch.size();
-                            AnimEvents::CollectTriggeredNotifies(Clip, PrevSampleTime, Clock, bLooping, 1.0f, EventScratch);
-                            ClockEvents[DstClock] = { EventStart, (uint16)EventScratch.size() };
+                            AnimEvents::CollectTriggeredNotifies(Clip, NotifyFromTime, Clock, bLooping, 1.0f, EventScratch);
+                            ClockTags.Write(DstClock).Events = { EventStart, (uint16)EventScratch.size() };
                         }
                     }
                     if (DstFinished < NumScalar)
@@ -1081,10 +1202,9 @@ namespace Lumina
                                      Task.Time);
 
                 // Adopt the clock's root-motion / event / sync tags onto the sampled pose.
-                SetPoseTags(Dst,
-                            TimeReg < NumScalar ? ClockDeltas[TimeReg] : FRootMotionDelta(),
-                            TimeReg < NumScalar ? ClockEvents[TimeReg] : FEventRange());
-                SetPoseSync(Dst, TimeReg < NumScalar ? ClockSync[TimeReg] : FSyncTag());
+                const FClockTag& Clock = ClockTagOf(TimeReg);
+                SetPoseTags(Dst, Clock.Delta, Clock.Events);
+                SetPoseSync(Dst, Clock.Sync);
                 break;
             }
 
@@ -1340,12 +1460,10 @@ namespace Lumina
                 SetPoseTask(Dst, OutTasks.Add(Task));
 
                 const float BlendAlpha = Math::Clamp(Task.Alpha, 0.0f, 1.0f);
-                ScaleEventWeights(EventsOf(A), 1.0f - BlendAlpha);
-                ScaleEventWeights(EventsOf(B), BlendAlpha);
                 LerpCurves(Dst, A, B, BlendAlpha);
                 SetPoseTags(Dst,
                             RootMotion::BlendRootMotion(DeltaOf(A), DeltaOf(B), BlendAlpha),
-                            UnionEvents(EventsOf(A), EventsOf(B)));
+                            MixEvents(EventsOf(A), 1.0f - BlendAlpha, EventsOf(B), BlendAlpha, true));
 
                 // Consumed next update, so the weights are one frame latent.
                 const FSyncTag SyncA = SyncOf(A);
@@ -1387,7 +1505,7 @@ namespace Lumina
                 SetPoseTask(Dst, OutTasks.Add(Task));
 
                 // A layered blend keeps the base's root motion, while events from both layers fire at full weight.
-                SetPoseTags(Dst, DeltaOf(A), UnionEvents(EventsOf(A), EventsOf(B)));
+                SetPoseTags(Dst, DeltaOf(A), MixEvents(EventsOf(A), 1.0f, EventsOf(B), 1.0f, false));
                 SetPoseSync(Dst, SyncOf(A));
                 LerpCurves(Dst, A, B, Math::Clamp(Task.Alpha, 0.0f, 1.0f));
                 break;
@@ -1915,8 +2033,8 @@ namespace Lumina
                 Task.Alpha = ReadScalar(Alpha, 0.0f);
                 SetPoseTask(Dst, OutTasks.Add(Task));
 
-                ScaleEventWeights(EventsOf(Delta), Math::Clamp(Task.Alpha, 0.0f, 1.0f));
-                SetPoseTags(Dst, DeltaOf(Base), UnionEvents(EventsOf(Base), EventsOf(Delta)));
+                SetPoseTags(Dst, DeltaOf(Base),
+                            MixEvents(EventsOf(Base), 1.0f, EventsOf(Delta), Math::Clamp(Task.Alpha, 0.0f, 1.0f), false));
                 SetPoseSync(Dst, SyncOf(Base));
                 AddCurves(Dst, Base, Delta, Math::Clamp(Task.Alpha, 0.0f, 1.0f));
                 break;
@@ -2291,14 +2409,18 @@ namespace Lumina
                     Current = OutTasks.Add(Combine);
 
                     // A montage curve whose name the graph does not carry has no slot to land in.
-                    if (float* DstCurves = CurvesOf(Dst))
+                    float* DstCurves = CurvesOf(Dst);
+                    const FAnimGraphClipCurveMap* MontageCurveMap = DstCurves != nullptr ? DynamicClipCurveMapFor(Contribution.Clip) : nullptr;
+                    if (MontageCurveMap != nullptr)
                     {
-                        for (const FAnimationCurve& Curve : Contribution.Clip->GetCurves())
+                        const TVector<FAnimationCurve>& Curves = Contribution.Clip->GetCurves();
+                        const SIZE_T Count = Math::Min(Curves.size(), MontageCurveMap->Slots.size());
+                        for (SIZE_T i = 0; i < Count; ++i)
                         {
-                            const int32 Slot = Graph->FindCurveIndex(Curve.Name);
+                            const int32 Slot = MontageCurveMap->Slots[i];
                             if (Slot != Constants::kIndexNone)
                             {
-                                const float Value = Curve.Curve.Evaluate(Contribution.ClipTime);
+                                const float Value = Curves[i].Curve.Evaluate(Contribution.ClipTime);
                                 DstCurves[Slot] += bAdditive ? Value * Alpha : (Value - DstCurves[Slot]) * Alpha;
                             }
                         }
@@ -2321,7 +2443,7 @@ namespace Lumina
 
                     if (!bAdditive)
                     {
-                        ScaleEventWeights(CurrentEvents, 1.0f - Alpha);
+                        CurrentEvents = MixEvents(CurrentEvents, 1.0f - Alpha, FEventRange(), 0.0f, true);
                     }
                 }
 
@@ -2339,6 +2461,7 @@ namespace Lumina
             }
             }
         }
+
 
         // A graph with no Output still yields a bind pose, so the mesh never keeps stale matrices.
         if (OutTasks.OutputTask == FAnimTask::NoTask)

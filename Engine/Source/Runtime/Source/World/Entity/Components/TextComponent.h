@@ -4,6 +4,7 @@
 #include "Containers/String.h"
 #include "Core/Math/Math.h"
 #include "Core/Object/ObjectHandleTyped.h"
+#include "Renderer/RenderLayers.h"
 #include "TextComponent.generated.h"
 
 namespace Lumina
@@ -92,7 +93,11 @@ namespace Lumina
         PROPERTY(Editable, Category = "Text")
         bool bDepthTest = true;
 
-        //~ Script setters (reflected fields aren't directly assignable from Lua). Font is optional -- a null
+        // Drawn by any camera whose CullMask shares one of these layers.
+        PROPERTY(Editable, Category = "Rendering")
+        SRenderLayerMask RenderLayers;
+
+        //~ Script setters (reflected fields aren't directly assignable from scripts). Font is optional -- a null
         //  font falls back to the engine default world-text font (CFontManager).
 
         FUNCTION()

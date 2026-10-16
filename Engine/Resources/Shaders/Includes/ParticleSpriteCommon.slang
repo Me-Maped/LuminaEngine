@@ -1,7 +1,6 @@
 #pragma once
 #include "ParticleSimCommon.slang"
-
-// Billboard expansion shared by the built-in particle shaders and the Particle material template.
+#include "Triplanar.slang"
 
 // Must match EParticleFacingMode in ParticleSystem.h.
 static const uint PARTICLE_FACING_CAMERA   = 0u;
@@ -31,8 +30,8 @@ static const uint PARTICLE_RENDER_LIT = 1u << 8u;
 // Mirrors FParticlePushConstants in DefaultSceneRenderer.cpp; every particle pipeline pushes this block.
 struct FParticlePushConstants
 {
-    GPUSpan<FGPUParticle> Particles;   // the simulated particle array
-    float4 Tint;                   // xyz tint rgb, w intensity multiplier, kept 16-byte aligned since a vector must not straddle one
+    GPUSpan<FGPUParticle> Particles;
+    float4 Tint;                   // rgb tint, w intensity multiplier
     uint   TextureIndex;           // bindless 2D SRV (0 = default sprite)
     uint   FacingMode;             // EParticleFacingMode
     float  VelocityStretch;        // extra length along velocity, in seconds of travel
@@ -68,13 +67,27 @@ struct FParticlePushConstants
     float  CameraFadeDistance;     // meters from the camera inside which a sprite fades away; 0 disables it
     float  Pad0;
 };
-FParticlePushConstants* Pass() { return GetPassArgs<FParticlePushConstants>(); }
+// One multi-draw covers consecutive emitters on a pipeline, and each draw reads its own entry by draw index.
+struct FParticleDrawBatch
+{
+    GPUSpan<FParticlePushConstants> Draws;
+};
+
+static FParticlePushConstants* gParticleDraw;
+
+FParticlePushConstants* Pass() { return gParticleDraw; }
+
+// Every particle stage calls this first, the vertex stage with SV_DrawIndex and the pixel stage with the index it was handed.
+void BeginParticleDraw(uint DrawIndex)
+{
+    gParticleDraw = GetPassArgs<FParticleDrawBatch>().Draws.At(DrawIndex);
+}
 
 // The draw covers VertsPerParticle vertices per particle, and a sorted draw only the live ones in order.
 uint ParticleSlotForVertex(uint VertexIndex)
 {
     const uint Ordinal = VertexIndex / max(Pass().VertsPerParticle, 1u);
-    return (Pass().bSorted != 0u) ? SpanGet(&Pass().SortedIndices, Ordinal) : Ordinal;
+    return (Pass().bSorted != 0u) ? Pass().SortedIndices.Get(Ordinal) : Ordinal;
 }
 
 bool IsParticleAlive(FGPUParticle P)
@@ -128,13 +141,11 @@ float4 ParticleToClip(float3 WorldPos)
     return WorldToClip(WorldPos);
 }
 
-// A stable 0..1 per particle from its spawn seed.
 float ParticleSeedRandom(FGPUParticle P)
 {
     return frac(P.Seed * 0.61803398875 + 0.5);
 }
 
-// Cell of the sprite sheet this particle shows now, per the emitter's flipbook mode.
 float2 ParticleFlipbookUV(FGPUParticle P, float2 UV)
 {
     const uint FrameCount = max(Pass().SubUVColumns * Pass().SubUVRows, 1u);
@@ -171,15 +182,15 @@ float ParticleSoftFade(float4 SvPosition)
     const float CameraFade  = Pass().CameraFadeDistance;
     float       Fade        = CameraFade > 0.0 ? smoothstep(CameraFade * 0.3, CameraFade, SpriteDepth) : 1.0;
 
-    const float FadeDistance = Pass().SoftFadeDistance;
-    const uint  DepthIndex   = Scene().SceneDepthIndex;
-    if (FadeDistance <= 0.0 || DepthIndex == 0xFFFFFFFFu)
+    const float      FadeDistance = Pass().SoftFadeDistance;
+    const FTexture2D SceneDepth = Scene().SceneDepth;
+    if (FadeDistance <= 0.0 || !SceneDepth.IsValid())
     {
         return Fade;
     }
 
     const float2 UV       = SvPosition.xy / float2(GetScreenSize());
-    const float  SceneRaw = SampleTexture2DLevel(DepthIndex, SAMPLER_POINT_CLAMP, UV, 0.0).r;
+    const float  SceneRaw = SceneDepth.SampleLevel(Samplers::PointClamp, UV, 0.0).r;
     return Fade * saturate((LinearizeSceneDepth(SceneRaw) - SpriteDepth) / FadeDistance);
 }
 
@@ -190,7 +201,7 @@ float ReadParticleAttr(uint ParticleIndex, int Slot, float Fallback)
     {
         return Fallback;
     }
-    return SpanGet(&Pass().Attributes, ParticleIndex * Pass().AttrFloats + (uint)Slot);
+    return Pass().Attributes.Get(ParticleIndex * Pass().AttrFloats + (uint)Slot);
 }
 
 static const float2 kParticleQuadPositions[6] =
@@ -235,7 +246,7 @@ FParticleSprite ExpandParticleSprite(uint VertexIndex, out FGPUParticle OutParti
 
     const uint ParticleIndex = ParticleSlotForVertex(VertexIndex);
 
-    FGPUParticle P = SpanGet(&Pass().Particles, ParticleIndex);
+    FGPUParticle P = Pass().Particles.Get(ParticleIndex);
     P.Position = ParticleDrawPosition(P);
     OutParticle = P;
 
@@ -265,7 +276,6 @@ FParticleSprite ExpandParticleSprite(uint VertexIndex, out FGPUParticle OutParti
     float3 QuadCenter = P.Position;
     // A directional quad ignores rotation, which would swing it off the axis the mode exists to align to.
     bool bDirectional = false;
-    // Multipliers on the simulated size, so an emitter declaring neither behaves exactly as before.
     float2 Extent = float2(P.Size, P.Size);
     Extent.x *= ReadParticleAttr(ParticleIndex, Pass().AttrSlotSizeScaleX, 1.0);
     Extent.y *= ReadParticleAttr(ParticleIndex, Pass().AttrSlotSizeScaleY, 1.0);
@@ -279,7 +289,6 @@ FParticleSprite ExpandParticleSprite(uint VertexIndex, out FGPUParticle OutParti
 
         const float3 Delta = P.Position - Prev;
         const float  Len   = length(Delta);
-        // A particle that has not moved has no segment to span, so it draws as a plain sprite this frame.
         if (Len > 1e-5)
         {
             const float3 Dir = Delta / Len;
@@ -303,7 +312,6 @@ FParticleSprite ExpandParticleSprite(uint VertexIndex, out FGPUParticle OutParti
     else if (Pass().FacingMode == PARTICLE_FACING_VELOCITY)
     {
         const float Speed = length(P.Velocity);
-        // A particle with no velocity has no direction to align to, so it stays camera-facing.
         if (Speed > 1e-5)
         {
             const float3 Dir = P.Velocity / Speed;
@@ -377,7 +385,6 @@ FParticleSprite ExpandParticleSprite(uint VertexIndex, out FGPUParticle OutParti
         Normal = -Normal;
     }
 
-    // The sub-UV frame advances with age, so a flipbook needs no per-particle storage.
     const float2 UV = ParticleFlipbookUV(P, kParticleQuadUVs[QuadIndex]);
 
     Sprite.WorldPosition = WorldPos;
@@ -403,6 +410,7 @@ struct FParticleMaterialVertexOutput
     float3 Velocity      : PARTICLE_VELOCITY;
     float3 Center        : PARTICLE_CENTER;   // the particle itself, not the expanded corner
     float4 SizeLifeRand  : PARTICLE_LIFE;     // xy extent, z relative time, w per-particle random
+    nointerpolation uint DrawIndex : PARTICLE_DRAW;
     float4 Position      : SV_Position;
 };
 

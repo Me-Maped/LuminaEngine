@@ -30,6 +30,7 @@
 #include "Core/Delegates/ScriptDelegate.h"
 #include "Core/Object/InstancedStruct.h"
 #include "Scripting/ScriptDelegateTestTypes.h"
+#include "ScriptTestUtil.h"
 
 using namespace Lumina;
 
@@ -91,18 +92,9 @@ namespace
         return Field;
     }
 
-    Scripting::FScriptExportField ScalarField(const char* Name, EPropertyTypeFlags Kind)
-    {
-        Scripting::FScriptExportField Field;
-        Field.Name = FName(Name);
-        Field.Type = MakeShared<Scripting::FScriptExportType>();
-        Field.Type->Kind = Kind;
-        return Field;
-    }
-
     Scripting::FScriptExportField EntityField(const char* Name)
     {
-        return ScalarField(Name, EPropertyTypeFlags::Entity);
+        return ScriptTest::ScalarField(Name, EPropertyTypeFlags::Entity);
     }
 
     Scripting::FScriptExportField ByteEnumField(const char* Name, const char* EnumName)
@@ -113,10 +105,8 @@ namespace
         Field.Type->Kind = EPropertyTypeFlags::Enum;
         Field.Type->EnumName = FName(EnumName);
         Field.Type->EnumUnderlying = EPropertyTypeFlags::UInt8;
-        Field.Type->EnumEntries.push_back({FName("Zero"), 0});
-        Field.Type->EnumEntries.push_back({FName("One"), 1});
-        Field.Type->EnumEntries.push_back({FName("Two"), 2});
-        Field.Type->EnumEntries.push_back({FName("Highest"), 255});
+        ScriptTest::PublishEnum(EnumName, EPropertyTypeFlags::UInt8,
+            { {FName("Zero"), 0}, {FName("One"), 1}, {FName("Two"), 2}, {FName("Highest"), 255} });
         return Field;
     }
 
@@ -159,7 +149,7 @@ namespace
     FFunction* MintFrame(const char* ClassName, const Scripting::FScriptExportSchema& ParamSchema,
         const char* FunctionName = "Marshal", int32 ReturnIndex = -1)
     {
-        static const bool bReflectionReady = [] { ProcessNewlyLoadedCObjects(); return true; }();
+        static const bool bReflectionReady = [] { RegisterPendingTypes(); return true; }();
         (void)bReflectionReady;
 
         CScriptClass* Class = FScriptableRegistry::Mint(ClassName, "CScriptableTest");
@@ -169,7 +159,7 @@ namespace
         }
 
         Scripting::FScriptExportSchema Properties;
-        Properties.Fields.push_back(ScalarField("Anchor", EPropertyTypeFlags::Int32));
+        Properties.Fields.push_back(ScriptTest::ScalarField("Anchor", EPropertyTypeFlags::Int32));
         Scripting::AppendScriptPropertiesToClass(Class, Properties);
 
         CScriptStruct* Record = Cast<CScriptStruct>(Class->LayoutRecord.Get());
@@ -266,7 +256,7 @@ TEST_F(FFrameMarshalTest, AByteEnumIsReadAtItsOwnWidth)
 
     Scripting::FScriptExportSchema Params;
     Params.Fields.push_back(ByteEnumField("Channel", "FrameMarshal_Channel"));
-    Params.Fields.push_back(ScalarField("After", EPropertyTypeFlags::UInt8));
+    Params.Fields.push_back(ScriptTest::ScalarField("After", EPropertyTypeFlags::UInt8));
 
     FFunction* Function = MintFrame("FrameMarshal_ReadEnum", Params);
     ASSERT_NE(Function, nullptr);
@@ -291,7 +281,7 @@ TEST_F(FFrameMarshalTest, AByteEnumWriteStaysInsideItsSlot)
 
     Scripting::FScriptExportSchema Params;
     Params.Fields.push_back(ByteEnumField("Channel", "FrameMarshal_WriteChannel"));
-    Params.Fields.push_back(ScalarField("After", EPropertyTypeFlags::UInt8));
+    Params.Fields.push_back(ScriptTest::ScalarField("After", EPropertyTypeFlags::UInt8));
 
     FFunction* Function = MintFrame("FrameMarshal_WriteEnum", Params);
     ASSERT_NE(Function, nullptr);
@@ -337,7 +327,7 @@ TEST_F(FFrameMarshalTest, ASlotTooNarrowForItsMirrorIsRefused)
     ASSERT_NE(Bind, nullptr);
 
     Scripting::FScriptExportSchema Params;
-    Params.Fields.push_back(ScalarField("NotAVector", EPropertyTypeFlags::Float));
+    Params.Fields.push_back(ScriptTest::ScalarField("NotAVector", EPropertyTypeFlags::Float));
 
     FFunction* Function = MintFrame("FrameMarshal_Mismatch", Params);
     ASSERT_NE(Function, nullptr);
@@ -456,7 +446,7 @@ namespace
 {
     FFunction* FindOptionalEcho()
     {
-        static const bool bReflectionReady = [] { ProcessNewlyLoadedCObjects(); return true; }();
+        static const bool bReflectionReady = [] { RegisterPendingTypes(); return true; }();
         (void)bReflectionReady;
 
         return CScriptableTest::StaticClass()->FindFunction(FName("OnEchoOptional"));
@@ -580,7 +570,7 @@ namespace
 {
     FFunction* FindVectorAppend()
     {
-        static const bool bReflectionReady = [] { ProcessNewlyLoadedCObjects(); return true; }();
+        static const bool bReflectionReady = [] { RegisterPendingTypes(); return true; }();
         (void)bReflectionReady;
 
         return CScriptableTest::StaticClass()->FindFunction(FName("OnAppendSum"));
@@ -793,6 +783,32 @@ TEST_F(FFrameMarshalTest, ANullableResolvesToAnOptionalOverItsPayload)
     EXPECT_EQ(PayloadKind, (int32)EPropertyTypeFlags::Float);
 }
 
+TEST_F(FFrameMarshalTest, EachScriptStructFormRegistersOnceWithOneHandle)
+{
+    auto* Compile = (int32(*)())DotNet::ResolveManagedExport("Test_CompileScriptStructForms");
+    ASSERT_NE(Compile, nullptr);
+
+    // Nibbles are root, extension, component; bits are native backed, registered once, handle shape, NativeName.
+    int32 Failures = Compile();
+    EXPECT_EQ(Failures, 0) << "failure bits 0x" << std::hex << Failures;
+}
+
+TEST_F(FFrameMarshalTest, InstancedStructGetThrowsAndTryGetReportsAMismatch)
+{
+    auto* Run = (int32(*)(void*, float))DotNet::ResolveManagedExport("Test_InstancedStructGetTryGet");
+    ASSERT_NE(Run, nullptr);
+
+    FInstancedStruct Instanced;
+    CStruct* Opaque = FindObject<CStruct>(FName("SInteropOpaqueStruct"));
+    ASSERT_NE(Opaque, nullptr);
+    Instanced.InitializeAs(Opaque);
+
+    // Bits are matching TryGet, mismatched TryGet, mismatched Get throwing, and an unbound slot.
+    int32 Failures = Run(&Instanced, 4.5f);
+    EXPECT_EQ(Failures, 0) << "failure bits 0x" << std::hex << Failures;
+    EXPECT_FLOAT_EQ(static_cast<SInteropOpaqueStruct*>(Instanced.GetMutableMemory())->Value, 4.5f) << "a write through Get lands in place";
+}
+
 TEST_F(FFrameMarshalTest, AScriptMintedOptionalRoundTripsThroughTheDispatcher)
 {
     auto* MakeTarget = (FMakeTargetFn)DotNet::ResolveManagedExport("Test_MakeMarshalTarget");
@@ -971,7 +987,7 @@ TEST_F(FFrameMarshalTest, AScriptCallbackRunsOnceAndReleasesItsHandle)
     ASSERT_NE(Bind, nullptr);
     ASSERT_NE(Result, nullptr);
 
-    FScriptCallback Callback;
+    SScriptCallback Callback;
     Callback.Token = Bind();
     ASSERT_TRUE(Callback.IsBound());
 
@@ -998,7 +1014,7 @@ TEST_F(FFrameMarshalTest, ARepeatingScriptCallbackSurvivesEveryFireUntilReleased
     ASSERT_NE(Bind, nullptr);
     ASSERT_NE(Result, nullptr);
 
-    FScriptCallback Callback;
+    SScriptCallback Callback;
     Callback.Token = Bind();
     ASSERT_TRUE(Callback.IsBound());
 
@@ -1024,7 +1040,7 @@ TEST_F(FFrameMarshalTest, AScriptCallbackOwnerReleasesWhenTheThingHoldingItDies)
     ASSERT_NE(Bind, nullptr);
     ASSERT_NE(Result, nullptr);
 
-    FScriptCallback Callback;
+    SScriptCallback Callback;
     Callback.Token = Bind();
     ASSERT_TRUE(Callback.IsBound());
 
@@ -1042,7 +1058,7 @@ TEST_F(FFrameMarshalTest, AScriptCallbackOwnerReleasesWhenTheThingHoldingItDies)
 
 TEST_F(FFrameMarshalTest, AnUnboundScriptCallbackIsSafeToInvoke)
 {
-    FScriptCallback Unbound;
+    SScriptCallback Unbound;
     EXPECT_FALSE(Unbound.IsBound());
     Scripting::InvokeScriptCallback(Unbound, 7);
 }
@@ -1070,8 +1086,8 @@ TEST_F(FFrameMarshalTest, AWrapperToADestroyedObjectStillThrows)
     EXPECT_EQ(Probe(Wrapper, &bValid), 1) << "a live object must read through the fast path";
     EXPECT_EQ(bValid, 1);
 
-    FScopedStaleReferenceTolerance Tolerance;
-    GObjectArray.ReleaseStrongRef(Doomed);
+    Object::Internal::FScopedStaleReferenceTolerance Tolerance;
+    Object::Internal::ReleaseStrongRef(Doomed);
     ASSERT_EQ(Owner.Get(), nullptr) << "the object under test was not actually freed";
 
     EXPECT_EQ(Probe(Wrapper, &bValid), -1) << "a destroyed object must throw, not hand back freed memory";
@@ -1282,7 +1298,7 @@ TEST_F(FFrameMarshalTest, AnOpaqueStructParameterIsReadThroughAViewOverItsSlot)
     ASSERT_NE(Invoke, nullptr);
 
     Scripting::FScriptExportSchema Params;
-    Params.Fields.push_back(NativeStructField("Bone", "FAnimGraphBoneMaskBone"));
+    Params.Fields.push_back(NativeStructField("Bone", "SAnimGraphBoneMaskBone"));
     Params.Fields.push_back(ParamField("Weight", EPropertyTypeFlags::Float, EPropertyFlags::OutParam));
 
     FFunction* Function = MintFrame("FrameMarshal_StructView", Params, "MarshalStructView");
@@ -1292,7 +1308,7 @@ TEST_F(FFrameMarshalTest, AnOpaqueStructParameterIsReadThroughAViewOverItsSlot)
     ASSERT_NE(Target, nullptr);
 
     FFunctionFrame Frame(*Function);
-    Frame.At<FAnimGraphBoneMaskBone>(0).Weight = 0.75f;
+    Frame.At<SAnimGraphBoneMaskBone>(0).Weight = 0.75f;
     Invoke(Target, Function, Frame.GetMemory());
 
     EXPECT_FLOAT_EQ(Frame.At<float>(1), 0.75f) << "the struct view never reached the managed method";
@@ -1307,7 +1323,7 @@ TEST_F(FFrameMarshalTest, ResetClearsEveryCacheKeyedByAUserType)
     ASSERT_NE(Probe, nullptr);
 
     Scripting::FScriptExportSchema Params;
-    Params.Fields.push_back(NativeStructField("Bone", "FAnimGraphBoneMaskBone"));
+    Params.Fields.push_back(NativeStructField("Bone", "SAnimGraphBoneMaskBone"));
     Params.Fields.push_back(VectorField("Values", EPropertyTypeFlags::Float));
 
     FFunction* Function = MintFrame("FrameMarshal_CacheProbe", Params, "MarshalStructView");
@@ -1335,12 +1351,12 @@ TEST_F(FFrameMarshalTest, AnOpaqueStructCrossesAsAFunctionArgument)
     auto* Read = (FOpaqueArgFn)DotNet::ResolveManagedExport("Test_OpaqueStructArgument");
     ASSERT_NE(Read, nullptr);
 
-    FInteropOpaqueStruct Opaque;
+    SInteropOpaqueStruct Opaque;
     Opaque.Label = FName("abcd");
     Opaque.Value = 2.5f;
 
     EXPECT_FLOAT_EQ(Read(&Opaque), 6.5f) << "the callee did not see the struct the wrapper views";
-    const float Default = CInteropTestLibrary::ReadOpaqueValue(FInteropOpaqueStruct{});
+    const float Default = CInteropTestLibrary::ReadOpaqueValue(SInteropOpaqueStruct{});
     EXPECT_FLOAT_EQ(Read(nullptr), Default) << "a null wrapper has to stand in as a default, not crash";
 }
 
@@ -1367,7 +1383,7 @@ TEST_F(FFrameMarshalTest, ASlotViewBindsInPlaceRatherThanByWidth)
     auto* Probe = (FSlotViewFn)DotNet::ResolveManagedExport("Test_SlotViewBinds");
     ASSERT_NE(Probe, nullptr);
 
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
 
     struct FCase { const char* Struct; const char* Property; int32 bDelegate; };
     const FCase Cases[] =
@@ -1395,9 +1411,9 @@ TEST_F(FFrameMarshalTest, AMapCarriesAMarshalledKeyAndValue)
     auto* RoundTrip = (FMapRoundTripFn)DotNet::ResolveManagedExport("Test_MarshalledMapRoundTrip");
     ASSERT_NE(RoundTrip, nullptr);
 
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
 
-    FInteropOpaqueStruct Opaque;
+    SInteropOpaqueStruct Opaque;
     EXPECT_EQ(RoundTrip(&Opaque), 63) << "a map operation did not survive the round trip";
 
     EXPECT_EQ(Opaque.Weights.size(), 1u) << "native does not see what managed left behind";
@@ -1445,9 +1461,9 @@ TEST_F(FFrameMarshalTest, AnOptionalCarriesAMarshalledPayload)
     auto* RoundTrip = (FOptRoundTripFn)DotNet::ResolveManagedExport("Test_MarshalledOptionalRoundTrip");
     ASSERT_NE(RoundTrip, nullptr);
 
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
 
-    FInteropOpaqueStruct Opaque;
+    SInteropOpaqueStruct Opaque;
     EXPECT_EQ(RoundTrip(&Opaque), 15) << "an optional operation did not survive the round trip";
     EXPECT_FALSE(Opaque.Note.IsSet()) << "native still sees a payload managed reset";
 }
@@ -1495,7 +1511,7 @@ TEST_F(FFrameMarshalTest, AnAsyncScriptFunctionHandsBackATokenNativeCanPoll)
 
     Scripting::FScriptExportSchema Params;
     Params.Fields.push_back(ParamField("Value", EPropertyTypeFlags::Int32, EPropertyFlags::None));
-    Params.Fields.push_back(ScalarField("ReturnValue", EPropertyTypeFlags::UInt64));
+    Params.Fields.push_back(ScriptTest::ScalarField("ReturnValue", EPropertyTypeFlags::UInt64));
 
     FFunction* Function = MintFrame("FrameMarshal_Async", Params, "MarshalAsync", 1);
     ASSERT_NE(Function, nullptr);
@@ -1541,7 +1557,7 @@ TEST_F(FFrameMarshalTest, AFinishedAsyncScriptFunctionIsReapedOnTheTick)
 
     Scripting::FScriptExportSchema Params;
     Params.Fields.push_back(ParamField("Value", EPropertyTypeFlags::Int32, EPropertyFlags::None));
-    Params.Fields.push_back(ScalarField("ReturnValue", EPropertyTypeFlags::UInt64));
+    Params.Fields.push_back(ScriptTest::ScalarField("ReturnValue", EPropertyTypeFlags::UInt64));
 
     FFunction* Function = MintFrame("FrameMarshal_AsyncReap", Params, "MarshalAsync", 1);
     ASSERT_NE(Function, nullptr);
@@ -1581,7 +1597,7 @@ TEST_F(FFrameMarshalTest, AManagedHandlerReceivesEveryDelegateArgument)
     ASSERT_NE(Flags, nullptr);
     ASSERT_NE(Release, nullptr);
 
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
 
     SDelegateTestHost Host;
     ASSERT_EQ(Bind(&Host), 1) << "one of the generated accessors refused to bind";
@@ -1615,7 +1631,7 @@ TEST_F(FFrameMarshalTest, ABlittableBroadcastReachesManagedWithoutAllocating)
     ASSERT_NE(Release, nullptr);
     ASSERT_NE(Allocated, nullptr);
 
-    ProcessNewlyLoadedCObjects();
+    RegisterPendingTypes();
 
     SDelegateTestHost Host;
     ASSERT_EQ(Bind(&Host), 1);

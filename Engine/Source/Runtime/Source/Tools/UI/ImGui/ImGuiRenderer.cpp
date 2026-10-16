@@ -13,6 +13,7 @@
 
 #include "implot.h"
 #include "Paths/Paths.h"
+#include "Platform/Filesystem/PlatformFilesystem.h"
 #include "Tools/UI/ImGui/ImGuiAllocator.h"
 #include "Config/Config.h"
 #include "Config/EngineSettings.h"
@@ -289,9 +290,7 @@ namespace Lumina
     		ImFont* pFont = io.Fonts->AddFontFromFileTTF(Path.data(), FontSize, &FontConfig);
     		if (pFont == nullptr)
     		{
-    			PANIC("Failed to load font '{}'. Engine resources could not be resolved -- "
-    			      "LUMINA_DIR may be unset or pointing at the wrong directory. Run the engine's Setup.bat.",
-    			      Path.data());
+    			PANIC("Failed to load font '{}'. The engine's resources were not found beside this executable.", Path.data());
     		}
 		    ImGuiX::Font::GFonts[static_cast<uint8>(FontID)] = pFont;
 
@@ -299,7 +298,7 @@ namespace Lumina
     		IconFontConfig.GlyphMinAdvanceX = IconFontSize;
     		if (io.Fonts->AddFontFromFileTTF(IconFontFile.c_str(), IconFontSize, &IconFontConfig, IconRanges) == nullptr)
     		{
-    			LOG_ERROR("Failed to load icon font '{}'; editor icons will be missing. Check engine resources / LUMINA_DIR.", IconFontFile.c_str());
+    			LOG_ERROR("Failed to load icon font '{}'; editor icons will be missing. Check the engine's resources.", IconFontFile.c_str());
     		}
 
             // Merged last, so Latin keeps the primary face and icons keep their own. Merge-mode sources
@@ -340,7 +339,7 @@ namespace Lumina
     	CreateFontFromFile(FontFile_Regular, size24, size24, ImGuiX::Font::EFont::Large, ImVec2(0, 2));
     	CreateFontFromFile(FontFile_Bold, size24, size24, ImGuiX::Font::EFont::LargeBold, ImVec2(0, 2));
 
-    	// Monospace pair for code editors (Lua / RML / shaders).
+    	// Monospace pair for code editors (RML / shaders).
     	CreateFontFromFile(FontFile_Mono, size16, size18, ImGuiX::Font::EFont::Mono, ImVec2(0, 2));
     	CreateFontFromFile(FontFile_MonoBold, size16, size18, ImGuiX::Font::EFont::MonoBold, ImVec2(0, 2));
 
@@ -365,6 +364,19 @@ namespace Lumina
     	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable Docking
     	io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;       // Enable Multi-Viewport / Platform Windows
     	io.BackendFlags |= ImGuiBackendFlags_PlatformHasViewports;
+
+#if USING(WITH_EDITOR)
+    	// One layout for the whole editor, rather than an imgui.ini in whatever directory the editor was launched from.
+    	LayoutFilePath = Paths::GetEngineDirectory() + "/Editor/Config/EditorLayout.ini";
+    	Filesystem::MakeParentDirectoryTree(LayoutFilePath);
+    	if (!Filesystem::Exists(LayoutFilePath) && Filesystem::Exists("imgui.ini"))
+    	{
+    		Filesystem::Copy("imgui.ini", LayoutFilePath, false);
+    	}
+    	io.IniFilename = LayoutFilePath.c_str();
+#else
+    	io.IniFilename = nullptr;
+#endif
 
         ImGui::StyleColorsDark();
         ImGuiStyle& Style = ImGui::GetStyle();

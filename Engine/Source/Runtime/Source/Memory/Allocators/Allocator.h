@@ -62,6 +62,10 @@ namespace Lumina
             Memory::Free(Base);
             Base = nullptr;
         }
+        FLinearAllocator(const FLinearAllocator&) = delete;
+        FLinearAllocator& operator=(const FLinearAllocator&) = delete;
+        FLinearAllocator(FLinearAllocator&&) = delete;
+        FLinearAllocator& operator=(FLinearAllocator&&) = delete;
         
         void* Allocate(size_t Size, size_t Alignment) override
         {
@@ -96,14 +100,16 @@ namespace Lumina
     class RUNTIME_API FBlockLinearAllocator : public IAllocator
     {
         struct Block;
+        struct FLargeAllocation;
     public:
 
         // Snapshot of the allocation cursor. Restore to free everything allocated since,
         // without touching earlier allocations. The basis for FMemMark-style scopes.
         struct FMark
         {
-            Block*  MarkBlock  = nullptr;
-            SIZE_T  MarkOffset = 0;
+            Block*            MarkBlock  = nullptr;
+            SIZE_T            MarkOffset = 0;
+            FLargeAllocation* MarkLarge  = nullptr;
         };
 
         explicit FBlockLinearAllocator(const char* AllocatorName) noexcept
@@ -128,6 +134,8 @@ namespace Lumina
     
         ~FBlockLinearAllocator() override 
         { 
+            FreeLargeAllocationsUntil(nullptr);
+
             Block* Current = FirstBlock;
             while (Current)
             {
@@ -136,6 +144,10 @@ namespace Lumina
                 Current = Next;
             }
         }
+        FBlockLinearAllocator(const FBlockLinearAllocator&) = delete;
+        FBlockLinearAllocator& operator=(const FBlockLinearAllocator&) = delete;
+        FBlockLinearAllocator(FBlockLinearAllocator&&) = delete;
+        FBlockLinearAllocator& operator=(FBlockLinearAllocator&&) = delete;
 
         void* allocate(size_t n, int flags = 0)
         {
@@ -153,10 +165,10 @@ namespace Lumina
          
         void* Allocate(SIZE_T Size, SIZE_T Alignment) override
         {
-            // An oversized request cannot fit any block;
-            if (Size >= GetUsableBlockSize()) [[unlikely]]
+            // A count-sized array can outgrow any block, so it gets its own allocation, which the same rewind frees.
+            if (Size + Alignment > GetUsableBlockSize()) [[unlikely]]
             {
-                PANIC("FBlockLinearAllocator: {}-byte allocation exceeds usable block size {}", Size, GetUsableBlockSize());
+                return AllocateLarge(Size, Alignment);
             }
 
             SIZE_T CurrentPtr = reinterpret_cast<SIZE_T>(CurrentBlock->GetData() + CurrentOffset);
@@ -184,6 +196,7 @@ namespace Lumina
     
         void Reset() override
         {
+            FreeLargeAllocationsUntil(nullptr);
             CurrentBlock = FirstBlock;
             CurrentOffset = 0;
         }
@@ -191,13 +204,14 @@ namespace Lumina
         // Capture the current cursor; pair with RestoreToMark for scoped (pop-off) reuse.
         FMark GetMark() const
         {
-            return { CurrentBlock, CurrentOffset };
+            return { CurrentBlock, CurrentOffset, LargeAllocations };
         }
 
         // Rewind the cursor to a previously captured mark. Blocks past the mark stay
         // allocated and are reused by later Allocate calls (no free, no destructors).
         void RestoreToMark(const FMark& Mark)
         {
+            FreeLargeAllocationsUntil(Mark.MarkLarge);
             CurrentBlock  = Mark.MarkBlock ? Mark.MarkBlock : FirstBlock;
             CurrentOffset = Mark.MarkOffset;
         }
@@ -205,6 +219,8 @@ namespace Lumina
         /** Frees all blocks except the first, then resets. */
         void Compact()
         {
+            FreeLargeAllocationsUntil(nullptr);
+
             if (!FirstBlock)
             {
                 return;
@@ -306,6 +322,36 @@ namespace Lumina
         {
             return BlockSize - sizeof(Block);
         }
+
+        // Newest first, so a rewind frees from the head until it reaches the mark's.
+        struct FLargeAllocation
+        {
+            FLargeAllocation* Next;
+        };
+
+        void* AllocateLarge(SIZE_T Size, SIZE_T Alignment)
+        {
+            const SIZE_T HeaderAlignment = Alignment > alignof(FLargeAllocation) ? Alignment : alignof(FLargeAllocation);
+            const SIZE_T HeaderSize = (sizeof(FLargeAllocation) + HeaderAlignment - 1) & ~(HeaderAlignment - 1);
+
+            FLargeAllocation* Large = (FLargeAllocation*)Memory::Malloc(HeaderSize + Size, HeaderAlignment);
+            ASSERT(Large != nullptr);
+
+            Large->Next = LargeAllocations;
+            LargeAllocations = Large;
+            return reinterpret_cast<uint8*>(Large) + HeaderSize;
+        }
+
+        void FreeLargeAllocationsUntil(FLargeAllocation* Keep)
+        {
+            while (LargeAllocations != nullptr && LargeAllocations != Keep)
+            {
+                FLargeAllocation* Next = LargeAllocations->Next;
+                void* Raw = LargeAllocations;
+                Memory::Free(Raw);
+                LargeAllocations = Next;
+            }
+        }
         
         void AllocateNewBlock()
         {
@@ -336,6 +382,7 @@ namespace Lumina
         
         Block* FirstBlock = nullptr;
         Block* CurrentBlock = nullptr;
+        FLargeAllocation* LargeAllocations = nullptr;
         SIZE_T BlockSize;
         SIZE_T CurrentOffset;
         SIZE_T BlockCount;
@@ -385,6 +432,8 @@ namespace Lumina
 
         FMemMark(const FMemMark&)            = delete;
         FMemMark& operator=(const FMemMark&) = delete;
+        FMemMark(FMemMark&&) = delete;
+        FMemMark& operator=(FMemMark&&) = delete;
 
         void* Allocate(SIZE_T Size, SIZE_T Alignment = 16) { return Arena.Allocate(Size, Alignment); }
 

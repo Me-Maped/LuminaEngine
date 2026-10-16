@@ -25,7 +25,7 @@ public static unsafe class NativeBindings
         {
             try
             {
-                Native.EntityScriptMarkFaulted(Script.Handle);
+                Script.MarkFaulted();
                 Native.Log(ELogLevel.Warn, $"{Owner} stopped ticking because its {Event} threw. It still receives OnDetach.");
             }
             catch (Exception Secondary)
@@ -39,6 +39,12 @@ public static unsafe class NativeBindings
     public static void* Resolve(string Module, string EntryPoint)
     {
         return Resolve(Module, EntryPoint, 0);
+    }
+
+    // What a generated P/Invoke checks before its first call, so a missing or drifted export fails by name.
+    public static bool Bind(string Module, string EntryPoint, int ExpectedSignature)
+    {
+        return Resolve(Module, EntryPoint, ExpectedSignature) != null;
     }
 
     public static void* Resolve(string Module, string EntryPoint, int ExpectedSignature)
@@ -85,6 +91,13 @@ public static unsafe class NativeBindings
         return false;
     }
 
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    public static void ThrowUnbound(string EntryPoint)
+    {
+        throw Unbound(EntryPoint);
+    }
+
     // What a call through a dropped or missing binding raises, naming the export rather than faulting at address zero.
     public static InvalidOperationException Unbound(string EntryPoint)
     {
@@ -103,8 +116,7 @@ public static unsafe class NativeBindings
         return null;
     }
 
-    // Property resolve helpers for the generated bindings: a blittable property caches a byte offset
-    // (PropertyOffset), a non-blittable one an FProperty* token (FindProperty), resolved once per property.
+    // Property lookups for the generated bindings, an offset for a blittable property and a token otherwise, each resolved once.
 
     // Indexed by the negative offset PropertyOffset hands back, so FieldAt can name what failed.
     private static readonly List<string> UnresolvedProperties = new();
@@ -189,29 +201,6 @@ public static unsafe class NativeBindings
             PropUtf8.Free();
         }
     }
-
-    // Parameter-block memory for an animation graph component, name-checked against the graph's struct.
-    public static IntPtr AnimGraphParameterMemory(IntPtr Component, string TypeName)
-    {
-        if (AnimGraphParameterMemoryExport == null || Component == IntPtr.Zero)
-        {
-            return IntPtr.Zero;
-        }
-
-        Span<byte> Scratch = stackalloc byte[256];
-        Interop.FInteropString Utf8 = new(TypeName, Scratch);
-        try
-        {
-            return AnimGraphParameterMemoryExport((void*)Component, Utf8.Pointer, Utf8.Length);
-        }
-        finally
-        {
-            Utf8.Free();
-        }
-    }
-
-    private static readonly delegate* unmanaged[Cdecl]<void*, byte*, int, IntPtr> AnimGraphParameterMemoryExport =
-        (delegate* unmanaged[Cdecl]<void*, byte*, int, IntPtr>)Resolve(Host.NativeLibrary, "LuminaSharp_AnimGraph_GetParameterMemory");
 
     // Resolved without a check of its own, since it is what every other check asks.
     private static readonly delegate* unmanaged[Cdecl]<byte*, int, int> ExportSignatureExport =

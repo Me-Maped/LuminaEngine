@@ -8,6 +8,7 @@
 #include "Containers/Name.h"
 #include "Containers/String.h"
 #include "Core/Object/ObjectHandle.h"
+#include "Core/Serialization/BulkDataRef.h"
 #include "Core/Templates/CanBulkSerialize.h"
 #include "Core/Templates/IsSigned.h"
 #include "Core/Versioning/CoreVersion.h"
@@ -20,6 +21,7 @@ namespace Lumina
 {
     class FField;
     class FGuid;
+    class FPortableBytes;
 }
 
 enum class EArchiverFlags : uint8
@@ -36,28 +38,14 @@ enum class EArchiverFlags : uint8
      *  export must KEEP the FBulkDataRef it already has instead of re-emitting its payload. Region-relative
      *  offsets are what make this work: copy the whole region and every ref into it is still correct. */
     BulkPassthrough = 7,
+
+    // Writing or reading a save game, where an object reference may carry the object itself.
+    SaveGame    = 8,
 };
 
 namespace Lumina
 {
     class CObject;
-
-    /**
-     * Locates a payload inside its package's bulk-data region. Written inline in the export, so an object
-     * knows where its heavy data lives without any of it being resident; the bytes are pulled later with
-     * CPackage::ReadBulkData, which turns into one ranged file read.
-     *
-     * Offset is relative to the start of the region, NOT the file -- the region's own file offset moves
-     * whenever the compressed container changes size, so a file-absolute offset would be invalidated by
-     * every save.
-     */
-    struct FBulkDataRef
-    {
-        int64 Offset = 0;
-        int64 Size   = 0;
-
-        bool IsValid() const { return Size > 0; }
-    };
 
     class RUNTIME_API FArchive
     {
@@ -90,7 +78,13 @@ namespace Lumina
          *  drop EditorOnly properties when this is set. */
         FORCEINLINE bool IsCooking() const { return HasFlag(EArchiverFlags::Cooking); }
 
-        FORCEINLINE void SetHasError(bool bIsError) { bHasError = bIsError; }
+        FORCEINLINE bool IsSaveGame() const { return HasFlag(EArchiverFlags::SaveGame); }
+
+        // A packed ECS entity id, which an archive between two worlds may translate.
+        virtual void SerializeEntityId(uint32& PackedEntity) { *this << PackedEntity; }
+
+        // Virtual so a proxy can hand the error to the archive that actually reports it.
+        virtual void SetHasError(bool bIsError) { bHasError = bIsError; }
         FORCEINLINE virtual bool HasError() const { return bHasError; }
 
         FORCEINLINE static FPackageFileVersion GetEngineVersion()
@@ -103,9 +97,8 @@ namespace Lumina
         FORCEINLINE int32 GetFileVersion() const { return FileVersion; }
         FORCEINLINE void SetFileVersion(int32 InVersion) { FileVersion = InVersion; }
 
-        // Reads bytes cut from this archive later, resolving names and objects through the same tables. Empty means plain bytes suffice.
-        using FDeferredReaderFactory = TFunction<TUniquePtr<FArchive>(const TVector<uint8>&)>;
-        virtual FDeferredReaderFactory GetDeferredReaderFactory() const { return {}; }
+        // Records what the name slots and object indices in bytes just read from here stand for, false when this archive cannot say.
+        virtual bool DescribeCutBytes(FPortableBytes& Cut) const { return false; }
 
         FORCEINLINE size_t GetMaxSerializeSize() const { return ArMaxSerializeSize; }
 
@@ -143,6 +136,9 @@ namespace Lumina
         /** Soft-ref hook: FSoftObjectPath::operator<< calls this on write so the saver records
          *  a Soft ImportTable entry. No-op on archives without an import table. */
         virtual void RegisterSoftAssetReference(const FGuid& AssetGUID) {}
+
+        // The bundles a property names for the soft references inside it, returning the ones it replaces so nesting restores them.
+        virtual FStringView SetSoftReferenceBundles(FStringView Bundles) { return {}; }
 
         // Offered its resolved path+GUID on write so a fixup archive can retarget a soft ref in place.
         virtual bool RewriteSoftAssetReference(FString& Path, FGuid& AssetGUID) { return false; }

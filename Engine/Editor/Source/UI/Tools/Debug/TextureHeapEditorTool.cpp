@@ -86,7 +86,7 @@ namespace Lumina
     {
         DrawHelpTextRow(LOC("Heap"),
             LOC("Every texture currently registered in the global bindless heap, by sampled slot index. "
-            "This is exactly what shaders see through gTextures2D[] / SampleTexture2D."));
+            "This is exactly what shaders see through FTexture2D and SampleTexture2D."));
         DrawHelpTextRow(LOC("Preview"),
             LOC("Click a thumbnail (or row) to open it enlarged in the inspector panel. Cube, 3D, array "
             "and MSAA textures can't be drawn through ImGui's 2D sampler and show no thumbnail."));

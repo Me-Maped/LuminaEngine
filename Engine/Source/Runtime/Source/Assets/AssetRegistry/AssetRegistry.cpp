@@ -27,7 +27,7 @@
 namespace Lumina
 {
     // Tag for the cooked-runtime registry blob bundled into the PAK.
-    static constexpr uint32 kAssetRegistryCacheTag     = 0xA55E1DB2; // 'AssetIDB2'
+    static constexpr uint32 kAssetRegistryCacheTag     = 0xA55E1DB3; // 'AssetIDB3'
 
     // Schema version for the human-readable on-disk editor cache.
 
@@ -317,12 +317,9 @@ namespace Lumina
     void FAssetRegistry::ResumeBroadcasts()
     {
         // Last suspender out fires the single coalesced broadcast iff something flagged a change while suspended.
-        if (BroadcastSuspendCount.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        if (BroadcastSuspendCount.fetch_sub(1, std::memory_order_seq_cst) == 1 && bBroadcastPending.exchange(false, std::memory_order_seq_cst))
         {
-            if (bBroadcastPending.exchange(false, std::memory_order_relaxed))
-            {
-                DispatchRegistryChanged();
-            }
+            DispatchRegistryChanged();
         }
     }
 
@@ -343,13 +340,12 @@ namespace Lumina
 
     void FAssetRegistry::NotifyRegistryChanged()
     {
-        if (BroadcastSuspendCount.load(std::memory_order_relaxed) > 0)
+        // Flagged before the count is read, so a resume racing this either sees the flag or leaves it for the claim below.
+        bBroadcastPending.store(true, std::memory_order_seq_cst);
+        if (BroadcastSuspendCount.load(std::memory_order_seq_cst) == 0 && bBroadcastPending.exchange(false, std::memory_order_seq_cst))
         {
-            bBroadcastPending.store(true, std::memory_order_relaxed);
-            return;
+            DispatchRegistryChanged();
         }
-
-        DispatchRegistryChanged();
     }
 
     FScopedAssetRegistryBatch::FScopedAssetRegistryBatch()
@@ -366,7 +362,7 @@ namespace Lumina
     {
         FFixedString FilePath = Asset->GetPackage()->GetPackagePath();
 
-        auto AssetData = MakeUnique<FAssetData>();
+        auto AssetData = MakeShared<FAssetData>();
         AssetData->AssetClass    = Asset->GetClass()->GetName();
         AssetData->AssetGUID     = Asset->GetGUID();
         AssetData->AssetName     = Asset->GetName();
@@ -386,7 +382,7 @@ namespace Lumina
         NotifyRegistryChanged();
     }
 
-    void FAssetRegistry::InsertAssetLocked(TUniquePtr<FAssetData>&& AssetData)
+    void FAssetRegistry::InsertAssetLocked(TSharedPtr<FAssetData>&& AssetData)
     {
         if (!bPathIndexValid)
         {
@@ -401,6 +397,7 @@ namespace Lumina
             auto Entry = Assets.find_as(Stale->second->AssetGUID, FGuidHash(), FAssetDataGuidEqual());
             if (Entry != Assets.end())
             {
+                RetireLocked(*Entry);
                 Assets.erase(Entry);
             }
             PathIndex.erase(Stale);
@@ -415,12 +412,43 @@ namespace Lumina
             {
                 PathIndex.erase(OldKey);
             }
+            RetireLocked(*SameGuid);
             Assets.erase(SameGuid);
         }
 
         FAssetData* Added = AssetData.get();
         Assets.emplace(Move(AssetData));
         PathIndex[Move(PathKey)] = Added;
+    }
+
+    void FAssetRegistry::RetireLocked(const TSharedPtr<FAssetData>& Entry)
+    {
+        RetiredAssets.push_back(Entry);
+        if (!bReclaimQueued.exchange(true, std::memory_order_acq_rel))
+        {
+            MainThread::Enqueue([] { FAssetRegistry::Get().ReclaimRetired(); });
+        }
+    }
+
+    void FAssetRegistry::RetireAllLocked()
+    {
+        for (const TSharedPtr<FAssetData>& Entry : Assets)
+        {
+            RetireLocked(Entry);
+        }
+        Assets.clear();
+    }
+
+    void FAssetRegistry::ReclaimRetired()
+    {
+        // Freed outside the lock, since thousands of entries take a while and nothing waits on them.
+        TVector<TSharedPtr<FAssetData>> Freed;
+        {
+            FWriteScopeLock Lock(AssetsMutex);
+            Freed = Move(RetiredAssets);
+            RetiredAssets.clear();
+            bReclaimQueued.store(false, std::memory_order_release);
+        }
     }
 
     void FAssetRegistry::AssetDeleted(const FGuid& GUID)
@@ -436,6 +464,7 @@ namespace Lumina
                 return;
             }
 
+            RetireLocked(*It);
             Assets.erase(It);
         }
 
@@ -453,7 +482,7 @@ namespace Lumina
             FWriteScopeLock Lock(AssetsMutex);
             InvalidatePathIndex();
 
-            auto It = Algo::FindIf(Assets, [&OldPath](const TUniquePtr<FAssetData>& Asset)
+            auto It = Algo::FindIf(Assets, [&OldPath](const TSharedPtr<FAssetData>& Asset)
             {
                 return Asset->Path == OldPath;
             });
@@ -466,23 +495,24 @@ namespace Lumina
 
             // Drop any stale entry already at NewPath (different GUID), else GetAssetByPath is non-deterministic.
             const FGuid RenamedGuid = (*It)->AssetGUID;
-            auto Colliding = Algo::FindIf(Assets, [&](const TUniquePtr<FAssetData>& Asset)
+            auto Colliding = Algo::FindIf(Assets, [&](const TSharedPtr<FAssetData>& Asset)
             {
                 return Asset->AssetGUID != RenamedGuid && Asset->Path == NewPath;
             });
             if (Colliding != Assets.end())
             {
                 LOG_WARN("AssetRegistry::AssetRenamed: dropping stale entry at {} colliding with rename {} -> {}", NewPath, OldPath, NewPath);
+                RetireLocked(*Colliding);
                 Assets.erase(Colliding);
                 // hash_set::erase can invalidate other iterators; re-find.
-                It = Algo::FindIf(Assets, [&OldPath](const TUniquePtr<FAssetData>& Asset)
+                It = Algo::FindIf(Assets, [&OldPath](const TSharedPtr<FAssetData>& Asset)
                 {
                     return Asset->Path == OldPath;
                 });
                 if (It == Assets.end()) return;
             }
 
-            const TUniquePtr<FAssetData>& Data = *It;
+            const TSharedPtr<FAssetData>& Data = *It;
             Data->Path.assign(NewPath);
             Data->AssetName    = VFS::FileName(NewPath, true);
             Data->OwningPlugin = ExtractOwningPlugin(NewPath);
@@ -518,7 +548,7 @@ namespace Lumina
         PathIndex.clear();
         PathIndex.reserve(Assets.size());
 
-        for (const TUniquePtr<FAssetData>& Data : Assets)
+        for (const TSharedPtr<FAssetData>& Data : Assets)
         {
             PathIndex.emplace(FString(VFS::RemoveExtension(Data->Path)), Data.get());
         }
@@ -580,7 +610,7 @@ namespace Lumina
 
         TVector<FAssetData*> Datas;
         Datas.reserve(Assets.size() / 2);
-        for (const TUniquePtr<FAssetData>& Data : Assets)
+        for (const TSharedPtr<FAssetData>& Data : Assets)
         {
             if (Predicate(*Data))
             {
@@ -853,6 +883,7 @@ namespace Lumina
 
             if (!bVisited)
             {
+                RetireLocked(*It);
                 It = Assets.erase(It);
                 ++Reaped;
             }
@@ -882,7 +913,7 @@ namespace Lumina
         ReverseDepMap.clear();
         FReadScopeLock AssetsLock(AssetsMutex);
         ReverseDepMap.reserve(Assets.size());
-        for (const TUniquePtr<FAssetData>& Data : Assets)
+        for (const TSharedPtr<FAssetData>& Data : Assets)
         {
             for (const FAssetDependency& Dep : Data->Dependencies)
             {
@@ -1030,6 +1061,7 @@ namespace Lumina
 
         // Hard for a direct CObject reference and Soft for an FSoftObjectPath, as the saver recorded.
         TVector<FAssetDependency> Dependencies;
+        TVector<FAssetBundleEntry> Bundles;
         if (Header.ImportTableOffset >= 0
             && static_cast<size_t>(Header.ImportTableOffset) <= Bytes.size())
         {
@@ -1043,10 +1075,14 @@ namespace Lumina
                 Dep.TargetGUID = Import.ObjectGUID;
                 Dep.Type       = Import.Type;
                 Dependencies.emplace_back(Dep);
+                for (const FName& Bundle : Import.Bundles)
+                {
+                    Bundles.push_back({ Bundle, Import.ObjectGUID });
+                }
             }
         }
 
-        auto AssetData = MakeUnique<FAssetData>();
+        auto AssetData = MakeShared<FAssetData>();
         AssetData->AssetClass     = Export->ClassName;
         AssetData->AssetGUID      = Export->ObjectGUID;
         AssetData->AssetName      = Export->ObjectName;
@@ -1055,6 +1091,7 @@ namespace Lumina
         AssetData->SourceMTimeNs  = MTimeNs;
         AssetData->FileSize       = FileSize;
         AssetData->Dependencies   = Move(Dependencies);
+        AssetData->Bundles        = Move(Bundles);
         AssetData->OwningPlugin   = ExtractOwningPlugin(Path);
 
         FWriteScopeLock Lock(AssetsMutex);
@@ -1073,7 +1110,7 @@ namespace Lumina
         {
             FWriteScopeLock Lock(AssetsMutex);
             InvalidatePathIndex();
-            Assets.clear();
+            RetireAllLocked();
 
             {
                 FWriteScopeLock TextLock(TextAssetsMutex);
@@ -1099,7 +1136,7 @@ namespace Lumina
         uint32 Count = (uint32)Assets.size();
         Ar << Count;
 
-        for (const TUniquePtr<FAssetData>& Data : Assets)
+        for (const TSharedPtr<FAssetData>& Data : Assets)
         {
             Ar << const_cast<FGuid&>(Data->AssetGUID);
             Ar << const_cast<FFixedString&>(Data->Path);
@@ -1121,6 +1158,14 @@ namespace Lumina
 
             Ar << const_cast<FName&>(Data->OwnerChunk);
             Ar << const_cast<FName&>(Data->OwningPlugin);
+
+            uint32 BundleCount = (uint32)Data->Bundles.size();
+            Ar << BundleCount;
+            for (const FAssetBundleEntry& Entry : Data->Bundles)
+            {
+                Ar << const_cast<FName&>(Entry.Bundle);
+                Ar << const_cast<FGuid&>(Entry.Target);
+            }
         }
 
         // Text-asset identity table (v2+).
@@ -1158,12 +1203,12 @@ namespace Lumina
 
         FWriteScopeLock Lock(AssetsMutex);
         InvalidatePathIndex();
-        Assets.clear();
+        RetireAllLocked();
         Assets.reserve(Count);
 
         for (uint32 i = 0; i < Count && !Ar.HasError(); ++i)
         {
-            auto Data = MakeUnique<FAssetData>();
+            auto Data = MakeShared<FAssetData>();
             Ar << Data->AssetGUID;
             Ar << Data->Path;
             Ar << Data->AssetName;
@@ -1192,6 +1237,20 @@ namespace Lumina
 
             Ar << Data->OwnerChunk;
             Ar << Data->OwningPlugin;
+
+            uint32 BundleCount = 0;
+            Ar << BundleCount;
+            if (!Ar.CanHoldCount(BundleCount))
+            {
+                Ar.SetHasError(true);
+                break;
+            }
+            Data->Bundles.resize(BundleCount);
+            for (FAssetBundleEntry& Entry : Data->Bundles)
+            {
+                Ar << Entry.Bundle;
+                Ar << Entry.Target;
+            }
 
             Assets.emplace(Move(Data));
         }
@@ -1241,7 +1300,10 @@ namespace Lumina
     {
         // A JSON cache cost 1.8 s to parse and 2 s to write at 109k entries, so the cache is a flat binary stream.
         constexpr uint32 kAssetRegistryCacheMagic   = 0x4352414C;
-        constexpr uint32 kAssetRegistryCacheVersion = 1;
+        constexpr uint32 kAssetRegistryCacheVersion = 2;
+
+        // A version 1 cache predates bundles, and every package it describes was saved without any.
+        constexpr uint32 kAssetRegistryCacheBundlesVersion = 2;
 
         // A damaged count is refused before it sizes an allocation.
         constexpr uint32 kMaxCachedDependencies = 1u << 16;
@@ -1260,7 +1322,7 @@ namespace Lumina
             }
         }
 
-        void SerializeAssetEntry(FArchive& Ar, FAssetData& Data)
+        void SerializeAssetEntry(FArchive& Ar, FAssetData& Data, uint32 Version)
         {
             Ar << Data.AssetGUID;
             Ar << Data.Path;
@@ -1294,6 +1356,27 @@ namespace Lumina
                 uint8 Type = (uint8)Dependency.Type;
                 Ar << Type;
                 Dependency.Type = (EDependencyType)Type;
+            }
+
+            if (Version < kAssetRegistryCacheBundlesVersion)
+            {
+                return;
+            }
+            uint32 BundleCount = (uint32)Data.Bundles.size();
+            Ar << BundleCount;
+            if (Ar.IsReading())
+            {
+                if (BundleCount > kMaxCachedDependencies)
+                {
+                    Ar.SetHasError(true);
+                    return;
+                }
+                Data.Bundles.resize(BundleCount);
+            }
+            for (FAssetBundleEntry& Entry : Data.Bundles)
+            {
+                SerializeName(Ar, Entry.Bundle);
+                Ar << Entry.Target;
             }
         }
 
@@ -1331,9 +1414,9 @@ namespace Lumina
             FReadScopeLock Lock(AssetsMutex);
             uint32 Count = (uint32)Assets.size();
             Writer << Count;
-            for (const TUniquePtr<FAssetData>& Data : Assets)
+            for (const TSharedPtr<FAssetData>& Data : Assets)
             {
-                SerializeAssetEntry(Writer, *Data);
+                SerializeAssetEntry(Writer, *Data, Version);
             }
         }
 
@@ -1376,7 +1459,7 @@ namespace Lumina
         uint32 Version = 0;
         Reader << Magic;
         Reader << Version;
-        if (Reader.HasError() || Magic != kAssetRegistryCacheMagic || Version != kAssetRegistryCacheVersion)
+        if (Reader.HasError() || Magic != kAssetRegistryCacheMagic || Version > kAssetRegistryCacheVersion || Version < 1)
         {
             LOG_INFO("AssetRegistry: cache at {} is from another build; rebuilding from scratch", CachePath);
             return false;
@@ -1385,12 +1468,12 @@ namespace Lumina
         // Read whole before anything is replaced, so a damaged file leaves the registry as it was.
         uint32 AssetCount = 0;
         Reader << AssetCount;
-        TVector<TUniquePtr<FAssetData>> LoadedAssets;
+        TVector<TSharedPtr<FAssetData>> LoadedAssets;
         LoadedAssets.reserve(Reader.HasError() ? 0 : Math::Min<uint32>(AssetCount, (uint32)(Bytes.size() / 32)));
         for (uint32 i = 0; i < AssetCount && !Reader.HasError(); ++i)
         {
-            auto Data = MakeUnique<FAssetData>();
-            SerializeAssetEntry(Reader, *Data);
+            auto Data = MakeShared<FAssetData>();
+            SerializeAssetEntry(Reader, *Data, Version);
             LoadedAssets.push_back(Move(Data));
         }
 
@@ -1413,9 +1496,9 @@ namespace Lumina
         {
             FWriteScopeLock Lock(AssetsMutex);
             InvalidatePathIndex();
-            Assets.clear();
+            RetireAllLocked();
             Assets.reserve(LoadedAssets.size());
-            for (TUniquePtr<FAssetData>& Data : LoadedAssets)
+            for (TSharedPtr<FAssetData>& Data : LoadedAssets)
             {
                 Assets.emplace(Move(Data));
             }

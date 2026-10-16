@@ -5,6 +5,7 @@
 #include "Assets/AssetTypes/Material/Material.h"
 #include "Assets/AssetTypes/Material/MaterialInterface.h"
 #include "Assets/AssetTypes/Mesh/Mesh.h"
+#include "Containers/Algorithm.h"
 #include "Renderer/MeshletHeaderSlab.h"
 
 namespace Lumina
@@ -36,9 +37,27 @@ namespace Lumina
         {
             FScopeLock Lock(PendingMutex);
             PendingInvalidations.push_back(Asset);
+
+            const uint64 Bit = DependencyBit(Asset);
+            for (std::atomic<uint64>* Sink : Get().InvalidationSinks)
+            {
+                Sink->fetch_or(Bit, std::memory_order_release);
+            }
         }
 
         MarkPendingWork();
+    }
+
+    void FMeshResolveCache::AddInvalidationSink(std::atomic<uint64>* Sink)
+    {
+        FScopeLock Lock(PendingMutex);
+        InvalidationSinks.push_back(Sink);
+    }
+
+    void FMeshResolveCache::RemoveInvalidationSink(std::atomic<uint64>* Sink)
+    {
+        FScopeLock Lock(PendingMutex);
+        InvalidationSinks.erase(Algo::Remove(InvalidationSinks, Sink), InvalidationSinks.end());
     }
 
     void FMeshResolveCache::MarkEntryStale(uint32 Handle)
@@ -283,7 +302,12 @@ namespace Lumina
             {
                 bReady = false;
             }
-            Material = CMaterial::GetDefaultMaterial();
+
+            // A material still compiling keeps the plain default, so only a real failure shows the checker.
+            const CMaterial* Root = IsValid(RawMaterial) ? RawMaterial->GetMaterial() : nullptr;
+            CMaterial* ErrorMaterial = CMaterial::GetErrorMaterial();
+            const bool bShowError = IsValid(Root) && Root->HasCompileFailed() && IsValid(ErrorMaterial) && ErrorMaterial->IsReadyForRender();
+            Material = bShowError ? ErrorMaterial : CMaterial::GetDefaultMaterial();
         }
 
         // Second gate. IsReadyForRender reports that the material finished COMPILING.
@@ -314,7 +338,7 @@ namespace Lumina
         const uint64 SwitchKey = Material->GetStaticSwitchKey();
         auto Stage = [ConcreteMaterial, SwitchKey](EMaterialShaderStage InStage)
         {
-            return ConcreteMaterial ? ConcreteMaterial->GetStageForKey(InStage, SwitchKey) : FShaderH{};
+            return ConcreteMaterial ? ConcreteMaterial->GetStageForKey(ActiveMeshletStage(InStage), SwitchKey) : FShaderH{};
         };
 
         R.PixelShader                = Stage(EMaterialShaderStage::Pixel);
@@ -332,7 +356,7 @@ namespace Lumina
         MeshResolve::StampSurfaceSource(R, RawMaterial);
 
         R.MaterialID            = (uint64)ConcreteMaterial;
-        R.MaterialIdx           = (uint16)Material->GetMaterialIndex();
+        R.MaterialIdx           = (uint32)Material->GetMaterialIndex();
         R.bMaterialCastsShadows = Material->DoesCastShadows();
 
         // Casting is what shadow-only draws, so the two together are the only useful combination.
@@ -410,7 +434,7 @@ namespace Lumina
 
         const FMeshResource& Resource = Mesh->GetMeshResource();
 
-        const FAABB& LocalBounds = Mesh->GetAABB();
+        const SAABB& LocalBounds = Mesh->GetAABB();
         Out.LocalCenter = (LocalBounds.Min + LocalBounds.Max) * 0.5f;
         // Degenerate bounds (geometry not resident) collapse to a zero sphere rather than a NaN radius.
         Out.LocalRadius = (LocalBounds.Max.x < LocalBounds.Min.x)
@@ -432,11 +456,9 @@ namespace Lumina
 
             for (uint32 LOD = 0; LOD < MAX_MESH_LODS; ++LOD)
             {
-                R.LODMeshletOffset[LOD]  = Surface.LODMeshletOffset[LOD];
-                R.LODMeshletCount[LOD]   = Surface.LODMeshletCount[LOD];
-                // Thresholds are non-negative, so squaring preserves their ordering.
-                const float Threshold = Surface.LODScreenThreshold[LOD] * Mesh->LODDistanceScale;
-                R.LODScreenThresholdSq[LOD] = Threshold * Threshold;
+                R.LODMeshletOffset[LOD] = Surface.LODMeshletOffset[LOD];
+                R.LODMeshletCount[LOD]  = Surface.LODMeshletCount[LOD];
+                R.LODError[LOD]         = Surface.LODError[LOD] * Mesh->LODDistanceScale;
             }
 
             // -1 means unassigned; widening keeps it out of range so it falls through to the default.
@@ -454,6 +476,10 @@ namespace Lumina
             if (!MeshResolve::ResolveSurfaceMaterial(R, RawMaterial))
             {
                 Out.bAllMaterialsReady = false;
+            }
+            if (Mesh->HasDistanceField())
+            {
+                R.MaterialFlags |= EInstanceFlags::HasDistanceField;
             }
 
             AddDependency(Out, (const void*)RawMaterial);

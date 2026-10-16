@@ -1,5 +1,6 @@
 ﻿#include "RuntimePCH.h"
 #include "FoliageComponent.h"
+#include "Assets/AssetTypes/Physics/CollisionShape.h"
 #include "World/ECS/Registry.h"
 #include "TaskSystem/TaskSystem.h"
 #include "World/Scene/RenderScene/ScenePrimitiveSet.h"
@@ -7,6 +8,19 @@
 
 namespace Lumina
 {
+    CCollisionShape* SFoliageType::GetDefaultCollisionShape() const
+    {
+        CCollisionShape* Shape = CollisionShape.Get();
+        if (Shape != nullptr && Shape->HasCollision())
+        {
+            return Shape;
+        }
+        const CStaticMesh* StaticMesh = Mesh.Get();
+        return StaticMesh != nullptr && StaticMesh->GetDefaultCollisionShape() != nullptr
+            ? StaticMesh->DefaultCollisionShape.Get()
+            : nullptr;
+    }
+
     int32 SFoliageComponent::RemoveInRadius(const FVector3& WorldCenter, float Radius, int32 TypeFilter)
     {
         const float RadiusSq = Radius * Radius;
@@ -53,7 +67,7 @@ namespace Lumina
         // Both rejections are properties of the TYPE, so they resolve once per type instead of per instance.
         const uint32 NumTypes = (uint32)Types.size();
         TVector<uint8> TypeReady;
-        TVector<FAABB> TypeBounds;
+        TVector<SAABB> TypeBounds;
         TypeReady.assign(NumTypes, 0u);
         TypeBounds.resize(NumTypes);
 
@@ -65,7 +79,7 @@ namespace Lumina
                 continue;
             }
 
-            const FAABB& LocalBounds = Type.Mesh->GetAABB();
+            const SAABB& LocalBounds = Type.Mesh->GetAABB();
             if (LocalBounds.Max.x < LocalBounds.Min.x)
             {
                 continue;
@@ -101,7 +115,7 @@ namespace Lumina
             }
 
             const FMatrix4 Transform = Inst.GetMatrix();
-            const FAABB    WorldBox  = TypeBounds[Inst.TypeIndex].ToWorld(Transform);
+            const SAABB    WorldBox  = TypeBounds[Inst.TypeIndex].ToWorld(Transform);
             const FVector3 Center    = (WorldBox.Min + WorldBox.Max) * 0.5f;
 
             FFoliageBakedInstance& Baked = BakedInstances[Index];
@@ -111,17 +125,7 @@ namespace Lumina
         };
 
         constexpr uint32 kParallelThreshold = 2048;
-        if (NumInstances < kParallelThreshold || GTaskSystem == nullptr)
-        {
-            for (uint32 i = 0; i < NumInstances; ++i)
-            {
-                BakeOne(i);
-            }
-        }
-        else
-        {
-            Task::ParallelFor(NumInstances, BakeOne, 256);
-        }
+        Task::ParallelForOrSerial(NumInstances, kParallelThreshold, BakeOne, 256);
 
         // A rejected instance leaves a hole, and only the rejecting case pays for closing them.
         if (SkippedCount.load(std::memory_order_relaxed) != 0)
@@ -147,6 +151,12 @@ namespace Lumina
         bBakeReleased   = false;
         BakedVersion    = InstancesVersion;
         ++BakeSerial;
+    }
+
+    void SFoliageComponent::PostEditChange(const FPropertyChangedEvent& Event)
+    {
+        MarkInstancesChanged();
+        FMeshResolveCache::MarkPendingWork();
     }
 
     void MarkFoliageChanged(CWorld& World, ECS::FEntity Entity, SFoliageComponent& Foliage)

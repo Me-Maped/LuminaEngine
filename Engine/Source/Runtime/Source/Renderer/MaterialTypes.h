@@ -3,6 +3,7 @@
 #include "Core/Object/ObjectMacros.h"
 #include "Core/Math/Math.h"
 #include "Shared/SharedConstants.h"
+#include "Renderer/GPUSpan.h"
 #include "MaterialTypes.generated.h"
 
 namespace Lumina
@@ -41,6 +42,26 @@ namespace Lumina
 
         /** Collection table slot per binding, resolved in PostLoad; 0 is the reserved zero collection. */
         uint32      CollectionIndices[MAX_MATERIAL_COLLECTIONS];
+    };
+
+    // The GPU form of a slot, whose parameters sit packed at DataWord in the material data pool.
+    struct FMaterialHeaderGPU
+    {
+        uint32      Flags;
+        float       OpacityClipValue;
+        uint32      DataWord;
+        uint32      Layout;
+    };
+
+    static_assert(sizeof(FMaterialHeaderGPU) == 16, "FMaterialHeaderGPU must match FMaterialHeader in Common.slang");
+    static_assert(MAX_VECTORS <= MATERIAL_COUNT_MASK && MAX_SCALARS <= MATERIAL_COUNT_MASK && MAX_TEXTURES <= MATERIAL_COUNT_MASK);
+    static_assert(MAX_PARAMETER_COLLECTIONS <= MATERIAL_COLLECTION_MASK + 1u);
+
+    // Mirrors FMaterialTable in Common.slang.
+    struct FMaterialTableGPU
+    {
+        RHI::TGPUSpan<FMaterialHeaderGPU>   Headers;
+        RHI::TGPUSpan<uint32>               Data;
     };
 
     /** One collection's GPU block, shared by every material that binds it. */
@@ -96,36 +117,36 @@ namespace Lumina
      * density, which is what confines a species to specific terrain layers.
      */
     REFLECT()
-    struct RUNTIME_API FGrassOutput
+    struct RUNTIME_API SGrassOutput
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         TStrongObjectPtr<CGrassType> GrassType;
 
         /** Index into STerrainComponent::Layers whose painted weight gates this species. */
-        PROPERTY()
+        PROPERTY(Hidden)
         uint32 LayerIndex = 0;
 
         /** Multiplies the type's own density, so one type can be reused at different coverage per layer. */
-        PROPERTY()
+        PROPERTY(Hidden)
         float DensityScale = 1.0f;
     };
 
     /** A compile-time branch an instance may flip, at the cost of compiling that instance its own shader. */
     REFLECT()
-    struct RUNTIME_API FMaterialStaticSwitch
+    struct RUNTIME_API SMaterialStaticSwitch
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FName ParameterName;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         bool bDefaultValue = true;
 
         // Assigned by name order, so a graph edit that reorders nodes does not renumber the key.
-        PROPERTY()
+        PROPERTY(Hidden)
         uint8 BitIndex = 0;
     };
 
@@ -138,24 +159,24 @@ namespace Lumina
     };
 
     REFLECT()
-    struct RUNTIME_API FMaterialParameter
+    struct RUNTIME_API SMaterialParameter
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FName ParameterName;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         EMaterialParameterType Type;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         uint16 Index;
 
         // Replayed into MaterialUniforms in PostLoad (uniform block isn't serialized).
-        PROPERTY()
+        PROPERTY(Hidden)
         float ScalarDefault = 0.0f;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector4 VectorDefault = FVector4(0.0f);
     };
 }

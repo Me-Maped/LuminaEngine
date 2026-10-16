@@ -110,6 +110,39 @@ TEST(TaskSystem, ParallelForEach_VisitsAndMutates)
     }
 }
 
+TEST(TaskSystem, ParallelForOrSerial_BelowThresholdRunsOneInlineRange)
+{
+    const std::thread::id Caller = std::this_thread::get_id();
+    uint32 Calls = 0;
+    bool bOffThread = false;
+    Task::ParallelForOrSerial(100, 1000, [&](const Task::FParallelRange& Range)
+    {
+        ++Calls;
+        bOffThread |= std::this_thread::get_id() != Caller;
+        EXPECT_EQ(Range.Start, 0u);
+        EXPECT_EQ(Range.End, 100u);
+    });
+    EXPECT_EQ(Calls, 1u);
+    EXPECT_FALSE(bOffThread);
+}
+
+TEST(TaskSystem, ParallelForOrSerial_VisitsEveryIndexOnBothSidesOfThreshold)
+{
+    for (uint32 Num : { 10u, 50000u })
+    {
+        std::vector<std::atomic<int>> Visits(Num);
+        Task::ParallelForOrSerial(Num, 1000, [&](uint32 Index)
+        {
+            Visits[Index].fetch_add(1, std::memory_order_relaxed);
+        }, 64);
+
+        for (uint32 i = 0; i < Num; ++i)
+        {
+            ASSERT_EQ(Visits[i].load(), 1) << "Num " << Num << " index " << i;
+        }
+    }
+}
+
 // AsyncTask
 
 TEST(TaskSystem, AsyncTask_CompletesAndRunsBody)
@@ -1240,5 +1273,76 @@ TEST(TaskSystem, WedgedFiberPool_BackgroundReleaseJobStillRuns)
     static FWedgeProbe Probe;
     RunWedgeRecoveryScenario(Probe, Jobs::EJobPriority::Background);
 
+    RestoreSchedulerAfterWedge(SavedWorkers, SavedExternal);
+}
+
+namespace
+{
+    constexpr uint32 kNestProbeSlots = 64;
+
+    struct FNestProbe
+    {
+        std::atomic<uint32> Finished{0};
+        std::atomic<uint32> MaxNativeDepth{0};
+        std::atomic<uint32> NativeDepth[kNestProbeSlots]{};
+    };
+
+    // Slow enough that a waiting parent goes looking for queued work to adopt.
+    void NestLeafJob(void* /*Arg*/, uint32 /*Worker*/)
+    {
+        const double Until = Lumina::PlatformTime::Seconds() + 0.00005;
+        while (Lumina::PlatformTime::Seconds() < Until)
+        {
+        }
+    }
+
+    // Native runs never migrate threads, so the per-slot count is the nesting on that one stack.
+    void NestParkableJob(void* Arg, uint32 Worker)
+    {
+        FNestProbe* P = static_cast<FNestProbe*>(Arg);
+        const bool bTracked = !Jobs::GetCurrentFiberHandle() && Worker < kNestProbeSlots;
+        if (bTracked)
+        {
+            const uint32 Depth = P->NativeDepth[Worker].fetch_add(1) + 1;
+            uint32 Seen = P->MaxNativeDepth.load();
+            while (Depth > Seen && !P->MaxNativeDepth.compare_exchange_weak(Seen, Depth))
+            {
+            }
+        }
+
+        Jobs::FCounter* Children = Jobs::AllocCounter(0);
+        for (uint32 i = 0; i < 4; ++i)
+        {
+            Jobs::RunJob(&NestLeafJob, nullptr, Jobs::EJobPriority::Normal, Children, "Nest.Leaf");
+        }
+        Jobs::WaitForCounter(Children, 0);
+        Jobs::FreeCounter(Children);
+
+        if (bTracked)
+        {
+            P->NativeDepth[Worker].fetch_sub(1);
+        }
+        P->Finished.fetch_add(1);
+    }
+}
+
+TEST(TaskSystem, WedgedFiberPool_BoundsNativeNestingOfParkableJobs)
+{
+    uint32 SavedWorkers = 0, SavedExternal = 0;
+    CycleToWedgeScheduler(SavedWorkers, SavedExternal);
+
+    // Far past the 8-fiber ceiling, so most of these run inline and wait there, adopting the rest.
+    static FNestProbe Probe;
+    constexpr uint32 Parkable = 400;
+    for (uint32 i = 0; i < Parkable; ++i)
+    {
+        Jobs::RunJob(&NestParkableJob, &Probe, Jobs::EJobPriority::Normal, nullptr, "Nest.Parkable", true);
+    }
+
+    EXPECT_TRUE(PollUntil([&] { return Probe.Finished.load() == Parkable; }, 30.0))
+        << "only " << Probe.Finished.load() << " of " << Parkable << " parkable jobs completed";
+    EXPECT_LE(Probe.MaxNativeDepth.load(), 4u) << "park-capable jobs nested past the inline cap on one stack";
+
+    Jobs::WaitForAll();
     RestoreSchedulerAfterWedge(SavedWorkers, SavedExternal);
 }

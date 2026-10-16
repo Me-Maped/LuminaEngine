@@ -17,26 +17,25 @@ namespace Lumina
         Requested,
     };
 
-    /** Handed to CEntityScript::OnReloaded so a script can tell a fresh start from a reload and rebuild
-     *  whatever did not survive the old load context, its delegate bindings above all. */
+    /// Handed to OnReloaded, so a script can tell a fresh start from a reload and rebuild its delegate bindings.
     REFLECT()
     struct SScriptReloadContext
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         EScriptReloadReason Reason = EScriptReloadReason::Requested;
 
         /** Editor, Game or Simulation, so a script can skip work that only matters while playing. */
-        PROPERTY()
+        PROPERTY(Hidden)
         EWorldType WorldType = EWorldType::None;
 
         /** The entity this script is attached to, the same one GetOwningEntity returns. */
-        PROPERTY()
+        PROPERTY(Hidden)
         ECS::FEntity Entity = ECS::NullEntity;
 
         /** Generation of the script load context now live; it advances once per reload. */
-        PROPERTY()
+        PROPERTY(Hidden)
         int32 Generation = 0;
     };
 }

@@ -2,6 +2,8 @@
 
 // Spells out its own integer types rather than relying on whoever includes it first to have pulled them.
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 namespace Lumina
 {
@@ -48,7 +50,7 @@ void EnumRemoveFlags(Enum& Flags, Enum FlagsToRemove)
 }
 
 
-    /** This must reflect EPropertyTypeFlags found in ObjectCore.h */
+    // Kept in the order of the runtime's EPropertyTypeFlags.inl, since the Reflector cannot include runtime headers.
     enum class EPropertyTypeFlags : uint64_t
     {
         None = 0,
@@ -85,9 +87,10 @@ void EnumRemoveFlags(Enum& Flags, Enum FlagsToRemove)
         InstancedStruct,
         Map,
         Entity,
+        ComponentRef,
     };
 
-    /** Must be in-sync with EPropertyFlags in ObjectCore.h */
+    // The flags the Reflector sets, at the bits the runtime's EPropertyFlags.inl gives them.
     enum class EPropertyFlags : uint32_t
     {
         None            = 0,
@@ -97,21 +100,13 @@ void EnumRemoveFlags(Enum& Flags, Enum FlagsToRemove)
         Const           = BIT(3),
         Private         = BIT(4),
         Protected       = BIT(5),
-        SubField        = BIT(6),
-        Trivial         = BIT(7),
-        Builtin         = BIT(9),
-        BulkSerialize   = BIT(10),
-        // Property exists only for editor tooling. Stripped from cooked
-        // packages (see CStruct::SerializeTaggedProperties + FArchive::IsCooking).
         EditorOnly      = BIT(11),
-        // Property participates in network replication (PROPERTY(Replicated)).
         Replicated      = BIT(12),
-        // Script (C#) interop specifiers, independent of the editor flags above.
         ScriptReadOnly  = BIT(13),
         ScriptWritable  = BIT(14),
         ScriptHidden    = BIT(15),
-        // Duplication resets this property instead of copying it, and a flag survives where METADATA_PARAMS strips metadata.
         DuplicateTransient = BIT(16),
+        SaveGame        = BIT(19),
     };
 
     ENUM_CLASS_FLAGS(EPropertyFlags);
@@ -143,16 +138,13 @@ void EnumRemoveFlags(Enum& Flags, Enum FlagsToRemove)
         AppendFlag(EPropertyFlags::Const, "Lumina::EPropertyFlags::Const");
         AppendFlag(EPropertyFlags::Private, "Lumina::EPropertyFlags::Private");
         AppendFlag(EPropertyFlags::Protected, "Lumina::EPropertyFlags::Protected");
-        AppendFlag(EPropertyFlags::SubField, "Lumina::EPropertyFlags::SubField");
-        AppendFlag(EPropertyFlags::Trivial, "Lumina::EPropertyFlags::Trivial");
-        AppendFlag(EPropertyFlags::Builtin, "Lumina::EPropertyFlags::Builtin");
-        AppendFlag(EPropertyFlags::BulkSerialize, "Lumina::EPropertyFlags::BulkSerialize");
         AppendFlag(EPropertyFlags::EditorOnly, "Lumina::EPropertyFlags::EditorOnly");
         AppendFlag(EPropertyFlags::Replicated, "Lumina::EPropertyFlags::Replicated");
         AppendFlag(EPropertyFlags::ScriptReadOnly, "Lumina::EPropertyFlags::ScriptReadOnly");
         AppendFlag(EPropertyFlags::ScriptWritable, "Lumina::EPropertyFlags::ScriptWritable");
         AppendFlag(EPropertyFlags::ScriptHidden, "Lumina::EPropertyFlags::ScriptHidden");
         AppendFlag(EPropertyFlags::DuplicateTransient, "Lumina::EPropertyFlags::DuplicateTransient");
+        AppendFlag(EPropertyFlags::SaveGame, "Lumina::EPropertyFlags::SaveGame");
 
         return Result;
     }

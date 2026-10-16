@@ -2,6 +2,7 @@
 #include "Localization/Localization.h"
 #include "imgui.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
+#include "Tools/UI/ImGui/ImGuiXNumeric.h"
 
 namespace Lumina
 {
@@ -34,7 +35,7 @@ namespace Lumina
             case ECustomPrimitiveDataType::Float:
             {
                 float V = Value.Data.AsFloat();
-                if (ImGui::DragFloat("##Value", &V, 0.01f))
+                if (ImGuiX::DragFloat("##Value", &V, 0.01f))
                 {
                     Value.Data = ECustomPrimitiveDataUnion::FromFloat(V);
                     bWasChanged = true;
@@ -45,7 +46,7 @@ namespace Lumina
             case ECustomPrimitiveDataType::Int:
             {
                 int32 V = Value.Data.AsInt();
-                if (ImGui::DragInt("##Value", &V))
+                if (ImGuiX::DragInt("##Value", &V))
                 {
                     Value.Data = ECustomPrimitiveDataUnion::FromInt(V);
                     bWasChanged = true;
@@ -56,7 +57,7 @@ namespace Lumina
             case ECustomPrimitiveDataType::UInt:
             {
                 int32 V = (int32)Value.Data.AsUInt();
-                if (ImGui::DragInt("##Value", &V, 1.0f, 0, INT_MAX))
+                if (ImGuiX::DragInt("##Value", &V, 1.0f, 0, INT_MAX))
                 {
                     Value.Data = ECustomPrimitiveDataUnion::FromUInt((uint32)Math::Max(0, V));
                     bWasChanged = true;

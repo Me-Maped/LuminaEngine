@@ -26,9 +26,9 @@ namespace Lumina::RHI
     constexpr auto kRWImageBindingSlot          = 2;
 
     constexpr auto kFramesInFlight              = 2;
-    // Upper bounds for the bindless bindings; the device limits can lower them at startup.
-    constexpr uint32 kMaxSampledTextureHeapSize = 1u << 16;
-    constexpr uint32 kMaxStorageTextureHeapSize = INT16_MAX;
+    // Upper bounds for the bindless bindings, which the device limits can lower. Some drivers report UINT32_MAX, and every slot costs descriptor memory up front.
+    constexpr uint32 kMaxSampledTextureHeapSize = 1u << 20;
+    constexpr uint32 kMaxStorageTextureHeapSize = 1u << 16;
     constexpr auto kMaxNumSamplers              = 4000;
     constexpr auto kMaxNumTextureHeaps          = 1024;
     constexpr auto kDedicatedMemoryThreshold    = 32 * Constants::kMiB;
@@ -49,6 +49,12 @@ namespace Lumina::RHI
     struct FQueryPool;
 
     using GPUPtr            = uint64;
+
+    // Every pointer handed to a shader as root data starts here, so shaders may read it in whole 16-byte loads.
+    constexpr uint64 kRootDataAlign             = 16;
+    static_assert(kDefaultAlign >= kRootDataAlign, "Transient blocks are root data, so their default alignment must cover it.");
+
+    NODISCARD constexpr bool IsRootAligned(GPUPtr Address) { return (Address & (kRootDataAlign - 1)) == 0; }
     using FPipelineH        = THandle<FPipeline>;
     using FTextureH         = THandle<FTexture>;
     using FTextureHeapH     = THandle<FTextureHeap>;
@@ -507,6 +513,9 @@ namespace Lumina::RHI
         // Leave empty to take any GPU that can present.
         EDeviceFeature RequiredFeatures = EDeviceFeature::None;
 
+        // Left off even where supported, which is how a launch flag exercises a fallback on capable hardware.
+        EDeviceFeature DisabledFeatures = EDeviceFeature::None;
+
         // MiB of device-local memory a GPU must report to be considered. Zero takes any amount.
         uint32 MinDeviceLocalMemoryMiB = 0;
 
@@ -609,7 +618,12 @@ namespace Lumina::RHI
     // The most one of SliceCount ring slices may take of a small CPU-visible aperture, or no limit with ReBAR.
     RUNTIME_API uint64         GetCPUWriteSliceCap(uint32 SliceCount);
     
+    RUNTIME_API bool           SupportsMeshShaders();
+
     RUNTIME_API uint32         GetMaxMeshWorkGroupCount();
+
+    // How many viewports one draw can address, which caps the views a multi-view shadow draw covers.
+    RUNTIME_API uint32         GetMaxViewports();
 
     RUNTIME_API bool           SupportsSwapchainMaintenance1();
     RUNTIME_API bool           SupportsAsyncCompute();
@@ -719,6 +733,9 @@ namespace Lumina::RHI
     RUNTIME_API uint32          GetOpenCommandListCount(EQueueType Queue);
 
     RUNTIME_API uint32      HeapWriteTexture(FTextureHeapH Heap, FTextureH Texture);
+
+    // Sampled image slots a heap can hold on this device, the engine ceiling or the driver's limit if lower.
+    RUNTIME_API uint32      GetSampledHeapCapacity();
     // Repoint and unbind reach each frame slot's copy at its next BeginFrame, so no in-flight frame sees the change.
     RUNTIME_API void        HeapRepointTexture(FTextureHeapH Heap, uint32 Slot, FTextureH Texture);
     RUNTIME_API uint32      HeapWriteRWTexture(FTextureHeapH Heap, FTextureH Texture, uint32 Mip = 0);
@@ -883,6 +900,8 @@ namespace Lumina::RHI
 
     RUNTIME_API void        CmdSetScissor(FCmdListH CL, const FRect& Rect);
     RUNTIME_API void        CmdSetViewport(FCmdListH CL, const FRect& Rect);
+    // Viewport i and scissor i both cover Rects[i], for draws that pick a viewport per primitive.
+    RUNTIME_API void        CmdSetViewportArray(FCmdListH CL, TSpan<const FRect> Rects);
 
     
     // Held in push constants rather than chased through memory. Re-issue whenever the view changes.
@@ -901,6 +920,7 @@ namespace Lumina::RHI
     RUNTIME_API void        CmdDrawIndexedIndirect(FCmdListH CL, FGPURange Indices, GPUPtr Args, FGPURange Arguments, uint32 DrawCount, uint32 Stride, EIndexType IndexType = EIndexType::Uint32);
     
     RUNTIME_API void        CmdDrawIndirect(FCmdListH CL, GPUPtr Args, FGPURange Arguments, uint32 DrawCount, uint32 Stride);
+    RUNTIME_API void        CmdDrawIndirectCount(FCmdListH CL, GPUPtr Args, FGPURange Arguments, FGPURange CountRange, uint32 MaxDrawCount, uint32 Stride);
     RUNTIME_API void        CmdDispatchIndirect(FCmdListH CL, GPUPtr Args, FGPURange Arguments);
 
     RUNTIME_API void        CmdDrawMeshTasks(FCmdListH CL, GPUPtr DrawArgs, uint32 GroupCountX, uint32 GroupCountY, uint32 GroupCountZ);

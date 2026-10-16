@@ -672,7 +672,7 @@ namespace Lumina::RmlBinding
             FindModel(Bindings.Models[Index], bDescribed);
             if (!bDescribed)
             {
-                Add(Bindings.ModelLines[Index], Format(LOCF("No class registers as '{0}', so the preview fills in placeholders. Name a class {0}, or give it [DataModel(\"{0}\")] in C# or REFLECT(DataModel = \"{0}\") in C++."), Bindings.Models[Index]), false);
+                Add(Bindings.ModelLines[Index], Format(LOCF("No class registers as '{0}', so the preview fills in placeholders. Name a class {0}, or give it [Reflect(DataModel = \"{0}\")] in C# or REFLECT(DataModel = \"{0}\") in C++."), Bindings.Models[Index]), false);
             }
         }
 
@@ -696,7 +696,7 @@ namespace Lumina::RmlBinding
             {
                 if (!Model->HasCommand(Name))
                 {
-                    Add(Ref.Line, Format(LOCF("'{0}()' is not a [Bind] method of {1}."), Ref.Name, TypeName), true);
+                    Add(Ref.Line, Format(LOCF("'{0}()' is not a [Function(Bind)] method of {1}."), Ref.Name, TypeName), true);
                 }
                 continue;
             }
@@ -718,14 +718,14 @@ namespace Lumina::RmlBinding
                 {
                     if (List.Name == Scope->List && std::find(List.Members.begin(), List.Members.end(), Ref.Member) == List.Members.end())
                     {
-                        Add(Ref.Line, Format(LOCF("'{0}.{1}' is not a [Bind] member of the items in {2}."), Ref.Name, Ref.Member, List.Name), true);
+                        Add(Ref.Line, Format(LOCF("'{0}.{1}' is not a [Property(Bind)] member of the items in {2}."), Ref.Name, Ref.Member, List.Name), true);
                     }
                 }
                 continue;
             }
             if (!Model->HasMember(Name))
             {
-                Add(Ref.Line, Format(LOCF("'{0}' is not a [Bind] member of {1}."), Ref.Name, TypeName), true);
+                Add(Ref.Line, Format(LOCF("'{0}' is not a [Property(Bind)] member of {1}."), Ref.Name, TypeName), true);
                 continue;
             }
             const bool bStruct = !Ref.Member.empty() && Model->FindScalar(Name) == nullptr && !ContainsName(Model->Lists, Name);
@@ -893,11 +893,11 @@ namespace Lumina::RmlBinding
             { "data-style-",       "Sets the named style property to the expression" },
             { "data-attr-",        "Sets the named attribute to the expression" },
             { "data-attrif-",      "Adds the named attribute while the expression is true" },
-            { "data-event-click",  "Runs a [Bind] method or assignment on click" },
-            { "data-event-change", "Runs a [Bind] method or assignment when an input changes" },
-            { "data-event-submit", "Runs a [Bind] method or assignment when a form submits" },
-            { "data-event-mouseover", "Runs a [Bind] method or assignment on hover" },
-            { "data-event-keydown", "Runs a [Bind] method or assignment on a key press" },
+            { "data-event-click",  "Runs a Bind function or assignment on click" },
+            { "data-event-change", "Runs a Bind function or assignment when an input changes" },
+            { "data-event-submit", "Runs a Bind function or assignment when a form submits" },
+            { "data-event-mouseover", "Runs a Bind function or assignment on hover" },
+            { "data-event-keydown", "Runs a Bind function or assignment on a key press" },
             { "data-alias-",       "Gives an expression a local name for a template" },
         };
         return Attributes;

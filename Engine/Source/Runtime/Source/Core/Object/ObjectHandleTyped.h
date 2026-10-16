@@ -1,5 +1,5 @@
 #pragma once
-#include "ObjectArray.h"
+#include "ObjectReferenceInternal.h"
 #include "Core/Templates/LuminaTemplate.h"
 #include "Core/LuminaMacros.h"
 
@@ -19,17 +19,17 @@ namespace Lumina
     {
     private:
         T*             Object = nullptr;
-        FCObjectEntry* Entry  = nullptr;
+        Object::Internal::FCObjectEntry* Entry  = nullptr;
 
         // Adopts a strong ref the object array already incremented, as the weak to strong upgrade does.
         struct FAdoptRef {};
-        TStrongObjectPtr(T* InObject, FCObjectEntry* InEntry, FAdoptRef) : Object(InObject), Entry(InEntry) {}
+        TStrongObjectPtr(T* InObject, Object::Internal::FCObjectEntry* InEntry, FAdoptRef) : Object(InObject), Entry(InEntry) {}
 
         // Resolved once, so every later add and release goes through the entry instead of the object.
         void AcquireInternal(T* InObject)
         {
             Object = InObject;
-            Entry  = (InObject != nullptr) ? GObjectArray.GetEntry((const CObjectBase*)InObject) : nullptr;
+            Entry  = (InObject != nullptr) ? Object::Internal::GetEntry((const CObjectBase*)InObject) : nullptr;
 
             // An entry-less object is pre-registration, so there is nothing to refcount and nothing to refuse.
             if (Entry != nullptr && !Entry->AddStrongRefIfAlive())
@@ -40,7 +40,7 @@ namespace Lumina
         }
 
         // Copying a source that outlived its object yields null, never a claim on the slot's new occupant.
-        void AdoptInternal(T* InObject, FCObjectEntry* InEntry)
+        void AdoptInternal(T* InObject, Object::Internal::FCObjectEntry* InEntry)
         {
             if (InEntry != nullptr && InEntry->GetObj() != (const CObjectBase*)InObject)
             {
@@ -59,19 +59,22 @@ namespace Lumina
         }
 
         // Takes the pair by value so an assignment can drop its old reference after adopting the new one.
-        static void ReleaseRef(T* InObject, FCObjectEntry* InEntry)
+        static void ReleaseRef(T* InObject, Object::Internal::FCObjectEntry* InEntry)
         {
             if (InEntry != nullptr)
             {
-                GObjectArray.ReleaseStrongRefEntry(InEntry, (const CObjectBase*)InObject);
+                Object::Internal::ReleaseStrongRefEntry(InEntry, (const CObjectBase*)InObject);
             }
         }
 
+        // Cleared before releasing, since the release can destroy this pointer's owner and run this destructor again.
         void ReleaseInternal()
         {
-            ReleaseRef(Object, Entry);
+            T* const             OldObject = Object;
+            Object::Internal::FCObjectEntry* const OldEntry  = Entry;
             Object = nullptr;
             Entry  = nullptr;
+            ReleaseRef(OldObject, OldEntry);
         }
 
     public:
@@ -112,7 +115,7 @@ namespace Lumina
             if (this != &Other && (Object != Other.Object || Entry != Other.Entry))
             {
                 T* const             OldObject = Object;
-                FCObjectEntry* const OldEntry  = Entry;
+                Object::Internal::FCObjectEntry* const OldEntry  = Entry;
                 AdoptInternal(Other.Object, Other.Entry);
                 ReleaseRef(OldObject, OldEntry);
             }
@@ -124,7 +127,7 @@ namespace Lumina
             if (this != &Other)
             {
                 T* const             OldObject = Object;
-                FCObjectEntry* const OldEntry  = Entry;
+                Object::Internal::FCObjectEntry* const OldEntry  = Entry;
                 Object = Other.Object;
                 Entry  = Other.Entry;
                 Other.Object = nullptr;
@@ -139,7 +142,7 @@ namespace Lumina
             if (Object != InObject)
             {
                 T* const             OldObject = Object;
-                FCObjectEntry* const OldEntry  = Entry;
+                Object::Internal::FCObjectEntry* const OldEntry  = Entry;
                 AcquireInternal(InObject);
                 ReleaseRef(OldObject, OldEntry);
             }
@@ -175,7 +178,7 @@ namespace Lumina
         FObjectHandle GetHandle() const
         {
             T* Live = Get();
-            return Live ? GObjectArray.GetHandleByObject(Live) : FObjectHandle();
+            return Live ? Object::Internal::GetHandleByObject(Live) : FObjectHandle();
         }
 
         void Reset()
@@ -191,10 +194,6 @@ namespace Lumina
         template<typename U> friend class TStrongObjectPtr;
         template<typename U> friend class TWeakObjectPtr;
     };
-
-    // The old name, kept for one version so game modules can move over.
-    template<typename T>
-    using TObjectPtr LUM_DEPRECATED(0.1.12, "Renamed to TStrongObjectPtr.") = TStrongObjectPtr<T>;
 
 
     
@@ -217,7 +216,7 @@ namespace Lumina
         {
             if (InObject)
             {
-                Handle = GObjectArray.GetHandleByObject(InObject);
+                Handle = Object::Internal::GetHandleByObject(InObject);
             }
         }
 
@@ -258,7 +257,7 @@ namespace Lumina
 
         TWeakObjectPtr& operator=(T* InObject)
         {
-            Handle = (InObject != nullptr) ? GObjectArray.GetHandleByObject(InObject) : FObjectHandle();
+            Handle = (InObject != nullptr) ? Object::Internal::GetHandleByObject(InObject) : FObjectHandle();
             return *this;
         }
 
@@ -279,19 +278,19 @@ namespace Lumina
         // a use-after-free (unlike Get()-then-wrap). This is the safe way to pin a weakly-held object.
         TStrongObjectPtr<T> Lock() const
         {
-            CObjectBase* Obj = GObjectArray.TryAddStrongRef(Handle);
+            CObjectBase* Obj = Object::Internal::TryAddStrongRef(Handle);
             if (Obj == nullptr)
             {
                 return TStrongObjectPtr<T>();
             }
             // TryAddStrongRef already incremented the strong count; adopt it without a second AddRef.
-            return TStrongObjectPtr<T>(static_cast<T*>(Obj), GObjectArray.GetEntry(Obj),
+            return TStrongObjectPtr<T>(static_cast<T*>(Obj), Object::Internal::GetEntry(Obj),
                 typename TStrongObjectPtr<T>::FAdoptRef{});
         }
 
         T* Get() const
         {
-            return (T*)GObjectArray.ResolveHandle(Handle);
+            return (T*)Object::Internal::ResolveHandle(Handle);
         }
 
         bool IsValid() const
@@ -333,10 +332,4 @@ namespace Lumina
     {
         return GetTypeHash(Object.GetHandle());
     }
-
-    // A module built against the old size reads the wrong bytes, because property offsets bake in at compile time.
-    static_assert(sizeof(TStrongObjectPtr<CObjectBase>) == 16,
-        "TStrongObjectPtr changed size. Bump LUMINA_MODULE_ABI_VERSION in ModuleManager.h so stale modules are rejected, then update this assert.");
-    static_assert(sizeof(TWeakObjectPtr<CObjectBase>) == 8,
-        "TWeakObjectPtr changed size. Bump LUMINA_MODULE_ABI_VERSION in ModuleManager.h so stale modules are rejected, then update this assert.");
 }

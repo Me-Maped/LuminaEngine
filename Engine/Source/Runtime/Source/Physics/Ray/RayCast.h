@@ -9,6 +9,7 @@
 #include "Core/Object/ObjectMacros.h"
 #include "Physics/PhysicsTypes.h"
 #include "Lumina.h"
+#include "Core/Math/Quat/Quat.h"
 #include "RayCast.generated.h"
 
 namespace Lumina
@@ -19,20 +20,78 @@ namespace Lumina
     inline constexpr ECollisionProfiles AllCollisionProfiles = ECollisionProfiles::All;
 
     REFLECT()
-    struct FPhysicsBodyTarget
+    struct SPhysicsBodyTarget
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         uint64 Scene = 0;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         uint32 Slot = Constants::kIndexNoneU32;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         uint32 Generation = 0;
 
         bool IsSet() const { return Scene != 0 && Slot != Constants::kIndexNoneU32; }
+    };
+
+    REFLECT()
+    enum class EQueryShapeType : uint8
+    {
+        Sphere,
+        Box,
+        Capsule,
+    };
+
+    // The volume a sweep or overlap tests, centered on the query position, a capsule running along its rotated up axis.
+    REFLECT()
+    struct SQueryShape
+    {
+        GENERATED_BODY()
+
+        PROPERTY(Hidden)
+        EQueryShapeType Type = EQueryShapeType::Sphere;
+
+        // Meters, for a sphere and a capsule's caps.
+        PROPERTY(Hidden)
+        float Radius = 0.0f;
+
+        // Half a capsule's straight section, so its full height is double the sum of HalfHeight and Radius.
+        PROPERTY(Hidden)
+        float HalfHeight = 0.0f;
+
+        PROPERTY(Hidden)
+        FVector3 HalfExtents = FVector3(0.0f);
+
+        PROPERTY(Hidden)
+        FQuat Rotation = FQuat::Identity();
+
+        static SQueryShape Sphere(float Radius)
+        {
+            SQueryShape Shape;
+            Shape.Radius = Radius;
+            return Shape;
+        }
+
+        static SQueryShape Box(const FVector3& HalfExtents, const FQuat& Rotation)
+        {
+            SQueryShape Shape;
+            Shape.Type = EQueryShapeType::Box;
+            Shape.HalfExtents = HalfExtents;
+            Shape.Rotation = Rotation;
+            return Shape;
+        }
+
+        static SQueryShape Capsule(float Radius, float HalfHeight, const FQuat& Rotation)
+        {
+            SQueryShape Shape;
+            Shape.Type = EQueryShapeType::Capsule;
+            Shape.Radius = Radius;
+            Shape.HalfHeight = HalfHeight;
+            Shape.Rotation = Rotation;
+            return Shape;
+        }
     };
 
     REFLECT()
@@ -40,37 +99,37 @@ namespace Lumina
     {
         GENERATED_BODY()
 
-        PROPERTY()
-        FPhysicsBodyTarget Target;
+        PROPERTY(Hidden)
+        SPhysicsBodyTarget Target;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         uint32 Entity = ECS::NullEntity.Value;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Start;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 End;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Location;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Normal;
 
         /** Normalized distance along ray (0 = start, 1 = end). */
-        PROPERTY()
+        PROPERTY(Hidden)
         float Fraction;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float Distance;
 
         /** Skeleton bone the hit body belongs to (ragdoll per-bone bodies); Constants::kIndexNone otherwise. */
-        PROPERTY()
+        PROPERTY(Hidden)
         int32 BoneIndex = Constants::kIndexNone;
 
-        /** Carries the optionality a by-value result cannot, so a miss is a zeroed struct rather than nothing. */
-        PROPERTY()
+        // A miss keeps the requested Start and End but has no hit data.
+        PROPERTY(Hidden)
         bool bHit = false;
     };
 
@@ -79,32 +138,32 @@ namespace Lumina
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Start = FVector3(0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 End = FVector3(0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         bool bDrawDebug = false;
 
         /** Seconds; 0 = one frame. */
-        PROPERTY()
+        PROPERTY(Hidden)
         float DebugDuration = 0.0f;
         
-        PROPERTY()
+        PROPERTY(Hidden)
         bool bIgnoreSelf = false;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 DebugHitColor = FVector3(0.0, 1.0f, 0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 DebugMissColor = FVector3(1.0f, 0.0f, 0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         ECollisionProfiles LayerMask = AllCollisionProfiles;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         TFixedVector<ECS::FEntity, MaxInlineIgnoreEntities> IgnoreEntities;
 
         FUNCTION()
@@ -119,33 +178,33 @@ namespace Lumina
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Start = FVector3(0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 End = FVector3(0.0f);
 
         /** Sphere radius (meters). */
-        PROPERTY()
+        PROPERTY(Hidden)
         float Radius = 0.0f;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         bool bDrawDebug = false;
 
         /** Seconds; 0 = one frame. */
-        PROPERTY()
+        PROPERTY(Hidden)
         float DebugDuration = 0.0f;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 DebugHitColor = FVector3(0.0, 1.0f, 0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 DebugMissColor = FVector3(1.0f, 0.0f, 0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         ECollisionProfiles LayerMask = AllCollisionProfiles;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         TFixedVector<ECS::FEntity, MaxInlineIgnoreEntities> IgnoreEntities;
 
         FUNCTION()

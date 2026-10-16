@@ -9,6 +9,7 @@
 #include "Core/Object/ObjectCore.h"
 #include "Core/Threading/Thread.h"
 #include "Renderer/MeshData.h"
+#include "Renderer/MeshQuantization.h"
 #include "Renderer/SkeletonResource.h"
 #include "TaskSystem/TaskSystem.h"
 
@@ -293,6 +294,20 @@ namespace Lumina::SkeletalMeshMerge
         Dst.MeshletTriangles.resize(TotalTriangles);
         Dst.MeshletBoneIndices.resize(TotalPalette);
 
+        // Spans every source grid, so each source's vertices re-encode onto it without clamping.
+        {
+            const FMeshVertexPosition GridLow  = { 0u, 0u };
+            const FMeshVertexPosition GridHigh = { ~0u, ~0u };
+            TVector<FVector3> GridCorners;
+            for (const CSkeletalMesh* Source : Sources)
+            {
+                const FMeshPositionGrid& Grid = Source->GetMeshResource().MeshletData.PositionGrid;
+                GridCorners.push_back(DecodeMeshPosition(Grid, GridLow));
+                GridCorners.push_back(DecodeMeshPosition(Grid, GridHigh));
+            }
+            Dst.PositionGrid = ComputeMeshPositionGrid(GridCorners.data(), GridCorners.size());
+        }
+
         //~ Every cell owns a disjoint destination range, so the copy needs no synchronization at all.
 
         Task::ParallelFor((uint32)Cells.size(), [&](uint32 CellIndex)
@@ -320,12 +335,14 @@ namespace Lumina::SkeletalMeshMerge
                 Dst.MeshletSpheres[DstIndex] = Src.MeshletSpheres[SrcIndex];
                 Dst.MeshletCones[DstIndex]   = Src.MeshletCones[SrcIndex];
 
-                // Copied VERBATIM, since JointIndices address the meshlet's own palette, not the skeleton.
+                // JointIndices address the meshlet's own palette, so only the position changes, onto the merged grid.
                 const uint32 VertexEnd = Math::Min(SrcM.VertexOffset + SrcM.VertexCount,
                                                    (uint32)Src.MeshletSkinnedVertices.size());
                 for (uint32 v = SrcM.VertexOffset; v < VertexEnd; ++v)
                 {
-                    Dst.MeshletSkinnedVertices[VertexCursor + (v - SrcM.VertexOffset)] = Src.MeshletSkinnedVertices[v];
+                    FMeshletSkinnedVertex Vertex = Src.MeshletSkinnedVertices[v];
+                    Vertex.Position = EncodeMeshPosition(Dst.PositionGrid, DecodeMeshPosition(Src.PositionGrid, Vertex.Position));
+                    Dst.MeshletSkinnedVertices[VertexCursor + (v - SrcM.VertexOffset)] = Vertex;
                 }
 
                 const uint32 TriangleEnd = Math::Min(SrcM.TriangleOffset + SrcM.TriangleCount,
@@ -383,9 +400,9 @@ namespace Lumina::SkeletalMeshMerge
 
                 for (uint32 LOD = 0; LOD < MAX_MESH_LODS; ++LOD)
                 {
-                    Out.LODMeshletOffset[LOD]   = 0;
-                    Out.LODMeshletCount[LOD]    = 0;
-                    Out.LODScreenThreshold[LOD] = Source.LODScreenThreshold[LOD];
+                    Out.LODMeshletOffset[LOD] = 0;
+                    Out.LODMeshletCount[LOD]  = 0;
+                    Out.LODError[LOD]         = Source.LODError[LOD];
                 }
 
                 SurfaceKeys.push_back(FSurfaceKey{ m, s });
@@ -438,7 +455,7 @@ namespace Lumina::SkeletalMeshMerge
                 {
                     continue;
                 }
-                for (const FMeshSocket& Socket : Skeleton->Sockets)
+                for (const SMeshSocket& Socket : Skeleton->Sockets)
                 {
                     if (FindSocketByName(OutSkeleton->Sockets, Socket.SocketName) == nullptr)
                     {
@@ -450,6 +467,21 @@ namespace Lumina::SkeletalMeshMerge
 
         CSkeletalMesh* OutMesh = NewObject<CSkeletalMesh>(nullptr, MeshName, FGuid::New(), OF_Transient);
         OutMesh->Skeleton  = OutSkeleton;
+
+        // Mesh sockets stay on the mesh, so they keep overriding the skeleton's after the merge.
+        if (Settings.bMergeSockets)
+        {
+            for (const CSkeletalMesh* Source : Sources)
+            {
+                for (const SMeshSocket& Socket : Source->Sockets)
+                {
+                    if (FindSocketByName(OutMesh->Sockets, Socket.SocketName) == nullptr)
+                    {
+                        OutMesh->Sockets.push_back(Socket);
+                    }
+                }
+            }
+        }
         OutMesh->Materials = MergedMaterials;
         OutMesh->MergeSources.reserve(Sources.size());
         for (CSkeletalMesh* Source : Sources)

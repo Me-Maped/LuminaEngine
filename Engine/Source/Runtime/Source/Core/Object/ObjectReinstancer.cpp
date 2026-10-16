@@ -11,6 +11,7 @@
 #include "Core/Serialization/Archiver.h"
 #include "Core/Serialization/MemoryArchiver.h"
 #include "Core/Serialization/ObjectArchiver.h"
+#include "Core/Object/Package/Package.h"
 
 namespace Lumina
 {
@@ -41,9 +42,8 @@ namespace Lumina
         const FGuid        Guid    = Old->GetGUID();
         const EObjectFlags Flags   = Old->GetFlags();
 
-        // Name and GUID are both the instance's identity to whatever resolves one, so the replacement takes
-        // both and the original steps aside on each, rather than the other way round.
-        Old->Rename(MakeRetiredName(Name), Package);
+        // The replacement takes the name, GUID and package, and the original steps aside out of the package so no save writes it.
+        Old->Rename(MakeRetiredName(Name), CPackage::GetTransientPackage());
         Old->HandleGUIDChange(FGuid::New());
 
         CObject* New = NewObject(NewClass, Package, Name, Guid, Flags);
@@ -60,12 +60,12 @@ namespace Lumina
         {
             FMemoryWriter Writer(Bytes);
             FObjectProxyArchiver Ar(Writer, /*bLoadIfFindFails*/ false);
-            Old->GetClass()->SerializeTaggedProperties(Ar, Old);
+            Old->GetClass()->SerializeProperties(Ar, Old);
         }
         {
             FMemoryReader Reader(Bytes);
             FObjectProxyArchiver Ar(Reader, /*bLoadIfFindFails*/ true);
-            NewClass->SerializeTaggedProperties(Ar, New);
+            NewClass->SerializeProperties(Ar, New);
         }
 
         if (PostReplace)
@@ -85,7 +85,7 @@ namespace Lumina
         }
 
         TVector<CObject*> Originals;
-        GObjectArray.ForEachObject([&](CObjectBase* Base, int32)
+        ForEachObject([&](CObjectBase* Base, int32)
         {
             if (Base == nullptr || Base->HasAnyFlag(OF_MarkedDestroy) || Base->HasAnyFlag(OF_DefaultObject))
             {
@@ -97,17 +97,20 @@ namespace Lumina
             }
         });
 
+        // Repointing an original's last holder drops it to zero, so each one is held until the walk is done with it.
+        TVector<TStrongObjectPtr<CObject>> Pins(Originals.begin(), Originals.end());
+
         for (CObject* Old : Originals)
         {
             CClass* const NewClass = ClassMap.find(Old->GetClass())->second;
-            const FObjectHandle OldHandle = GObjectArray.GetHandleByObject(Old);
+            const FObjectHandle OldHandle = Object::Internal::GetHandleByObject(Old);
             if (CObject* New = BuildReplacement(Old, NewClass))
             {
                 ObjectMap.insert_or_assign(Old, New);
 
                 // A weak reference is not a property, so no walk can reach it. Redirecting the handle is what
                 // makes one follow the instance instead of reading as destroyed.
-                GObjectArray.AddReinstanceRedirect(OldHandle, GObjectArray.GetHandleByObject(New));
+                Object::Internal::AddReinstanceRedirect(OldHandle, Object::Internal::GetHandleByObject(New));
                 ++Result.InstancesReplaced;
             }
         }
@@ -139,10 +142,9 @@ namespace Lumina
             return Found->second;
         };
 
-        // Raw is safe here, unlike a general replacement pass: every rewrite swaps one live object for
-        // another, so nothing loses its last reference and dies while the walk is still going.
+        // Raw is safe here because every original is pinned above, so none dies while the walk is still going.
         TVector<CObject*> Live;
-        GObjectArray.ForEachObject([&](CObjectBase* Base, int32)
+        ForEachObject([&](CObjectBase* Base, int32)
         {
             if (Base != nullptr && !Base->HasAnyFlag(OF_MarkedDestroy))
             {
@@ -175,13 +177,16 @@ namespace Lumina
             {
                 continue;   // a retired class is taken out by whoever minted it, not here
             }
-            Doomed.emplace_back(GObjectArray.GetHandleByObject(Old), Old);
+            Doomed.emplace_back(Object::Internal::GetHandleByObject(Old), Old);
         }
+
+        // An original nothing reaches any more dies here, which the handle check below then skips.
+        Pins.clear();
 
         FString Stranded;
         for (const TPair<FObjectHandle, CObject*>& Entry : Doomed)
         {
-            if (GObjectArray.ResolveHandle(Entry.first) != Entry.second)
+            if (Object::Internal::ResolveHandle(Entry.first) != Entry.second)
             {
                 continue;   // an earlier destroy in this loop already took it
             }
@@ -189,7 +194,7 @@ namespace Lumina
             // Forcing it down while a strong reference survives would dangle that holder. The original is
             // already renamed aside and resolves to nothing, so leaving it to its refcount is safe, and a
             // reference the walk could not reach keeps working until its owner lets go.
-            if (GObjectArray.GetStrongRefCountByIndex(Entry.first.Index) == 0)
+            if (Object::Internal::GetStrongRefCountByIndex(Entry.first.Index) == 0)
             {
                 Entry.second->ForceDestroyNow();
             }
@@ -212,6 +217,7 @@ namespace Lumina
                      Result.OriginalsOutlivingTheSwap, Stranded);
         }
 
+        Result.Replaced = Move(ObjectMap);
         return Result;
     }
 }

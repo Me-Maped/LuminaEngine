@@ -229,17 +229,17 @@ namespace Lumina
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FName Name;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FString Payload;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float Time = 0.0f;
 
         // Entity the event track is bound to, or the null entity for a sequence-wide track.
-        PROPERTY()
+        PROPERTY(Hidden)
         ECS::FEntity Target = ECS::NullEntity;
     };
 
@@ -450,7 +450,7 @@ namespace Lumina
         struct FPlayingSound
         {
             const CSequenceTrack* Track = nullptr;
-            FAudioHandle          Handle;
+            SAudioHandle          Handle;
             int32                 ClipIndex = Constants::kIndexNone;
             bool                  bPaused = false;
         };

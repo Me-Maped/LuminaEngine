@@ -549,6 +549,9 @@ namespace Lumina::RHI
         VkImageView          FallbackView = VK_NULL_HANDLE;
 
         TVector<FDeferredSampledWrite> DeferredWrites[kFramesInFlight];
+
+        // Where each slot's pending write sits in DeferredWrites, so a load registering thousands of textures stays linear.
+        THashMap<uint64, uint32>       DeferredWriteIndex[kFramesInFlight];
     };
     
     struct FSemaphore
@@ -594,6 +597,10 @@ namespace Lumina::RHI
 
         // Tracked per list, since a submitted list is not reset until its frame slot comes back around.
         bool bOpen = false;
+
+        // A failed bind leaves the previous pipeline live, and running it with this pass's arguments loses the device.
+        bool bGraphicsPipelineBound = false;
+        bool bComputePipelineBound  = false;
     };
 
     struct FSurface
@@ -806,6 +813,8 @@ namespace Lumina::RHI
 
         FAllQueuesLock(const FAllQueuesLock&) = delete;
         FAllQueuesLock& operator=(const FAllQueuesLock&) = delete;
+        FAllQueuesLock(FAllQueuesLock&&) = delete;
+        FAllQueuesLock& operator=(FAllQueuesLock&&) = delete;
     };
 
     static void DestroySwapchainImages(FSwapchain& SC);
@@ -930,6 +939,7 @@ namespace Lumina::RHI
 
     static void PushDrawArgs(VkCommandBuffer Cmd, GPUPtr Args)
     {
+        DEBUG_ASSERT(IsRootAligned(Args), "Pass args must sit on a 16-byte boundary; stage them with CopyTransient or AllocTransient.");
         if (Args != 0)
         {
             vkCmdPushConstants(Cmd, GDevice->PipelineLayout, VK_SHADER_STAGE_ALL, 0, sizeof(VkDeviceAddress), &Args);
@@ -1220,6 +1230,11 @@ namespace Lumina::RHI
         // Reported rather than fatal: a renderer that never dispatches a mesh shader still runs here.
         Result.MeshReason = [&]() -> FString
         {
+            if (EnumHasAnyFlags(DeviceDesc.DisabledFeatures, EDeviceFeature::MeshShading))
+            {
+                return "turned off at launch";
+            }
+
             if (!HasExtension(VK_EXT_MESH_SHADER_EXTENSION_NAME))
             {
                 return "no VK_EXT_mesh_shader extension";
@@ -1569,6 +1584,21 @@ namespace Lumina::RHI
                 return nullptr;
             }
             return GDevice->CommandLists[CommandList].CommandBuffer;
+        }
+
+        FNativeTexture GetNativeTexture(FTextureH Texture)
+        {
+            FNativeTexture Out;
+            if (GDevice == nullptr || !IsValid(Texture))
+            {
+                return Out;
+            }
+            const FTexture& TextureData = GDevice->Textures[Texture];
+            Out.Image  = TextureData.Image;
+            Out.View   = TextureData.DefaultImageView;
+            Out.Format = (uint32)ConvertFormat(TextureData.Desc.Format);
+            Out.Layout = (uint32)VK_IMAGE_LAYOUT_GENERAL;
+            return Out;
         }
 
         void RegisterDeviceCreationRequest(const FDeviceCreationRequest& Request)
@@ -2424,7 +2454,7 @@ namespace Lumina::RHI
 
         if (!Chosen.bMeshCapable)
         {
-            LOG_DISPLAY("Mesh shading unavailable ({}); the mesh path is disabled.", Chosen.MeshReason);
+            LOG_DISPLAY("Mesh shading unavailable ({}); meshlets draw through the vertex path.", Chosen.MeshReason);
         }
 
         // A driver reporting the maximum means no limit, but every derived divide then overflows.
@@ -3190,32 +3220,45 @@ namespace Lumina::RHI
                 return;
             }
 
-            FMemMark Mark;
-            auto* Infos  = Mark.AllocArray<VkDescriptorImageInfo>((uint32)Pending.size());
-            auto* Writes = Mark.AllocArray<VkWriteDescriptorSet>((uint32)Pending.size());
-            for (size_t i = 0; i < Pending.size(); ++i)
+            // A level load can register thousands of textures at once, so the writes go out a fixed batch at a time.
+            constexpr uint32 kWriteBatch = 256;
+            VkDescriptorImageInfo Infos[kWriteBatch];
+            VkWriteDescriptorSet  Writes[kWriteBatch];
+            uint32 Count = 0;
+
+            for (const FDeferredSampledWrite& Write : Pending)
             {
-                const bool bSampler = Pending[i].Sampler != VK_NULL_HANDLE;
-                Infos[i] = bSampler
-                    ? VkDescriptorImageInfo{ Pending[i].Sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED }
-                    : VkDescriptorImageInfo{ VK_NULL_HANDLE, Pending[i].View, VK_IMAGE_LAYOUT_GENERAL };
-                Writes[i] = VkWriteDescriptorSet
+                const bool bSampler = Write.Sampler != VK_NULL_HANDLE;
+                Infos[Count] = bSampler
+                    ? VkDescriptorImageInfo{ Write.Sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED }
+                    : VkDescriptorImageInfo{ VK_NULL_HANDLE, Write.View, VK_IMAGE_LAYOUT_GENERAL };
+                Writes[Count] = VkWriteDescriptorSet
                 {
                     .sType              = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                     .pNext              = nullptr,
                     .dstSet             = HeapData.DescriptorSets[Copy],
                     .dstBinding         = (uint32)(bSampler ? kSamplerBindingSlot : kImageBindingSlot),
-                    .dstArrayElement    = Pending[i].Slot,
+                    .dstArrayElement    = Write.Slot,
                     .descriptorCount    = 1,
                     .descriptorType     = bSampler ? VK_DESCRIPTOR_TYPE_SAMPLER : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                    .pImageInfo         = &Infos[i],
+                    .pImageInfo         = &Infos[Count],
                     .pBufferInfo        = nullptr,
                     .pTexelBufferView   = nullptr
                 };
+
+                if (++Count == kWriteBatch)
+                {
+                    vkUpdateDescriptorSets(*GDevice, Count, Writes, 0, nullptr);
+                    Count = 0;
+                }
             }
 
-            vkUpdateDescriptorSets(*GDevice, (uint32)Pending.size(), Writes, 0, nullptr);
+            if (Count > 0)
+            {
+                vkUpdateDescriptorSets(*GDevice, Count, Writes, 0, nullptr);
+            }
             Pending.clear();
+            HeapData.DeferredWriteIndex[Copy].clear();
         });
     }
 
@@ -4803,9 +4846,19 @@ namespace Lumina::RHI
         return GDevice->Pipelines.Emplace(Pipeline, VK_PIPELINE_BIND_POINT_COMPUTE);
     }
 
+    bool SupportsMeshShaders()
+    {
+        return GDevice != nullptr && GDevice->bMeshShaderSupported;
+    }
+
     uint32 GetMaxMeshWorkGroupCount()
     {
         return GDevice->MaxMeshWorkGroupCountX;
+    }
+
+    uint32 GetMaxViewports()
+    {
+        return GDevice->Properties.limits.maxViewports;
     }
 
     bool SupportsAsyncTransfer()
@@ -5313,21 +5366,55 @@ namespace Lumina::RHI
     }
 #endif
 
+    // Sampler slots number separately from image slots, so a write is keyed by its kind as well as its slot.
+    static uint64 DeferredWriteKey(uint32 Slot, bool bSampler)
+    {
+        return (uint64)Slot | ((uint64)bSampler << 32);
+    }
+
+    // Caller holds HeapMutex. Each copy takes the write at its own frame slot's next BeginFrame, replacing one already queued.
+    static void QueueDeferredWrite(FTextureHeap& HeapData, const FDeferredSampledWrite& Write)
+    {
+        const uint64 Key = DeferredWriteKey(Write.Slot, Write.Sampler != VK_NULL_HANDLE);
+        for (uint32 Copy = 0; Copy < kFramesInFlight; ++Copy)
+        {
+            TVector<FDeferredSampledWrite>& Writes = HeapData.DeferredWrites[Copy];
+            const auto [It, bInserted] = HeapData.DeferredWriteIndex[Copy].try_emplace(Key, (uint32)Writes.size());
+            if (bInserted)
+            {
+                Writes.push_back(Write);
+            }
+            else
+            {
+                Writes[It->second] = Write;
+            }
+        }
+    }
+
     // Caller holds HeapMutex.
-    // Sampler slots number separately from image slots, so only a pending write of the same kind is replaced.
     static void DropDeferredWrite(FTextureHeap& HeapData, uint32 Slot, bool bSampler)
     {
-        for (TVector<FDeferredSampledWrite>& Writes : HeapData.DeferredWrites)
+        const uint64 Key = DeferredWriteKey(Slot, bSampler);
+        for (uint32 Copy = 0; Copy < kFramesInFlight; ++Copy)
         {
-            for (size_t i = 0; i < Writes.size(); ++i)
+            TVector<FDeferredSampledWrite>& Writes = HeapData.DeferredWrites[Copy];
+            THashMap<uint64, uint32>& Index = HeapData.DeferredWriteIndex[Copy];
+
+            const auto It = Index.find(Key);
+            if (It == Index.end())
             {
-                if (Writes[i].Slot == Slot && (Writes[i].Sampler != VK_NULL_HANDLE) == bSampler)
-                {
-                    Writes[i] = Writes.back();
-                    Writes.pop_back();
-                    break;
-                }
+                continue;
             }
+
+            const uint32 At = It->second;
+            Index.erase(It);
+
+            if (At + 1u != (uint32)Writes.size())
+            {
+                Writes[At] = Writes.back();
+                Index[DeferredWriteKey(Writes[At].Slot, Writes[At].Sampler != VK_NULL_HANDLE)] = At;
+            }
+            Writes.pop_back();
         }
     }
 
@@ -5360,46 +5447,16 @@ namespace Lumina::RHI
         vkUpdateDescriptorSets(*GDevice, kFramesInFlight, Writes, 0, nullptr);
     }
 
-    // Caller holds HeapMutex. Each copy takes the view at its own frame slot's next BeginFrame.
+    // Caller holds HeapMutex.
     static void DeferSampledWrite(FTextureHeap& HeapData, uint32 Slot, VkImageView View)
     {
-        for (TVector<FDeferredSampledWrite>& Writes : HeapData.DeferredWrites)
-        {
-            bool bReplaced = false;
-            for (FDeferredSampledWrite& Pending : Writes)
-            {
-                if (Pending.Slot == Slot && Pending.Sampler == VK_NULL_HANDLE)
-                {
-                    Pending.View = View;
-                    bReplaced    = true;
-                    break;
-                }
-            }
-            if (!bReplaced)
-            {
-                Writes.push_back(FDeferredSampledWrite{ Slot, View });
-            }
-        }
+        QueueDeferredWrite(HeapData, FDeferredSampledWrite{ Slot, View });
     }
 
-    // Caller holds HeapMutex. Each copy takes the sampler at its own frame slot's next BeginFrame.
+    // Caller holds HeapMutex.
     static void DeferSamplerWrite(FTextureHeap& HeapData, uint32 Slot, VkSampler Sampler)
     {
-        for (TVector<FDeferredSampledWrite>& Writes : HeapData.DeferredWrites)
-        {
-            auto Existing = Algo::FindIf(Writes, [Slot](const FDeferredSampledWrite& Pending)
-            {
-                return Pending.Slot == Slot && Pending.Sampler != VK_NULL_HANDLE;
-            });
-            if (Existing != Writes.end())
-            {
-                Existing->Sampler = Sampler;
-            }
-            else
-            {
-                Writes.push_back(FDeferredSampledWrite{ Slot, VK_NULL_HANDLE, Sampler });
-            }
-        }
+        QueueDeferredWrite(HeapData, FDeferredSampledWrite{ Slot, VK_NULL_HANDLE, Sampler });
     }
 
     // Caller holds HeapMutex. Slot must already be marked occupied.
@@ -5624,6 +5681,11 @@ namespace Lumina::RHI
         return Slot;
     }
 
+    uint32 GetSampledHeapCapacity()
+    {
+        return GDevice != nullptr ? GDevice->SampledHeapCapacity : 0u;
+    }
+
     void HeapSetFallbackTexture(FTextureHeapH Heap, FTextureH Texture)
     {
         FTextureHeap& HeapData = GDevice->TextureHeaps[Heap];
@@ -5636,8 +5698,10 @@ namespace Lumina::RHI
             return;
         }
 
+        // Written in bounded runs, since a heap of a million slots would otherwise stage every descriptor at once.
+        constexpr uint32 kFallbackRun = 4096;
         TVector<VkDescriptorImageInfo> ImageInfos;
-        ImageInfos.reserve(HeapData.SampledImageSlots.GetCapacity());
+        ImageInfos.reserve(kFallbackRun);
 
         uint32 First = 0;
         auto FlushRun = [&]()
@@ -5688,6 +5752,11 @@ namespace Lumina::RHI
                 .imageView      = HeapData.FallbackView,
                 .imageLayout    = VK_IMAGE_LAYOUT_GENERAL
             });
+
+            if (ImageInfos.size() == kFallbackRun)
+            {
+                FlushRun();
+            }
         }
         FlushRun();
     }
@@ -5935,7 +6004,9 @@ namespace Lumina::RHI
             .imageColorSpace  = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
             .imageExtent      = ActualExtent,
             .imageArrayLayers = 1,
-            .imageUsage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            // Transfer source lets a window capture copy the presented image back, where the surface allows it.
+            .imageUsage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                              | (Caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT),
             .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
             .preTransform     = Caps.currentTransform,
             .compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
@@ -6231,6 +6302,39 @@ namespace Lumina::RHI
         vkCmdPipelineBarrier2(Cmd, &Dep);
     }
 
+    // Claims the next one-time command buffer from this queue's ring for the current slot, already begun.
+    static VkCommandBuffer BeginTransientCommandBuffer(EQueueType Queue)
+    {
+        FScopeLock RingLock(GDevice->TransientRingMutexes[(uint32)Queue]);
+        const uint32 Slot = GDevice->CurrentRetireSlot.load(std::memory_order_acquire);
+        FDeviceImpl::FTransientRing& Ring = GDevice->TransientRings[(uint32)Queue][Slot];
+
+        if (Ring.Used == Ring.Buffers.size())
+        {
+            VkCommandBufferAllocateInfo AllocInfo = {};
+            AllocInfo.sType                 = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            AllocInfo.level                 = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            AllocInfo.commandBufferCount    = 1;
+            AllocInfo.commandPool           = Ring.Pool;
+
+            VkCommandBuffer Grown = VK_NULL_HANDLE;
+            VK_CHECK(vkAllocateCommandBuffers(*GDevice, &AllocInfo, &Grown));
+            Ring.Buffers.push_back(Grown);
+        }
+
+        VkCommandBuffer Buffer = Ring.Buffers[Ring.Used++];
+
+        const VkCommandBufferBeginInfo BeginInfo
+        {
+            .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext              = nullptr,
+            .flags              = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo   = nullptr
+        };
+        vkBeginCommandBuffer(Buffer, &BeginInfo);
+        return Buffer;
+    }
+
     // Both submit paths must call this: a target created this frame is still UNDEFINED until it runs.
     // Caller holds the queue lock, which is what guards the ring.
     static VkCommandBuffer DrainPendingImageInits(EQueueType Queue)
@@ -6254,9 +6358,41 @@ namespace Lumina::RHI
             return VK_NULL_HANDLE;
         }
 
-        FMemMark Scratch;
-        auto* TextureBarriers = Scratch.AllocArray<VkImageMemoryBarrier2>(UninitializedTextures.size());
+        // A level load can create thousands of images between submits, so the barriers go out a fixed batch at a time.
+        constexpr uint32 kBarrierBatch = 256;
+        VkImageMemoryBarrier2 Barriers[kBarrierBatch];
         uint32 BarrierCount = 0;
+
+        // Claimed on the first batch, so a drain whose textures were all destroyed submits nothing.
+        VkCommandBuffer TransitionBuffer = VK_NULL_HANDLE;
+
+        auto FlushBarriers = [&]()
+        {
+            if (BarrierCount == 0)
+            {
+                return;
+            }
+            if (TransitionBuffer == VK_NULL_HANDLE)
+            {
+                TransitionBuffer = BeginTransientCommandBuffer(Queue);
+            }
+
+            const VkDependencyInfo DependencyInfo
+            {
+                .sType                      = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .pNext                      = nullptr,
+                .dependencyFlags            = 0,
+                .memoryBarrierCount         = 0,
+                .pMemoryBarriers            = nullptr,
+                .bufferMemoryBarrierCount   = 0,
+                .pBufferMemoryBarriers      = nullptr,
+                .imageMemoryBarrierCount    = BarrierCount,
+                .pImageMemoryBarriers       = Barriers
+            };
+            vkCmdPipelineBarrier2(TransitionBuffer, &DependencyInfo);
+            BarrierCount = 0;
+        };
+
         for (FTextureH Handle : UninitializedTextures)
         {
             const FTexture* Texture = GDevice->Textures.TryGet(Handle);
@@ -6265,7 +6401,7 @@ namespace Lumina::RHI
                 continue;
             }
 
-            TextureBarriers[BarrierCount++] =
+            Barriers[BarrierCount++] =
             {
                 .sType                  = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                 .pNext                  = nullptr,
@@ -6280,56 +6416,18 @@ namespace Lumina::RHI
                 .image                  = Texture->Image,
                 .subresourceRange       = FullSubresourceRange(AspectsForFormat(Texture->Desc.Format)),
             };
+
+            if (BarrierCount == kBarrierBatch)
+            {
+                FlushBarriers();
+            }
         }
+        FlushBarriers();
 
-        if (BarrierCount == 0)
+        if (TransitionBuffer != VK_NULL_HANDLE)
         {
-            return VK_NULL_HANDLE;
+            vkEndCommandBuffer(TransitionBuffer);
         }
-
-        FScopeLock RingLock(GDevice->TransientRingMutexes[(uint32)Queue]);
-        const uint32 Slot = GDevice->CurrentRetireSlot.load(std::memory_order_acquire);
-        FDeviceImpl::FTransientRing& Ring = GDevice->TransientRings[(uint32)Queue][Slot];
-
-        if (Ring.Used == Ring.Buffers.size())
-        {
-            VkCommandBufferAllocateInfo AllocInfo = {};
-            AllocInfo.sType                 = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            AllocInfo.level                 = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            AllocInfo.commandBufferCount    = 1;
-            AllocInfo.commandPool           = Ring.Pool;
-
-            VkCommandBuffer Grown = VK_NULL_HANDLE;
-            VK_CHECK(vkAllocateCommandBuffers(*GDevice, &AllocInfo, &Grown));
-            Ring.Buffers.push_back(Grown);
-        }
-
-        VkCommandBuffer TransitionBuffer = Ring.Buffers[Ring.Used++];
-
-        VkCommandBufferBeginInfo BeginInfo
-        {
-            .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext              = nullptr,
-            .flags              = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            .pInheritanceInfo   = nullptr
-        };
-        vkBeginCommandBuffer(TransitionBuffer, &BeginInfo);
-
-        VkDependencyInfo DependencyInfo
-        {
-            .sType                      = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .pNext                      = nullptr,
-            .dependencyFlags            = 0,
-            .memoryBarrierCount         = 0,
-            .pMemoryBarriers            = nullptr,
-            .bufferMemoryBarrierCount   = 0,
-            .pBufferMemoryBarriers      = nullptr,
-            .imageMemoryBarrierCount    = BarrierCount,
-            .pImageMemoryBarriers       = TextureBarriers
-        };
-        vkCmdPipelineBarrier2(TransitionBuffer, &DependencyInfo);
-        vkEndCommandBuffer(TransitionBuffer);
-
         return TransitionBuffer;
     }
 
@@ -6557,6 +6655,8 @@ namespace Lumina::RHI
 #endif
         CommandList.BreadcrumbDepth = 0;
         CommandList.bOpen = true;
+        CommandList.bGraphicsPipelineBound = false;
+        CommandList.bComputePipelineBound  = false;
         GDevice->OpenCommandLists[(uint32)Type].fetch_add(1, std::memory_order_release);
 
         // A recycled list's pool was already reset by ResetCommandList.
@@ -7598,9 +7698,24 @@ namespace Lumina::RHI
 
     void CmdSetPipeline(FCmdListH CL, FPipelineH Pipeline)
     {
-        FPipeline PL = GDevice->Pipelines[Pipeline];
         FCommandList& List = GDevice->CommandLists[CL];
+        const FPipeline PL = Pipeline.Handle != 0 ? GDevice->Pipelines[Pipeline] : FPipeline{};
+        if (PL.Pipeline == VK_NULL_HANDLE)
+        {
+            // The bind point of a pipeline that never built is unknown, so neither kind may run until a real bind.
+            List.bGraphicsPipelineBound = false;
+            List.bComputePipelineBound  = false;
+            return;
+        }
         vkCmdBindPipeline(List.CommandBuffer, PL.BindPoint, PL.Pipeline);
+        if (PL.BindPoint == VK_PIPELINE_BIND_POINT_COMPUTE)
+        {
+            List.bComputePipelineBound = true;
+        }
+        else
+        {
+            List.bGraphicsPipelineBound = true;
+        }
     }
 
     void CmdSetScissor(FCmdListH CL, const FRect& Rect)
@@ -7613,6 +7728,27 @@ namespace Lumina::RHI
         
         auto VkCmdBuf = GDevice->CommandLists[CL].CommandBuffer;
         vkCmdSetScissorWithCount(VkCmdBuf, 1, &Scissor);
+    }
+
+    void CmdSetViewportArray(FCmdListH CL, TSpan<const FRect> Rects)
+    {
+        constexpr uint32 kMaxViewportArray = 16;
+        const uint32 Count = (uint32)Rects.size();
+        ASSERT(Count > 0u && Count <= kMaxViewportArray && Count <= GDevice->Properties.limits.maxViewports);
+
+        VkViewport Viewports[kMaxViewportArray];
+        VkRect2D   Scissors[kMaxViewportArray];
+        for (uint32 i = 0; i < Count; ++i)
+        {
+            const FRect& Rect = Rects[i];
+            Viewports[i] = VkViewport{ (float)Rect.MinX, (float)Rect.MinY, (float)Rect.MaxX - (float)Rect.MinX, (float)Rect.MaxY - (float)Rect.MinY, 0.0f, 1.0f };
+            Scissors[i]  = VkRect2D{ { (int32)Rect.MinX, (int32)Rect.MinY },
+                                     { (uint32)Math::Abs((int32)(Rect.MaxX - Rect.MinX)), (uint32)Math::Abs((int32)(Rect.MaxY - Rect.MinY)) } };
+        }
+
+        VkCommandBuffer VkCmdBuf = GDevice->CommandLists[CL].CommandBuffer;
+        vkCmdSetViewportWithCount(VkCmdBuf, Count, Viewports);
+        vkCmdSetScissorWithCount(VkCmdBuf, Count, Scissors);
     }
 
     void CmdSetViewport(FCmdListH CL, const FRect& Rect)
@@ -7657,6 +7793,8 @@ namespace Lumina::RHI
 
     void CmdSetSceneRoot(FCmdListH CL, const FSceneBindings& Bindings)
     {
+        DEBUG_ASSERT(IsRootAligned(Bindings.Root) && IsRootAligned(Bindings.SceneData) && IsRootAligned(Bindings.Instances) && IsRootAligned(Bindings.Lights),
+                     "Scene root pointers must sit on a 16-byte boundary.");
         const VkDeviceAddress Addresses[4]
         {
             (VkDeviceAddress)Bindings.Root,      (VkDeviceAddress)Bindings.SceneData,
@@ -7668,6 +7806,11 @@ namespace Lumina::RHI
 
     void CmdDispatch(FCmdListH CL, GPUPtr DrawArgs, uint32 GroupX, uint32 GroupY, uint32 GroupZ)
     {
+        if (!GDevice->CommandLists[CL].bComputePipelineBound)
+        {
+            return;
+        }
+
         auto VkCmdBuf = GDevice->CommandLists[CL].CommandBuffer;
         PushDrawArgs(VkCmdBuf, DrawArgs);
 
@@ -7676,6 +7819,11 @@ namespace Lumina::RHI
 
     void CmdDraw(FCmdListH CL, GPUPtr DrawArgs, uint32 VertexCount, uint32 InstanceCount, uint32 FirstVertex, uint32 FirstInstance)
     {
+        if (!GDevice->CommandLists[CL].bGraphicsPipelineBound)
+        {
+            return;
+        }
+
         auto VkCmdBuf = GDevice->CommandLists[CL].CommandBuffer;
         PushDrawArgs(VkCmdBuf, DrawArgs);
         
@@ -7684,6 +7832,11 @@ namespace Lumina::RHI
 
     void CmdDrawIndexed(FCmdListH CL, FGPURange Indices, GPUPtr DrawArgs, uint32 IndexCount, uint32 InstanceCount, uint32 FirstIndex, int32 VertexOffset, uint32 FirstInstance, EIndexType IndexType)
     {
+        if (!GDevice->CommandLists[CL].bGraphicsPipelineBound)
+        {
+            return;
+        }
+
         auto& CommandList           = GDevice->CommandLists[CL];
         VkCommandBuffer VkCmdBuf    = CommandList.CommandBuffer;
 
@@ -7699,6 +7852,11 @@ namespace Lumina::RHI
 
     void CmdDrawIndirect(FCmdListH CL, GPUPtr Args, FGPURange Arguments, uint32 DrawCount, uint32 Stride)
     {
+        if (!GDevice->CommandLists[CL].bGraphicsPipelineBound)
+        {
+            return;
+        }
+
         DEBUG_ASSERT((uint64)DrawCount * Stride <= Arguments.Size, "Indirect draw reads past its argument range.");
         const GPUPtr IndirectBuffer = Arguments.Address;
         const uint32 Offset = 0;
@@ -7725,6 +7883,11 @@ namespace Lumina::RHI
 
     void CmdDispatchIndirect(FCmdListH CL, GPUPtr Args, FGPURange Arguments)
     {
+        if (!GDevice->CommandLists[CL].bComputePipelineBound)
+        {
+            return;
+        }
+
         DEBUG_ASSERT(sizeof(FDispatchIndirectArguments) <= Arguments.Size, "Indirect dispatch reads past its argument range.");
         const GPUPtr IndirectBuffer = Arguments.Address;
         const uint32 Offset = 0;
@@ -7756,6 +7919,11 @@ namespace Lumina::RHI
 
     void CmdDrawIndexedIndirect(FCmdListH CL, FGPURange Indices, GPUPtr Args, FGPURange Arguments, uint32 DrawCount, uint32 Stride, EIndexType IndexType)
     {
+        if (!GDevice->CommandLists[CL].bGraphicsPipelineBound)
+        {
+            return;
+        }
+
         DEBUG_ASSERT((uint64)DrawCount * Stride <= Arguments.Size, "Indexed indirect draw reads past its argument range.");
         const GPUPtr IndirectBuffer = Arguments.Address;
         const uint32 Offset = 0;
@@ -7788,6 +7956,11 @@ namespace Lumina::RHI
 
     void CmdDrawMeshTasks(FCmdListH CL, GPUPtr DrawArgs, uint32 GroupCountX, uint32 GroupCountY, uint32 GroupCountZ)
     {
+        if (!GDevice->CommandLists[CL].bGraphicsPipelineBound)
+        {
+            return;
+        }
+
         VkCommandBuffer VkCmdBuf = GDevice->CommandLists[CL].CommandBuffer;
         PushDrawArgs(VkCmdBuf, DrawArgs);
 
@@ -7796,6 +7969,11 @@ namespace Lumina::RHI
 
     void CmdDrawMeshTasksIndirect(FCmdListH CL, GPUPtr DrawArgs, FGPURange Arguments, uint32 DrawCount, uint32 Stride)
     {
+        if (!GDevice->CommandLists[CL].bGraphicsPipelineBound)
+        {
+            return;
+        }
+
         DEBUG_ASSERT((uint64)DrawCount * Stride <= Arguments.Size, "Mesh task indirect draw reads past its argument range.");
         const GPUPtr IndirectBuffer = Arguments.Address;
         const uint32 Offset = 0;
@@ -7820,8 +7998,53 @@ namespace Lumina::RHI
         vkCmdDrawMeshTasksIndirectEXT(VkCmdBuf, Indirect.Buffer, Indirect.Offset + Offset, DrawCount, Stride);
     }
 
+    void CmdDrawIndirectCount(FCmdListH CL, GPUPtr Args, FGPURange Arguments, FGPURange CountRange, uint32 MaxDrawCount, uint32 Stride)
+    {
+        if (!GDevice->CommandLists[CL].bGraphicsPipelineBound)
+        {
+            return;
+        }
+
+        DEBUG_ASSERT((uint64)MaxDrawCount * Stride <= Arguments.Size, "Indirect count draw reads past its argument range.");
+        DEBUG_ASSERT(sizeof(uint32) <= CountRange.Size, "Indirect count draw reads past its count range.");
+        const GPUPtr IndirectBuffer = Arguments.Address;
+        const GPUPtr CountBuffer    = CountRange.Address;
+        VkCommandBuffer VkCmdBuf = GDevice->CommandLists[CL].CommandBuffer;
+
+        if (UseAddressCommands())
+        {
+            PushDrawArgs(VkCmdBuf, Args);
+
+            const VkDrawIndirectCount2InfoKHR Info
+            {
+                .sType             = VK_STRUCTURE_TYPE_DRAW_INDIRECT_COUNT_2_INFO_KHR,
+                .addressRange      = StridedRange(IndirectBuffer, (uint64)MaxDrawCount * Stride, Stride),
+                .addressFlags      = kEngineAddressFlags,
+                .countAddressRange = AddressRange(CountBuffer, sizeof(uint32)),
+                .countAddressFlags = kEngineAddressFlags,
+                .maxDrawCount      = MaxDrawCount,
+            };
+            vkCmdDrawIndirectCount2KHR(VkCmdBuf, &Info);
+            return;
+        }
+
+        FBufferRange Indirect, Count;
+        if (!ResolveBuffers(IndirectBuffer, Indirect, CountBuffer, Count))
+        {
+            return;
+        }
+
+        PushDrawArgs(VkCmdBuf, Args);
+        vkCmdDrawIndirectCount(VkCmdBuf, Indirect.Buffer, Indirect.Offset, Count.Buffer, Count.Offset, MaxDrawCount, Stride);
+    }
+
     void CmdDrawMeshTasksIndirectCount(FCmdListH CL, GPUPtr DrawArgs, FGPURange Arguments, FGPURange CountRange, uint32 MaxDrawCount, uint32 Stride)
     {
+        if (!GDevice->CommandLists[CL].bGraphicsPipelineBound)
+        {
+            return;
+        }
+
         DEBUG_ASSERT((uint64)MaxDrawCount * Stride <= Arguments.Size, "Mesh task indirect count draw reads past its argument range.");
         DEBUG_ASSERT(sizeof(uint32) <= CountRange.Size, "Mesh task indirect count reads past its count range.");
         const GPUPtr IndirectBuffer = Arguments.Address;

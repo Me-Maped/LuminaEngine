@@ -175,15 +175,15 @@ namespace Lumina
         (void)std::atomic_ref<uint32>(RenderDataVersion).fetch_add(1u, std::memory_order_release);
     }
 
-    FAABB SDynamicMeshComponent::GetAABB() const
+    SAABB SDynamicMeshComponent::GetAABB() const
     {
         const TSharedPtr<FDynamicMeshRenderData> Data = LoadRenderData();
         if (!Data)
         {
-            return FAABB();
+            return SAABB();
         }
 
-        return FAABB(Data->LocalMin, Data->LocalMax);
+        return SAABB(Data->LocalMin, Data->LocalMax);
     }
 
     void SDynamicMeshComponent::ResolveMaterialsInto(FDynamicMeshRenderData& Data) const
@@ -418,7 +418,7 @@ namespace Lumina
         }
 
         // Handed down so CreateForResource does not walk the positions a second time for the header.
-        Resource->LocalBounds = FAABB(Min, Max);
+        Resource->LocalBounds = SAABB(Min, Max);
         return Resource;
     }
 
@@ -487,8 +487,7 @@ namespace Lumina
             {
                 R.LODMeshletOffset[LOD] = Geometry[i].LODMeshletOffset[LOD];
                 R.LODMeshletCount[LOD]  = Geometry[i].LODMeshletCount[LOD];
-                const float Threshold   = Geometry[i].LODScreenThreshold[LOD];
-                R.LODScreenThresholdSq[LOD] = Threshold * Threshold;
+                R.LODError[LOD]         = Geometry[i].LODError[LOD];
             }
         }
         

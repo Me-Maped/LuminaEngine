@@ -1,10 +1,47 @@
 ﻿#include "RuntimePCH.h"
 #include "SceneRendererInternal.h"
+#include "World/Scene/RenderScene/SunShadowMath.h"
 
 #include <bit>
 
 namespace Lumina
 {
+    // Row 1 of a view-projection holds the pixel scale at unit distance whatever the rotation, perspective or orthographic.
+    static float MakeLODErrorScale(const FMatrix4& ViewProjection, float HeightPixels, float ToleratedPixels)
+    {
+        if (HeightPixels <= 0.0f || ToleratedPixels <= 0.0f)
+        {
+            return 0.0f;
+        }
+        const FVector3 Row1 = FVector3(ViewProjection[0][1], ViewProjection[1][1], ViewProjection[2][1]);
+        return 0.5f * HeightPixels * Math::Length(Row1) / ToleratedPixels;
+    }
+
+    static float CameraLODPixels()
+    {
+        const CRendererSettings* Settings = GetDefault<CRendererSettings>();
+        return 1.0f / Math::Clamp(Settings != nullptr ? Settings->LODDistanceScale : 1.0f, 0.25f, 16.0f);
+    }
+
+    static float ShadowLODTexels()
+    {
+        const CRendererSettings* Settings = GetDefault<CRendererSettings>();
+        return 1.0f / Math::Clamp(Settings != nullptr ? Settings->ShadowLODScale : 1.0f, 0.25f, 16.0f);
+    }
+
+    static FCullView MakeCameraLODView(const FViewVolume& ViewVolume, float DisplayHeight)
+    {
+        const FMatrix4 CameraVP = ViewVolume.GetProjectionMatrix() * ViewVolume.GetViewMatrix();
+        const uint32   Flags    = ViewVolume.IsOrthographic() ? (uint32)ECullViewFlags::OrthographicLOD : 0u;
+        float FlagsAsFloat;
+        std::memcpy(&FlagsAsFloat, &Flags, sizeof(float));
+
+        FCullView View = {};
+        View.ViewOriginAndFlags = FVector4(ViewVolume.GetViewPosition(), FlagsAsFloat);
+        View.LODErrorScale      = MakeLODErrorScale(CameraVP, DisplayHeight, CameraLODPixels());
+        return View;
+    }
+
     #if !defined(LE_SHIPPING)
     // Scripts and agents have no viewport menu, so this forces a debug view mode by its ERenderSceneDebugFlags value.
     static TConsoleVar<int32> CVarDebugViewOverride("r.DebugViewOverride", -1,
@@ -46,7 +83,7 @@ namespace Lumina
         }
     }
 
-    void FDefaultSceneRenderer::Extract(const FViewVolume& ViewVolume, const SPostProcessSettings* PostProcess)
+    void FDefaultSceneRenderer::Extract(const FViewVolume& ViewVolume, const SPostProcessSettings* PostProcess, const FViewLayerSettings& Layers)
     {
         LUMINA_PROFILE_SCOPE();
         LUMINA_MEMORY_SCOPE("Render Scene");
@@ -58,10 +95,12 @@ namespace Lumina
 
         // Before anything reads the primary size, and only on a frame that will also render.
         ApplyPendingPrimarySize();
+        RefreshPrimaryRenderSize();
 
         Frame.bExtractedThisFrame  = false;
         Frame.CachedWorldDeltaTime = (float)World->GetWorldDeltaTime();
         Frame.ViewVolume           = ViewVolume;
+        Frame.ViewLayers           = Layers;
 
         // PostProcess is a stack temporary in CWorld::Extract, so value-copy it.
         if (PostProcess != nullptr)
@@ -115,7 +154,7 @@ namespace Lumina
             SceneGlobalData.TemporalJitterU = 0.0f;
             SceneGlobalData.TemporalJitterV = 0.0f;
 
-            if (IsTemporalAAEnabledFor(PrimaryView))
+            if (IsTemporalAAEnabledFor(PrimaryView) || IsTemporalUpscalerFor(PrimaryView))
             {
                 // A bailed extract must not flip parity, or the resolve blends a slot against itself.
                 PrimaryView.PendingTemporalFrameIndex = PrimaryView.TemporalFrameIndex + 1;
@@ -130,8 +169,8 @@ namespace Lumina
                 // Every depth-reconstructing pass reads this, so it has to match the jitter that was rendered.
                 SceneGlobalData.CameraData.InverseProjection = Math::Inverse(SceneGlobalData.CameraData.Projection);
 
-                // Same period as the jitter, or the pair the resolve averages never repeats and never settles.
-                SceneGlobalData.TemporalPhase = PrimaryView.PendingTemporalFrameIndex & 1u;
+                // Same period as the jitter, or the samples the resolve averages never repeat and never settle.
+                SceneGlobalData.TemporalPhase = PrimaryView.PendingTemporalFrameIndex % GetTemporalPhaseCount(PrimaryView);
             }
             else
             {
@@ -141,7 +180,11 @@ namespace Lumina
 
             SceneGlobalData.CameraData.PrevViewProjection = PrimaryView.PrevViewProjection;
         }
-        SceneGlobalData.ScreenSize                      = FUIntVector4(PrimarySize.x, PrimarySize.y, 0, 0);
+        const FUIntVector2 DisplaySize = SceneViews[0].DisplaySize;
+        SceneGlobalData.ScreenSize                      = FUIntVector4(PrimarySize.x, PrimarySize.y, DisplaySize.x, DisplaySize.y);
+        // Below zero when upscaling, so textures pick the mips the display resolution would have.
+        SceneGlobalData.TextureMipBias                  = PrimarySize.x < DisplaySize.x
+                                                        ? Math::Log2((float)PrimarySize.x / (float)DisplaySize.x) : 0.0f;
         SceneGlobalData.GridSize                        = ComputeClusterGrid(PrimarySize);
         SceneGlobalData.Time                            = (float)World->GetTimeSinceWorldCreation();
         SceneGlobalData.DeltaTime                       = Frame.CachedWorldDeltaTime;
@@ -150,6 +193,7 @@ namespace Lumina
         SceneGlobalData.FarPlane                        = ViewVolume.GetFar();
         SceneGlobalData.NearPlane                       = ViewVolume.GetNear();
         SceneGlobalData.GTAOSettings                    = FGTAOSettings{};
+        Frame.Lighting.SunFarShadow                     = {};
         SceneGlobalData.ParallaxSettings.SampleScale       = 1.0f;
         SceneGlobalData.ParallaxSettings.LODBias           = 0.0f;
         SceneGlobalData.ParallaxSettings.ShadowSampleScale = 1.0f;
@@ -159,6 +203,7 @@ namespace Lumina
         SceneGlobalData.CullData.bHasDirectional        = 0u;
         SceneGlobalData.CullData.bFrustumCull           = FrameSettings.bFrustumCull;
         SceneGlobalData.CullData.bOcclusionCull         = FrameSettings.bOcclusionCull;
+        SceneGlobalData.CullData.CameraLayerMask        = Layers.CullMask;
 
         // Copied, not aliased, since freezing the cull replaces these and leaves the render camera.
         SceneGlobalData.CullData.CullCameraPosition     = SceneGlobalData.CameraData.Location;
@@ -168,13 +213,9 @@ namespace Lumina
         SceneGlobalData.CullData.CullFarPlane           = SceneGlobalData.FarPlane;
         SceneGlobalData.CullData.ShadowMaxDistance      = 5000.0f;
         SceneGlobalData.CullData.bShadowOcclusionCull   = FrameSettings.bShadowOcclusionCull;
-        SceneGlobalData.CullData.ShadowLODBias          = FrameSettings.ShadowLODBias;
-        SceneGlobalData.CullData.ShadowCoarseLODDistSq  = FrameSettings.ShadowCoarseLODDistance
-                                                        * FrameSettings.ShadowCoarseLODDistance;
-        const CRendererSettings* LODSettings            = GetDefault<CRendererSettings>();
-        const float LODDistanceScale                    = LODSettings != nullptr ? Math::Clamp(LODSettings->LODDistanceScale, 0.25f, 16.0f) : 1.0f;
-        SceneGlobalData.CullData.LODDistanceScaleSq     = LODDistanceScale * LODDistanceScale;
         CascadeMinTexels                                = 1.0f;
+        // Built here because the skinned gather picks against it on workers before the cull views exist.
+        Frame.Views.CameraLODView                       = MakeCameraLODView(ViewVolume, (float)DisplaySize.y);
         SceneGlobalData.CullData.DebugMode              = (uint32)FrameSettings.Flags;
         #if !defined(LE_SHIPPING)
         if (const int32 Override = CVarDebugViewOverride.GetValue(); Override >= 0)
@@ -244,7 +285,8 @@ namespace Lumina
             Data.CameraData.Projection        = VV.GetProjectionMatrix();
             Data.CameraData.InverseProjection = VV.GetInverseProjectionMatrix();
             const FUIntVector2 CaptureSize      = SceneViews[Capture.SceneViewIndex].Size;
-            Data.ScreenSize                   = FUIntVector4(CaptureSize.x, CaptureSize.y, 0, 0);
+            Data.ScreenSize                   = FUIntVector4(CaptureSize.x, CaptureSize.y, CaptureSize.x, CaptureSize.y);
+            Data.TextureMipBias               = 0.0f;
             Data.GridSize                     = ComputeClusterGrid(CaptureSize);
             Data.FarPlane                     = VV.GetFar();
             Data.NearPlane                    = VV.GetNear();
@@ -269,7 +311,8 @@ namespace Lumina
                 Data.CameraData.InverseView       = VV.GetInverseViewMatrix();
                 Data.CameraData.Projection        = VV.GetProjectionMatrix();
                 Data.CameraData.InverseProjection = VV.GetInverseProjectionMatrix();
-                Data.ScreenSize                   = FUIntVector4(FaceSize, FaceSize, 0, 0);
+                Data.ScreenSize                   = FUIntVector4(FaceSize, FaceSize, FaceSize, FaceSize);
+                Data.TextureMipBias               = 0.0f;
                 Data.GridSize                     = ComputeClusterGrid(FUIntVector2(FaceSize, FaceSize));
                 Data.FarPlane                     = VV.GetFar();
                 Data.NearPlane                    = VV.GetNear();
@@ -410,7 +453,7 @@ namespace Lumina
             Entry.Gpu.Params          = FVector4(Math::Max(Probe.Brightness, 0.0f),
                                                  Probe.Shape == EReflectionProbeShape::Sphere ? 1.0f : 0.0f,
                                                  0.0f,  // slice, assigned after sorting
-                                                 Math::Clamp(Probe.BlendDistance, 0.0f, 1.0f));
+                                                 Math::Max(Probe.BlendDistance, 0.0f));
 
             Entry.Capture.Position  = CaptureWorld;
             Entry.Capture.NearPlane = Math::Max(Probe.CaptureNearPlane, 0.001f);
@@ -639,11 +682,17 @@ namespace Lumina
 
         ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
 
+        // The bounds build reads the retained slots this sync rewrites.
+        JoinInstanceBlockBounds();
+
+        ScenePrimitives.SetForegroundView(ExtractFrame->ViewVolume, ExtractFrame->ViewLayers);
+
         MovedTransformScratch.clear();
-        ECS::Utils::DrainMovedTransforms(Registry, MovedTransformScratch);
+        ECS::Utils::DrainMovedTransforms(Registry, MovedTransformConsumer, MovedTransformScratch);
         ScenePrimitives.Sync(*World, TSpan<const ECS::FEntity>(MovedTransformScratch.data(), MovedTransformScratch.size()));
 
         PublishRetainedUpload();
+        LaunchInstanceBlockBounds();
     }
 
     // Collects what changed in the retained scene, before the render phase uploads it.
@@ -651,11 +700,16 @@ namespace Lumina
     {
         FFrameData::FGeometry::FRetainedUpload& Out = ExtractFrame->Geometry.RetainedUpload;
 
+        // Ahead of everything below, since a base that moves marks its slot static-dirty.
+        ScenePrimitives.AssignMeshletVisibility();
+        Out.MeshletVisibilityWords = ScenePrimitives.GetMeshletVisibilityExtent();
+
         const uint32 SlotCount = ScenePrimitives.GetRetainedSlotCount();
         Out.SlotCount = SlotCount;
 
         Out.DirtySlots.clear();
         Out.DirtyStaticSlots.clear();
+        Out.DeactivatedSlots.clear();
 
         const uint32 DeviceCapacity = RetainedDeviceCapacity.load(std::memory_order_acquire);
         // Growth keeps the device contents, so only a device holding nothing valid needs everything again.
@@ -671,6 +725,22 @@ namespace Lumina
             DirtySlotBits.resize(((SIZE_T)SlotCount + 63u) / 64u);
             auto Collect = [this, SlotCount](const TVector<uint32>& In, TVector<uint32>& OutList)
             {
+                // A few slots sort faster than a walk over every bitmap word.
+                constexpr SIZE_T SortedWordRatio = 16;
+                if (In.size() * SortedWordRatio < DirtySlotBits.size())
+                {
+                    for (uint32 DirtySlot : In)
+                    {
+                        if (DirtySlot < SlotCount)
+                        {
+                            OutList.push_back(DirtySlot);
+                        }
+                    }
+                    Algo::Sort(OutList);
+                    OutList.erase(std::unique(OutList.begin(), OutList.end()), OutList.end());
+                    return;
+                }
+
                 for (uint32 DirtySlot : In)
                 {
                     if (DirtySlot < SlotCount)   // a slot freed after being marked is simply dropped
@@ -714,6 +784,18 @@ namespace Lumina
             }
         }
 
+        // A full re-send already carries the cleared bits.
+        if (!Out.bFull)
+        {
+            for (uint32 Slot : ScenePrimitives.GetDeactivatedSlots())
+            {
+                if (Slot < SlotCount)
+                {
+                    Out.DeactivatedSlots.push_back(Slot);
+                }
+            }
+        }
+
         // Interned; a full instance re-send also re-sends these, since a replaced device buffer loses them.
         Out.SurfaceDescCount        = ScenePrimitives.GetSurfaceDescCount();
         Out.bSurfaceDescsChanged    = ScenePrimitives.AreSurfaceDescsDirty() || Out.bFull || Out.bFullStatic;
@@ -753,6 +835,29 @@ namespace Lumina
             }
 
             return Component.CachedEntryState == Cache.GetEntryState(Component.ResolveHandle);
+        }
+
+        // The whole parent chain, since a mid-chain instance taking a new parent invalidates only itself.
+        uint64 MaterialDependencyBits(const FDynamicMeshRenderData& Data)
+        {
+            constexpr uint32 MaxChainDepth = 16;
+            uint64 Bits = 0;
+            for (const FResolvedSurface& Surface : Data.Surfaces)
+            {
+                if (!IsValid(Surface.SourceMaterial))
+                {
+                    continue;
+                }
+                Bits |= FMeshResolveCache::DependencyBit(Surface.SourceMaterial->GetMaterial());
+
+                const CMaterialInterface* Link = Surface.SourceMaterial;
+                for (uint32 Depth = 0; IsValid(Link) && Depth < MaxChainDepth; ++Depth)
+                {
+                    Bits |= FMeshResolveCache::DependencyBit(Link);
+                    Link = Link->GetParentMaterial();
+                }
+            }
+            return Bits;
         }
 
         template <typename TComponent>
@@ -888,38 +993,50 @@ namespace Lumina
     {
         LUMINA_PROFILE_SCOPE();
 
-        // Recompiles, destroys and epoch bumps all move the generation, so the stale sweep waits for it.
-        const uint32 Generation = FMeshResolveCache::GetPendingGeneration();
-        const bool   bSweep     = Generation != LastDynamicResolveGeneration;
+        // Any resolve work at all, which only a mesh still waiting on a compiling material needs to hear about.
+        const uint32 Generation   = FMeshResolveCache::GetPendingGeneration();
+        const bool   bWorkPending = Generation != LastDynamicResolveGeneration;
         LastDynamicResolveGeneration = Generation;
 
         const uint32 Epoch = FMeshResolveCache::GetEpoch();
 
+        // Only meshes reading a changed material are examined, so streaming in unrelated content sweeps nothing.
+        const uint64 Invalidated = DynamicMaterialInvalidations.exchange(0, std::memory_order_acquire);
+
         auto Storage = Registry.GetStorage<SDynamicMeshComponent>();
         const uint32 Count = (uint32)Storage.GetDenseSize();
 
+        // Dynamic meshes own no cache entry, so an override write is detected from the component alone.
+        auto NeedsResolve = [&](const SDynamicMeshComponent& Component)
+        {
+            return (Component.ResolvedMaterialBits & Invalidated) != 0
+                || Epoch != Component.CachedResolveEpoch
+                || (Component.bResolvedMaterialsPending && bWorkPending)
+                || HashOverrides(Component) != Component.CachedMaterialHash
+                || Component.LoadRenderDataVersion() != Component.ResolvedRenderDataVersion;
+        };
+
+        // A streamed world holds tens of thousands of these, nearly all current, so the test fans out and only the hits run serially.
+        DynamicResolveFlags.resize(Count);
+        Task::ParallelForOrSerial(Count, 4096, [&](const Task::FParallelRange& Range)
+        {
+            for (uint32 i = Range.Start; i < Range.End; ++i)
+            {
+                DynamicResolveFlags[i] = !Storage.GetDenseData()[i].IsTombstone() && NeedsResolve(PackedPayloadAt(Storage, i));
+            }
+        }, 1024);
+
         for (uint32 i = 0; i < Count; ++i)
         {
+            if (!DynamicResolveFlags[i])
+            {
+                continue;
+            }
+
             const ECS::FEntity Entity = Storage.GetDenseData()[i];
-            if (Entity.IsTombstone())
-            {
-                continue;
-            }
-
             SDynamicMeshComponent& Component = PackedPayloadAt(Storage, i);
-
-            // Dynamic meshes own no cache entry, so an override write is detected from the component alone.
             const uint32 OverrideHash = HashOverrides(Component);
-            const uint32 DataVersion  = Component.LoadRenderDataVersion();
-
-            if (!bSweep
-                && OverrideHash == Component.CachedMaterialHash
-                && DataVersion == Component.ResolvedRenderDataVersion)
-            {
-                continue;
-            }
-
-            Component.ResolvedRenderDataVersion = DataVersion;
+            Component.ResolvedRenderDataVersion = Component.LoadRenderDataVersion();
 
             const TSharedPtr<FDynamicMeshRenderData> Data = Component.LoadRenderData();
             if (!Data)
@@ -942,12 +1059,16 @@ namespace Lumina
                 && !bShaderStale
                 && Data->bAllMaterialsReady)
             {
+                Component.ResolvedMaterialBits      = MaterialDependencyBits(*Data);
+                Component.bResolvedMaterialsPending = false;
                 continue;
             }
 
             Component.RefreshResolvedMaterials();
-            Component.CachedMaterialHash  = OverrideHash;
-            Component.CachedResolveEpoch  = Epoch;
+            Component.CachedMaterialHash        = OverrideHash;
+            Component.CachedResolveEpoch        = Epoch;
+            Component.ResolvedMaterialBits      = MaterialDependencyBits(*Data);
+            Component.bResolvedMaterialsPending = !Data->bAllMaterialsReady;
 
             Tracker.Mark(Entity, EPrimitiveSource::DynamicMesh, EPrimitiveDirty::Data);
         }
@@ -959,19 +1080,12 @@ namespace Lumina
     void FDefaultSceneRenderer::ValidateNoStaleResolves(ECS::FRegistry& Registry)
     {
 #if USING(WITH_EDITOR)
-        // Anything still stale after the re-resolve pass is a gate that did not fire.
-        const uint32 Generation = FMeshResolveCache::GetPendingGeneration();
-        if (Generation == LastStaleValidationGeneration)
-        {
-            return;
-        }
-        LastStaleValidationGeneration = Generation;
-
-        uint32 StaleSurfaces = 0;
-        uint32 StaleEntities = 0;
-
+        // Anything still stale after the re-resolve pass is a gate that did not fire, checked a slice a frame so a big world never spikes.
+        constexpr uint32 SliceSize = 256;
         auto Storage = Registry.GetStorage<SDynamicMeshComponent>();
-        for (uint32 i = 0, Count = (uint32)Storage.GetDenseSize(); i < Count; ++i)
+        const uint32 Count = (uint32)Storage.GetDenseSize();
+        const uint32 SliceEnd = Math::Min(Count, StaleValidationCursor + SliceSize);
+        for (uint32 i = StaleValidationCursor; i < SliceEnd; ++i)
         {
             if (Storage.GetDenseData()[i].IsTombstone())
             {
@@ -990,17 +1104,26 @@ namespace Lumina
                 Stale += MeshResolve::IsSurfaceStale(Surface) ? 1u : 0u;
             }
 
-            StaleSurfaces += Stale;
-            StaleEntities += (Stale > 0) ? 1u : 0u;
+            StaleValidationSurfaces += Stale;
+            StaleValidationEntities += (Stale > 0) ? 1u : 0u;
         }
 
-        if (StaleSurfaces > 0)
+        StaleValidationCursor = SliceEnd;
+        if (SliceEnd < Count)
+        {
+            return;
+        }
+        StaleValidationCursor = 0;
+
+        if (StaleValidationSurfaces > 0)
         {
             LOG_WARN("MeshResolve: {} surface(s) across {} dynamic mesh entities are still resolved against "
-                     "superseded shaders after a full resolve pass. Something recompiled that the resolve "
+                     "superseded shaders after a resolve pass. Something recompiled that the resolve "
                      "gate cannot see -- those entities are drawing last build's shader.",
-                     StaleSurfaces, StaleEntities);
+                     StaleValidationSurfaces, StaleValidationEntities);
         }
+        StaleValidationSurfaces = 0;
+        StaleValidationEntities = 0;
 #else
         (void)Registry;
 #endif
@@ -1091,7 +1214,7 @@ namespace Lumina
 
                 const FResolvedMesh& Entry = Cache.GetEntry(Handle);
                 Type.CachedMeshletHeaderSlot = Entry.MeshletHeaderSlot;
-                Type.CachedBaseFlags = Type.bReceiveShadow ? EInstanceFlags::ReceiveShadow : EInstanceFlags::None;
+                Type.CachedBaseFlags = EInstanceFlags::Foliage | (Type.bReceiveShadow ? EInstanceFlags::ReceiveShadow : EInstanceFlags::None);
                 Type.CachedEntryState = Cache.GetEntryState(Handle);
             }
         }
@@ -1119,6 +1242,7 @@ namespace Lumina
         auto DirectionalView = Registry.View<SDirectionalLightComponent>(ECS::TExclude<SDisabledTag>{});
         auto SpotLightView   = Registry.View<SSpotLightComponent>(ECS::TExclude<SDisabledTag>{});
         auto PointLightView  = Registry.View<SPointLightComponent>(ECS::TExclude<SDisabledTag>{});
+        auto AreaLightView   = Registry.View<SAreaLightComponent>(ECS::TExclude<SDisabledTag>{});
 
         ECS::Utils::ResolveAllDirtyTransforms(Registry);
         ResolveDynamicMeshMaterials(Registry, FRenderDirtyTracker::Ensure(Registry));
@@ -1195,6 +1319,19 @@ namespace Lumina
             FlushLightBatch(Batch, LightCount);
         });
 
+        auto AreaLightTask = EmitGraph.AddParallelFor((uint32)AreaLightView.NumDenseSlots(), 32, [&](Task::FParallelRange Range)
+        {
+            LUMINA_PROFILE_SECTION("Process Area Light Range");
+
+            FLightBatch Batch;
+            AreaLightView.ForEachInRange(Range.Start, Range.End,
+                [&](ECS::FEntity Entity, SAreaLightComponent& AreaLight)
+            {
+                ProcessAreaLight(AreaLight, TransformStorage.Get(Entity), Batch, LightCount);
+            });
+            FlushLightBatch(Batch, LightCount);
+        });
+
         EmitGraph.Add([this, &Registry, &Frame] { ExtractTerrain(Registry, Frame); },     ETaskPriority::Medium);
         EmitGraph.Add([this, &Registry, &Frame] { ExtractParticles(Registry, Frame); },   ETaskPriority::Medium);
         EmitGraph.Add([this, &Registry, &Frame] { ExtractDecals(Registry, Frame); },      ETaskPriority::Medium);
@@ -1208,6 +1345,7 @@ namespace Lumina
 
         EmitGraph.AddDependency(PointLightTask, DLightTask);
         EmitGraph.AddDependency(SpotLightTask, DLightTask);
+        EmitGraph.AddDependency(AreaLightTask, DLightTask);
 
         EmitGraph.Dispatch();
 
@@ -1238,6 +1376,10 @@ namespace Lumina
 
         // Serial fit/allocate after parallel light pass; shrinks when sum(area) exceeds atlas budget.
         AllocateShadowTiles();
+        ResolveLightFunctions();
+
+        // Takes a shadow slot for the rain occlusion view, so it runs before the counter is read back.
+        ExtractWeather(Registry, Frame);
 
         // Same overshoot as LightCount, and this is the last writer of the shadow counter.
         NumLiveShadows = Math::Min(Frame.Lighting.ShadowDataCount.load(std::memory_order_acquire),
@@ -1276,6 +1418,13 @@ namespace Lumina
 
         // One command per pipeline batch, not per primitive; the merge emits exactly this many.
         DrawCommands.reserve(ScenePrimitives.GetBatches().Num());
+
+        // Every bound skinned index fits before the gather, so the workers write in place instead of deferring.
+        TVector<FSkinnedFrameData>& SkinnedData = Frame.Geometry.SkinnedFrameData;
+        if ((uint32)SkinnedData.size() < ScenePrimitives.GetSkinnedIndexExtent())
+        {
+            SkinnedData.resize(ScenePrimitives.GetSkinnedIndexExtent());
+        }
 
         const uint32 NumThreads = GTaskSystem->GetNumTaskThreads();
 
@@ -1324,6 +1473,7 @@ namespace Lumina
                 SkinnedCandidates.resize(NumSkeletal);
                 SkinnedCandidateBones.resize(NumSkeletal);
                 PendingSliceAllocs.resize(NumSkeletal);
+                SharedPoseCandidates.resize(NumSkeletal);
             }
             SkinnedCandidateCursor.store(0, std::memory_order_relaxed);
 
@@ -1566,6 +1716,7 @@ namespace Lumina
                 }
                 Item.bEmit               = Component.bEmit;
                 Item.bBurstOnSpawn       = Component.bBurstOnSpawn;
+                Item.bOnDrawnLayer       = Frame.ViewLayers.Draws(Component.RenderLayers);
                 Item.bForceBurst         = bForceBurst;
                 Item.bForceReset         = bForceReset;
                 Item.MeshletHeaderSlot   = Emitter->RenderMode == EParticleRenderMode::Mesh ? ResidentMeshletHeaderSlot(Emitter->Mesh.Get()) : 0u;
@@ -1790,6 +1941,7 @@ namespace Lumina
             Frame.Volumetrics.bClouds = true;
             Frame.Volumetrics.Clouds  = Cloud;
         });
+        ApplyWeatherToClouds(Frame);
 
         Frame.Volumetrics.bVolumetricFog = false;
         Frame.Volumetrics.FogParams      = FExponentialHeightFogParams{};
@@ -1918,6 +2070,8 @@ namespace Lumina
 
             FrozenCull.bHasCascadeShadow = CaptureCascadeShadowFit(Frame);
             FrozenCull.CascadeViewBase   = Frame.Views.CascadeViewBase;
+            FrozenCull.NumCascadeViews   = Frame.Views.NumCascadeViews;
+            FrozenCull.NumNearCascadeViews = Frame.Views.NumNearCascadeViews;
             FrozenCull.bValid            = true;
             return;
         }
@@ -1925,14 +2079,8 @@ namespace Lumina
         // The view COUNT freezes too, since bucket indices and the dispatch grid all derive from it.
         Frame.Views.CullViews       = FrozenCull.Views;
         Frame.Views.CascadeViewBase = FrozenCull.CascadeViewBase;
-
-        // Batches are still live, so the only per-view field that tracks them has to be restamped.
-        const uint32 NumDraws = Frame.Views.NumDrawsPerView;
-        for (uint32 v = 0; v < (uint32)Frame.Views.CullViews.size(); ++v)
-        {
-            Frame.Views.CullViews[v].IndirectArgsOffset = v * NumDraws;
-            Frame.Views.CullViews[v].NumDraws           = NumDraws;
-        }
+        Frame.Views.NumCascadeViews = FrozenCull.NumCascadeViews;
+        Frame.Views.NumNearCascadeViews = FrozenCull.NumNearCascadeViews;
 
         Cull.CullCameraPosition   = FrozenCull.CameraPosition;
         Cull.CullCameraView       = FrozenCull.CameraView;
@@ -2043,32 +2191,50 @@ namespace Lumina
         }
     }
 
-    static uint32 SelectLODIndex(const FSurfaceDescGPU& Desc, float DistSq, float RadiusSq)
+    static float TransformMaxScale(const FMatrix4& Transform)
     {
-        // A zero radius used to yield ratio 0; without this guard every threshold would pass.
-        if (RadiusSq <= 0.0f)
+        const FVector3 AxisX = FVector3(Transform[0]);
+        const FVector3 AxisY = FVector3(Transform[1]);
+        const FVector3 AxisZ = FVector3(Transform[2]);
+        return Math::Sqrt(Math::Max(Math::Dot(AxisX, AxisX), Math::Max(Math::Dot(AxisY, AxisY), Math::Dot(AxisZ, AxisZ))));
+    }
+
+    // Distance to the nearest point of the bounds, so a large mesh is never coarser than its closest part allows.
+    static float LODReach(const FCullView& View, const FVector4& Sphere)
+    {
+        const bool bOrthographic = (GetCullViewFlags(View) & ECullViewFlags::OrthographicLOD) != 0u;
+        return bOrthographic
+             ? 1.0f
+             : Math::Max(Math::Length(FVector3(Sphere) - FVector3(View.ViewOriginAndFlags)) - Sphere.w, 0.0f);
+    }
+
+    // Mirrors SelectLODForView in Culling.slang.
+    static uint32 SelectLODForView(const FSurfaceDescGPU& Desc, const FCullView& View, const FVector4& Sphere, float MaxScale)
+    {
+        const uint32 NumLODs = Math::Min(Desc.NumLODs, (uint32)MAX_MESH_LODS);
+        if (NumLODs <= 1u || View.LODErrorScale <= 0.0f)
         {
             return 0u;
         }
 
+        const float Reach         = LODReach(View, Sphere);
+        const float ErrorScale    = View.LODErrorScale * MaxScale;
+
         uint32 Picked = 0;
-        const uint32 LastLOD = Desc.NumLODs > 0 ? Desc.NumLODs - 1u : 0u;
-        for (uint32 i = 1; i <= LastLOD; ++i)
+        for (uint32 i = 1; i < NumLODs; ++i)
         {
-            if (DistSq >= Desc.LODScreenThresholdSq[i] * RadiusSq)
-            {
-                Picked = i;
-            }
-            else
+            if (Desc.LODError[i] * ErrorScale > Reach)
             {
                 break;
             }
+            Picked = i;
         }
         return Picked;
     }
 
     // Component override beats global setting; both clamped to surface NumLODs.
-    static uint32 ResolveSurfaceLOD(const FSurfaceDescGPU& Desc, int32 ForcedLODIndex, bool bUseLODs, float DistSq, float RadiusSq)
+    static uint32 ResolveSurfaceLOD(const FSurfaceDescGPU& Desc, int32 ForcedLODIndex, bool bUseLODs,
+                                    const FCullView* CameraView, const FVector4& Sphere, float MaxScale)
     {
         if (Desc.NumLODs <= 1)
         {
@@ -2078,24 +2244,44 @@ namespace Lumina
         {
             return (uint32)Math::Min((int32)Desc.NumLODs - 1, ForcedLODIndex);
         }
-        if (bUseLODs)
+        if (bUseLODs && CameraView != nullptr)
         {
-            return SelectLODIndex(Desc, DistSq, RadiusSq);
+            return SelectLODForView(Desc, *CameraView, Sphere, MaxScale);
         }
         return 0u;
     }
 
-    static uint32 ResolveShadowLOD(const FSurfaceDescGPU& Desc, uint32 CameraLOD, int32 ShadowLODBias,
-                                   float DistSq, float CoarseDistSq)
+    // The mesh-local error the camera tolerates here, which is what picks a skinned LOD and how much of the skeleton may hold still.
+    static float ResolveBoneLODTolerance(const FScenePrimitive& Prim, const FSurfaceBinding* Bindings,
+                                         const FSurfaceDescGPU* SurfaceDescs, uint32 NumSurfaceDescs,
+                                         const FSceneRenderSettings& Settings, const FCullView* CameraView,
+                                         const FVector4& Sphere, float MaxScale)
     {
-        if (Desc.NumLODs == 0)
+        // A forced LOD previews the cut that LOD's own error allows.
+        if (Prim.ForcedLODIndex >= 0)
         {
-            return 0u;
+            float Tolerance = 0.0f;
+            for (uint32 s = 0; s < Prim.SurfaceCount; ++s)
+            {
+                if (Bindings[s].SurfaceDescIndex >= NumSurfaceDescs)
+                {
+                    continue;
+                }
+                const FSurfaceDescGPU& Desc = SurfaceDescs[Bindings[s].SurfaceDescIndex];
+                const uint32 NumLODs = Math::Min(Desc.NumLODs, (uint32)MAX_MESH_LODS);
+                if (NumLODs > 1u)
+                {
+                    Tolerance = Math::Max(Tolerance, Desc.LODError[Math::Min((uint32)Prim.ForcedLODIndex, NumLODs - 1u)]);
+                }
+            }
+            return Tolerance;
         }
-        const uint32 Cap   = (CoarseDistSq > 0.0f && DistSq >= CoarseDistSq) ? MAX_COARSE_SHADOW_LOD : MAX_SHADOW_LOD;
-        const int32 Biased = (int32)CameraLOD + ShadowLODBias;
-        const int32 MaxLOD = (int32)Math::Min<uint32>(Desc.NumLODs - 1u, Cap);
-        return (uint32)Math::Clamp(Biased, 0, MaxLOD);
+
+        if (!Settings.bUseLODs || CameraView == nullptr || CameraView->LODErrorScale <= 0.0f || MaxScale <= 0.0f)
+        {
+            return 0.0f;
+        }
+        return LODReach(*CameraView, Sphere) / (CameraView->LODErrorScale * MaxScale);
     }
 
     // Leaves FrameTag and SkinnedBoundsBase alone, since UploadSkinnedFrameData stamps both on the render thread.
@@ -2103,12 +2289,10 @@ namespace Lumina
     {
         Out.SurfaceMeshletOffset    = In.SurfaceMeshletOffset;
         Out.SurfaceMeshletCount     = In.SurfaceMeshletCount;
-        Out.ShadowMeshletOffset     = In.ShadowMeshletOffset;
-        Out.ShadowMeshletCount      = In.ShadowMeshletCount;
         Out.MeshletTotalCount       = In.MeshletTotalCount;
         Out.SkinnedVertexBase       = In.SkinnedVertexBase;
-        Out.ShadowSkinnedVertexBase = In.ShadowSkinnedVertexBase;
         Out.BoneOffset              = In.BoneOffset;
+        Out.RetainedSlot            = In.RetainedSlot;
     }
 
     struct FSkinnedFrameDataTarget
@@ -2129,8 +2313,9 @@ namespace Lumina
                                       uint32 BoneArenaBase,
                                       const FSkinnedFrameDataTarget& Target,
                                       const FSceneRenderSettings& Settings,
-                                      float DistSq,
-                                      float RadiusSq)
+                                      const FCullView* CameraView,
+                                      const FVector4& Sphere,
+                                      float MaxScale)
     {
         const uint32 MeshletHeaderSlot = Prim.MeshletHeaderSlot;
 
@@ -2138,42 +2323,39 @@ namespace Lumina
         {
             const FSurfaceBinding& Binding = Bindings[s];
             const uint32 InstanceSlot = Binding.InstanceSlot;
-            if (Binding.SurfaceDescIndex >= NumSurfaceDescs || InstanceSlot >= Target.RetainedSlots)
+            const uint32 SkinnedIndex = Binding.SkinnedIndex;
+            if (Binding.SurfaceDescIndex >= NumSurfaceDescs || InstanceSlot >= Target.RetainedSlots || SkinnedIndex == kNoSkinnedIndex)
             {
                 continue;
             }
             const FSurfaceDescGPU& Desc = SurfaceDescs[Binding.SurfaceDescIndex];
 
-            // CPU LOD pick replaces LOD 0; smaller ranges directly cut cull-pass cost.
-            const uint32 LODIndex       = ResolveSurfaceLOD(Desc, Prim.ForcedLODIndex, Settings.bUseLODs, DistSq, RadiusSq);
-            const uint32 ShadowLODIndex = ResolveShadowLOD(Desc, LODIndex, Settings.ShadowLODBias,
-                                                           DistSq, Settings.ShadowCoarseLODDistance * Settings.ShadowCoarseLODDistance);
+            // Shadows take the camera's pick too, so both views share one pre-skin slice.
+            const uint32 LODIndex = ResolveSurfaceLOD(Desc, Prim.ForcedLODIndex, Settings.bUseLODs, CameraView, Sphere, MaxScale);
 
             const uint32 LastLOD = Desc.NumLODs > 0u ? Math::Min(Desc.NumLODs, (uint32)MAX_MESH_LODS) - 1u : 0u;
 
             FSkinnedFrameData Data = {};
             // Zero meshlet count gates the cull shader's MeshletHeader deref.
-            Data.SurfaceMeshletCount     = MeshletHeaderSlot ? Desc.LODMeshletCount[LODIndex]       : 0u;
+            Data.SurfaceMeshletCount     = MeshletHeaderSlot ? Desc.LODMeshletCount[LODIndex] : 0u;
             Data.SurfaceMeshletOffset    = Desc.LODMeshletOffset[LODIndex];
-            Data.ShadowMeshletCount      = MeshletHeaderSlot ? Desc.LODMeshletCount[ShadowLODIndex] : 0u;
-            Data.ShadowMeshletOffset     = Desc.LODMeshletOffset[ShadowLODIndex];
             Data.MeshletTotalCount       = MeshletHeaderSlot
                                          ? Desc.LODMeshletOffset[LastLOD] + Desc.LODMeshletCount[LastLOD]
                                          : 0u;
             // Seeded to the sentinel so a rejected slot keeps no slice rather than last frame's base.
             Data.SkinnedVertexBase       = kNoPreSkinBase;
-            Data.ShadowSkinnedVertexBase = kNoPreSkinBase;
             Data.BoneOffset              = BoneArenaBase;
+            Data.RetainedSlot            = InstanceSlot;
 
-            // Slots are disjoint across primitives, and the array only grows in the merge, after every emit.
-            if (InstanceSlot < Target.Num)
+            // Indices are disjoint across primitives, and the array only grows in the merge, after every emit.
+            if (SkinnedIndex < Target.Num)
             {
-                PublishSkinnedFrameData(Target.Data[InstanceSlot], Data);
-                Local.SkinnedSlots.push_back(InstanceSlot);
+                PublishSkinnedFrameData(Target.Data[SkinnedIndex], Data);
+                Local.SkinnedIndices.push_back(SkinnedIndex);
             }
             else
             {
-                Local.DeferredSlots.push_back({ InstanceSlot, Data });
+                Local.DeferredSlots.push_back({ SkinnedIndex, Data });
             }
         }
     }
@@ -2191,6 +2373,31 @@ namespace Lumina
         // Dense, since the range indexes skeletal primitives rather than the whole table.
         const uint32* RESTRICT Skeletal = SkeletalPrimitiveIndices;
 
+        // A skeleton on a layer no view draws is never skinned.
+        const bool   bOtherViews  = !Frame.Views.CaptureViews.empty() || Frame.ReflectionProbes.BakingProbe >= 0;
+        const uint32 DrawnLayers  = Frame.ViewLayers.CullMask | (bOtherViews ? RenderLayers::kAllMask : 0u);
+
+        // Claimed from the shared cursor a batch at a time, since every worker bumping it per primitive fights over one line.
+        constexpr uint32 AcceptBatch = 64;
+        uint32 Accepted[AcceptBatch];
+        uint32 NumAccepted = 0;
+
+        const auto Flush = [&]()
+        {
+            if (NumAccepted == 0u)
+            {
+                return;
+            }
+            const uint32 Base = SkinnedCandidateCursor.fetch_add(NumAccepted, std::memory_order_relaxed);
+            const uint32 Capacity = (uint32)SkinnedCandidates.size();
+            for (uint32 i = 0; i < NumAccepted && Base + i < Capacity; ++i)
+            {
+                SkinnedCandidates[Base + i]     = Accepted[i];
+                SkinnedCandidateBones[Base + i] = Prims[Accepted[i]].BoneCount;
+            }
+            NumAccepted = 0;
+        };
+
         const auto Accept = [&](uint32 PrimIndex)
         {
             const FScenePrimitive& Prim = Prims[PrimIndex];
@@ -2198,13 +2405,16 @@ namespace Lumina
             {
                 return;   // parked awaiting resolve or a skeleton; the sync pass retries it
             }
-
-            // A SUPERSET of what the emit pass accepts; anything it rejects just leaves an unused hole.
-            const uint32 Slot = SkinnedCandidateCursor.fetch_add(1, std::memory_order_relaxed);
-            if (Slot < (uint32)SkinnedCandidates.size())
+            if ((Prim.RenderLayers & DrawnLayers) == 0u)
             {
-                SkinnedCandidates[Slot]     = PrimIndex;
-                SkinnedCandidateBones[Slot] = Prim.BoneCount;
+                return;
+            }
+
+            // A superset of what the emit pass accepts; anything it rejects just leaves an unused hole.
+            Accepted[NumAccepted++] = PrimIndex;
+            if (NumAccepted == AcceptBatch)
+            {
+                Flush();
             }
         };
 
@@ -2214,6 +2424,7 @@ namespace Lumina
             {
                 Accept(Skeletal[d]);
             }
+            Flush();
             return;
         }
 
@@ -2276,6 +2487,51 @@ namespace Lumina
 
             Accept(PrimIndex);
         }
+        Flush();
+    }
+
+    // Writes the pose into its slice unless the arena already holds it, and reports the range to upload.
+    static void PackPoseIntoSlice(FScenePrimitive& Tracked, SSkeletalMeshComponent& MeshComponent, uint32 BoneSlice,
+                                  TVector<FBoneTransform>& Arena, TVector<FUIntVector2>& UploadRanges)
+    {
+        const uint32 BoneCount = Tracked.BoneCount;
+        if (BoneCount == 0u || BoneSlice == kNoBoneSlice || (SIZE_T)BoneSlice + BoneCount > Arena.size())
+        {
+            return;
+        }
+
+        // Folded in here so the residency test below is the one gate, even for a writer that never bumped the serial.
+        if (MeshComponent.bRenderBonesDirty)
+        {
+            MeshComponent.bRenderBonesDirty = false;
+            ++MeshComponent.PoseSerial;
+        }
+
+        if (Tracked.UploadedSliceBase == BoneSlice && Tracked.UploadedPoseSerial == MeshComponent.PoseSerial)
+        {
+            return;
+        }
+
+        FBoneTransform* Dst = Arena.data() + BoneSlice;
+
+        // A partial pose cannot be packed against this slice, so it falls through to identity.
+        if ((uint32)MeshComponent.BoneTransforms.size() == BoneCount)
+        {
+            SkeletalUtils::PackRenderBones(MeshComponent.BoneTransforms.data(), BoneCount, Dst);
+        }
+        else
+        {
+            // With no pose, BoneWorld * InvBindMatrix collapses to identity for every bone.
+            const FBoneTransform IdentityBone = IdentityBoneTransform();
+            for (uint32 b = 0; b < BoneCount; ++b)
+            {
+                Dst[b] = IdentityBone;
+            }
+        }
+
+        Tracked.UploadedSliceBase  = BoneSlice;
+        Tracked.UploadedPoseSerial = MeshComponent.PoseSerial;
+        UploadRanges.push_back(FUIntVector2{ BoneSlice, BoneCount });
     }
 
     void FDefaultSceneRenderer::LayoutSkinnedBoneSlices(TVector<FThreadLocalDrawData>& ThreadLocal)
@@ -2289,12 +2545,22 @@ namespace Lumina
         {
             BoneSliceByPrimitive.resize(NumPrimitives, kNoBoneSlice);
         }
+        if ((uint32)BoneSliceBorrowed.size() < NumPrimitives)
+        {
+            BoneSliceBorrowed.resize(NumPrimitives, 0u);
+        }
+
+        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        auto FollowerStorage = Registry.GetStorage<SFollowerPoseComponent>();
 
         SkinnedCandidateCount = Math::Min(SkinnedCandidateCursor.load(std::memory_order_relaxed),
                                           (uint32)SkinnedCandidates.size());
         PendingSliceCursor.store(0, std::memory_order_relaxed);
+        SharedPoseCursor.store(0, std::memory_order_relaxed);
 
         ++BoneSliceFrameNumber;
+
+        const FScenePrimitive* LayoutPrims = ScenePrimitives.GetPrimitives();
 
         // Reuse needs nothing shared; only the misses fall through to the serial allocator below.
         Task::ParallelFor(SkinnedCandidateCount,
@@ -2305,6 +2571,21 @@ namespace Lumina
                     const uint32 Index = SkinnedCandidates[c];
                     if (Index >= NumPrimitives)
                     {
+                        continue;
+                    }
+
+                    BoneSliceBorrowed[Index] = 0u;
+
+                    // Its own slice is left untouched, so it ages out while the leader's serves both.
+                    const ECS::FEntity Entity = LayoutPrims[Index].Entity;
+                    if (FollowerStorage && FollowerStorage.Contains(Entity) && FollowerStorage.Get(Entity).bSharesLeaderPose)
+                    {
+                        BoneSliceByPrimitive[Index] = kNoBoneSlice;
+                        const uint32 Slot = SharedPoseCursor.fetch_add(1, std::memory_order_relaxed);
+                        if (Slot < (uint32)SharedPoseCandidates.size())
+                        {
+                            SharedPoseCandidates[Slot] = c;
+                        }
                         continue;
                     }
 
@@ -2334,10 +2615,68 @@ namespace Lumina
                 ScenePrimitives.AcquireBoneSlice(Index, SkinnedCandidateBones[c], BoneSliceFrameNumber);
         }
 
+        // A leader nothing else gathered this frame still owes its followers a pose, which is packed here once.
+        TVector<uint32> UngatheredLeaders;
+        const uint32 NumShared = Math::Min(SharedPoseCursor.load(std::memory_order_relaxed), (uint32)SharedPoseCandidates.size());
+        for (uint32 n = 0; n < NumShared; ++n)
+        {
+            const uint32 c     = SharedPoseCandidates[n];
+            const uint32 Index = SkinnedCandidates[c];
+            const FScenePrimitive& Prim = LayoutPrims[Index];
+
+            const SFollowerPoseComponent* Link = FollowerStorage ? FollowerStorage.TryGet(Prim.Entity) : nullptr;
+            const uint32 Leader = Link != nullptr ? ScenePrimitives.FindSkeletalPrimitive(Link->CopiedLeader) : Constants::kIndexNoneU32;
+
+            uint32 Base = kNoBoneSlice;
+            if (Leader < NumPrimitives && Leader != Index && LayoutPrims[Leader].Entity == Link->CopiedLeader &&
+                LayoutPrims[Leader].BoneCount == Prim.BoneCount)
+            {
+                if (LayoutPrims[Leader].BoneSliceFrame == BoneSliceFrameNumber)
+                {
+                    Base = BoneSliceByPrimitive[Leader];
+                }
+                else
+                {
+                    Base = ScenePrimitives.AcquireBoneSlice(Leader, Prim.BoneCount, BoneSliceFrameNumber);
+                    BoneSliceByPrimitive[Leader] = Base;
+                    if (Base != kNoBoneSlice)
+                    {
+                        UngatheredLeaders.push_back(Leader);
+                    }
+                }
+            }
+
+            if (Base != kNoBoneSlice)
+            {
+                BoneSliceByPrimitive[Index] = Base;
+                BoneSliceBorrowed[Index] = 1u;
+            }
+            else
+            {
+                // The leader cannot lend a slice this frame, so the follower packs its own copy of the pose.
+                BoneSliceByPrimitive[Index] = ScenePrimitives.AcquireBoneSlice(Index, Prim.BoneCount, BoneSliceFrameNumber);
+            }
+        }
+
         ScenePrimitives.ReleaseStaleBoneSlices(BoneSliceFrameNumber, kBoneSliceGraceFrames);
 
         ExtractFrame->Geometry.BoneCount = ScenePrimitives.GetBoneSliceExtent();
         ExtractFrame->Geometry.BonesData.resize_uninitialized(ExtractFrame->Geometry.BoneCount);
+
+        if (!UngatheredLeaders.empty())
+        {
+            auto SkeletalStorage = Registry.GetStorage<SSkeletalMeshComponent>();
+            FScenePrimitive* MutablePrims = ScenePrimitives.GetMutablePrimitives();
+            for (const uint32 Leader : UngatheredLeaders)
+            {
+                FScenePrimitive& Tracked = MutablePrims[Leader];
+                if (SkeletalStorage.Contains(Tracked.Entity))
+                {
+                    PackPoseIntoSlice(Tracked, SkeletalStorage.Get(Tracked.Entity), BoneSliceByPrimitive[Leader],
+                                      ExtractFrame->Geometry.BonesData, LeaderPoseUploadRanges);
+                }
+            }
+        }
     }
 
     void FDefaultSceneRenderer::EmitSkinnedPrimitives(const Task::FParallelRange& Range, FThreadLocalDrawData& Local)
@@ -2346,6 +2685,7 @@ namespace Lumina
         const FSceneCullContext& SceneCull       = Frame.Geometry.SceneCullContext;
         const FSceneGlobalData&  SceneGlobalData = Frame.SceneGlobalData;
         const FVector3           CameraPos       = FVector3(SceneGlobalData.CameraData.Location);
+        const FCullView*         CameraView      = &Frame.Views.CameraLODView;
 
         const FScenePrimitive*      Prims    = ScenePrimitives.GetPrimitives();
         const FVector4*             Spheres  = ScenePrimitives.GetBounds();
@@ -2386,8 +2726,6 @@ namespace Lumina
 
             const FVector3 ToCamera = Center - CameraPos;
             const float    DistSq   = Math::Dot(ToCamera, ToCamera);
-            // Same operand order as the GPU's SelectLOD callers, so the two picks agree bit for bit.
-            const float    RadiusSq = Radius * Radius * SceneGlobalData.CullData.LODDistanceScaleSq;
 
             if (!SkeletalStorage.Contains(Prim.Entity))
             {
@@ -2408,51 +2746,22 @@ namespace Lumina
             {
                 BoneArenaBase = BoneSlice;
 
-                // A partial pose cannot be packed against this slice, so it falls through to identity.
-                const bool bHasFullPose = (uint32)MeshComponent.BoneTransforms.size() == SkeletonBoneCount;
-
-                // A writer that moved the pose without bumping the serial gets folded in here, so the
-                // residency test below is the single gate on whether this slice is already correct.
-                if (MeshComponent.bRenderBonesDirty)
+                // A borrowed slice belongs to the leader, whose own gather or the layout pass packs it.
+                if (!BoneSliceBorrowed[i])
                 {
-                    MeshComponent.bRenderBonesDirty = false;
-                    ++MeshComponent.PoseSerial;
-                }
-
-                // Disjoint per primitive, so workers stamp this without synchronizing.
-                FScenePrimitive& Tracked = MutablePrims[i];
-                const bool bResident = Tracked.UploadedSliceBase == BoneSlice
-                                    && Tracked.UploadedPoseSerial == MeshComponent.PoseSerial;
-
-                if (!bResident)
-                {
-                    FBoneTransform* Dst = ArenaMirror.data() + BoneSlice;
-
-                    if (bHasFullPose)
-                    {
-                        SkeletalUtils::PackRenderBones(MeshComponent.BoneTransforms.data(), SkeletonBoneCount, Dst);
-                    }
-                    else
-                    {
-                        // With no pose, BoneWorld * InvBindMatrix collapses to identity for every bone.
-                        const FBoneTransform IdentityBone = IdentityBoneTransform();
-                        for (uint32 b = 0; b < SkeletonBoneCount; ++b)
-                        {
-                            Dst[b] = IdentityBone;
-                        }
-                    }
-
-                    Tracked.UploadedSliceBase  = BoneSlice;
-                    Tracked.UploadedPoseSerial = MeshComponent.PoseSerial;
-                    Local.BoneUploadRanges.push_back(FUIntVector2{ BoneSlice, SkeletonBoneCount });
+                    PackPoseIntoSlice(MutablePrims[i], MeshComponent, BoneSlice, ArenaMirror, Local.BoneUploadRanges);
                 }
             }
 
             MeshComponent.LastDistanceOverRadius = (Radius > 0.0f) ? (Math::Sqrt(DistSq) / Radius) : 0.0f;
 
+            const float MaxScale = TransformMaxScale(Prim.Transform);
+            MeshComponent.LastBoneLODTolerance = ResolveBoneLODTolerance(Prim, Bindings + Prim.BindingBase, SurfaceDescs, NumSurfaceDescs,
+                                                                         FrameSettings, CameraView, Sphere, MaxScale);
+
             EmitPrimitiveSurfaces(Local, Prim, Bindings + Prim.BindingBase,
                                   SurfaceDescs, NumSurfaceDescs,
-                                  BoneArenaBase, Target, FrameSettings, DistSq, RadiusSq);
+                                  BoneArenaBase, Target, FrameSettings, CameraView, Sphere, MaxScale);
         }
     }
 
@@ -2474,6 +2783,8 @@ namespace Lumina
 
         TVector<FUIntVector2>& BoneUploadRanges = Frame.Geometry.BoneUploadRanges;
         BoneUploadRanges.clear();
+        BoneUploadRanges.insert(BoneUploadRanges.end(), LeaderPoseUploadRanges.begin(), LeaderPoseUploadRanges.end());
+        LeaderPoseUploadRanges.clear();
 
         uint64 TotalInstancesCulled = 0;
         for (uint32 t = 0; t < NumThreads; ++t)
@@ -2537,17 +2848,17 @@ namespace Lumina
             LUMINA_PROFILE_SECTION("Publish Skinned Frame Data");
 
             TVector<FSkinnedFrameData>& SkinnedData = Frame.Geometry.SkinnedFrameData;
-            TVector<uint32>&            SkinnedSlots = Frame.Geometry.SkinnedSlots;
+            TVector<uint32>&            SkinnedIndices = Frame.Geometry.SkinnedIndices;
 
-            SkinnedSlots.clear();
+            SkinnedIndices.clear();
 
-            // Indexed by retained slot; grown, never cleared, and only as long as the highest skinned slot.
+            // Indexed by skinned index, so it is only as long as the most skinned instances ever bound at once.
             uint32 SkinnedExtent = (uint32)SkinnedData.size();
             for (uint32 t = 0; t < NumThreads; ++t)
             {
                 for (const FDeferredSkinnedSlot& Deferred : ThreadLocal[t].DeferredSlots)
                 {
-                    SkinnedExtent = Math::Max(SkinnedExtent, Deferred.InstanceSlot + 1u);
+                    SkinnedExtent = Math::Max(SkinnedExtent, Deferred.SkinnedIndex + 1u);
                 }
             }
             if ((uint32)SkinnedData.size() < SkinnedExtent)
@@ -2563,11 +2874,11 @@ namespace Lumina
                     continue;
                 }
 
-                SkinnedSlots.insert(SkinnedSlots.end(), Local.SkinnedSlots.begin(), Local.SkinnedSlots.end());
+                SkinnedIndices.insert(SkinnedIndices.end(), Local.SkinnedIndices.begin(), Local.SkinnedIndices.end());
                 for (const FDeferredSkinnedSlot& Deferred : Local.DeferredSlots)
                 {
-                    PublishSkinnedFrameData(SkinnedData[Deferred.InstanceSlot], Deferred.Data);
-                    SkinnedSlots.push_back(Deferred.InstanceSlot);
+                    PublishSkinnedFrameData(SkinnedData[Deferred.SkinnedIndex], Deferred.Data);
+                    SkinnedIndices.push_back(Deferred.SkinnedIndex);
                 }
             }
         }
@@ -2772,7 +3083,7 @@ namespace Lumina
         for (ECS::FEntity Entity : PointView)
         {
             const SPointLightComponent& Light = PointView.Get<SPointLightComponent>(Entity);
-            if (!Light.bCastShadows || Light.Intensity <= 0.0f)
+            if (!Light.bCastShadows || Light.Intensity <= 0.0f || !Frame.ViewLayers.Draws(Light.RenderLayers))
             {
                 continue;
             }
@@ -2790,7 +3101,7 @@ namespace Lumina
         for (ECS::FEntity Entity : SpotView)
         {
             const SSpotLightComponent& Light    = SpotView.Get<SSpotLightComponent>(Entity);
-            if (!Light.bCastShadows || Light.Intensity <= 0.0f)
+            if (!Light.bCastShadows || Light.Intensity <= 0.0f || !Frame.ViewLayers.Draws(Light.RenderLayers))
             {
                 continue;
             }
@@ -2838,14 +3149,29 @@ namespace Lumina
             }
         }
 
+        if (Batch.NumLightFunctions != 0)
+        {
+            FScopeLock Lock(Frame.Lighting.LightFunctionRequestMutex);
+            for (uint32 Index = 0; Index < Batch.NumLightFunctions; ++Index)
+            {
+                FLightFunctionRequest& Request = Batch.LightFunctions[Index];
+                if (Request.LightIndex < Fits)
+                {
+                    Request.LightIndex += Base;
+                    Frame.Lighting.LightFunctionRequests.push_back(Request);
+                }
+            }
+        }
+
         Batch.NumLights  = 0;
         Batch.NumShadows = 0;
+        Batch.NumLightFunctions = 0;
     }
 
     void FDefaultSceneRenderer::ProcessPointLight(const SPointLightComponent& PointLight, const STransformComponent& TransformComponent, FLightBatch& Batch, TAtomic<uint32>& LightCount)
     {
         // A switched-off light adds nothing to the image, so it should not take a slot or a cluster test either.
-        if (PointLight.Intensity <= 0.0f)
+        if (PointLight.Intensity <= 0.0f || !ExtractFrame->ViewLayers.Draws(PointLight.RenderLayers))
         {
             return;
         }
@@ -2879,6 +3205,16 @@ namespace Lumina
             Light.Flags |= ELightFlags::ContactShadow;
         }
         Light.Flags = PackLightMinRoughness(Light.Flags, PointLight.MinRoughness);
+
+        if (PointLight.LightFunctionMaterial.Get() != nullptr)
+        {
+            FLightFunctionRequest& Request = Batch.LightFunctions[Batch.NumLightFunctions++];
+            Request            = {};
+            Request.Material   = PointLight.LightFunctionMaterial.Get();
+            Request.LightIndex = Lights;
+            Request.Type       = ELightFlags::Point;
+            Request.Position   = Position;
+        }
 
         if (PointLight.bCastShadows && ShouldRequestShadow(Light.Position, Light.Radius))
         {
@@ -2920,7 +3256,7 @@ namespace Lumina
 
     void FDefaultSceneRenderer::ProcessSpotLight(const SSpotLightComponent& SpotLight, const STransformComponent& TransformComponent, FLightBatch& Batch, TAtomic<uint32>& LightCount)
     {
-        if (SpotLight.Intensity <= 0.0f)
+        if (SpotLight.Intensity <= 0.0f || !ExtractFrame->ViewLayers.Draws(SpotLight.RenderLayers))
         {
             return;
         }
@@ -2967,6 +3303,23 @@ namespace Lumina
         }
         Light.Flags = PackLightMinRoughness(Light.Flags, SpotLight.MinRoughness);
 
+        if (SpotLight.LightFunctionMaterial.Get() != nullptr)
+        {
+            const FVector3 Forward = Math::Normalize(UpdatedForward);
+            const FVector3 Right   = Math::Normalize(Math::Cross(Forward, UpdatedUp));
+
+            FLightFunctionRequest& Request = Batch.LightFunctions[Batch.NumLightFunctions++];
+            Request                 = {};
+            Request.Material        = SpotLight.LightFunctionMaterial.Get();
+            Request.LightIndex      = Lights;
+            Request.Type            = ELightFlags::Spot;
+            Request.Position        = Position;
+            Request.Forward         = Forward;
+            Request.Right           = Right;
+            Request.Up              = Math::Cross(Right, Forward);
+            Request.ProjectionScale = 1.0f / Math::Max(std::tan(Math::Radians(Math::Clamp(OuterDegrees, 0.1f, 89.0f))), 1e-3f);
+        }
+
         if (SpotLight.bCastShadows && ShouldRequestShadow(Light.Position, Light.Radius))
         {
             const FVector3 CamPos = ExtractFrame->ViewVolume.GetViewPosition();
@@ -2993,6 +3346,103 @@ namespace Lumina
         }
     }
 
+    void FDefaultSceneRenderer::ProcessAreaLight(const SAreaLightComponent& AreaLight, const STransformComponent& TransformComponent, FLightBatch& Batch, TAtomic<uint32>& LightCount)
+    {
+        if (AreaLight.Intensity <= 0.0f || !ExtractFrame->ViewLayers.Draws(AreaLight.RenderLayers))
+        {
+            return;
+        }
+
+        const FVector2 HalfSize    = FVector2(Math::Max(AreaLight.Width, 0.01f), Math::Max(AreaLight.Height, 0.01f)) * 0.5f;
+        const FVector3 Position    = TransformComponent.GetWorldLocationCached();
+        // Padded by the half diagonal, so the cluster sphere still covers the reach past the rectangle's corners.
+        const float    Radius      = Math::Max(AreaLight.Attenuation, 0.01f) + Math::Length(HalfSize);
+        if (!IsLightRelevant(Position, Radius))
+        {
+            return;
+        }
+
+        const FQuat    WorldRotation = TransformComponent.GetWorldRotation();
+        const FVector3 Forward       = Math::Normalize(WorldRotation * FViewVolume::ForwardAxis);
+        const FVector3 Right         = Math::Normalize(WorldRotation * FViewVolume::RightAxis);
+
+        FLight Light                = {};
+        Light.Flags                 = ELightFlags::Area;
+        Light.Position              = Position;
+        Light.Direction             = -Forward;
+        Light.Falloff               = AreaLight.Falloff;
+        Light.Color                 = PackColor(FVector4(AreaLight.LightColor, 1.0));
+        Light.Intensity             = AreaLight.Intensity;
+        Light.Radius                = Radius;
+        Light.Angles                = HalfSize;
+        Light.ShadowDataIndex       = Constants::kIndexNone;
+        Light.VolumetricScatteringRadius = std::bit_cast<float>(PackNormal(Right));
+        if (AreaLight.bVolumetric)
+        {
+            Light.Flags              |= ELightFlags::Volumetric;
+            Light.VolumetricIntensity = AreaLight.VolumetricIntensity;
+        }
+        Light.Flags = PackLightMinRoughness(Light.Flags, AreaLight.MinRoughness);
+
+        Batch.Lights[Batch.NumLights++] = Light;
+        if (Batch.NumLights == FLightBatch::Capacity)
+        {
+            FlushLightBatch(Batch, LightCount);
+        }
+    }
+
+    void FDefaultSceneRenderer::ResolveLightFunctions()
+    {
+        auto& Lighting = ExtractFrame->Lighting;
+        Lighting.LightFunctionDraws.clear();
+
+        // The tasks pushed in any order, so sorting keeps the sun first and a capped frame stable.
+        std::sort(Lighting.LightFunctionRequests.begin(), Lighting.LightFunctionRequests.end(),
+            [](const FLightFunctionRequest& A, const FLightFunctionRequest& B) { return A.LightIndex < B.LightIndex; });
+
+        for (const FLightFunctionRequest& Request : Lighting.LightFunctionRequests)
+        {
+            if (Lighting.LightFunctionDraws.size() == MAX_LIGHT_FUNCTIONS)
+            {
+                LOG_WARN_ONCE("Renderer: more than {} lights carry a light function, so the rest light unmasked.", MAX_LIGHT_FUNCTIONS);
+                break;
+            }
+            if (Request.LightIndex >= NumLiveLights)
+            {
+                continue;
+            }
+
+            FShaderH VS;
+            FShaderH PS;
+            CMaterialInterface* Material = Request.Material;
+            if (!Material->ResolveDomainShaders(EMaterialType::LightFunction, VS, PS) || !Material->RequestTexturesResolved())
+            {
+                continue;
+            }
+            const int32 MaterialIndex = Material->GetMaterialIndex();
+            if (MaterialIndex < 0)
+            {
+                continue;
+            }
+
+            const uint32 Slot = (uint32)Lighting.LightFunctionDraws.size();
+            FFrameData::FLighting::FLightFunctionDraw& Draw = Lighting.LightFunctionDraws.emplace_back();
+            Draw.Shaders.VertexShader = VS;
+            Draw.Shaders.PixelShader  = PS;
+            Draw.Request              = Request;
+            Draw.MaterialIndex        = (uint32)MaterialIndex;
+            Draw.Slot                 = Slot;
+
+            Lighting.LightFunctions[Slot].Right = FVector4(Request.Right, Request.ProjectionScale);
+            Lighting.LightFunctions[Slot].Up    = FVector4(Request.Up, 0.0f);
+
+            FLight& Light = Lighting.Lights[Request.LightIndex];
+            Light.Flags = (ELightFlags)((uint32)Light.Flags | (uint32)ELightFlags::LightFunction | (Slot << LIGHT_FUNCTION_SLOT_SHIFT));
+        }
+
+        Lighting.LightFunctionRequests.clear();
+    }
+
     void FDefaultSceneRenderer::AllocateShadowTiles()
     {
         FFrameData& Frame = *ExtractFrame;
@@ -3008,7 +3458,7 @@ namespace Lumina
         }
 
         {
-            const uint32 SunViews        = LightData.bHasSun ? (uint32)NumCascades : 0u;
+            const uint32 SunViews        = LightData.bHasSun ? (uint32)ActiveCascadeCount : 0u;
             const uint32 ReservedViews   = 1u                                     // Camera (early)
                                          + SunViews                               // CSM cascades
                                          + SunViews                               // CSM cascades (late, phase 2)
@@ -3279,10 +3729,19 @@ namespace Lumina
         auto& PointShadowCullViewBases = Frame.Views.PointShadowCullViewBases;
         auto& SpotShadowCullViewBases  = Frame.Views.SpotShadowCullViewBases;
         uint32& CascadeViewBase        = Frame.Views.CascadeViewBase;
+        Frame.Views.NumCascadeViews    = 0;
+        Frame.Views.NumNearCascadeViews = 0;
 
-        const uint32 NumDraws = Frame.Views.NumDrawsPerView;
+        const float CameraTolerance   = CameraLODPixels();
+        const float ShadowTolerance   = ShadowLODTexels();
+        const float ShadowAtlasTexels = (float)ShadowAtlas.GetConfig().AtlasResolution;
 
-        auto PushView = [&](const FMatrix4& ViewProjection, const FVector3& Origin, uint32 Flags,
+        // The camera and its shadows draw what the camera draws, and the other views skip a remapped Foreground layer, which only lines up from the camera.
+        const FViewLayerSettings& Layers = Frame.ViewLayers;
+        const uint32 OtherViewLayers = Layers.IsForegroundActive() ? ~RenderLayers::kForegroundMask : RenderLayers::kAllMask;
+        uint32 PushLayers = Layers.CullMask;
+
+        auto PushView = [&](const FMatrix4& ViewProjection, const FVector3& Origin, uint32 Flags, float LODErrorScale,
                             uint32 CascadeIndex = Constants::kIndexNoneU32, float MinBoundsDiameter = 0.0f)
         {
             const uint32 ViewIndex = (uint32)CullViews.size();
@@ -3298,8 +3757,8 @@ namespace Lumina
             View.ViewOriginAndFlags = FVector4(Origin, FlagsAsFloat);
             View.CascadeIndex       = CascadeIndex;
             View.MinBoundsDiameter  = MinBoundsDiameter;
-            View.IndirectArgsOffset = ViewIndex * NumDraws;
-            View.NumDraws           = NumDraws;
+            View.LODErrorScale      = LODErrorScale;
+            View.LayerMask          = PushLayers;
             CullViews.push_back(View);
 
             return ViewIndex;
@@ -3321,11 +3780,12 @@ namespace Lumina
         // Both VisBuffer phases rasterize the SAME camera view, so it contributes one entry.
         const uint32 NumViews =
             1u +                                                        // Camera
-            (LightData.bHasSun ? (uint32)NumCascades : 0u) +            // CSM cascades
+            (LightData.bHasSun ? (uint32)ActiveCascadeCount : 0u) +     // CSM cascades
             NumPointFaceViews +
             (uint32)PackedShadows[(uint32)ELightType::Spot].size() +
             (uint32)Frame.Views.CaptureViews.size() +                         // Capture cameras (frustum-only)
-            (Frame.ReflectionProbes.BakingProbe >= 0 ? 6u : 0u);              // Reflection-probe cube faces
+            (Frame.ReflectionProbes.BakingProbe >= 0 ? 6u : 0u) +             // Reflection-probe cube faces
+            (Frame.Weather.OcclusionShadowDataIndex != Constants::kIndexNone ? 1u : 0u);
 
         ASSERT(NumViews <= (uint32)GMaxCullViews);
         LUMINA_PROFILE_VALUE("Shadows/PointFaceViews", (int64)NumPointFaceViews);
@@ -3357,7 +3817,10 @@ namespace Lumina
             {
                 CameraFlags |= ECullViewFlags::MeshletHiZ;
             }
-            PushView(CameraVP, ViewVolume.GetViewPosition(), CameraFlags);
+            // The same view the skinned gather picked against, so camera picks agree on the CPU and the GPU.
+            const FCullView& CameraLOD = Frame.Views.CameraLODView;
+            CameraFlags |= GetCullViewFlags(CameraLOD) & ECullViewFlags::OrthographicLOD;
+            PushView(CameraVP, ViewVolume.GetViewPosition(), CameraFlags, CameraLOD.LODErrorScale);
         }
         
         if (LightData.bHasSun)
@@ -3372,22 +3835,35 @@ namespace Lumina
                     ECullViewFlags::SunAligned |
                     ECullViewFlags::CastShadowOnly |
                     ECullViewFlags::Distance |
-                    ECullViewFlags::Cascade;
+                    ECullViewFlags::Cascade |
+                    ECullViewFlags::OrthographicLOD;
 
                 // Published by ProcessDirectionalLight from the active sun, already clamped.
                 const float MinTexels = CascadeMinTexels;
 
                 CascadeViewBase = (uint32)CullViews.size();
-                for (int32 c = 0; c < NumCascades; ++c)
+                for (int32 c = 0; c < ActiveCascadeCount; ++c)
                 {
                     // Micro-poly threshold in world units, from this cascade's own texel pitch.
                     const float Radius     = LightData.CascadeRadii[c];
                     const float Resolution = Math::Max(LightData.CascadeResolutions[c], 1.0f);
                     const float TexelWorld = (Radius * 2.0f) / Resolution;
 
-                    PushView(SunShadow.ViewProjection[c], ViewVolume.GetViewPosition(), CascadeFlags,
-                             (uint32)c, MinTexels * TexelWorld);
+                    // Unreal's screen-size rule taken at the cascade's near edge, so it never drops a caster Unreal would keep.
+                    const float CascadeNear    = (c == 0) ? 0.0f : LightData.CascadeSplits[c - 1];
+                    const float ScreenDiameter = 2.0f * CasterMinScreenRadius * CascadeNear;
+
+                    // The far cascade lies wholly past ShadowMaxDistance, which the distance reject would empty.
+                    const uint32 Flags = (c < NearCascadeCount)
+                        ? CascadeFlags
+                        : ((CascadeFlags & ~(uint32)ECullViewFlags::Distance) | ECullViewFlags::FarCascade);
+
+                    PushView(SunShadow.ViewProjection[c], ViewVolume.GetViewPosition(), Flags,
+                             MakeLODErrorScale(SunShadow.ViewProjection[c], Resolution, ShadowTolerance),
+                             (uint32)c, Math::Max(MinTexels * TexelWorld, ScreenDiameter));
                 }
+                Frame.Views.NumCascadeViews     = (uint32)ActiveCascadeCount;
+                Frame.Views.NumNearCascadeViews = (uint32)NearCascadeCount;
 
             }
         }
@@ -3413,7 +3889,9 @@ namespace Lumina
             {
                 if (ShadowData.Shadow[Face].ShadowMapIndex != Constants::kIndexNone)
                 {
-                    PushView(ShadowData.ViewProjection[Face], Light.Position, FaceFlags);
+                    const float FaceTexels = ShadowData.Shadow[Face].AtlasUVScale.y * ShadowAtlasTexels;
+                    PushView(ShadowData.ViewProjection[Face], Light.Position, FaceFlags,
+                             MakeLODErrorScale(ShadowData.ViewProjection[Face], FaceTexels, ShadowTolerance));
                 }
             }
         }
@@ -3435,14 +3913,29 @@ namespace Lumina
                 ECullViewFlags::CastShadowOnly;
 
             SpotShadowCullViewBases.push_back((uint32)CullViews.size());
-            PushView(ShadowData.ViewProjection[0], Light.Position, SpotFlags);
+            const float SpotTexels = ShadowData.Shadow[0].AtlasUVScale.y * ShadowAtlasTexels;
+            PushView(ShadowData.ViewProjection[0], Light.Position, SpotFlags,
+                     MakeLODErrorScale(ShadowData.ViewProjection[0], SpotTexels, ShadowTolerance));
         }
 
+        PushLayers = OtherViewLayers;
         for (FFrameData::FCaptureViewData& Capture : Frame.Views.CaptureViews)
         {
             const FMatrix4 CaptureVP = Capture.ViewVolume.GetProjectionMatrix() * Capture.ViewVolume.GetViewMatrix();
-            const uint32 CaptureFlags = ECullViewFlags::Frustum | ConeFlag;
-            Capture.CameraViewIndex = PushView(CaptureVP, Capture.ViewVolume.GetViewPosition(), CaptureFlags);
+            const uint32 CaptureFlags = ECullViewFlags::Frustum | ConeFlag
+                                      | (Capture.ViewVolume.IsOrthographic() ? (uint32)ECullViewFlags::OrthographicLOD : 0u);
+            const float  CaptureHeight = (float)Capture.SceneGlobalData.ScreenSize.w;
+            Capture.CameraViewIndex = PushView(CaptureVP, Capture.ViewVolume.GetViewPosition(), CaptureFlags,
+                                               MakeLODErrorScale(CaptureVP, CaptureHeight, CameraTolerance));
+        }
+
+        if (Frame.Weather.OcclusionShadowDataIndex != Constants::kIndexNone)
+        {
+            // No cone test, since its sphere form assumes a perspective view origin.
+            const uint32 RainFlags = ECullViewFlags::Frustum | ECullViewFlags::CastShadowOnly | ECullViewFlags::OrthographicLOD | ECullViewFlags::NoFoliage;
+            const FMatrix4& RainVP = Frame.Weather.OcclusionViewProjection;
+            Frame.Weather.OcclusionCullView = PushView(RainVP, ViewVolume.GetViewPosition(), RainFlags,
+                MakeLODErrorScale(RainVP, (float)Frame.Weather.OcclusionResolution, ShadowTolerance));
         }
 
         if (Frame.ReflectionProbes.BakingProbe >= 0)
@@ -3452,7 +3945,8 @@ namespace Lumina
             {
                 const FViewVolume& Volume = Frame.ReflectionProbes.FaceVolumes[Face];
                 const FMatrix4 FaceVP = Volume.GetProjectionMatrix() * Volume.GetViewMatrix();
-                Frame.ReflectionProbes.FaceCullViews[Face] = PushView(FaceVP, Volume.GetViewPosition(), FaceFlags);
+                Frame.ReflectionProbes.FaceCullViews[Face] = PushView(FaceVP, Volume.GetViewPosition(), FaceFlags,
+                    MakeLODErrorScale(FaceVP, (float)Frame.ReflectionProbes.BakeFaceSize, CameraTolerance));
             }
         }
     }
@@ -3546,11 +4040,52 @@ namespace Lumina
         
         SceneGlobalData.CullData.ShadowMaxDistance = DirectionalLight.ShadowMaxDistance;
 
+        auto& SunFarShadow           = Frame.Lighting.SunFarShadow;
+        SunFarShadow.bTerrain        = DirectionalLight.bCastShadows && DirectionalLight.bTerrainShadows;
+        SunFarShadow.ToSun           = Math::Normalize(Light.Direction);
+        SunFarShadow.TanHalfAngle    = std::tan(Math::Radians(Math::Clamp(DirectionalLight.SourceAngle, 0.0f, 10.0f)) * 0.5f);
+        SunFarShadow.TerrainDistance = Math::Max(DirectionalLight.TerrainShadowDistance, 1.0f);
+
+        // Starts where the cascades begin to fade, so the hand-off has no gap.
+        const float CascadeEnd = Math::Min(FarClip, DirectionalLight.ShadowMaxDistance);
+        SunFarShadow.DFNear         = CascadeEnd * (1.0f - Math::Clamp(DirectionalLight.ShadowDistanceFade, 0.0f, 1.0f));
+        SunFarShadow.DFFar          = Math::Min(FarClip, DirectionalLight.DistanceFieldShadowDistance);
+        SunFarShadow.bDistanceField = DirectionalLight.bCastShadows && DirectionalLight.bDistanceFieldShadows
+                                   && SunFarShadow.DFFar > SunFarShadow.DFNear;
+        SunFarShadow.DFMinRadius    = Math::Max(DirectionalLight.CasterMinScreenRadius, 0.0f) * SunFarShadow.DFNear;
+        if (SunFarShadow.bDistanceField)
+        {
+            // A pixel's distance exceeds its view depth toward the screen corners, so the slice starts a little nearer.
+            const FMatrix4 SliceProj = Math::Perspective(Math::Radians(ViewVolume.GetFOV()), ViewVolume.GetAspectRatio(),
+                                                         Math::Max(SunFarShadow.DFNear * 0.8f, NearClip), SunFarShadow.DFFar);
+            FVector3 Corners[8];
+            FFrustum::ComputeFrustumCorners(SliceProj * ViewVolume.GetViewMatrix(), Corners);
+
+            const SunShadow::FSunGrid Grid = SunShadow::FitSunGrid(SunFarShadow.ToSun, Corners, kSunDFGridDimension);
+            SunFarShadow.SunRight     = Grid.Right;
+            SunFarShadow.SunUp        = Grid.Up;
+            SunFarShadow.GridOrigin   = Grid.Origin;
+            SunFarShadow.GridCellSize = Grid.CellSize;
+        }
+
         if (!DirectionalLight.bCascadeOcclusionCull)
         {
             SceneGlobalData.CullData.bShadowOcclusionCull = 0u;
         }
-        CascadeMinTexels = Math::Max(DirectionalLight.CascadeMinTexels, 0.0f);
+        CascadeMinTexels      = Math::Max(DirectionalLight.CascadeMinTexels, 0.0f);
+        CasterMinScreenRadius = Math::Max(DirectionalLight.CasterMinScreenRadius, 0.0f);
+
+        constexpr float ShadowMinDistance = 1.0f;
+
+        const float ShadowFar  = Math::Min(FarClip, DirectionalLight.ShadowMaxDistance);
+        const float ShadowNear = Math::Max(NearClip, ShadowMinDistance);
+        const float ClipRange  = ShadowFar - ShadowNear;
+
+        // The far cascade takes the last atlas tile, so it costs the near split one cascade when all four are asked for.
+        const float FarCascadeDistance = Math::Min(FarClip, DirectionalLight.FarShadowDistance);
+        const bool  bFarCascade        = DirectionalLight.bFarShadowCascade && FarCascadeDistance > ShadowFar;
+        NearCascadeCount   = Math::Clamp(DirectionalLight.CascadeCount, 1, bFarCascade ? NumCascades - 1 : NumCascades);
+        ActiveCascadeCount = NearCascadeCount + (bFarCascade ? 1 : 0);
 
         // A hard edge needs only the center tap, so a blur of zero drops the rest.
         const FSunShadowFilter Filter       = GetSunShadowFilter();
@@ -3564,29 +4099,17 @@ namespace Lumina
                                             DirectionalLight.CascadeBlend);
         LightData.ShadowParams2 = FVector4(DirectionalLight.ShadowDistanceFade,
                                             float(FilterTaps),
-                                            0.0f,
-                                            0.0f);
+                                            float(ActiveCascadeCount),
+                                            bFarCascade ? 1.0f : 0.0f);
 
-        const float CascadeSplitLambda = Math::Clamp(DirectionalLight.CascadeSplitLambda, 0.0f, 1.0f);
+        const float DistributionExponent = Math::Clamp(DirectionalLight.CascadeDistributionExponent, 1.0f, 10.0f);
 
-        constexpr float ShadowMinDistance   = 1.0f;
-
-        const float ShadowFar  = Math::Min(FarClip, DirectionalLight.ShadowMaxDistance);
-        const float ShadowNear = Math::Max(NearClip, ShadowMinDistance);
-        const float ClipRange  = ShadowFar - ShadowNear;
-        const float MinDepth   = ShadowNear;
-        const float MaxDepth   = ShadowFar;
-        const float DepthRatio = MaxDepth / Math::Max(MinDepth, 0.0001f);
-        
         float CascadeFarDistances[NumCascades];
+        SunShadow::ComputeCascadeSplits(ShadowNear, ShadowFar, NearCascadeCount, DistributionExponent, bFarCascade,
+                                        FarCascadeDistance, CascadeFarDistances);
         for (int i = 0; i < NumCascades; ++i)
         {
-            const float P       = (float)(i + 1) / (float)NumCascades;
-            const float LogD    = MinDepth * Math::Pow(DepthRatio, P);
-            const float UniD    = MinDepth + ClipRange * P;
-            const float D       = CascadeSplitLambda * (LogD - UniD) + UniD;
-            CascadeFarDistances[i]      = D;
-            LightData.CascadeSplits[i]  = D; // World-distance, view-space Z.
+            LightData.CascadeSplits[i] = CascadeFarDistances[i]; // World-distance, view-space Z.
         }
         
         const FMatrix4& CamView   = ViewVolume.GetViewMatrix();
@@ -3612,7 +4135,7 @@ namespace Lumina
         const float CascadeBlendFraction = Math::Clamp(DirectionalLight.CascadeBlend, 0.0f, 1.0f);
 
         float LastSplitDistance = ShadowNear;
-        for (int i = 0; i < NumCascades; ++i)
+        for (int i = 0; i < ActiveCascadeCount; ++i)
         {
             const float SplitNear = LastSplitDistance;
             const float SplitFar  = CascadeFarDistances[i];
@@ -3692,7 +4215,11 @@ namespace Lumina
 
             {
                 const float PrevBandNear = (i >= 2) ? CascadeFarDistances[i - 2] : 0.0f;
-                const float BlendBack    = (i == 0) ? 0.0f : CascadeBlendFraction * (SplitNear - PrevBandNear);
+                // The shader fades near shadows into the far cascade over the larger of the two fractions.
+                const float BandFraction = (bFarCascade && i == NearCascadeCount)
+                    ? Math::Max(CascadeBlendFraction, Math::Clamp(DirectionalLight.ShadowDistanceFade, 0.0f, 1.0f))
+                    : CascadeBlendFraction;
+                const float BlendBack    = (i == 0) ? 0.0f : BandFraction * (SplitNear - PrevBandNear);
 
                 const float MinCullNear = Math::Max(NearClip, 0.01f);
                 const float CullNear    = (i == 0) ? MinCullNear : Math::Max(SplitNear - BlendBack, MinCullNear);
@@ -3715,6 +4242,25 @@ namespace Lumina
         bCascadeHZBTransformsValid = true;
 
         SceneGlobalData.CullData.bCascadeHZBMidValid = 1u;
+
+        if (DirectionalLight.LightFunctionMaterial.Get() != nullptr)
+        {
+            const FVector3 Forward   = -Math::Normalize(Light.Direction);
+            const FVector3 Reference = Math::Abs(Forward.y) < 0.99f ? FVector3(0.0f, 1.0f, 0.0f) : FVector3(1.0f, 0.0f, 0.0f);
+            const FVector3 Right     = Math::Normalize(Math::Cross(Forward, Reference));
+
+            FLightFunctionRequest Request;
+            Request.Material        = DirectionalLight.LightFunctionMaterial.Get();
+            Request.LightIndex      = 0;
+            Request.Type            = ELightFlags::Directional;
+            Request.Forward         = Forward;
+            Request.Right           = Right;
+            Request.Up              = Math::Cross(Right, Forward);
+            Request.ProjectionScale = 1.0f / Math::Max(DirectionalLight.LightFunctionScale, 0.01f);
+
+            FScopeLock Lock(Frame.Lighting.LightFunctionRequestMutex);
+            Frame.Lighting.LightFunctionRequests.push_back(Request);
+        }
 
         // Slot 0 is reserved for the sun by CompileDrawCommands_Extract, which is why no index is taken here.
         Frame.Lighting.Lights[0] = Light;
@@ -3792,7 +4338,7 @@ namespace Lumina
             {
                 FLineInstance Line = Chunk.Data[i];
 
-                const FAABB LineBounds(Math::Min(Line.Start, Line.End), Math::Max(Line.Start, Line.End));
+                const SAABB LineBounds(Math::Min(Line.Start, Line.End), Math::Max(Line.Start, Line.End));
                 if (Frustum.IsInside(LineBounds))
                 {
                     uint32 Idx = Constants::kIndexNoneU32;
@@ -4069,6 +4615,8 @@ namespace Lumina
         ShadowAtlas.FreeTiles();
         Frame.Lighting.ShadowRequests.clear();
         Frame.Lighting.AtlasTiles.clear();
+        Frame.Lighting.LightFunctionRequests.clear();
+        Frame.Lighting.LightFunctionDraws.clear();
         Frame.Primitives.BillboardInstances.clear();
         Frame.Primitives.WidgetInstances.clear();
         Frame.Primitives.GlyphInstances.clear();
@@ -4182,7 +4730,6 @@ namespace Lumina
         {
             Out.Grass.clear();
             Out.GrassMaxInstances = 0;
-            Out.GrassMaxDrawDistance = 0.0f;
 
             const SGrassComponent* Grass = Registry.TryGet<SGrassComponent>(Entity);
             if (Grass == nullptr || !Grass->bEnabled)
@@ -4198,9 +4745,8 @@ namespace Lumina
             }
 
             Out.GrassMaxInstances    = Grass->MaxInstancesPerSpecies;
-            Out.GrassMaxDrawDistance = Grass->MaxDrawDistance;
 
-            for (const FGrassOutput& Output : Material->GrassOutputs)
+            for (const SGrassOutput& Output : Material->GrassOutputs)
             {
                 const CGrassType* Type = Output.GrassType.Get();
                 if (Type == nullptr || Type->Mesh == nullptr)
@@ -4221,7 +4767,9 @@ namespace Lumina
                 }
 
                 FDefaultSceneRenderer::FFrameData::FGrassSpeciesExtract Species;
-                Species.Mesh       = Type->Mesh.Get();
+                Species.Mesh          = Type->Mesh.Get();
+                Species.ResolveHandle = FMeshResolveCache::Get().Resolve(Species.Mesh, {});
+                Species.TypeName      = Type->GetName();
                 Species.LayerIndex = Output.LayerIndex;
 
                 // Density is instances per square meter and a world unit is a meter, so the spacing is its inverse root.

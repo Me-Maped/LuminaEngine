@@ -150,7 +150,7 @@ namespace Lumina
             }
         }
 
-        FAnimGraphObjectParameter Param;
+        SAnimGraphObjectParameter Param;
         Param.Name = Name;
         Param.Type = Type;
         ObjectParameters.push_back(Param);
@@ -722,7 +722,7 @@ namespace Lumina
         return Dst;
     }
 
-    void FAnimationGraphCompiler::ResolveBoneMasks(const TVector<FAnimGraphBoneMaskDef>& Defs, const FSkeletonResource* InSkeleton)
+    void FAnimationGraphCompiler::ResolveBoneMasks(const TVector<SAnimGraphBoneMaskDef>& Defs, const FSkeletonResource* InSkeleton)
     {
         Skeleton = InSkeleton;
         BoneMasks.clear();
@@ -741,7 +741,7 @@ namespace Lumina
 
         BoneMasks.reserve(Defs.size());
 
-        for (const FAnimGraphBoneMaskDef& Def : Defs)
+        for (const SAnimGraphBoneMaskDef& Def : Defs)
         {
             if (Def.Name.IsNone())
             {
@@ -751,7 +751,7 @@ namespace Lumina
             FAnimGraphBoneMask Mask;
             Mask.Weights.assign(NumBones, 0.0f);
 
-            for (const FAnimGraphBoneMaskBone& Entry : Def.Bones)
+            for (const SAnimGraphBoneMaskBone& Entry : Def.Bones)
             {
                 const int32 BoneIdx = Skeleton->FindBoneIndex(Entry.BoneName);
                 if (BoneIdx >= 0 && BoneIdx < NumBones)

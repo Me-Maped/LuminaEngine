@@ -1,9 +1,207 @@
 ﻿using System;
+using JetBrains.Annotations;
+using Lumina;
+using System.Collections.Generic;
+using System.Reflection;
 
 namespace LuminaSharp;
 
+// The C# spelling of a C++ REFLECT(...), and what registers a class extending a native struct, as REFLECT does for a C++ struct.
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Enum, AllowMultiple = false, Inherited = false)]
+public sealed class ReflectAttribute : Attribute
+{
+    private EScriptUpdatePhase UpdatePhaseValue;
+    private bool InteractiveValue;
+    private bool ShowOnStartValue = true;
+
+    public string? DisplayName { get; set; }
+
+    public string? Category { get; set; }
+
+    public string? ToolTip { get; set; }
+
+    // The name an .rml's data-model attribute uses for this class. The class name when no class in the chain sets one.
+    public string? DataModel { get; set; }
+
+    // The .rml a UI script shows when the entity leaves its Document property empty.
+    public string? UIDocument { get; set; }
+
+    // Backs a settings class with this config file, which the config system loads and saves its properties to.
+    public string? ConfigFile { get; set; }
+
+    // Puts every asset of this class and its subclasses in the named asset group, the same as a C++ REFLECT(Group = ...).
+    public string? Group { get; set; }
+
+    public bool HideInComponentList { get; set; }
+
+    public bool HideInDetails { get; set; }
+
+    // Keeps the class out of the node graph's placeable node registry.
+    public bool NotPlaceable { get; set; }
+
+    // OnUpdate and OnFixedUpdate touch only this entity and change no structure, so the driver runs it in parallel.
+    public bool ParallelUpdate { get; set; }
+
+    // Runs only on the host, a dedicated server or a standalone game. Every realm set must hold.
+    public bool HostOnly { get; set; }
+
+    // Runs only on a client joined to a host, never on the host or in a standalone game.
+    public bool ClientOnly { get; set; }
+
+    // Runs only where something is drawn or played, never on a dedicated server, a bot or a headless process.
+    public bool Cosmetic { get; set; }
+
+    public EScriptUpdatePhase UpdatePhase
+    {
+        get => UpdatePhaseValue;
+        set
+        {
+            UpdatePhaseValue = value;
+            HasUpdatePhase = true;
+        }
+    }
+
+    // A UI script's starting Interactive value, which a C++ subclass would set in its constructor.
+    public bool Interactive
+    {
+        get => InteractiveValue;
+        set
+        {
+            InteractiveValue = value;
+            HasInteractive = true;
+        }
+    }
+
+    // A UI script's starting ShowOnStart value, which a C++ subclass would set in its constructor.
+    public bool ShowOnStart
+    {
+        get => ShowOnStartValue;
+        set
+        {
+            ShowOnStartValue = value;
+            HasShowOnStart = true;
+        }
+    }
+
+    internal bool HasUpdatePhase { get; private set; }
+
+    internal bool HasInteractive { get; private set; }
+
+    internal bool HasShowOnStart { get; private set; }
+
+    // The nearest [Reflect] up Type's chain that sets what Picks reads, mirroring how native reads class metadata.
+    internal static ReflectAttribute? Nearest(Type? Type, Func<ReflectAttribute, bool> Picks)
+    {
+        for (Type? Current = Type; Current != null; Current = Current.BaseType)
+        {
+            if (Current.GetCustomAttribute<ReflectAttribute>(inherit: false) is { } Reflect && Picks(Reflect))
+            {
+                return Reflect;
+            }
+        }
+        return null;
+    }
+
+    internal static string DataModelOf(Type Type) => Nearest(Type, Reflect => Reflect.DataModel != null)?.DataModel ?? Type.Name;
+
+    // Specifier name and value as C++ REFLECT spells them, with an empty value for a flag.
+    internal IEnumerable<KeyValuePair<string, string>> Specifiers()
+    {
+        if (DisplayName != null)
+        {
+            yield return new(nameof(DisplayName), DisplayName);
+        }
+        if (Category != null)
+        {
+            yield return new(nameof(Category), Category);
+        }
+        if (ToolTip != null)
+        {
+            yield return new(nameof(ToolTip), ToolTip);
+        }
+        if (DataModel != null)
+        {
+            yield return new(nameof(DataModel), DataModel);
+        }
+        if (UIDocument != null)
+        {
+            yield return new(nameof(UIDocument), UIDocument);
+        }
+        if (ConfigFile != null)
+        {
+            yield return new(nameof(ConfigFile), ConfigFile);
+        }
+        if (Group != null)
+        {
+            yield return new(nameof(Group), Group);
+        }
+        if (HideInComponentList)
+        {
+            yield return new(nameof(HideInComponentList), "");
+        }
+        if (HideInDetails)
+        {
+            yield return new(nameof(HideInDetails), "");
+        }
+        if (NotPlaceable)
+        {
+            yield return new(nameof(NotPlaceable), "");
+        }
+        if (ParallelUpdate)
+        {
+            yield return new(nameof(ParallelUpdate), "");
+        }
+        if (HostOnly)
+        {
+            yield return new(nameof(HostOnly), "");
+        }
+        if (ClientOnly)
+        {
+            yield return new(nameof(ClientOnly), "");
+        }
+        if (Cosmetic)
+        {
+            yield return new(nameof(Cosmetic), "");
+        }
+        if (HasUpdatePhase)
+        {
+            yield return new(nameof(UpdatePhase), UpdatePhase.ToString());
+        }
+    }
+}
+
+// Class metadata an engine C# base hands to every script class minted beneath it, for a key no REFLECT specifier spells.
+[AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+internal sealed class ClassMetaAttribute : Attribute
+{
+    public ClassMetaAttribute(string Key, string Value = "")
+    {
+        this.Key = Key;
+        this.Value = Value;
+    }
+
+    public string Key { get; }
+
+    public string Value { get; }
+}
+
+// Dispatches Event to a script type that does not override it when the static bool(TypeLibrary, Type) Predicate on this class accepts the type, for engine work in a pre-event hook.
+[AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+internal sealed class DispatchWhenAttribute : Attribute
+{
+    public DispatchWhenAttribute(string Event, string Predicate)
+    {
+        this.Event = Event;
+        this.Predicate = Predicate;
+    }
+
+    public string Event { get; }
+
+    public string Predicate { get; }
+}
+
 /// <summary>Declares a prior name this element was serialized under, so saved data survives a rename. Repeatable.</summary>
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Field | AttributeTargets.Property, AllowMultiple = true)]
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Enum | AttributeTargets.Field | AttributeTargets.Property, AllowMultiple = true, Inherited = false)]
 public sealed class AliasAttribute : Attribute
 {
     public AliasAttribute(string Name)
@@ -11,45 +209,8 @@ public sealed class AliasAttribute : Attribute
         this.Name = Name;
     }
 
-    /// <summary>A prior name, a full type name on a class or a member name on a property.</summary>
+    /// <summary>A prior name, the type's name on a class, struct or enum, or a member name on a property.</summary>
     public string Name { get; }
-}
-
-/// <summary>
-/// Base for the markers that publish a C# data type to the engine as a subtype of a native reflected
-/// struct. A marked type is discovered and minted on every script load whether or not anything
-/// references it, and the engine sees it as deriving from <see cref="NativeBase"/>, so it appears
-/// wherever that base is accepted.
-/// </summary>
-/// <remarks>
-/// C# structs cannot inherit, so the base relationship has to be carried by an attribute rather than
-/// expressed in the type. The native base is named here rather than inferred from the C# type's shape
-/// or name: the engine resolves it through the reflection registry, so a wrong name is a load-time
-/// warning naming both types instead of a type that silently fails to appear in a picker.
-/// </remarks>
-[AttributeUsage(AttributeTargets.Struct | AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-public abstract class ScriptStructBaseAttribute : Attribute
-{
-    protected ScriptStructBaseAttribute(string NativeBase)
-    {
-        this.NativeBase = NativeBase;
-    }
-
-    /// <summary>Registered name of the native CStruct the minted type derives from.</summary>
-    public string NativeBase { get; }
-}
-
-/// <summary>
-/// Publishes this type as a data table row shape. Its [Property] members become the columns of any
-/// data table asset that selects it as its row struct.
-/// </summary>
-[AttributeUsage(AttributeTargets.Struct | AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-public sealed class DataTableRowAttribute : ScriptStructBaseAttribute
-{
-    public DataTableRowAttribute()
-        : base("SDataTableRowBase")
-    {
-    }
 }
 
 /// <summary>Resets this [Property] (or every [Property] on the class) to its default on a C# hot reload instead of carrying the previous value into the reloaded instance.</summary>
@@ -68,7 +229,7 @@ public enum EPropertyFlags : uint
 {
     None               = 0,
 
-    /// <summary>Shown in the details panel. Implied by <see cref="PropertyAttribute"/>.</summary>
+    /// <summary>Shown in the details panel.</summary>
     Editable           = 1u << 0,
     /// <summary>Shown but not editable.</summary>
     ReadOnly           = 1u << 1,
@@ -82,6 +243,8 @@ public enum EPropertyFlags : uint
     Replicated         = 1u << 12,
     /// <summary>Duplication resets this to its default rather than copying it.</summary>
     DuplicateTransient = 1u << 16,
+    /// <summary>Written into save games.</summary>
+    SaveGame           = 1u << 19,
 }
 
 // The parameter half of native EPropertyFlags, kept apart because neither is anything a [Property] declares.
@@ -97,76 +260,104 @@ internal enum EScriptParamFlags : uint
     RefParam = 1u << 18,
 }
 
-/// <summary>
-/// Exposes a script field/property to the editor (and saves it).
-/// </summary>
+// How a [Property(Component = ...)] reference is filled before OnAttach.
+public enum EComponentBind
+{
+    None,
+
+    // Finds the entity's component, leaving the reference unbound when it has none.
+    Get,
+
+    // Adds the component first when the entity has none.
+    GetOrAdd,
+}
+
+// The bare words a [Property] or [Function] takes, as C++ PROPERTY(...) and FUNCTION(...) do, imported into every script.
+public enum ESpecifier
+{
+    Editable,
+    ReadOnly,
+    Hidden,
+    NoSerialize,
+    SaveGame,
+    EditorOnly,
+    DuplicateTransient,
+    Sync,
+    Bind,
+
+    // C++ spells this Color, which a bare name in C# cannot, since it would collide with LuminaSharp.Color.
+    ColorPicker,
+
+    Button,
+}
+
+// The C# spelling of a C++ PROPERTY(...), which stores the member natively, saves it and shows it as Editable unless it says ReadOnly or Hidden.
+[MeansImplicitUse(ImplicitUseKindFlags.Access | ImplicitUseKindFlags.Assign)]
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property, AllowMultiple = false)]
 public sealed class PropertyAttribute : Attribute
 {
-    /// <summary>Inspector group.</summary>
+    private readonly ESpecifier[] Specifiers;
+    private Lumina.ESyncFlags SyncValue;
+    private bool bSyncNamed;
+
+    public PropertyAttribute(params ESpecifier[] Specifiers)
+    {
+        this.Specifiers = Specifiers;
+    }
+
     public string? Category { get; set; }
 
-    /// <summary>Hover help.</summary>
-    public string? Tooltip { get; set; }
+    public string? ToolTip { get; set; }
 
-    /// <summary>Display label override (defaults to the member name).</summary>
-    public string? Name { get; set; }
+    public string? DisplayName { get; set; }
 
-    /// <summary>Slider/drag lower bound (NaN = unbounded).</summary>
-    public float Min { get; set; } = float.NaN;
+    public float ClampMin { get; set; } = float.NaN;
 
-    /// <summary>Slider/drag upper bound (NaN = unbounded).</summary>
-    public float Max { get; set; } = float.NaN;
+    public float ClampMax { get; set; } = float.NaN;
 
-    /// <summary>Unit suffix shown after the value (e.g. "m/s").</summary>
     public string? Units { get; set; }
 
-    /// <summary>Draw a color picker for a Vector3/Vector4 value instead of drag fields.</summary>
-    public bool Color { get; set; }
-
-    // Turns a string into a picker of those file kinds, such as "rml" or "rml,rcss", the same as a C++ PROPERTY(AssetType = ...).
     public string? AssetType { get; set; }
 
-    /// <summary>
-    /// Reflected flags for this property, on top of the Editable one <see cref="PropertyAttribute"/> implies.
-    ///
-    /// This is how a script field says the things the engine already understood but C# could not express:
-    /// <c>Replicated</c>, <c>ReadOnly</c>, <c>EditorOnly</c>, <c>Const</c>, <c>DuplicateTransient</c>.
-    /// </summary>
-    public EPropertyFlags Flags { get; set; } = EPropertyFlags.None;
+    public string? Bundle { get; set; }
 
-    public bool HasMin => !float.IsNaN(Min);
-    public bool HasMax => !float.IsNaN(Max);
-}
+    public string? Group { get; set; }
 
-/// <summary>
-/// Persists a field/property with the entity without exposing it in the inspector.
-/// </summary>
-[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property, AllowMultiple = false)]
-public sealed class SerializeAttribute : Attribute
-{
-}
+    public EComponentBind Component { get; set; }
 
-/// <summary>Marks a field/property as never serialized or shown, even if otherwise eligible.</summary>
-[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property, AllowMultiple = false)]
-public sealed class HideAttribute : Attribute
-{
-}
+    // The name a UI document binds this under, which implies Bind.
+    public string? Bind { get; set; }
 
-/// <summary>Marks a [Property] field as an instanced (polymorphic) object. The inspector shows a type
-/// picker of the concrete classes deriving from the field's declared type and edits the chosen
-/// instance's own [Property] members inline. Opt-in only; an unmarked field is never instanced.</summary>
-[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property, AllowMultiple = false)]
-public sealed class InstancedAttribute : Attribute
-{
-}
+    // Implies Sync, and FromOwner lets the owning client write the field too.
+    public Lumina.ESyncFlags Sync
+    {
+        get => SyncValue;
+        set
+        {
+            SyncValue = value;
+            bSyncNamed = true;
+        }
+    }
 
-/// <summary>Stamped by the Reflector on the generated C# wrapper of a <c>REFLECT(Scriptable)</c> native class,
-/// marking it as a base a user may subclass. The runtime discovers Scriptable user types by looking for a class
-/// whose base chain carries this attribute. Never hand-written.</summary>
-[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-public sealed class ScriptableTypeAttribute : Attribute
-{
+    public float Rate { get; set; }
+
+    public double Quantize { get; set; }
+
+    public string? Validate { get; set; }
+
+    public string? Change { get; set; }
+
+    public bool HasClampMin => !float.IsNaN(ClampMin);
+    public bool HasClampMax => !float.IsNaN(ClampMax);
+
+    public bool Has(ESpecifier Specifier)
+    {
+        return Array.IndexOf(Specifiers, Specifier) >= 0
+            || (Specifier == ESpecifier.Sync && bSyncNamed)
+            || (Specifier == ESpecifier.Bind && Bind != null);
+    }
+
+    public bool Has(string Specifier) => Enum.TryParse(Specifier, out ESpecifier Parsed) && Has(Parsed);
 }
 
 /// <summary>Marks a generated wrapper method as a native reflected virtual that a C# subclass of a
@@ -185,38 +376,30 @@ public sealed class ScriptEventAttribute : Attribute
     public int Index { get; }
 }
 
-/// <summary>
-/// Publishes this method as a reflected function on the minted class, so native and other scripts can find
-/// it by name and call it without a generated binding.
-/// </summary>
-/// <remarks>
-/// Parameters and the return value become real FPropertys describing the call frame, so they are limited to
-/// kinds the reflection system can describe. A method whose signature cannot be described is reported at
-/// mint time and left unreflected rather than half-bound.
-/// </remarks>
+// The C# spelling of a C++ FUNCTION(...), which publishes the method as a reflected function native and other scripts call by name.
+[MeansImplicitUse]
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
-public sealed class ScriptFunctionAttribute : Attribute
+public sealed class FunctionAttribute : Attribute
 {
-}
+    private readonly ESpecifier[] Specifiers;
 
-/// <summary>Exposes a parameterless method as a clickable button in the script component's inspector.
-/// Clicking it invokes the method on the live script instance (only while the game is running). Methods
-/// taking arguments are ignored with a warning.</summary>
-[AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
-public sealed class ButtonAttribute : Attribute
-{
-    public ButtonAttribute()
+    public FunctionAttribute(params ESpecifier[] Specifiers)
     {
+        this.Specifiers = Specifiers;
     }
 
-    public ButtonAttribute(string Label)
+    public string? ToolTip { get; set; }
+
+    // The label of the inspector button that calls this parameterless method, which implies Button.
+    public string? Button { get; set; }
+
+    // The name a UI document runs or reads this under, which implies Bind.
+    public string? Bind { get; set; }
+
+    public bool Has(ESpecifier Specifier)
     {
-        this.Label = Label;
+        return Array.IndexOf(Specifiers, Specifier) >= 0
+            || (Specifier == ESpecifier.Button && Button != null)
+            || (Specifier == ESpecifier.Bind && Bind != null);
     }
-
-    /// <summary>Button text override (defaults to the method name).</summary>
-    public string? Label { get; set; }
-
-    /// <summary>Hover help.</summary>
-    public string? Tooltip { get; set; }
 }

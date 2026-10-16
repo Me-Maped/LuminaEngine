@@ -4,9 +4,56 @@
 #include "AI/Navigation/NavTypes.h"
 #include "Memory/SmartPtr.h"
 #include "Containers/Function.h"
+#include "Core/Threading/Sync.h"
+
+struct rcCompactHeightfield;
 
 namespace Lumina
 {
+    class FNavBuildPool;
+
+    // Tiles rebaked lately, kept as their eroded heightfield, so a tile whose geometry has not changed only restamps its areas and links.
+    class RUNTIME_API FNavTileCache
+    {
+    public:
+
+        explicit FNavTileCache(size_t InBudgetBytes);
+        ~FNavTileCache();
+
+        FNavTileCache(const FNavTileCache&) = delete;
+        FNavTileCache& operator=(const FNavTileCache&) = delete;
+        FNavTileCache(FNavTileCache&&) = delete;
+        FNavTileCache& operator=(FNavTileCache&&) = delete;
+
+        // Geometry under the tile changed, so whatever is held for it no longer counts.
+        void Invalidate(int32 X, int32 Y);
+        uint32 GetGeneration(int32 X, int32 Y) const;
+
+        // Held for a bake that gathers no geometry, so the budget cannot evict the entry before the bake reads it.
+        bool Pin(int32 X, int32 Y, uint32 Generation);
+        void Unpin(int32 X, int32 Y);
+
+        // Out is a fresh copy owned by the caller, freed with rcFreeCompactHeightfield.
+        bool Load(int32 X, int32 Y, uint32 Generation, rcCompactHeightfield*& Out);
+        void Store(int32 X, int32 Y, uint32 Generation, const rcCompactHeightfield& Compact);
+
+        int32 GetHits() const { return Hits.load(std::memory_order_relaxed); }
+        int32 GetMisses() const { return Misses.load(std::memory_order_relaxed); }
+
+    private:
+
+        struct FEntry;
+
+        mutable FMutex                       Lock;
+        THashMap<uint64, TUniquePtr<FEntry>> Entries;
+        THashMap<uint64, uint32>             Generations;
+        size_t                               BudgetBytes = 0;
+        size_t                               Bytes = 0;
+        uint64                               Clock = 0;
+        std::atomic<int32>                   Hits{ 0 };
+        std::atomic<int32>                   Misses{ 0 };
+    };
+
     /** World-space triangle snapshot. Areas is one ENavArea per tri (empty = all Ground). */
     struct FNavBuildInput
     {
@@ -23,7 +70,7 @@ namespace Lumina
         FVector3               BoundsMin = FVector3( FLT_MAX);
         FVector3               BoundsMax = FVector3(-FLT_MAX);
 
-        FNavBuildSettings       Settings;
+        SNavBuildSettings       Settings;
     };
 
     /** Passed to FNavMesh::Initialize. */
@@ -39,7 +86,7 @@ namespace Lumina
 
         int32                   MaxTiles = 0;
         int32                   MaxPolysPerTile = 0;
-        TVector<FNavTileData>   Tiles;
+        TVector<SNavTileData>   Tiles;
     };
 
     /** Async bake handle; cancellation is cooperative. */
@@ -70,12 +117,10 @@ namespace Lumina
         RUNTIME_API bool BakeSync(FNavBuildInput Input, FNavBuildOutput& Out);
 
         /** Single-tile rebake aligned to BaseLayout's grid (used for hot-swap). */
-        RUNTIME_API bool BakeSingleTile(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout, int32 TX, int32 TY, FNavTileData& Out);
+        RUNTIME_API bool BakeSingleTile(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout, int32 TX, int32 TY, SNavTileData& Out);
 
-        /** Batch rebake aligned to BaseLayout's grid. Bins the input once and bakes the tiles in
-         *  parallel, so a batch costs one pass over the geometry rather than one per tile.
-         *  Out is resized to Coords; a tile that failed to bake is left with an empty blob. */
-        RUNTIME_API void BakeTiles(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout,
-                                   const TVector<FNavTileCoord>& Coords, TVector<FNavTileData>& Out);
+        // One binning pass feeds every tile in Coords, on Pool's threads when given one, and a tile that fails keeps an empty blob.
+        RUNTIME_API void BakeTiles(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout, const TVector<FNavTileCoord>& Coords,
+                                   TVector<SNavTileData>& Out, FNavBuildPool* Pool = nullptr, FNavTileCache* Cache = nullptr);
     }
 }

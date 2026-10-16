@@ -31,7 +31,7 @@ namespace LuminaInteropBench
     using Lumina::int32;
     using Lumina::uint64;
     using Lumina::FVector3;
-    using Lumina::FScriptCallback;
+    using Lumina::SScriptCallback;
     using Lumina::CInteropTestLibrary;
 
     volatile uint64 GInteropBenchSink = 0;
@@ -116,7 +116,7 @@ namespace LuminaInteropBench
         {
             Lumina::Paths::InitializePaths();
             // Registers the reflected types, without which a property offset resolves to zero.
-            Lumina::ProcessNewlyLoadedCObjects();
+            Lumina::RegisterPendingTypes();
             DotNet::Initialize();
         }
 
@@ -173,6 +173,56 @@ namespace LuminaInteropBench
         SUCCEED();
     }
 
+    TEST_F(FInteropBench, NativeCallAgainstPInvoke)
+    {
+        auto* Compare = (double(*)(int32, int32))DotNet::ResolveManagedExport("Bench_InteropCompare");
+        ASSERT_NE(Compare, nullptr);
+
+        auto Best = [Compare](int32 Which)
+        {
+            double Result = 1e30;
+            for (int32 Attempt = 0; Attempt < kRepeats; ++Attempt)
+            {
+                const double Nanos = Compare(Which, kIterations);
+                Result = Nanos < Result ? Nanos : Result;
+            }
+            return Result;
+        };
+
+        struct FRow { const char* Name; int32 Which; };
+        const FRow Rows[] =
+        {
+            { "NativeCall int(), GC transition",              0 },
+            { "NativeCall int(), SuppressGCTransition",       1 },
+            { "DllImport int()",                              2 },
+            { "LibraryImport int()",                          3 },
+            { "LibraryImport int(), SuppressGCTransition",    4 },
+            { "NativeCall FVector3(FVector3, FVector3)",      5 },
+            { "LibraryImport FVector3(FVector3, FVector3)",   6 },
+            { "NativeCall int(string), 20 chars UTF-8",       7 },
+            { "LibraryImport int(string), 20 chars UTF-8",    8 },
+            { "LibraryImport int(string), 20 chars UTF-16",   9 },
+            { "NativeCall int(string), 400 chars UTF-8",      10 },
+            { "LibraryImport int(string), 400 chars UTF-8",   11 },
+            { "LibraryImport int(string), 400 chars UTF-16",  12 },
+            { "NativeCall string(), two-pass FString copy",   13 },
+            { "LibraryImport byte*() + PtrToStringUTF8",      14 },
+            { "bare pointer int(), GC transition",            15 },
+            { "bare pointer int(), SuppressGCTransition",     16 },
+            { "bare pointer FVector3(FVector3, FVector3)",    17 },
+        };
+
+        const double Floor = BestOfManagedLoop("Bench_ManagedOnly", kIterations);
+        ReportHeader("NativeCall against P/Invoke, same native function per pair");
+        ReportRow("managed call, no crossing (the floor)", Floor, 0.0);
+        for (const FRow& Row : Rows)
+        {
+            ReportRow(Row.Name, Best(Row.Which), Floor);
+        }
+
+        SUCCEED();
+    }
+
     TEST_F(FInteropBench, PropertyAccess)
     {
         auto* OffsetLoop = (FPropLoopFn)DotNet::ResolveManagedExport("Bench_PropertyOffsetRead");
@@ -196,7 +246,7 @@ namespace LuminaInteropBench
         double BestMap = -1.0;
         if (MapLookup != nullptr)
         {
-            Lumina::FInteropOpaqueStruct Opaque;
+            Lumina::SInteropOpaqueStruct Opaque;
             BestMap = 1e30;
             for (int32 Attempt = 0; Attempt < kRepeats; ++Attempt)
             {
@@ -230,7 +280,7 @@ namespace LuminaInteropBench
         SUCCEED();
     }
 
-    // The reflection dispatcher every [ScriptFunction] goes through, which is the one path that boxes.
+    // The reflection dispatcher every [Function] goes through, which is the one path that boxes.
     TEST_F(FInteropBench, ScriptFunctionDispatch)
     {
         auto* MakeTarget = (FMakeTargetFn)DotNet::ResolveManagedExport("Test_MakeMarshalTarget");
@@ -361,7 +411,7 @@ namespace LuminaInteropBench
         Bone.Name = Lumina::FName("Bone");
         Bone.Type = Lumina::MakeShared<Lumina::Scripting::FScriptExportType>();
         Bone.Type->Kind = Lumina::EPropertyTypeFlags::Struct;
-        Bone.Type->NativeName = Lumina::FName("FAnimGraphBoneMaskBone");
+        Bone.Type->NativeName = Lumina::FName("SAnimGraphBoneMaskBone");
         ViewParams.Fields.push_back(Bone);
         Lumina::Scripting::FScriptExportField Weight;
         Weight.Name = Lumina::FName("Weight");
@@ -444,12 +494,12 @@ namespace LuminaInteropBench
             {
                 for (int32 i = 0; i < CallbackIterations; ++i)
                 {
-                    FScriptCallback Once;
+                    SScriptCallback Once;
                     Once.Token = Bind();
                     Scripting::InvokeScriptCallback(Once, (uint64)i);
                 }
             });
-            ReportRow("FScriptCallback bind, fire and free", Callback, Native);
+            ReportRow("SScriptCallback bind, fire and free", Callback, Native);
         }
 
         SUCCEED();

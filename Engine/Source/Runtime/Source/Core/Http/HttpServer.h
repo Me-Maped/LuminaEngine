@@ -36,6 +36,8 @@ namespace Lumina::Http
 
         FServer(const FServer&) = delete;
         FServer& operator=(const FServer&) = delete;
+        FServer(FServer&&) = delete;
+        FServer& operator=(FServer&&) = delete;
 
         bool Start(const FServerParams& Params, FRequestHandler Handler);
 
@@ -57,7 +59,7 @@ namespace Lumina::Http
             bool bClosing = false;
         };
 
-        void ServeLoop();
+        void ServeLoop(const FThreadStop& Stop);
 
         // False when the connection should be dropped.
         bool ServiceClient(FClient& Client);
@@ -73,7 +75,6 @@ namespace Lumina::Http
 
         FThread Worker;
 
-        TAtomic<bool> bStopRequested { false };
         TAtomic<bool> bRunning       { false };
 
         uint16 BoundPort = 0;

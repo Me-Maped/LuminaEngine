@@ -4,18 +4,13 @@ namespace LuminaSharp;
 
 /// <summary>
 /// Ambient access to the world the current gameplay callback belongs to. The runtime sets this around every
-/// EntityScript and EntitySystem callback, so the static engine APIs (<see cref="Time"/>, <see cref="Sound"/>,
+/// CEntityScript and CEntitySystem callback, so the static engine APIs (<see cref="Time"/>, <see cref="Sound"/>,
 /// <see cref="Trace"/>, <see cref="Gizmo"/>) and the Entity extension methods resolve their world without you
 /// threading one through. Game-thread only, never touch it from a worker Task body.
 /// </summary>
 public static partial class Engine
 {
-    /// <summary>
-    /// Switches to another level. The world swap is deferred to the next frame start, so this is safe to
-    /// call from any script callback; everything in the current world (entities, scripts, timers) is torn
-    /// down and the new world starts fresh. URL forms: a world asset path ("/Game/Maps/Arena"), a hosted
-    /// map ("/Game/Maps/Arena?listen?port=7777"), or a server address to connect to ("192.168.1.5:7777").
-    /// </summary>
+    // Switches level at the next frame start, keeping only SPersistentComponent entities, which arrive with their children and scripts and get OnTraveled.
     public static void OpenLevel(string Url) => Lumina.CGameLibrary.OpenLevel(World, Url);
 
     /// <summary>
@@ -51,16 +46,10 @@ public static partial class Engine
     // False wherever nothing is drawn or heard, so cosmetic work can skip a server, a bot and a headless process alike.
     public static bool HasPresentation => Lumina.CGameLibrary.HasPresentation(World);
 
-    /// The persistent game instance, or null before the project has created one.
-    public static Lumina.CGameInstance? Instance => Lumina.CGameLibrary.GetGameInstance();
-
-    /// The game instance as your own subclass, or null when the project runs a different one.
-    public static T? GetInstance<T>() where T : Lumina.CGameInstance => Instance as T;
-
     [ThreadStatic] private static Lumina.CWorld? ActiveWorld;
-    [ThreadStatic] private static Entity ActiveEntity;
+    [ThreadStatic] private static FEntity ActiveEntity;
     [ThreadStatic] private static bool ActiveHasEntity;
-    [ThreadStatic] private static EntityScript? ActiveScriptField;
+    [ThreadStatic] private static Lumina.CEntityScript? ActiveScriptField;
     [ThreadStatic] private static object? EventTarget;
     [ThreadStatic] private static Lumina.CWorld? EventWorldCache;
 
@@ -71,19 +60,19 @@ public static partial class Engine
     /// <summary>True while a gameplay callback is running (so <see cref="World"/> is available).</summary>
     public static bool InWorld => ActiveWorld != null || EventWorld() != null;
 
-    // The entity whose script callback is running (Entity.Null in a system tick). Used by Trace.IgnoreSelf.
-    internal static Entity CurrentEntity => ActiveHasEntity ? ActiveEntity : (EventTarget as EntityScript)?.Entity ?? Entity.Null;
+    // The entity whose script callback is running (FEntity.Null in a system tick). Used by Trace.IgnoreSelf.
+    internal static FEntity CurrentEntity => ActiveHasEntity ? ActiveEntity : (EventTarget as Lumina.CEntityScript)?.Entity ?? FEntity.Null;
 
     // The script whose callback is currently running, or null.
-    internal static EntityScript? ActiveScript => ActiveScriptField ?? EventTarget as EntityScript;
+    internal static Lumina.CEntityScript? ActiveScript => ActiveScriptField ?? EventTarget as Lumina.CEntityScript;
 
     // Resolved on first use, so an event that never touches the ambient world costs no native call.
     private static Lumina.CWorld? EventWorld()
     {
         return EventWorldCache ??= EventTarget switch
         {
-            EntityScript Script => Script.World,
-            WorldSubsystem Subsystem => Subsystem.World,
+            Lumina.CEntityScript Script => Script.World,
+            Lumina.CWorldSubsystem Subsystem => Subsystem.World,
             _ => null,
         };
     }
@@ -111,7 +100,7 @@ public static partial class Engine
         EventWorldCache = null;
     }
 
-    internal static Scope Push(Lumina.CWorld World, Entity Entity)
+    internal static Scope Push(Lumina.CWorld World, FEntity Entity)
     {
         Scope Prior = Capture();
         ActiveWorld = World;
@@ -122,7 +111,7 @@ public static partial class Engine
         return Prior;
     }
 
-    internal static Scope Push(Lumina.CWorld World, Entity Entity, EntityScript Script)
+    internal static Scope Push(Lumina.CWorld World, FEntity Entity, Lumina.CEntityScript Script)
     {
         Scope Prior = Capture();
         ActiveWorld = World;
@@ -161,13 +150,13 @@ public static partial class Engine
     public readonly struct Scope : IDisposable
     {
         private readonly Lumina.CWorld? World;
-        private readonly Entity Entity;
+        private readonly FEntity Entity;
         private readonly bool HasEntity;
-        private readonly EntityScript? Script;
+        private readonly Lumina.CEntityScript? Script;
         private readonly object? Target;
         private readonly Lumina.CWorld? TargetWorld;
 
-        internal Scope(Lumina.CWorld? World, Entity Entity, bool HasEntity, EntityScript? Script, object? Target, Lumina.CWorld? TargetWorld)
+        internal Scope(Lumina.CWorld? World, FEntity Entity, bool HasEntity, Lumina.CEntityScript? Script, object? Target, Lumina.CWorld? TargetWorld)
         {
             this.World = World;
             this.Entity = Entity;

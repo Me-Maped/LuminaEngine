@@ -5,11 +5,12 @@
 #include "Containers/Function.h"
 #include "Containers/String.h"
 #include "Memory/SmartPtr.h"
-#include "Scripting/ScriptExports.h"
+#include "UI/Widgets/CategorizedPicker.h"
 
 namespace Lumina
 {
     class CEntityScript;
+    class FFunction;
     class FPropertyTable;
 
     /**
@@ -22,7 +23,7 @@ namespace Lumina
      *  - a script's properties are real FPropertys on its (minted) class, so each one is drawn by a stock
      *    nested FPropertyTable instead of a bespoke drawer over a value blob.
      *
-     * A [Button] method is drawn under those properties and invoked by name on the live managed instance.
+     * A function with Button metadata, C++ FUNCTION(Button) or C# [Function(Button)], is drawn under those properties and called through reflection.
      */
     class FEntityScriptComponentCustomization : public IPropertyTypeCustomization
     {
@@ -44,8 +45,8 @@ namespace Lumina
             const CClass*              BoundClass = nullptr;   // guards an object replaced at the same address
             TUniquePtr<FPropertyTable> ValueTable;
 
-            // Gathered with the table rather than per frame: it is a marshalled crossing per script type.
-            TVector<Scripting::FScriptButton> Buttons;
+            // The class's functions that carry Button metadata, gathered with the table rather than per frame.
+            TVector<const FFunction*> Buttons;
 
             // Resolved with the rest of the binding, since it walks the script directories off disk.
             FString SourceFile;
@@ -59,6 +60,9 @@ namespace Lumina
         // undo snapshot is taken BEFORE the mutation. Mutating mid-draw would also invalidate the vector the
         // draw loop is walking.
         TFunction<void()> PendingMutation;
+
+        // Owned here, so its search and open categories last as long as this inspector does.
+        FCategorizedPicker ScriptPicker;
         bool              bFinishPending = false;
 
         TVector<FSlotView> SlotViews;

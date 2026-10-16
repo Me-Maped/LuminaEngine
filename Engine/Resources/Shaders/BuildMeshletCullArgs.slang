@@ -1,18 +1,12 @@
 #include "Includes/SceneGlobals.slang"
 #include "Includes/GroupScan.slang"
 
-// Lays out the meshlet cull's flat dispatch, then publishes what it appended as the draw slices the
-// mesh stage reads.
-//
-// Runs twice per cull phase. BEFORE the cull it assigns each bucket a dense offset in the flat block
-// dispatch and records where the phase starts appending; AFTER it turns the cursor movement into that
-// phase's slice and writes the per-slice indirect draw arguments.
+// Runs before the cull to lay out the flat block dispatch, and after it to publish the phase's draw slices.
 
-struct FDrawMeshTasksIndirectArguments
+// One meshlet sub-draw, read as mesh-task group counts or as an unindexed instanced draw, and mirrored by FMeshletDrawArgs.
+struct FMeshletDrawArgs
 {
-    uint GroupCountX;
-    uint GroupCountY;
-    uint GroupCountZ;
+    uint Words[4];
 };
 
 struct FDispatchIndirectArguments
@@ -26,24 +20,29 @@ struct FBuildMeshletCullArgsArgs
 {
     uint  NumViews;
     uint  NumDraws;
-    // MESHLET_SLICE_EARLY or MESHLET_SLICE_LATE. Never ALL -- that slice is derived, not appended.
+    // MESHLET_SLICE_EARLY or MESHLET_SLICE_LATE, never MESHLET_SLICE_ALL since that slice is derived.
     uint  Slice;
     // 0 = before the cull dispatch, 1 = after it.
     uint  bPost;
-    // maxMeshWorkGroupCount[0]. One mesh workgroup per surviving meshlet, so a slice needing more than
-    // this is split across consecutive sub-draws rather than truncated.
+    // maxMeshWorkGroupCount[0], and a slice needing more is split across sub-draws rather than truncated.
     uint  MaxMeshGroups;
     // Sub-draw slots reserved per (bucket, slice).
     uint  SubDrawsPerSlice;
     // 0 keeps every block in front for both phases, as the block build does when splitting is off.
     uint  bSplitPhases;
+    // 1 keeps near cascades out of this phase, 2 lays out only them for the dispatch that culls against the receiver mask.
+    uint  bDeferCascades;
+    // Corners per meshlet on the vertex path, or 0 for mesh shading.
+    uint  VertexPathCorners;
+    uint  _Pad0;
     uint  _Pad1;
+    uint  _Pad2;
 
     GPUSpan<FRenderBucket>                   Buckets;
     // One workgroup per written block, Y-folded exactly as BuildDrawPrefix folds the block dispatch.
     GPUSpan<FDispatchIndirectArguments>      OutCullDispatchArgs;
     // [(bucket * MESHLET_SLICE_COUNT + slice) * SubDrawsPerSlice + subdraw]
-    GPUSpan<FDrawMeshTasksIndirectArguments> OutMeshDrawArgs;
+    GPUSpan<FMeshletDrawArgs>                OutMeshDrawArgs;
 };
 FBuildMeshletCullArgsArgs* Pass() { return GetPassArgs<FBuildMeshletCullArgsArgs>(); }
 
@@ -51,6 +50,12 @@ FBuildMeshletCullArgsArgs* Pass() { return GetPassArgs<FBuildMeshletCullArgsArgs
 uint PhaseBlocks(FRenderBucket* Bucket, uint ViewIndex, bool bLate, bool bSplitPhases)
 {
     const uint Front = min(Bucket.BlockCursor, Bucket.BlockCapacity);
+    const bool bDeferred = Pass().bDeferCascades != 0u && CullViewHasFlag(ViewIndex, CULL_VIEW_FLAG_CASCADE)
+                        && !CullViewHasFlag(ViewIndex, CULL_VIEW_FLAG_FAR_CASCADE);
+    if (Pass().bDeferCascades == 2u || bDeferred)
+    {
+        return (Pass().bDeferCascades == 2u && bDeferred) ? Front : 0u;
+    }
     if (!bLate)
     {
         return Front;
@@ -64,7 +69,7 @@ uint PhaseBlocks(FRenderBucket* Bucket, uint ViewIndex, bool bLate, bool bSplitP
          : Front;
 }
 
-// PRE is one workgroup scanning contiguous runs of buckets; POST is one thread per bucket over ceil(NumBuckets / 64) groups.
+// The pre pass is one workgroup scanning bucket runs, the post pass one thread per bucket.
 #define BUILD_CULL_ARGS_GROUP 64
 
 [shader("compute")]
@@ -88,7 +93,7 @@ void ComputeMain(uint3 ThreadID : SV_DispatchThreadID)
         for (uint i = First; i < Last; ++i)
         {
             // Blocks are dense inside a bucket but sparse across the arena, so the flat dispatch needs its own prefix.
-            Local += PhaseBlocks(SpanAt(&Pass().Buckets, i), i / NumDraws, bLate, Pass().bSplitPhases != 0u);
+            Local += PhaseBlocks(Pass().Buckets.At(i), i / NumDraws, bLate, Pass().bSplitPhases != 0u);
         }
 
         uint2 Total;
@@ -96,7 +101,7 @@ void ComputeMain(uint3 ThreadID : SV_DispatchThreadID)
 
         for (uint i = First; i < Last; ++i)
         {
-            FRenderBucket* Bucket = SpanAt(&Pass().Buckets, i);
+            FRenderBucket* Bucket = Pass().Buckets.At(i);
 
             Bucket.CullWorkBase = Running;
             Running += PhaseBlocks(Bucket, i / NumDraws, bLate, Pass().bSplitPhases != 0u);
@@ -112,7 +117,7 @@ void ComputeMain(uint3 ThreadID : SV_DispatchThreadID)
             Args.GroupX = min(Total.x, (uint)MAX_DISPATCH_AXIS);
             Args.GroupY = (Total.x + (uint)MAX_DISPATCH_AXIS - 1u) / (uint)MAX_DISPATCH_AXIS;
             Args.GroupZ = 1u;
-            SpanSet(&Pass().OutCullDispatchArgs, 0u, Args);
+            Pass().OutCullDispatchArgs.Set(0u, Args);
         }
         return;
     }
@@ -124,14 +129,13 @@ void ComputeMain(uint3 ThreadID : SV_DispatchThreadID)
             return;
         }
 
-        FRenderBucket* Bucket = SpanAt(&Pass().Buckets, i);
+        FRenderBucket* Bucket = Pass().Buckets.At(i);
 
         const uint Written = min(Bucket.DrawCursor, Bucket.DrawCapacity);
         const uint Start   = Bucket.SliceBase[Slice];
         Bucket.SliceCount[Slice] = (Written > Start) ? (Written - Start) : 0u;
 
-        // ALL is the whole region, and it is what every single-phase pass draws. Derived rather than
-        // appended: those passes all run after both phases, so the cursor is final by then.
+        // Single-phase passes draw the whole region and run after both phases, so it is derived here.
         Bucket.SliceBase[MESHLET_SLICE_ALL]  = 0u;
         Bucket.SliceCount[MESHLET_SLICE_ALL] = Written;
 
@@ -139,27 +143,25 @@ void ComputeMain(uint3 ThreadID : SV_DispatchThreadID)
         {
             const uint Count = Bucket.SliceCount[s];
 
-            // Zero meshlets means zero sub-draws, so an empty slice costs the command processor nothing
-            // rather than launching an empty grid.
-            //
-            // Spelled to survive MaxMeshGroups near UINT32_MAX. The obvious (Count + Max - 1) / Max WRAPS
-            // there -- with Max == 0xFFFFFFFF the numerator is Count - 2 (mod 2^32), so the quotient is 0
-            // for EVERY non-empty slice and the indirect draw draws nothing at all, silently and with no
-            // validation error. GroupCountX below uses min() and stayed correct, which is what made the
-            // capture read as "args are fine, count is zero". Devices really do report that value.
+            // Spelled to survive MaxMeshGroups near UINT32_MAX, where the rounded-up division wraps to zero.
             Bucket.SubDrawCount[s] = (Count == 0u) ? 0u : (((Count - 1u) / Pass().MaxMeshGroups) + 1u);
 
             for (uint sd = 0u; sd < Pass().SubDrawsPerSlice; ++sd)
             {
                 const uint First = sd * Pass().MaxMeshGroups;
 
-                FDrawMeshTasksIndirectArguments DrawArgs;
-                DrawArgs.GroupCountX = (First < Count) ? min(Count - First, Pass().MaxMeshGroups) : 0u;
-                DrawArgs.GroupCountY = 1u;
-                DrawArgs.GroupCountZ = 1u;
+                const uint Meshlets = (First < Count) ? min(Count - First, Pass().MaxMeshGroups) : 0u;
+
+                // The vertex path draws one instance per meshlet where the mesh path launches one workgroup.
+                const bool bVertexPath = Pass().VertexPathCorners != 0u;
+                FMeshletDrawArgs DrawArgs;
+                DrawArgs.Words[0] = bVertexPath ? Pass().VertexPathCorners : Meshlets;
+                DrawArgs.Words[1] = bVertexPath ? Meshlets : 1u;
+                DrawArgs.Words[2] = bVertexPath ? 0u : 1u;
+                DrawArgs.Words[3] = 0u;
 
                 const uint Index = (i * (uint)MESHLET_SLICE_COUNT + s) * Pass().SubDrawsPerSlice + sd;
-                SpanSet(&Pass().OutMeshDrawArgs, Index, DrawArgs);
+                Pass().OutMeshDrawArgs.Set(Index, DrawArgs);
             }
         }
     }

@@ -15,6 +15,7 @@ namespace Lumina
     class CMaterialInterface;
     class FImmediateLineRenderer;
     struct SPostProcessSettings;
+    struct FViewLayerSettings;
 
     class IRenderScene : public IPrimitiveDrawInterface
     {
@@ -30,7 +31,7 @@ namespace Lumina
         virtual void Init() = 0;
 
         // Gather this frame's scene from the ECS.
-        virtual void Extract(const FViewVolume& ViewVolume, const SPostProcessSettings* PostProcess) = 0;
+        virtual void Extract(const FViewVolume& ViewVolume, const SPostProcessSettings* PostProcess, const FViewLayerSettings& Layers) = 0;
 
         virtual void RenderView(uint8 FrameIndex) = 0;
 
@@ -42,7 +43,7 @@ namespace Lumina
          */
         virtual void SetPrimaryViewSize(const FUIntVector2& SizePixels) {}
 
-        // Pixel extent of the scene's render target. Use this for sizing.
+        // Pixel extent of the displayed image, which input, picking and deprojection are measured in.
         virtual FUIntVector2 GetRenderExtent() const = 0;
 
         //~ Frame hooks ---------------------------------------------------------------------

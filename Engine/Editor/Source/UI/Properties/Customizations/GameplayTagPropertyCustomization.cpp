@@ -255,7 +255,7 @@ namespace Lumina
     {
         if (void* Ptr = Property->GetValuePtr())
         {
-            *static_cast<FGameplayTag*>(Ptr) = Value;
+            *static_cast<SGameplayTag*>(Ptr) = Value;
         }
     }
 
@@ -263,7 +263,7 @@ namespace Lumina
     {
         if (const void* Ptr = Property->GetValuePtr())
         {
-            Value = *static_cast<const FGameplayTag*>(Ptr);
+            Value = *static_cast<const SGameplayTag*>(Ptr);
         }
     }
 }

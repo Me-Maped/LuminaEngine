@@ -1,5 +1,8 @@
 #include "RuntimePCH.h"
 #include "SceneRendererInternal.h"
+#include "World/Scene/RenderScene/SceneCullMath.h"
+
+#include <bit>
 
 namespace Lumina
 {
@@ -7,6 +10,9 @@ namespace Lumina
     static TConsoleVar<float> CVarCullDebugCapacityScale("r.Cull.DebugCapacityScale", 1.0f,
         "Scales the meshlet draw and block lists below demand, to exercise the coarse-LOD overflow fallback.");
     #endif
+
+    static TConsoleVar<int32> CVarCullMeshletVisibility("r.Cull.MeshletVisibility", 1,
+        "0 decides the occlusion phase per instance instead of per meshlet, for an A/B against the meshlet bits.");
 
     static bool IsDebugCapacityScaled()
     {
@@ -45,42 +51,6 @@ namespace Lumina
 
     namespace
     {
-        FInstanceBlockBounds ComputeInstanceBlockBounds(const FInstanceCullEntry* Entries, uint32 First, uint32 End, bool bGPUWritten)
-        {
-            constexpr uint32 ActiveBit   = (uint32)EInstanceFlags::Active << 16;
-            constexpr uint32 NoCullBit   = (uint32)EInstanceFlags::IgnoreOcclusionCulling << 16;
-            constexpr float  Unreachable = -1.0f;
-
-            FVector3 Lo(std::numeric_limits<float>::max());
-            FVector3 Hi(-std::numeric_limits<float>::max());
-            float    Reach      = Unreachable;
-            bool     bUnbounded = bGPUWritten;
-            for (uint32 Slot = First; Slot < End; ++Slot)
-            {
-                const FInstanceCullEntry& Entry = Entries[Slot];
-                if ((Entry.DrawIDAndFlags & ActiveBit) == 0u)
-                {
-                    continue;
-                }
-
-                // Matches the instance test, which skips the distance cut for these.
-                bUnbounded = bUnbounded || (Entry.DrawIDAndFlags & NoCullBit) != 0u || Entry.MaxDrawDistance <= 0.0f;
-
-                const FVector3 Center = FVector3(Entry.SphereBounds);
-                const FVector3 Radius = FVector3(Entry.SphereBounds.w);
-                Lo    = Math::Min(Lo, Center - Radius);
-                Hi    = Math::Max(Hi, Center + Radius);
-                Reach = Math::Max(Reach, Entry.MaxDrawDistance);
-            }
-
-            FInstanceBlockBounds Out;
-            Out.bAlwaysScan = bUnbounded ? 1u : 0u;
-            Out.Reach       = Reach;
-            Out.Min         = Reach < 0.0f ? FVector3(0.0f) : Lo;
-            Out.Max         = Reach < 0.0f ? FVector3(0.0f) : Hi;
-            return Out;
-        }
-
         bool OverlapsAny(const TVector<FUIntVector2>& Ranges, uint32 First, uint32 End)
         {
             for (const FUIntVector2& Range : Ranges)
@@ -95,21 +65,116 @@ namespace Lumina
     }
 
     // Every instance in a block the camera can reach is still tested one by one, so the skip never changes what is drawn.
-    void FDefaultSceneRenderer::UpdateInstanceBlockBounds(RHI::FCmdListH CL, bool bFull, const TVector<uint32>& DirtySlots, uint32 NumSlots)
+    void FDefaultSceneRenderer::LaunchInstanceBlockBounds()
     {
         LUMINA_PROFILE_SCOPE();
 
+        // A launch whose render never consumed it left the device copy behind the CPU one.
+        if (bBlockBoundsLaunched)
+        {
+            bInstanceBlockBoundsValid = false;
+            bBlockBoundsLaunched = false;
+        }
+
+        const FFrameData::FGeometry::FRetainedUpload& Upload = ExtractFrame->Geometry.RetainedUpload;
         const FInstanceCullEntry* Entries = ScenePrimitives.GetRetainedCullEntries();
+        const uint32 NumSlots  = Upload.SlotCount;
         const uint32 NumBlocks = (NumSlots + kInstanceCullBlockSize - 1u) / kInstanceCullBlockSize;
         if (NumBlocks == 0u || Entries == nullptr)
         {
-            bInstanceBlockBoundsValid = false;
             return;
         }
 
         ScenePrimitives.GetGPUWrittenSlotRanges(GPUWrittenSlotRanges);
 
-        const bool bRebuildAll = bFull || !bInstanceBlockBoundsValid || InstanceBlockBounds.size() != NumBlocks;
+        bBlockBoundsRebuildAll = Upload.bFull || !bInstanceBlockBoundsValid || InstanceBlockBounds.size() != NumBlocks;
+        BlockBoundsNumBlocks   = NumBlocks;
+
+        if (InstanceBlockHasDF.size() != NumBlocks)
+        {
+            InstanceBlockHasDF.assign(NumBlocks, 0u);
+            bDistanceFieldBlocksDirty = true;
+        }
+
+        DirtyInstanceBlocks.clear();
+        if (bBlockBoundsRebuildAll)
+        {
+            InstanceBlockBounds.resize(NumBlocks);
+        }
+        else
+        {
+            // DirtySlots arrives sorted and unique, so its blocks come out sorted and only repeat back to back.
+            for (uint32 Slot : Upload.DirtySlots)
+            {
+                const uint32 Block = Slot / kInstanceCullBlockSize;
+                if (Slot < NumSlots && (DirtyInstanceBlocks.empty() || DirtyInstanceBlocks.back() != Block))
+                {
+                    DirtyInstanceBlocks.push_back(Block);
+                }
+            }
+        }
+
+        const uint32 NumWork = bBlockBoundsRebuildAll ? NumBlocks : (uint32)DirtyInstanceBlocks.size();
+        bBlockBoundsLaunched = true;
+        if (NumWork == 0u)
+        {
+            return;
+        }
+
+        constexpr uint32 BlocksPerTask = 256;
+        const uint32 NumTasks = (NumWork + BlocksPerTask - 1u) / BlocksPerTask;
+        const bool bAll = bBlockBoundsRebuildAll;
+        InstanceBlockBoundsTask = Task::AsyncTask(NumTasks, 1, [this, Entries, NumSlots, NumWork, bAll](uint32 Start, uint32 End, uint32)
+        {
+            for (uint32 TaskIndex = Start; TaskIndex < End; ++TaskIndex)
+            {
+                const uint32 WorkEnd = Math::Min((TaskIndex + 1u) * BlocksPerTask, NumWork);
+                for (uint32 Work = TaskIndex * BlocksPerTask; Work < WorkEnd; ++Work)
+                {
+                    const uint32 Block = bAll ? Work : DirtyInstanceBlocks[Work];
+                    const uint32 First = Block * kInstanceCullBlockSize;
+                    const uint32 Last  = Math::Min(First + kInstanceCullBlockSize, NumSlots);
+                    InstanceBlockBounds[Block] = SceneCull::ComputeInstanceBlockBounds(Entries, First, Last, OverlapsAny(GPUWrittenSlotRanges, First, Last));
+
+                    const uint8 bHasDF = SceneCull::BlockHasDistanceFieldCaster(Entries, First, Last) ? 1u : 0u;
+                    if (InstanceBlockHasDF[Block] != bHasDF)
+                    {
+                        InstanceBlockHasDF[Block] = bHasDF;
+                        bBlockDFChanged.store(true, std::memory_order_relaxed);
+                    }
+                }
+            }
+        }, ETaskPriority::Medium);
+    }
+
+    void FDefaultSceneRenderer::JoinInstanceBlockBounds()
+    {
+        if (InstanceBlockBoundsTask)
+        {
+            LUMINA_PROFILE_SECTION("Wait Instance Block Bounds");
+            InstanceBlockBoundsTask->Wait();
+            InstanceBlockBoundsTask = nullptr;
+        }
+        if (bBlockDFChanged.exchange(false, std::memory_order_relaxed))
+        {
+            bDistanceFieldBlocksDirty = true;
+        }
+    }
+
+    void FDefaultSceneRenderer::FinishInstanceBlockBounds(RHI::FCmdListH CL)
+    {
+        LUMINA_PROFILE_SCOPE();
+
+        JoinInstanceBlockBounds();
+        if (!bBlockBoundsLaunched)
+        {
+            bInstanceBlockBoundsValid = false;
+            return;
+        }
+        bBlockBoundsLaunched = false;
+
+        const uint32 NumBlocks   = BlockBoundsNumBlocks;
+        const bool   bRebuildAll = bBlockBoundsRebuildAll;
         ReserveBuffer(CL, InstanceBlockBoundsBuffer, (uint64)NumBlocks * sizeof(FInstanceBlockBounds),
                       /*bAllowShrink*/ bRebuildAll, /*bPreserveContents*/ !bRebuildAll);
         if (InstanceBlockBoundsBuffer.CapacityOf<FInstanceBlockBounds>() < NumBlocks)
@@ -118,38 +183,14 @@ namespace Lumina
             return;
         }
 
-        const auto BuildBlock = [&](uint32 Block)
-        {
-            const uint32 First = Block * kInstanceCullBlockSize;
-            const uint32 End   = Math::Min(First + kInstanceCullBlockSize, NumSlots);
-            InstanceBlockBounds[Block] = ComputeInstanceBlockBounds(Entries, First, End, OverlapsAny(GPUWrittenSlotRanges, First, End));
-        };
-
+        // The bounds stay untouched until the next extract, which comes after the fills are joined.
         if (bRebuildAll)
         {
-            InstanceBlockBounds.resize(NumBlocks);
-            Task::ParallelFor(NumBlocks, [&](const Task::FParallelRange& Range)
-            {
-                for (uint32 Block = Range.Start; Block < Range.End; ++Block)
-                {
-                    BuildBlock(Block);
-                }
-            }, 256);
-            StageWrite(InstanceBlockBoundsBuffer.Gpu, InstanceBlockBounds.data(), (uint64)NumBlocks * sizeof(FInstanceBlockBounds));
+            StageWrite(InstanceBlockBoundsBuffer.Gpu, InstanceBlockBounds.data(), (uint64)NumBlocks * sizeof(FInstanceBlockBounds),
+                       /*bFillBeforeSubmit*/ true);
         }
         else
         {
-            DirtyInstanceBlocks.clear();
-            for (uint32 Slot : DirtySlots)
-            {
-                if (Slot < NumSlots)
-                {
-                    DirtyInstanceBlocks.push_back(Slot / kInstanceCullBlockSize);
-                }
-            }
-            Algo::Sort(DirtyInstanceBlocks);
-            DirtyInstanceBlocks.erase(std::unique(DirtyInstanceBlocks.begin(), DirtyInstanceBlocks.end()), DirtyInstanceBlocks.end());
-
             // Consecutive dirty blocks go up as one write.
             for (SIZE_T i = 0; i < DirtyInstanceBlocks.size();)
             {
@@ -157,13 +198,35 @@ namespace Lumina
                 uint32 RunEnd = RunStart;
                 while (i < DirtyInstanceBlocks.size() && DirtyInstanceBlocks[i] == RunEnd)
                 {
-                    BuildBlock(RunEnd);
                     ++RunEnd;
                     ++i;
                 }
                 StageWrite(InstanceBlockBoundsBuffer.Gpu + (uint64)RunStart * sizeof(FInstanceBlockBounds),
-                           &InstanceBlockBounds[RunStart], (uint64)(RunEnd - RunStart) * sizeof(FInstanceBlockBounds));
+                           &InstanceBlockBounds[RunStart], (uint64)(RunEnd - RunStart) * sizeof(FInstanceBlockBounds),
+                           /*bFillBeforeSubmit*/ true);
             }
+        }
+
+        if (bDistanceFieldBlocksDirty)
+        {
+            DistanceFieldBlocks.clear();
+            for (uint32 Block = 0; Block < NumBlocks; ++Block)
+            {
+                if (InstanceBlockHasDF[Block] != 0u)
+                {
+                    DistanceFieldBlocks.push_back(Block);
+                }
+            }
+            if (!DistanceFieldBlocks.empty())
+            {
+                const uint64 Bytes = (uint64)DistanceFieldBlocks.size() * sizeof(uint32);
+                ReserveBuffer(CL, SunDFBlockListBuffer, Bytes, /*bAllowShrink*/ true, /*bPreserveContents*/ false);
+                if (SunDFBlockListBuffer.Size >= Bytes)
+                {
+                    StageWrite(SunDFBlockListBuffer.Gpu, DistanceFieldBlocks.data(), Bytes);
+                }
+            }
+            bDistanceFieldBlocksDirty = false;
         }
 
         FlushStagedWrites(CL);
@@ -185,22 +248,37 @@ namespace Lumina
         // Sized by residency, so it tracks the meshes the cull keeps rather than every skeleton alive.
         const SIZE_T ArenaBytes = (SIZE_T)ArenaCount * sizeof(FBoneTransform);
 
-        const RHI::GPUPtr PrevArena = BoneArenaBuffer.Gpu;
-        ReserveBuffer(CL, BoneArenaBuffer, ArenaBytes);
-        if (!BoneArenaBuffer)
+        // Every copy below is a deferred fill, since it is PCIe-bound and the frame can record while it runs.
+        FSceneBuffer& Arena = BoneArenaRing[CurrentFrameSlot];
+        const RHI::GPUPtr PrevArena = Arena.Gpu;
+        ReserveBuffer(CL, Arena, ArenaBytes);
+        if (!Arena)
         {
             return;
         }
 
-        // A reallocation drops every resident pose, so the dirty set no longer describes the buffer.
-        if (BoneArenaBuffer.Gpu != PrevArena)
-        {
-            WriteBuffer(CL, BoneArenaBuffer.Gpu, Mirror.data(), ArenaBytes);
-            return;
-        }
+        // This slot's arena missed the uploads made into the other slots since it last synced, which only the latest one's ranges describe.
+        const uint64 Serial       = ++BoneUploadSerial;
+        const uint64 SyncedSerial = BoneArenaSyncedSerial[CurrentFrameSlot];
+        BoneArenaSyncedSerial[CurrentFrameSlot] = Serial;
 
         TVector<FUIntVector2>& Ranges = BoneUploadScratch;
         Ranges.assign(Frame.Geometry.BoneUploadRanges.begin(), Frame.Geometry.BoneUploadRanges.end());
+        const bool bMissedLastUpload = SyncedSerial + 2u == Serial;
+        if (bMissedLastUpload)
+        {
+            Ranges.insert(Ranges.end(), LastBoneUploadRanges.begin(), LastBoneUploadRanges.end());
+        }
+        LastBoneUploadRanges.assign(Frame.Geometry.BoneUploadRanges.begin(), Frame.Geometry.BoneUploadRanges.end());
+
+        // A reallocation drops every resident pose, and so does an arena older than the ranges kept, so the dirty set no longer describes it.
+        if (Arena.Gpu != PrevArena || (SyncedSerial + 1u != Serial && !bMissedLastUpload))
+        {
+            StageWrite(Arena.Gpu, Mirror.data(), ArenaBytes, /*bFillBeforeSubmit*/ true);
+            FlushStagedWrites(CL);
+            return;
+        }
+
         if (Ranges.empty())
         {
             return;   // every pose the gather kept is already resident
@@ -220,8 +298,8 @@ namespace Lumina
                 return;
             }
 
-            WriteBuffer(CL, BoneArenaBuffer.Gpu + (uint64)Start * sizeof(FBoneTransform),
-                        Mirror.data() + Start, (uint64)(End - Start) * sizeof(FBoneTransform));
+            StageWrite(Arena.Gpu + (uint64)Start * sizeof(FBoneTransform), Mirror.data() + Start,
+                       (uint64)(End - Start) * sizeof(FBoneTransform), /*bFillBeforeSubmit*/ true);
         };
 
         uint32 RunStart = Ranges[0].x;
@@ -243,6 +321,7 @@ namespace Lumina
             RunEnd   = End;
         }
         Flush(RunStart, RunEnd);
+        FlushStagedWrites(CL);
     }
 
     // Vulkan guarantees at least this on maxComputeWorkGroupCount[1], and the bounds dispatch uses y per slot.
@@ -251,7 +330,7 @@ namespace Lumina
     void FDefaultSceneRenderer::UploadSkinnedFrameData(RHI::FCmdListH CL, FFrameData& Frame)
     {
         TVector<FSkinnedFrameData>& Data  = Frame.Geometry.SkinnedFrameData;
-        const TVector<uint32>&      Slots = Frame.Geometry.SkinnedSlots;
+        const TVector<uint32>&      Slots = Frame.Geometry.SkinnedIndices;   // skinned indices, not retained slots
 
         // Minted here rather than reused from MeshletDrawTag, which wraps at 4095 and can alias.
         CurrentSkinnedFrameTag++;
@@ -283,11 +362,7 @@ namespace Lumina
                 continue;
             }
 
-            const FSkinnedFrameData& D = Data[Slot];
-            const uint32 Begin = Math::Min(D.SurfaceMeshletOffset, D.ShadowMeshletOffset);
-            const uint32 End   = Math::Max(D.SurfaceMeshletOffset + D.SurfaceMeshletCount,
-                                           D.ShadowMeshletOffset + D.ShadowMeshletCount);
-            const uint32 Len   = (End > Begin) ? (End - Begin) : 0u;
+            const uint32 Len = Data[Slot].SurfaceMeshletCount;
 
             SkinnedBoundsMaxRange = Math::Max(SkinnedBoundsMaxRange, Len);
             BoundsTotal += Len;
@@ -325,10 +400,8 @@ namespace Lumina
             FSkinnedFrameData& D = Data[Slot];
             D.FrameTag = CurrentSkinnedFrameTag;
 
-            const uint32 Begin = Math::Min(D.SurfaceMeshletOffset, D.ShadowMeshletOffset);
-            const uint32 End   = Math::Max(D.SurfaceMeshletOffset + D.SurfaceMeshletCount,
-                                           D.ShadowMeshletOffset + D.ShadowMeshletCount);
-            const uint32 Len   = (End > Begin) ? (End - Begin) : 0u;
+            const uint32 Begin = D.SurfaceMeshletOffset;
+            const uint32 Len   = D.SurfaceMeshletCount;
 
             // All or nothing, because a partly written slice leaves the cull rejecting against stale data.
             if (Len == 0u || !bDispatchable || (uint64)BoundsCursor + Len > SkinnedMeshletBoundsCapacity)
@@ -342,17 +415,21 @@ namespace Lumina
             BoundsCursor += Len;
         }
 
-        // Only the gathered slots, coalesced; ungathered slots are rejected by their frame tag.
-        // Every run is one slot wide, so this sorts the bare indices rather than (base, count) pairs.
-        TVector<uint32>& Sorted = SkinnedUploadScratch;
-        Sorted.assign(Slots.begin(), Slots.end());
-
-        Algo::Sort(Sorted);
-
         // A merged gap is still staged and copied, so this trades one copy region against ~1 KiB of bytes.
         constexpr uint32 kSkinnedMergeGap = 24;
 
         const uint32 Count = (uint32)Data.size();
+
+        // Only the gathered slots, coalesced, and a bitmap over the slot range orders them in linear time where a sort did not.
+        TVector<uint64>& SlotBits = SkinnedSlotBits;
+        SlotBits.assign(((SIZE_T)Count + 63u) / 64u, 0ull);
+        for (uint32 Slot : Slots)
+        {
+            if (Slot < Count)
+            {
+                SlotBits[Slot >> 6] |= 1ull << (Slot & 63u);
+            }
+        }
 
         TVector<FUIntVector2>& Runs = SkinnedRunScratch;
         Runs.clear();
@@ -366,24 +443,36 @@ namespace Lumina
             }
         };
 
-        uint32 RunStart = Sorted[0];
-        uint32 RunEnd   = Sorted[0] + 1u;
-        for (SIZE_T i = 1; i < Sorted.size(); ++i)
+        bool   bHaveRun = false;
+        uint32 RunStart = 0;
+        uint32 RunEnd   = 0;
+        for (SIZE_T Word = 0; Word < SlotBits.size(); ++Word)
         {
-            const uint32 Start = Sorted[i];
-            const uint32 End   = Sorted[i] + 1u;
-            if (Start <= RunEnd + kSkinnedMergeGap)
+            uint64 Bits = SlotBits[Word];
+            while (Bits != 0)
             {
-                RunEnd = Math::Max(RunEnd, End);
-                continue;
+                const uint32 Slot = (uint32)(Word * 64u) + (uint32)std::countr_zero(Bits);
+                Bits &= Bits - 1u;
+                if (bHaveRun && Slot <= RunEnd + kSkinnedMergeGap)
+                {
+                    RunEnd = Slot + 1u;
+                    continue;
+                }
+                if (bHaveRun)
+                {
+                    AddRun(RunStart, RunEnd);
+                }
+                RunStart = Slot;
+                RunEnd   = Slot + 1u;
+                bHaveRun = true;
             }
-            AddRun(RunStart, RunEnd);
-            RunStart = Start;
-            RunEnd   = End;
         }
-        AddRun(RunStart, RunEnd);
+        if (bHaveRun)
+        {
+            AddRun(RunStart, RunEnd);
+        }
 
-        WriteBufferRuns(CL, SkinnedFrameDataBuffer.Gpu, Data.data(), sizeof(FSkinnedFrameData), Runs);
+        WriteBufferRuns(CL, SkinnedFrameDataBuffer.Gpu, Data.data(), sizeof(FSkinnedFrameData), Runs, /*bFillBeforeSubmit*/ true);
 
         uint64 StagedSlots = 0;
         for (const FUIntVector2& Run : Runs)
@@ -396,7 +485,7 @@ namespace Lumina
 
     void FDefaultSceneRenderer::SkinnedMeshletBoundsPass(RHI::FCmdListH CL, const FFrameData& Frame)
     {
-        const uint32 NumSkinned = (uint32)Frame.Geometry.SkinnedSlots.size();
+        const uint32 NumSkinned = (uint32)Frame.Geometry.SkinnedIndices.size();
         if (NumSkinned == 0 || SkinnedBoundsMaxRange == 0 || SkinnedMeshletBoundsCapacity == 0
             || RetainedStaticCapacity == 0)
         {
@@ -526,16 +615,17 @@ namespace Lumina
             }
 
             // Read after the resize, because last frame's value describes the other ring slot's buffer.
-            const uint32 MaxGroups = Math::Max(RHI::GetMaxMeshWorkGroupCount(), 1u);
+            const uint32 MaxGroups = MeshletsPerSubDraw();
             const uint32 WantedSubDraws = (DrawListCapacity == 0u) ? 1u : (((DrawListCapacity - 1u) / MaxGroups) + 1u);
             const SIZE_T NumBucketSlices = NumArgSlots * (SIZE_T)kMeshletSliceCount;
+            // One spare view of slots, since a multi-view shadow draw's strided range runs a whole view past its last read.
+            const SIZE_T SpareViewSlots = (SIZE_T)Math::Max(NumDraws, 1u) * (SIZE_T)kMeshletSliceCount * (SIZE_T)WantedSubDraws;
             const SIZE_T MeshDrawArgsSize = Math::Max<SIZE_T>(
-                sizeof(RHI::FDrawMeshTasksIndirectArguments),
-                NumBucketSlices * (SIZE_T)WantedSubDraws
-                    * sizeof(RHI::FDrawMeshTasksIndirectArguments));
+                sizeof(FMeshletDrawArgs),
+                (NumBucketSlices * (SIZE_T)WantedSubDraws + SpareViewSlots) * sizeof(FMeshletDrawArgs));
 
             ReserveBuffer(CL, MeshDrawArgsRing[Slot], MeshDrawArgsSize);
-            const uint32 AllocatedArgSlots = MeshDrawArgsRing[Slot].CapacityOf<RHI::FDrawMeshTasksIndirectArguments>();
+            const uint32 AllocatedArgSlots = MeshDrawArgsRing[Slot].CapacityOf<FMeshletDrawArgs>();
             MeshSubDrawsPerSlice = (uint32)Math::Min<SIZE_T>(WantedSubDraws, AllocatedArgSlots / NumBucketSlices);
 
             if (MeshSubDrawsPerSlice > LoggedSubDrawPeak)
@@ -699,15 +789,28 @@ namespace Lumina
             // Only the live prefix of each array reaches the ring; the header carries where they landed.
             LightData.Lights  = RHI::CopyTransientArray(Frame.Lighting.Lights.data(),  NumLiveLights);
             LightData.Shadows = RHI::CopyTransientArray(Frame.Lighting.Shadows.data(), NumLiveShadows);
+            const uint32 NumLightFunctions = (uint32)Frame.Lighting.LightFunctionDraws.size();
+            if (NumLightFunctions != 0 && !LightFunctionAtlas)
+            {
+                RHI::FTextureDesc AtlasDesc;
+                AtlasDesc.Type      = RHI::ETextureType::Tex2D;
+                AtlasDesc.Dimension = FUIntVector3(LIGHT_FUNCTION_ATLAS_TILES * LIGHT_FUNCTION_TILE_SIZE,
+                                                   LIGHT_FUNCTION_ATLAS_TILES * LIGHT_FUNCTION_TILE_SIZE, 1);
+                AtlasDesc.Format    = EFormat::RGBA8_UNORM;
+                AtlasDesc.Usage     = RHI::EImageUsageFlags::Sampled | RHI::EImageUsageFlags::ColorAttachment;
+                LightFunctionAtlas  = CreateSceneImage(AtlasDesc);
+            }
+            LightData.LightFunctions     = RHI::CopyTransientArray(Frame.Lighting.LightFunctions.data(), NumLightFunctions);
+            LightData.LightFunctionAtlas = LightFunctionAtlas ? (uint32)LightFunctionAtlas.GetResourceID() : 0u;
             SceneBindings.Lights = RHI::CopyTransient(LightData);
             if (VisibleInstanceRing[CurrentFrameSlot])
             {
                 SceneBindings.Instances = VisibleInstanceRing[CurrentFrameSlot].Gpu;
             }
             // Persistent and slot-addressed, so this is just the arena's address.
-            if (BoneArenaBuffer)
+            if (BoneArenaRing[CurrentFrameSlot])
             {
-                SceneRootShared.Bones = { BoneArenaBuffer };
+                SceneRootShared.Bones = { GetBoneArena() };
             }
 
             // Last frame's snapshot, so this publishes what SnapshotMotionState left at the end of it.
@@ -715,9 +818,11 @@ namespace Lumina
             {
                 SceneRootShared.PrevRetainedTransforms = { PrevRetainedTransformBuffer };
 
-                if (PrevBoneArenaBuffer)
+                // The other slot's arena still holds last frame's poses when it took the upload before this one.
+                const uint32 PrevSlot = (CurrentFrameSlot + RHI::kFramesInFlight - 1u) % RHI::kFramesInFlight;
+                if (BoneArenaRing[PrevSlot] && BoneArenaSyncedSerial[PrevSlot] + 1u == BoneArenaSyncedSerial[CurrentFrameSlot])
                 {
-                    SceneRootShared.PrevBones = { PrevBoneArenaBuffer };
+                    SceneRootShared.PrevBones = { BoneArenaRing[PrevSlot] };
                 }
             }
             if (!BillboardInstances.empty())
@@ -762,18 +867,21 @@ namespace Lumina
                                                                 Frame.ReflectionProbes.Probes.size());
             }
 
-            SceneRootShared.Materials            = Render().GetMaterialManager().GetMaterialSpan();
+            SceneRootShared.Materials            = Render().GetMaterialManager().GetMaterialTable();
             SceneRootShared.Collections          = Render().GetCollectionManager().GetSpan();
             SceneRootShared.MeshletDrawList      = { GetMeshletDrawList(), DrawListCapacity };
             SceneRootShared.PreSkinnedVertices   = { GetPreSkinnedVerticesBuffer(), PreSkinnedVertexCapacity };
             SceneRootShared.PreSkinnedPrevPositions = { PreSkinnedPrevPositionsBuffer, PreSkinnedPrevCapacity };
-            SceneRootShared.SkinnedFrameData     = { SkinnedFrameDataBuffer };
             // Spheres and cones are indexed by one base, so each carries the same capacity.
             SceneRootShared.SkinnedMeshletBounds = { SkinnedMeshletBoundsBuffer, SkinnedMeshletBoundsCapacity };
             SceneRootShared.SkinnedMeshletCones  = { SkinnedMeshletConeBuffer, SkinnedMeshletBoundsCapacity };
             if (IsGTAOEnabled())
             {
                 SceneGlobalData.GTAOSettings.AOTextureIndex = (uint32)CurrentView->Images[(int)ENamedImage::GTAOBlur].GetResourceID();
+            }
+            if (CurrentView->Images[(int)ENamedImage::SunFarShadowMask].IsValid() && WantsSunFarShadowMask())
+            {
+                SceneGlobalData.GTAOSettings.SunShadowMaskIndex = (uint32)CurrentView->Images[(int)ENamedImage::SunFarShadowMask].GetResourceID();
             }
 
             SceneGlobalData.SceneDepthIndex =
@@ -786,11 +894,15 @@ namespace Lumina
             SceneGlobalData.DBufferDIndex = bDecals ? (uint32)CurrentView->Images[(int)ENamedImage::DBufferD].GetResourceID() : Constants::kIndexNoneU32;
 
             PublishFogGlobals(SceneGlobalData);
+            PublishWeatherGlobals(SceneGlobalData);
 
             SetSceneRoot(CL, *CurrentView, RHI::CopyTransient(SceneGlobalData));
 
             DispatchGPUSceneCull(CL, Frame);
         }
+
+        // A frame with no retained slots never reaches the launch in the cull, and its bone fills still belong on the workers.
+        LaunchDeferredStageFills();
     }
 
     void FDefaultSceneRenderer::SkinningPass(RHI::FCmdListH CL)
@@ -798,7 +910,7 @@ namespace Lumina
         const FFrameData& Frame = *RenderFrame;
 
         // Two blocks per gathered skinned SLOT, the surface LOD and the coarser shadow LOD.
-        const uint32 NumSkinned = (uint32)Frame.Geometry.SkinnedSlots.size();
+        const uint32 NumSkinned = (uint32)Frame.Geometry.SkinnedIndices.size();
         if (NumSkinned == 0)
         {
             return;
@@ -814,17 +926,16 @@ namespace Lumina
             return;
         }
 
-        const uint8  Slot     = CurrentFrameSlot;
-        const uint32 NumPairs = NumSkinned * 2u;
+        const uint8 Slot = CurrentFrameSlot;
 
-        ReserveBuffer(CL, SkinWorkBaseRing[Slot], (uint64)NumPairs * sizeof(uint32));
+        ReserveBuffer(CL, SkinWorkBaseRing[Slot], (uint64)NumSkinned * sizeof(uint32));
         if (!SkinWorkBaseRing[Slot] || !GetSkinDispatchArgs() || !GetPreSkinnedVerticesBuffer()
             || !SkinnedSlotListBuffer || !SkinnedFrameDataBuffer || !RetainedStaticBuffer)
         {
             return;
         }
 
-        //~ Lay out the dispatch as one workgroup per instance, block and meshlet, enumerated on the GPU.
+        //~ Lay out the dispatch as one workgroup per instance and meshlet, enumerated on the GPU.
         {
             struct FBuildSkinWorkPC
             {
@@ -837,7 +948,7 @@ namespace Lumina
 
             WPC.SlotList        = { SkinnedSlotListBuffer, NumSkinned };
             WPC.SkinnedData     = { SkinnedFrameDataBuffer };
-            WPC.OutWorkBase     = { SkinWorkBaseRing[Slot], NumPairs };
+            WPC.OutWorkBase     = { SkinWorkBaseRing[Slot], NumSkinned };
             WPC.OutDispatchArgs = { GetSkinDispatchArgs() };
 
             DispatchCompute(CL, WorkShader, WPC, 1u, 1u, 1u);
@@ -857,7 +968,7 @@ namespace Lumina
         } PC = {};
         static_assert(sizeof(FSkinningPushConstants) == 96, "FSkinningPushConstants must match Skinning.slang.");
 
-        PC.WorkBase       = { SkinWorkBaseRing[Slot], NumPairs };
+        PC.WorkBase       = { SkinWorkBaseRing[Slot], NumSkinned };
         PC.SlotList       = { SkinnedSlotListBuffer, NumSkinned };
         PC.SkinnedData    = { SkinnedFrameDataBuffer };
         PC.RetainedStatic = { RetainedStaticBuffer };
@@ -1059,7 +1170,8 @@ namespace Lumina
             SCENE_GPU_SCOPE(CL, "Retained Upload");
 
             // Only when something is sent, since waiting on every earlier stage stalls the frame head for nothing otherwise.
-            const bool bUploadsThisFrame = Upload.bFull || Upload.bFullStatic || !Upload.DirtySlots.empty() || !Upload.DirtyStaticSlots.empty();
+            const bool bUploadsThisFrame = Upload.bFull || Upload.bFullStatic || !Upload.DirtySlots.empty() || !Upload.DirtyStaticSlots.empty()
+                                        || !Upload.DeactivatedSlots.empty();
             if (bUploadsThisFrame)
             {
                 RHI::CmdBarrier(CL,
@@ -1098,6 +1210,11 @@ namespace Lumina
 
             InstanceVisibilityCapacity = VisCapacity;
 
+            // History is kept across a grow, since the zeroed tail is the only part with none.
+            ReserveBuffer(CL, MeshletVisibilityBuffer, Math::Max<SIZE_T>(sizeof(uint32), (SIZE_T)Upload.MeshletVisibilityWords * sizeof(uint32)),
+                          /*bAllowShrink*/ false, /*bPreserveContents*/ true);
+            MeshletVisibilityCapacity = MeshletVisibilityBuffer ? MeshletVisibilityBuffer.CapacityOf<uint32>() : 0u;
+
             // A grow that failed leaves a buffer shorter than the slot range, and the writes below are unchecked.
             const bool bRetainedFits = RetainedCullEntryBuffer.CapacityOf<FInstanceCullEntry>() >= RetainedSlots
                                     && RetainedTransformBuffer.CapacityOf<FTransform3x4>()   >= RetainedSlots
@@ -1120,6 +1237,12 @@ namespace Lumina
                         i = j;
                     }
                 };
+
+                // Ahead of the writes, so a slot freed and reused this frame ends with its new entry.
+                if (!Upload.bFull && !Upload.DeactivatedSlots.empty())
+                {
+                    DeactivateRetainedSlots(CL, Upload.DeactivatedSlots);
+                }
 
                 if (Upload.bFull)
                 {
@@ -1150,9 +1273,9 @@ namespace Lumina
                             RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite);
 
                         WriteBufferScatter(CL, RetainedCullEntryBuffer.Gpu, RetainedCullEntryBuffer.Size, SrcCullEntries,
-                                           sizeof(FInstanceCullEntry), Slots, Upload.DirtySlots);
+                                           sizeof(FInstanceCullEntry), Slots, Upload.DirtySlots, /*bFillBeforeSubmit*/ true);
                         WriteBufferScatter(CL, RetainedTransformBuffer.Gpu, RetainedTransformBuffer.Size, SrcTransforms,
-                                           sizeof(FTransform3x4), Slots, Upload.DirtySlots);
+                                           sizeof(FTransform3x4), Slots, Upload.DirtySlots, /*bFillBeforeSubmit*/ true);
 
                         RHI::CmdBarrier(CL,
                             RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
@@ -1176,11 +1299,13 @@ namespace Lumina
                     CollectRuns(Upload.DirtyStaticSlots, RetainedRunScratch);
                     WriteBufferRuns(CL, RetainedStaticBuffer.Gpu, SrcStatic, sizeof(FInstanceStatic), RetainedRunScratch, true);
                 }
-                UpdateInstanceBlockBounds(CL, Upload.bFull, Upload.DirtySlots, RetainedSlots);
+                FinishInstanceBlockBounds(CL);
                 LaunchDeferredStageFills();
             }
             else
             {
+                JoinInstanceBlockBounds();
+                bBlockBoundsLaunched      = false;
                 bInstanceBlockBoundsValid = false;
             }
             const uint32 CullCap      = RetainedCullEntryBuffer.CapacityOf<FInstanceCullEntry>();
@@ -1333,7 +1458,7 @@ namespace Lumina
             DispatchCompute(CL, DrawPrefixShader, PC, 1u, 1u, 1u);
 
             RHI::CmdBarrier(CL, RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
-                RHI::EStageFlags::Compute | RHI::EStageFlags::MeshShader |
+                RHI::EStageFlags::Compute | RHI::EStageFlags::MeshShader | RHI::EStageFlags::VertexShader |
                 RHI::EStageFlags::IndirectArguments | RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferRead | RHI::EAccessFlags::TransferWrite | RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite | RHI::EAccessFlags::IndirectRead);
         }
 
@@ -1357,7 +1482,7 @@ namespace Lumina
 
     //~ Begin new-RHI helpers
 
-    void FDefaultSceneRenderer::DispatchMeshletBlockBuild(RHI::FCmdListH CL, bool bLatePass)
+    void FDefaultSceneRenderer::DispatchMeshletBlockBuild(RHI::FCmdListH CL, bool bLatePass, bool bCascadePhase)
     {
         static const FShaderH BlocksShader = FShaderLibrary::Get("BuildMeshletBlocks.slang");
         const uint32 NumCullViews = RenderFrame != nullptr ? (uint32)RenderFrame->Views.CullViews.size() : 0u;
@@ -1379,8 +1504,13 @@ namespace Lumina
             uint32 BuildMode;
             uint32 VisibilityTag;
             RHI::TGPUSpan<uint32>           PrevVisibility;
+            uint32 bDeferCascades;
+            uint32 ReceiverMaskDim;
+            int32  SunShadowDataIndex;
+            uint32 _Pad0;
+            RHI::TGPUSpan<uint32>           ReceiverMask;
         } BPC = {};
-        static_assert(sizeof(FBuildMeshletBlocksPC) == 128, "FBuildMeshletBlocksPC must match BuildMeshletBlocks.slang.");
+        static_assert(sizeof(FBuildMeshletBlocksPC) == 160, "FBuildMeshletBlocksPC must match BuildMeshletBlocks.slang.");
 
         BPC.NumViews           = NumCullViews;
         BPC.NumBatches         = Math::Max(RenderFrame->Views.NumDrawsPerView, 1u);
@@ -1391,11 +1521,19 @@ namespace Lumina
         BPC.OutBlockList       = { GetMeshletBlocks(), BlockListCapacity };
         BPC.SurfaceDescs       = { SurfaceDescBuffer, UploadedSurfaceDescs };
         // Latched by the early build, so a console change between the two builds cannot split one phase and not the other.
-        if (!bLatePass)
+        if (!bLatePass && !bCascadePhase)
         {
             bSplitMeshletPhasesThisFrame = CVarSplitMeshletPhases.GetValue();
         }
-        BPC.BuildMode          = bLatePass ? 1u : (bSplitMeshletPhasesThisFrame ? 0u : 2u);
+        // The cascade build appends to the front like an unsplit early build, since cascades never take two phases.
+        BPC.BuildMode          = bCascadePhase ? 2u : (bLatePass ? 1u : (bSplitMeshletPhasesThisFrame ? 0u : 2u));
+        BPC.bDeferCascades     = bCascadePhase ? 2u : (bShadowReceiverCullThisFrame ? 1u : 0u);
+        if (bCascadePhase && bReceiverMaskValid)
+        {
+            BPC.ReceiverMaskDim    = kReceiverMaskDim;
+            BPC.ReceiverMask       = ReceiverMaskFinal;
+            BPC.SunShadowDataIndex = RenderFrame->Lighting.Lights[0].ShadowDataIndex;
+        }
         BPC.VisibilityTag      = InstanceVisibilityTag;
         BPC.PrevVisibility     = { GetInstanceVisibilityPrev(), InstanceVisibilityCapacity };
 
@@ -1409,7 +1547,7 @@ namespace Lumina
             RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
     }
 
-    void FDefaultSceneRenderer::MeshletCullPass(RHI::FCmdListH CL, EMeshletSlice Slice)
+    void FDefaultSceneRenderer::MeshletCullPass(RHI::FCmdListH CL, EMeshletSlice Slice, bool bCascadePhase)
     {
         static const FShaderH ArgsShader = FShaderLibrary::Get("BuildMeshletCullArgs.slang");
         static const FShaderH CullShader = FShaderLibrary::Get("MeshletCull.slang");
@@ -1429,10 +1567,17 @@ namespace Lumina
         SCENE_GPU_SCOPE(CL, "Meshlet Cull");
 
         // Instances last frame did not see get their blocks only now, and only if this frame's pyramid leaves them visible.
-        if (Slice == EMeshletSlice::Late && bSplitMeshletPhasesThisFrame)
+        if (Slice == EMeshletSlice::Late && bSplitMeshletPhasesThisFrame && !bCascadePhase)
         {
             SCENE_GPU_SCOPE(CL, "Build Late Meshlet Blocks");
             DispatchMeshletBlockBuild(CL, /*bLatePass*/ true);
+        }
+
+        // Near cascades get their blocks only now, and only for casters whose shadow reaches something the camera sees.
+        if (bCascadePhase)
+        {
+            SCENE_GPU_SCOPE(CL, "Build Cascade Meshlet Blocks");
+            DispatchMeshletBlockBuild(CL, /*bLatePass*/ false, /*bCascadePhase*/ true);
         }
 
         struct FCullArgsPC
@@ -1444,19 +1589,25 @@ namespace Lumina
             uint32 MaxMeshGroups;
             uint32 SubDrawsPerSlice;
             uint32 bSplitPhases;
-            uint32 _Pad1;
+            uint32 bDeferCascades;
+            uint32 VertexPathCorners;
+            uint32 Pad0;
+            uint32 Pad1;
+            uint32 Pad2;
             RHI::TGPUSpan<FRenderBucketGPU> Buckets;
             RHI::TGPUSpan<RHI::FDispatchIndirectArguments> OutCullDispatchArgs;
-            RHI::TGPUSpan<RHI::FDrawMeshTasksIndirectArguments> OutMeshDrawArgs;
+            RHI::TGPUSpan<FMeshletDrawArgs> OutMeshDrawArgs;
         } APC = {};
-        static_assert(sizeof(FCullArgsPC) == 80, "FCullArgsPC must match BuildMeshletCullArgs.slang.");
+        static_assert(sizeof(FCullArgsPC) == 96, "FCullArgsPC must match BuildMeshletCullArgs.slang.");
 
         APC.NumViews                = NumViews;
         APC.NumDraws                = NumDraws;
         APC.Slice                   = (uint32)Slice;
-        APC.MaxMeshGroups           = Math::Max(RHI::GetMaxMeshWorkGroupCount(), 1u);
+        APC.MaxMeshGroups           = MeshletsPerSubDraw();
+        APC.VertexPathCorners       = RHI::SupportsMeshShaders() ? 0u : (uint32)MESHLET_MAX_TRIANGLES * 3u;
         APC.SubDrawsPerSlice        = MeshSubDrawsPerSlice;
         APC.bSplitPhases            = bSplitMeshletPhasesThisFrame ? 1u : 0u;
+        APC.bDeferCascades          = bCascadePhase ? 2u : (bShadowReceiverCullThisFrame ? 1u : 0u);
         APC.Buckets             = { GetRenderBuckets() };
         APC.OutCullDispatchArgs = { GetMeshletCullDispatchArgs() };
         APC.OutMeshDrawArgs     = { GetMeshDrawArgs() };
@@ -1477,13 +1628,17 @@ namespace Lumina
             uint32 Slice;
             uint32 VisibilityTag;
             uint32 bSplitPhases;
-            uint32 _Pad0;
+            uint32 bDeferCascades;
+            uint32 ReceiverMaskDim;
+            int32  SunShadowDataIndex;
             RHI::TGPUSpan<FRenderBucketGPU> Buckets;
             RHI::TGPUSpan<FUIntVector2>     BlockList;
             RHI::TGPUSpan<uint32>           PrevVisibility;
             RHI::TGPUSpan<uint32>           OutVisibility;
+            RHI::TGPUSpan<uint32>           MeshletVisibility;
+            RHI::TGPUSpan<uint32>           ReceiverMask;
         } CPC = {};
-        static_assert(sizeof(FMeshletCullPC) == 88, "FMeshletCullPC must match MeshletCull.slang.");
+        static_assert(sizeof(FMeshletCullPC) == 128, "FMeshletCullPC must match MeshletCull.slang.");
 
         CPC.NumViews       = NumViews;
         CPC.NumDraws       = NumDraws;
@@ -1494,11 +1649,19 @@ namespace Lumina
         CPC.BlockList      = { GetMeshletBlocks() };
         CPC.PrevVisibility = { GetInstanceVisibilityPrev(), InstanceVisibilityCapacity };
         CPC.OutVisibility  = { GetInstanceVisibilityWrite(), InstanceVisibilityCapacity };
+        CPC.MeshletVisibility = { GetMeshletVisibility(), CVarCullMeshletVisibility.GetValue() != 0 ? MeshletVisibilityCapacity : 0u };
+        CPC.bDeferCascades = APC.bDeferCascades;
+        if (bCascadePhase && bReceiverMaskValid)
+        {
+            CPC.ReceiverMaskDim    = kReceiverMaskDim;
+            CPC.ReceiverMask       = ReceiverMaskFinal;
+            CPC.SunShadowDataIndex = RenderFrame->Lighting.Lights[0].ShadowDataIndex;
+        }
 
         DispatchComputeIndirect(CL, CullShader, CPC, GetMeshletCullDispatchArgs());
         RHI::CmdBarrier(CL,
             RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
-            RHI::EStageFlags::Compute | RHI::EStageFlags::MeshShader | RHI::EStageFlags::IndirectArguments,
+            RHI::EStageFlags::Compute | RHI::EStageFlags::MeshShader | RHI::EStageFlags::VertexShader | RHI::EStageFlags::IndirectArguments,
             RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite | RHI::EAccessFlags::IndirectRead);
 
         // Turn what it appended into the slice every draw indexes, and the counts they draw from.
@@ -1506,7 +1669,7 @@ namespace Lumina
         DispatchCompute(CL, ArgsShader, APC, PostGroups, 1u, 1u);
 
         RHI::CmdBarrier(CL, RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
-            RHI::EStageFlags::Compute | RHI::EStageFlags::MeshShader |
+            RHI::EStageFlags::Compute | RHI::EStageFlags::MeshShader | RHI::EStageFlags::VertexShader |
             RHI::EStageFlags::IndirectArguments | RHI::EStageFlags::PixelShader, RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite | RHI::EAccessFlags::IndirectRead);
     }
 
@@ -1533,22 +1696,47 @@ namespace Lumina
             int32  ViewIndex;
             float  ViewportW;
             float  ViewportH;
+            RHI::TGPUSpan<FShadowRasterViewGPU> ShadowViews;
+            uint32 ArgViewStride;
+            uint32 Pad0;
         } Push;
-        static_assert(sizeof(FMeshletPassPush) == 48, "FMeshletPassPush must match FMeshletPassArgs in MeshletGeometry.slang.");
+        static_assert(sizeof(FMeshletPassPush) == 72, "FMeshletPassPush must match FMeshletPassArgs in MeshletGeometry.slang.");
 
         Push.Buckets              = { GetRenderBuckets() };
         Push.ArgBase              = ArgIndex;
         Push.Slice                = Slice;
-        Push.MaxMeshGroups        = Math::Max(RHI::GetMaxMeshWorkGroupCount(), 1u);
+        Push.MaxMeshGroups        = MeshletsPerSubDraw();
         Push.CullViewIndex        = Ctx.CullViewIndex;
         Push.ShadowDataIndex      = Ctx.ShadowDataIndex;
         Push.ViewIndex            = Ctx.ShadowViewIndex;
         Push.ViewportW            = Ctx.ViewportW;
         Push.ViewportH            = Ctx.ViewportH;
+        Push.ShadowViews          = Ctx.ShadowViews;
+        Push.ArgViewStride        = NumDrawsPerView;
+        Push.Pad0                 = 0;
 
-        // One mesh workgroup per surviving meshlet, so the grid IS the survivor count.
+        // One mesh workgroup or one vertex-path instance per surviving meshlet, so the grid is the survivor count.
         const uint32 SliceArgBase = (ArgIndex * kMeshletSliceCount + Slice) * MeshSubDrawsPerSlice;
+        const RHI::FGPURange SliceArgs = GetMeshDrawArgs().Skip(SliceArgBase * sizeof(FMeshletDrawArgs));
+        const bool bMeshShaders = RHI::SupportsMeshShaders();
 
-        RHI::CmdDrawMeshTasksIndirectCount(CL, MakeArgs(Push), GetMeshDrawArgs().Skip(SliceArgBase * sizeof(RHI::FDrawMeshTasksIndirectArguments)), GetRenderBuckets().Skip(ArgIndex * sizeof(FRenderBucketGPU) + offsetof(FRenderBucketGPU, SubDrawCount) + Slice * sizeof(uint32)), MeshSubDrawsPerSlice, sizeof(RHI::FDrawMeshTasksIndirectArguments));
+        if (Ctx.ShadowViews.Count > 0u)
+        {
+            // An empty view's slot holds zero groups, so it costs the command processor a read and nothing more.
+            ASSERT(MeshSubDrawsPerSlice == 1u && bMeshShaders);
+            const uint32 ViewStride = NumDrawsPerView * kMeshletSliceCount * sizeof(FMeshletDrawArgs);
+            RHI::CmdDrawMeshTasksIndirect(CL, MakeArgs(Push), SliceArgs, Ctx.ShadowViews.Count, ViewStride);
+            return;
+        }
+
+        const RHI::FGPURange SubDrawCount = GetRenderBuckets().Skip(ArgIndex * sizeof(FRenderBucketGPU) + offsetof(FRenderBucketGPU, SubDrawCount) + Slice * sizeof(uint32));
+        if (bMeshShaders)
+        {
+            RHI::CmdDrawMeshTasksIndirectCount(CL, MakeArgs(Push), SliceArgs, SubDrawCount, MeshSubDrawsPerSlice, sizeof(FMeshletDrawArgs));
+        }
+        else
+        {
+            RHI::CmdDrawIndirectCount(CL, MakeArgs(Push), SliceArgs, SubDrawCount, MeshSubDrawsPerSlice, sizeof(FMeshletDrawArgs));
+        }
     }
 }

@@ -1,33 +1,23 @@
 #pragma once
 
-// Parsed by BOTH MSVC and Slang: preprocessor directives and // comments ONLY. Everything here sizes a
-// buffer or is packed into a field both sides decode, so drift corrupts memory instead of misbehaving.
+// Parsed by both MSVC and Slang, so only preprocessor directives and line comments; drift here corrupts memory.
 
 #define MESHLET_MAX_VERTICES            64
 #define MESHLET_MAX_TRIANGLES           64
 
-// LOD 0 is full detail. Sloppy LODs (4-5) can hole, which reads as a shadow light-leak, so casters
-// cap lower -- except past ShadowCoarseLODDistance, where one cascade texel keeps the holes sub-texel.
 #define MESHLET_MAX_LODS                6
-#define MESHLET_MAX_SHADOW_LOD          3
-#define MESHLET_MAX_COARSE_SHADOW_LOD   5
 
-// FMeshletDraw packs a mesh-global meshlet index into this many bits and spends the rest on the frame
-// tag. Past the bound the index wraps and silently resolves the wrong meshlet.
+// FMeshletDraw packs a mesh-global meshlet index into this many bits; past the bound it silently resolves the wrong meshlet.
 #define MESHLET_DRAW_INDEX_BITS         20u
 
-// The remaining 12 bits of the packed word are spare, and for a cascade entry record which cascade
-// deferred it. The cull drops a defer past 1024 rather than wrapping into the cascade field.
+// The spare 12 bits record a cascade entry's deferring cascade, so the cull drops a defer past 1024 rather than wrap.
 #define MESHLET_DEFER_DRAWID_BITS       10u
 #define MESHLET_DEFER_MAX_DRAWID        1024u
 
-// Not a device preference: the block list is laid out CPU-side in units of this and the cull workgroup
-// is declared from it. RHI::kMeshletCullGroupSize mirrors it and MeshData.h static_asserts the pair.
+// Mirrored by RHI::kMeshletCullGroupSize, which MeshData.h static_asserts against.
 #define MESHLET_CULL_GROUP_SIZE         32
 
-// Which part of a bucket's draw region a geometry pass rasterizes. The two VisBuffer phases share one
-// cull view, so each phase's appends are tracked separately; every single-phase pass takes ALL, which
-// by then is final. Sized per slice: bases, counts, sub-draw counts and indirect args.
+// The two VisBuffer phases share one cull view, so each tracks its appends apart and single-phase passes take MESHLET_SLICE_ALL.
 #define MESHLET_SLICE_EARLY             0u
 #define MESHLET_SLICE_LATE              1u
 #define MESHLET_SLICE_ALL               2u
@@ -36,13 +26,22 @@
 // Y-fold axis, far below the 65535 Vulkan guarantees because the fold rounds group counts up to a multiple of it.
 #define MAX_DISPATCH_AXIS               1024
 
-// DXR2 COMPRESSED1: three 16-bit offsets from a signed 24-bit anchor on a shared power-of-two exponent.
-// Anchor + Offset < 2^24, so the decode is bit-identical everywhere -- load-bearing for early-Z.
-#define MESHLET_POSITION_MAX            65535
-#define MESHLET_ANCHOR_MAX              8388607
-#define MESHLET_ANCHOR_MASK             0x00FFFFFFu
-#define MESHLET_ANCHOR_SIGN             0x00800000u
-#define MESHLET_EXPONENT_SHIFT          24u
+// One grid per mesh, 21 bits per axis in two words; anchor plus offset stays below 2^24 so the decode is exact, which early-Z relies on.
+#define MESH_POSITION_BITS              21
+#define MESH_POSITION_MAX               0x1FFFFFu
+
+// FMeshlet's last word, low bit first, is its vertex count, triangle count, LOD and whether its refs are 16-bit.
+#define MESHLET_COUNT_BITS              7
+#define MESHLET_COUNT_MASK              0x7Fu
+#define MESHLET_TRIANGLE_COUNT_SHIFT    7u
+#define MESHLET_LOD_BITS                3
+#define MESHLET_LOD_MASK                0x7u
+#define MESHLET_LOD_SHIFT               14u
+#define MESHLET_SHORT_REFS_SHIFT        17u
+
+// Which optional per-vertex streams a static mesh carries; an absent UV1 reads as UV0 and an absent color as white.
+#define MESH_VERTEX_STREAM_UV1          1u
+#define MESH_VERTEX_STREAM_COLOR        2u
 
 // meshoptimizer's 8-bit SNORM cone, axis in bytes 0..2 and cutoff in byte 3, each decoded as x / 127.
 #define MESHLET_CONE_SNORM_SCALE        127
@@ -60,11 +59,12 @@
 #define MATERIAL_PIXEL_GROUP_SIZE       (MATERIAL_CLASSIFY_TILE * MATERIAL_CLASSIFY_TILE)
 // Frames one streaming-feedback readback spans; the deferred material pass reports a rotating 1/N of its groups each frame.
 #define STREAMING_FEEDBACK_WINDOW       4u
-// Distinct deferred shaders one frame may bin, bounded by the R16F slot image holding slot + 1 exactly.
-#define MATERIAL_MAX_SLOTS              2048u
-// A classified pair packs its slot under the tile index, so these bits have to cover MATERIAL_MAX_SLOTS.
-#define MATERIAL_PAIR_SLOT_BITS         11u
-#define MATERIAL_PAIR_SLOT_MASK         ((1u << MATERIAL_PAIR_SLOT_BITS) - 1u)
+// Distinct deferred shaders one frame may bin, bounded by the R16_UINT slot image holding slot + 1.
+#define MATERIAL_MAX_SLOTS              65535u
+// The set a classify tile dedupes its slots in, twice the 64 a tile can hold so a probe stays short.
+#define MATERIAL_TILE_CLAIM_BUCKETS     128u
+// A pair past a tile's inline records is stored as its tile index, then its slot.
+#define MATERIAL_OVERFLOW_PAIR_WORDS    2u
 // Slots a tile records inline, past which its pairs go to the overflow list.
 #define MATERIAL_TILE_SLOTS             4u
 // A slot word plus a 64-bit pixel mask for each inline pair.
@@ -73,12 +73,12 @@
 // A pair covering fewer pixels than this shades a lane per pixel, since a whole tile group would leave most lanes idle.
 #define MATERIAL_SPARSE_PIXELS          16u
 
-// FMaterialUniforms layout. Changing one side reinterprets every field after it.
+// Per-kind parameter caps. FMaterialUniforms holds every entry, and the GPU block keeps only each kind's used prefix.
 #define MAX_SCALARS                     24
 #define MAX_VECTORS                     24
 #define MAX_TEXTURES                    24
 
-// Collections one material may bind. Their indices sit in words FMaterialUniforms already reserved.
+// Collections one material may bind, each index packed into FMaterialHeader's Layout word.
 #define MAX_MATERIAL_COLLECTIONS        2
 
 // FMaterialCollectionUniforms layout, mirrored by FMaterialCollection in Common.slang.
@@ -88,18 +88,29 @@
 // Slot 0 is a reserved all-zero collection, so a material binding none reads zeros without a sentinel.
 #define MAX_PARAMETER_COLLECTIONS       64
 
+// FMaterialHeader's Layout word, each kind's count up to its last nonzero entry, then the two collection indices.
+#define MATERIAL_COUNT_MASK             31u
+#define MATERIAL_SCALAR_COUNT_SHIFT     5u
+#define MATERIAL_TEXTURE_COUNT_SHIFT    10u
+#define MATERIAL_COLLECTION_SHIFT       16u
+#define MATERIAL_COLLECTION_BITS        8u
+#define MATERIAL_COLLECTION_MASK        255u
+
 #define MAX_LIGHTS                      8192
 #define MAX_SHADOWS                     256
+
+// Light-function masks share one atlas of square tiles, so this many lights may carry one per frame.
+#define LIGHT_FUNCTION_ATLAS_TILES      4u
+#define LIGHT_FUNCTION_TILE_SIZE        512u
+#define MAX_LIGHT_FUNCTIONS             (LIGHT_FUNCTION_ATLAS_TILES * LIGHT_FUNCTION_ATLAS_TILES)
+// A light's atlas tile rides bits 8-15 of its flags, next to the LightFunction flag.
+#define LIGHT_FUNCTION_SLOT_SHIFT       8u
+#define LIGHT_FUNCTION_SLOT_MASK        255u
 #define NUM_CASCADES                    4
 
-// Hard cap on cull views: camera + NUM_CASCADES + 6/point + 1/spot.
+// Hard cap on cull views, covering the camera, NUM_CASCADES, six per point light and one per spot.
 #define MAX_CULL_VIEWS                  128
 
-// The cluster light list packs two 13-bit light indices per uint.
-#define LIGHT_INDEX_MASK                0x1FFFu
-#define LIGHTS_PER_UINT                 2
-// Light-mask words one view's clusters share, each cluster holding one bit per light rounded up to whole words.
-#define MAX_CLUSTER_MASK_WORDS          (1 << 21)
 // LightCull gives each workgroup this block of clusters, so one bounding box pre-culls the lights for all of them.
 #define CLUSTER_CULL_BLOCK_X            8
 #define CLUSTER_CULL_BLOCK_Y            4
@@ -110,6 +121,8 @@
 #define COL_B_SHIFT                     16
 #define COL_A_SHIFT                     24
 #define COL_A_MASK                      0xFF000000
+
+#define PARTICLE_SIM_GROUP_SIZE         64u
 
 // Emitter slots one workgroup can sort in groupshared; larger emitters take the multi-pass sort.
 #define PARTICLE_SORT_CAPACITY          2048u
@@ -127,3 +140,10 @@
 // Events per list per frame an emitter can raise for its sub-emitters; extras are dropped.
 #define PARTICLE_EVENT_CAPACITY         1024u
 #define PARTICLE_EVENT_LISTS            3u
+
+// Render layer bits, Default for anything that never chose a mask and Foreground for first-person geometry drawn over the world.
+#define RENDER_LAYER_DEFAULT_MASK       1u
+#define RENDER_LAYER_FOREGROUND_MASK    0x80000000u
+
+// Set in an instance's LODAndThinning when its layers are anything but Default, so only those instances load their mask.
+#define INSTANCE_CUSTOM_LAYERS_BIT      0x100u

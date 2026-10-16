@@ -100,6 +100,10 @@ namespace Lumina::RmlUi
         {
             explicit FScopedDiagnosticSink(TVector<FRmlDiagnostic>* Sink) : Previous(GDiagnosticSink) { GDiagnosticSink = Sink; }
             ~FScopedDiagnosticSink() { GDiagnosticSink = Previous; }
+            FScopedDiagnosticSink(const FScopedDiagnosticSink&) = delete;
+            FScopedDiagnosticSink& operator=(const FScopedDiagnosticSink&) = delete;
+            FScopedDiagnosticSink(FScopedDiagnosticSink&&) = delete;
+            FScopedDiagnosticSink& operator=(FScopedDiagnosticSink&&) = delete;
 
             TVector<FRmlDiagnostic>* Previous;
         };
@@ -253,6 +257,10 @@ namespace Lumina::RmlUi
         {
             FEventDispatchScope()  { ++GEventDispatchDepth; }
             ~FEventDispatchScope() { --GEventDispatchDepth; }
+            FEventDispatchScope(const FEventDispatchScope&) = delete;
+            FEventDispatchScope& operator=(const FEventDispatchScope&) = delete;
+            FEventDispatchScope(FEventDispatchScope&&) = delete;
+            FEventDispatchScope& operator=(FEventDispatchScope&&) = delete;
         };
 
         // RmlUi never deletes listeners on element destruction, so bAttached guards a freed element.
@@ -403,15 +411,25 @@ namespace Lumina::RmlUi
             TVector<int32>            Types;              // per-field EUIVarType
             TVector<Rml::String>      VarNames;           // per-field name, for DirtyVariable
             TVector<TUniquePtr<FListField>> Lists;        // list fields (own id space, index == list field id)
-            void*                     Context = nullptr;  // managed GCHandle handed back to the thunks
-            FManagedDataSetThunk      SetThunk = nullptr;
-            FManagedDataEventThunk    EventThunk = nullptr;
+            SScriptCallback           OnSet;
+            SScriptCallback           OnEvent;
 
             // Set for an editor preview's design model, which belongs to that context rather than to a world.
             Rml::Context*             OwnerContext = nullptr;
 
             // Commands an editor preview fired, as "Name(args)", since it has no script to call.
             TVector<FString>          FiredCommands;
+
+            FManagedDataModel() = default;
+            ~FManagedDataModel()
+            {
+                Scripting::ReleaseScriptCallback(OnSet);
+                Scripting::ReleaseScriptCallback(OnEvent);
+            }
+            FManagedDataModel(const FManagedDataModel&) = delete;
+            FManagedDataModel& operator=(const FManagedDataModel&) = delete;
+            FManagedDataModel(FManagedDataModel&&) = delete;
+            FManagedDataModel& operator=(FManagedDataModel&&) = delete;
         };
 
         // Coerce a double into a Variant typed per EUIVarType so views format/compare against the right type.
@@ -458,7 +476,6 @@ namespace Lumina::RmlUi
             // Small N per screen, so a linear scan on add and remove is fine.
             TVector<FManagedUIListener*>        UIListeners;
 
-            // Script-registered data models (World.UI.AddModel). Owned here; reaped per-world like UIListeners.
             TVector<FManagedDataModel*>         DataModels;
 
             // Recursive because Update may fire callbacks that re-enter the bridge on the same thread.
@@ -2106,8 +2123,6 @@ namespace Lumina::RmlUi
         }
     }
 
-    // Scripting surface for World.UI; takes the bridge lock, game thread only.
-
     namespace
     {
         Rml::Element*         AsElement (void* P) { return static_cast<Rml::Element*>(P); }
@@ -2129,14 +2144,14 @@ namespace Lumina::RmlUi
             // A headless process never starts the UI, so a document it asks for is expected to come back empty.
             if (!GIsHeadless)
             {
-                LOG_WARN("[RmlUi] World.UI.LoadDocument('{}') called before RmlUi initialized.", FString(VirtualPath.data(), VirtualPath.size()).c_str());
+                LOG_WARN("[RmlUi] CUILibrary.LoadDocument('{}') called before RmlUi initialized.", FString(VirtualPath.data(), VirtualPath.size()).c_str());
             }
             return nullptr;
         }
         FWorldUIContext* UI = WorldUI(World);
         if (UI == nullptr || UI->Context == nullptr)
         {
-            LOG_WARN("[RmlUi] World.UI.LoadDocument('{}') found no UI context on world '{}'.",
+            LOG_WARN("[RmlUi] CUILibrary.LoadDocument('{}') found no UI context on world '{}'.",
                 FString(VirtualPath.data(), VirtualPath.size()).c_str(), World->GetName().c_str());
             return nullptr;
         }
@@ -2144,7 +2159,7 @@ namespace Lumina::RmlUi
         Rml::ElementDocument* Doc = UI->Context->LoadDocument(ToRml(VirtualPath));
         if (Doc == nullptr)
         {
-            LOG_WARN("[RmlUi] World.UI.LoadDocument failed for '{}'.", FString(VirtualPath.data(), VirtualPath.size()).c_str());
+            LOG_WARN("[RmlUi] CUILibrary.LoadDocument failed for '{}'.", FString(VirtualPath.data(), VirtualPath.size()).c_str());
         }
         return Doc;
     }
@@ -2531,20 +2546,16 @@ namespace Lumina::RmlUi
         }
     }
 
-    // Data binding for LuminaSharp ViewModel and World.UI.AddModel.
-
-    void* CreateDataModel(CWorld* World, FStringView Name, void* Context, FManagedDataSetThunk SetThunk, FManagedDataEventThunk EventThunk)
+    void* CreateDataModel(CWorld* World, FStringView Name, SScriptCallback OnSet, SScriptCallback OnEvent)
     {
         NoteUIChanged();
         FState& State = S();
         FRecursiveScopeLock Lock(State.StateMutex);
-        if (!State.bInitialized || World == nullptr || Name.empty())
-        {
-            return nullptr;
-        }
-        FWorldUIContext* UI = WorldUI(World);
+        FWorldUIContext* UI = State.bInitialized && World != nullptr && !Name.empty() ? WorldUI(World) : nullptr;
         if (UI == nullptr || UI->Context == nullptr)
         {
+            Scripting::ReleaseScriptCallback(OnSet);
+            Scripting::ReleaseScriptCallback(OnEvent);
             return nullptr;
         }
 
@@ -2553,6 +2564,8 @@ namespace Lumina::RmlUi
         if (!Ctor)
         {
             LOG_WARN("[RmlUi] CreateDataModel('{}') failed (a model with that name already exists?).", ModelName.c_str());
+            Scripting::ReleaseScriptCallback(OnSet);
+            Scripting::ReleaseScriptCallback(OnEvent);
             return nullptr;
         }
 
@@ -2561,9 +2574,8 @@ namespace Lumina::RmlUi
         M->Name        = ModelName;
         M->Constructor = Ctor;
         M->Handle      = Ctor.GetModelHandle();
-        M->Context     = Context;
-        M->SetThunk    = SetThunk;
-        M->EventThunk  = EventThunk;
+        M->OnSet       = OnSet;
+        M->OnEvent     = OnEvent;
         State.DataModels.push_back(M);
         return M;
     }
@@ -2593,19 +2605,15 @@ namespace Lumina::RmlUi
                 {
                     const Rml::String Str = In.Get<Rml::String>();
                     M->Values[Field] = Str;
-                    if (M->SetThunk != nullptr)
-                    {
-                        M->SetThunk(M->Context, Field, (int32)EUIVarType::String, 0.0, Str.c_str(), (int32)Str.size());
-                    }
+                    const FUIDataSet Set{ Field, (int32)EUIVarType::String, 0.0, Str.c_str(), (int32)Str.size() };
+                    Scripting::InvokeScriptCallbackRepeating(M->OnSet, reinterpret_cast<uint64>(&Set));
                 }
                 else
                 {
                     const double Num = In.Get<double>(0.0);
                     StoreNumber(M->Values[Field], M->Types[Field], Num);
-                    if (M->SetThunk != nullptr)
-                    {
-                        M->SetThunk(M->Context, Field, M->Types[Field], Num, nullptr, 0);
-                    }
+                    const FUIDataSet Set{ Field, M->Types[Field], Num, nullptr, 0 };
+                    Scripting::InvokeScriptCallbackRepeating(M->OnSet, reinterpret_cast<uint64>(&Set));
                 }
             });
 
@@ -2643,7 +2651,7 @@ namespace Lumina::RmlUi
         M->Constructor.BindEventCallback(CmdName,
             [M, CommandId, CmdName](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& Arguments)
             {
-                if (M->EventThunk == nullptr)
+                if (!M->OnEvent.IsBound())
                 {
                     if (M->OwnerContext != nullptr && M->FiredCommands.size() < 64)
                     {
@@ -2670,7 +2678,8 @@ namespace Lumina::RmlUi
                 {
                     Argv.push_back(FUIArg{ Str.c_str(), (int32)Str.size() });
                 }
-                M->EventThunk(M->Context, CommandId, (int32)Argv.size(), Argv.empty() ? nullptr : Argv.data());
+                const FUIDataEvent Fired{ CommandId, (int32)Argv.size(), Argv.empty() ? nullptr : Argv.data() };
+                Scripting::InvokeScriptCallbackRepeating(M->OnEvent, reinterpret_cast<uint64>(&Fired));
             });
     }
 
@@ -3103,6 +3112,10 @@ namespace Lumina::RmlUi
             {
                 Function.DestructFrame(Storage.data());
             }
+            FModelCallFrame(const FModelCallFrame&) = delete;
+            FModelCallFrame& operator=(const FModelCallFrame&) = delete;
+            FModelCallFrame(FModelCallFrame&&) = delete;
+            FModelCallFrame& operator=(FModelCallFrame&&) = delete;
 
             void* Data() { return Storage.data(); }
 

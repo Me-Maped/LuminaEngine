@@ -6,33 +6,32 @@ using System.Runtime.InteropServices;
 
 namespace LuminaSharp;
 
-/// <summary>
-/// The single entry point every script-declared reflected function is dispatched through.
-/// </summary>
-/// <remarks>
-/// One entry point serves all of them, which is why native hands it the function being called. Arguments are
-/// read back out of the call frame through the function's own parameters: a frame is a container like an
-/// object is, so the property accessors already exported address it without any marshalling of its own.
-/// </remarks>
+// The entry point every script-declared function dispatches through, reading its arguments out of the frame through the parameters.
 public static unsafe class ScriptFunctionDispatch
 {
-    // Keyed by the function AND the type, because a re-mint frees the old FFunction and the arena can hand
-    // its address straight back to a new one; on the pointer alone that would silently dispatch the old method.
+    // Keyed by function and type, since a re-mint can reuse a freed function's address.
     private static readonly Dictionary<(IntPtr Function, Type Type), FBound> BoundByFunction = new();
 
-    // Hashing that tuple costs more than the call it guards, so a direct-mapped line answers the repeat case
-    // and the dictionary stays the authority behind it. Power of two, masked rather than divided.
+    // A direct-mapped cache answers the repeat case, since hashing the tuple costs more than the call.
     private const int CacheLines = 256;
-    private static readonly FCacheLine[] Cache = new FCacheLine[CacheLines];
+    private static readonly FCacheLine?[] Cache = new FCacheLine?[CacheLines];
 
     // The offset arrays this dispatcher allocated, so a reset frees them rather than leaking a generation.
     private static readonly List<nint> OwnedOffsets = new();
 
-    private struct FCacheLine
+    // Immutable and published by one reference write, so a call on a worker never reads half of a line.
+    private sealed class FCacheLine
     {
-        public IntPtr Function;
-        public Type?  Type;
-        public FBound Bound;
+        public FCacheLine(IntPtr Function, Type Type, FBound Bound)
+        {
+            this.Function = Function;
+            this.Type = Type;
+            this.Bound = Bound;
+        }
+
+        public readonly IntPtr Function;
+        public readonly Type   Type;
+        public readonly FBound Bound;
     }
 
     // An FFunction is arena allocated, so the low bits carry no entropy and the shift is what spreads it.
@@ -88,10 +87,9 @@ public static unsafe class ScriptFunctionDispatch
 
             Type Owner = Target.GetType();
 
-            // Straight off the cache line when a generated invoker is bound, so the whole FBound is never
-            // copied out just to reach two of its fields.
-            ref FCacheLine Line = ref Cache[LineOf(Function)];
-            if (Line.Function == Function && ReferenceEquals(Line.Type, Owner) && Line.Bound.Invoker != 0)
+            // Straight off the cache line when an invoker is bound, without copying the whole entry.
+            FCacheLine? Line = Cache[LineOf(Function)];
+            if (Line != null && Line.Function == Function && ReferenceEquals(Line.Type, Owner) && Line.Bound.Invoker != 0)
             {
                 ((delegate* managed<nint, nint, int*, void>)Line.Bound.Invoker)(
                     Instance, Frame, Line.Bound.Offsets);
@@ -109,27 +107,35 @@ public static unsafe class ScriptFunctionDispatch
                 return;
             }
 
-            // A script's method runs inside its own callback context, as every other script event does.
-            if (Target is EntityScript Script && !Script.Entity.IsNull)
+            using Engine.Scope Scope = EnterFunction(Target);
+            try
             {
-                using Engine.Scope Scope = Engine.Push(Script.World, Script.Entity, Script);
-                try
-                {
-                    InvokeBound(Target, Bound, Frame);
-                }
-                catch (TargetInvocationException Thrown) when (Thrown.InnerException != null)
-                {
-                    NativeBindings.ScriptEventException(Script, Bound.Method.Name, Thrown.InnerException);
-                }
-                return;
+                InvokeBound(Target, Bound, Frame);
             }
-
-            InvokeBound(Target, Bound, Frame);
+            catch (TargetInvocationException Thrown) when (Thrown.InnerException != null)
+            {
+                ReportFunctionException(Target, Bound.Method.Name, Thrown.InnerException);
+            }
         }
         catch (Exception Exception)
         {
             Interop.LogException(Exception);
         }
+    }
+
+    // Shared by the reflected path and every generated invoker, which native calls directly once it is published.
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public static Engine.Scope EnterFunction(object Target)
+    {
+        return Target is Lumina.CEntityScript Script && !Script.Entity.IsNull
+            ? Engine.Push(Script.World, Script.Entity, Script)
+            : Engine.Snapshot();
+    }
+
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public static void ReportFunctionException(object Target, string Function, Exception Exception)
+    {
+        NativeBindings.ScriptEventException(Target, Function, Exception);
     }
 
     private static void InvokeBound(object Target, in FBound Bound, IntPtr Frame)
@@ -166,23 +172,29 @@ public static unsafe class ScriptFunctionDispatch
         }
     }
 
-    // Resolved once per function. A signature the frame and the method disagree about is reported here rather
-    // than read as whatever happened to be at the offset.
+    // Resolved once per function, a signature mismatch reported here rather than read from the wrong offset.
     private static bool TryBind(Type Type, IntPtr Function, out FBound Bound)
     {
-        ref FCacheLine Line = ref Cache[LineOf(Function)];
-        if (Line.Function == Function && ReferenceEquals(Line.Type, Type))
+        FCacheLine? Line = Cache[LineOf(Function)];
+        if (Line != null && Line.Function == Function && ReferenceEquals(Line.Type, Type))
         {
             Bound = Line.Bound;
             return Bound.Method != null;
         }
 
+        // A [ParallelUpdate] script can call into native that calls back here from several workers at once.
+        lock (BoundByFunction)
+        {
+            return TryBindLocked(Type, Function, out Bound);
+        }
+    }
+
+    private static bool TryBindLocked(Type Type, IntPtr Function, out FBound Bound)
+    {
         var Key = (Function, Type);
         if (BoundByFunction.TryGetValue(Key, out Bound))
         {
-            Line.Function = Function;
-            Line.Type = Type;
-            Line.Bound = Bound;
+            Cache[LineOf(Function)] = new FCacheLine(Function, Type, Bound);
             return Bound.Method != null;
         }
 
@@ -264,7 +276,8 @@ public static unsafe class ScriptFunctionDispatch
         }
 
         // Only after TryBind validated the same signature, so the invoker can never widen what is accepted.
-        nint Invoker = ScriptInvokerRegistry.Find(Type, Name);
+        // Registered under the declaring type, so a subclass inheriting the function shares its invoker.
+        nint Invoker = ScriptInvokerRegistry.Find(Method.DeclaringType!, Name);
         int* Offsets = null;
         if (Invoker != 0)
         {
@@ -281,17 +294,13 @@ public static unsafe class ScriptFunctionDispatch
                 Offsets[Parameters.Length] = Return.Offset;
             }
 
-            // Published so the native thunk calls the generated entry point directly from here on, which
-            // skips this dispatcher's handle lookup, type read and cache probe entirely.
+            // Published so the native thunk calls the generated entry point directly from here on.
             Native.FunctionPublishInvoker(Function, Invoker, (IntPtr)Offsets);
         }
 
         Bound = new FBound(Method, Parameters, WriteBack, Return, bHasReturn, bAsync, Invoker, Offsets);
         BoundByFunction[Key] = Bound;
-        Line = ref Cache[LineOf(Function)];
-        Line.Function = Function;
-        Line.Type = Type;
-        Line.Bound = Bound;
+        Cache[LineOf(Function)] = new FCacheLine(Function, Type, Bound);
         return true;
     }
 
@@ -327,11 +336,7 @@ public static unsafe class ScriptFunctionDispatch
         return Overloads == 1 ? Match : null;
     }
 
-    /// <summary>
-    /// Dropped on hot reload. A bound entry holds a MethodInfo from the generation being unloaded, which
-    /// roots its declaring type and so pins the collectible load context: left in place this does not just
-    /// go stale, it stops the generation unloading at all.
-    /// </summary>
+    // Dropped on reload, since a bound entry's MethodInfo would pin the context being unloaded.
     internal static void Reset()
     {
         BoundByFunction.Clear();

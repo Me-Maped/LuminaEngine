@@ -115,7 +115,7 @@ namespace Lumina
         //~ Migration: actions authored before EInputActionType existed carry bAxis instead. Not Editable, so
         //  it never shows in the Input settings, but still round-trips through the config file until
         //  FInputActionMap::RebuildFromSettings folds it into Type.
-        PROPERTY()
+        PROPERTY(Hidden)
         bool bAxis = false;
 
         bool IsAxis() const { return Type != EInputActionType::Digital; }
@@ -144,12 +144,12 @@ namespace Lumina
 
     // A reference to an authored action, resolved once per settings change instead of hashed per query.
     REFLECT()
-    struct RUNTIME_API FInputActionHandle
+    struct RUNTIME_API SInputActionHandle
     {
         GENERATED_BODY()
 
-        FInputActionHandle() = default;
-        explicit FInputActionHandle(FName InName) : Name(InName) {}
+        SInputActionHandle() = default;
+        explicit SInputActionHandle(FName InName) : Name(InName) {}
 
         // Public so the property system can write it; the resolve re-checks it against CachedName.
         PROPERTY(Editable)
@@ -173,7 +173,7 @@ namespace Lumina
     // LuminaSharp.InputActionState: the script layer reads the whole array through a pointer instead of
     // crossing into native per action.
     REFLECT()
-    struct FInputActionState
+    struct SInputActionState
     {
         GENERATED_BODY()
 
@@ -186,17 +186,17 @@ namespace Lumina
             Flag_Tapped   = 1u << 4,  ///< Released this frame after less than TapTime down.
         };
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float  X = 0.0f;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float  Y = 0.0f;
 
         /** Seconds the current press has lasted, and zero while up. */
-        PROPERTY()
+        PROPERTY(Hidden)
         float  HeldTime = 0.0f;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         uint32 Flags = 0;
 
         bool IsDown()     const { return (Flags & Flag_Down) != 0; }

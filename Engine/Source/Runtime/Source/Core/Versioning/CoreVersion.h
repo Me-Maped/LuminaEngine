@@ -90,12 +90,29 @@ enum class ELuminaEngineVersion : uint32
 	// FAnimationResource names the notify track whose entries are its sync markers.
 	ANIM_SYNC_TRACK,
 
-	// Packages carry a name table, and every FName in the stream is a slot in it rather than inline text.
-	// FPropertyTag's type is the 1-byte EPropertyTypeFlags and its dead Offset field is gone.
+	// Packages carry a name table, and a property header spells its kind in one byte with no dead offset.
 	PACKAGE_NAME_TABLE,
 
 	// FTextureResource::FDescription carries the swizzle a single-channel format is sampled through.
 	TEXTURE_SWIZZLE,
+
+	// An entity stores its parent and sibling index, replacing the removed FRelationshipComponent's raw links.
+	REGISTRY_PARENT_LINKS,
+
+	// FGeometrySurface stores each LOD's measured error; older meshes load LOD 0 only until reimported.
+	MESH_LOD_ERROR,
+
+	// One position grid per mesh, static vertices stored once behind per-meshlet refs, and skinned vertices on the same grid.
+	MESHLET_SHARED_VERTICES,
+
+	// An entity script whose class was not loaded is written after the live ones with the names and objects its bytes refer to.
+	PORTABLE_HELD_SCRIPTS,
+
+	// A soft import lists the asset bundles that reference it.
+	ASSET_BUNDLES,
+
+	// A held value carries the entity remaps that copies made while its type was gone.
+	HELD_VALUE_ENTITY_REMAP,
 
 	AUTOMATIC_VERSION_PLUS_ONE,
 	AUTOMATIC_VERSION = AUTOMATIC_VERSION_PLUS_ONE - 1

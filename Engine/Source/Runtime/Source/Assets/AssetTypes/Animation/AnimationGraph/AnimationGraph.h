@@ -125,7 +125,7 @@ namespace Lumina
         return *reinterpret_cast<CObject* const*>(Base + Binding.Offset);
     }
 
-    // A named value editor/Lua tweak at runtime to drive blend weights, playback speeds, etc.
+    // A named value the editor or a script tweaks at runtime to drive blend weights, playback speeds, etc.
     struct FAnimGraphParameter
     {
         FName Name;
@@ -151,16 +151,16 @@ namespace Lumina
 
     // A named object-valued input, letting the graph swap which asset a node samples at runtime.
     REFLECT()
-    struct FAnimGraphObjectParameter
+    struct SAnimGraphObjectParameter
     {
         GENERATED_BODY()
 
         /** Field on the graph's parameter struct this asset reference is read from. */
-        PROPERTY()
+        PROPERTY(Hidden)
         FName Name;
 
         /** Asset kind the consuming node expects. */
-        PROPERTY()
+        PROPERTY(Hidden)
         EAnimObjectParamType Type = EAnimObjectParamType::Animation;
     };
 
@@ -245,7 +245,7 @@ namespace Lumina
 
     // One bone of a bone mask; resolved to a skeleton index and baked into FAnimGraphBoneMask::Weights at compile.
     REFLECT()
-    struct FAnimGraphBoneMaskBone
+    struct SAnimGraphBoneMaskBone
     {
         GENERATED_BODY()
 
@@ -260,7 +260,7 @@ namespace Lumina
 
     // Editor-authored bone mask (named (bone, weight) list); the compiler resolves it into a runtime FAnimGraphBoneMask.
     REFLECT()
-    struct FAnimGraphBoneMaskDef
+    struct SAnimGraphBoneMaskDef
     {
         GENERATED_BODY()
 
@@ -270,7 +270,7 @@ namespace Lumina
 
         /** Per-bone weight entries; unlisted bones default to zero. */
         PROPERTY(Editable, Category = "Bone Mask")
-        TVector<FAnimGraphBoneMaskBone> Bones;
+        TVector<SAnimGraphBoneMaskBone> Bones;
     };
 
     // Compiled bone mask: dense per-bone weight array (skeleton bone count); the VM's BlendMasked op indexes it directly.
@@ -338,6 +338,10 @@ namespace Lumina
 
         // Rewind to EntryState whenever the state hosting this machine is not the active one.
         bool bResetOnEntry = false;
+
+        // Built after load and after a compile, never saved. Per state, the transitions that can leave it, in authored order.
+        TVector<uint16> TransitionsByState;
+        TVector<uint32> TransitionsByStateStart;
 
         // Slots into FAnimGraphVMState.StateSlots: Current/From state indices (From -1 when not
         // transitioning), seconds spent in the current state, Duration of the active transition.
@@ -423,22 +427,22 @@ namespace Lumina
         FInstancedStruct ParameterStruct;
 
         /** Animation clips referenced by SampleAnim opcodes, indexed by clip index. */
-        PROPERTY()
+        PROPERTY(Hidden)
         TVector<TStrongObjectPtr<CAnimation>> Clips;
 
         /** Blend spaces referenced by SampleBlendSpace opcodes, indexed by blend-space index. */
-        PROPERTY()
+        PROPERTY(Hidden)
         TVector<TStrongObjectPtr<CBlendSpace>> BlendSpaces;
 
-        /** Lua- and editor-tweakable parameters that drive the graph. */
+        /** Script- and editor-tweakable parameters that drive the graph. */
         TVector<FAnimGraphParameter> Parameters;
 
         /** Object-valued inputs; the runtime fills these so nodes can swap which asset they sample. */
-        PROPERTY()
-        TVector<FAnimGraphObjectParameter> ObjectParameters;
+        PROPERTY(Hidden)
+        TVector<SAnimGraphObjectParameter> ObjectParameters;
 
         /** Assets referenced by LoadObjectConst, so a static pin still flows through an object register. */
-        PROPERTY()
+        PROPERTY(Hidden)
         TVector<TStrongObjectPtr<CObject>> ObjectConstants;
 
         /** Offsets into the blackboard struct, parallel to Parameters / ObjectParameters. Transient. */
@@ -451,7 +455,7 @@ namespace Lumina
 
         /** Editor-authored bone mask definitions; resolved into BoneMasks at compile. */
         PROPERTY(Editable, Category = "Bone Masks")
-        TVector<FAnimGraphBoneMaskDef> BoneMaskDefs;
+        TVector<SAnimGraphBoneMaskDef> BoneMaskDefs;
 
         /** Compiled per-bone weight arrays referenced by BlendMasked opcodes. */
         TVector<FAnimGraphBoneMask> BoneMasks;

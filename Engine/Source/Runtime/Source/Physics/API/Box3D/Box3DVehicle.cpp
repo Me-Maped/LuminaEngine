@@ -26,7 +26,7 @@ namespace Lumina::Physics
         struct FWheelRay
         {
             b3BodyId            IgnoreBody{};
-            FCollisionProfile   Profile{};
+            SCollisionProfile   Profile{};
             bool                bPermissive = true;
             b3ShapeId           Shape = b3_nullShapeId;
             b3Vec3              Point{};
@@ -84,7 +84,7 @@ namespace Lumina::Physics
         LUMINA_PROFILE_SCOPE();
 
         ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
-        const bool bDebugDraw = FBox3DPhysicsContext::IsDebugDrawEnabled();
+        const bool bDrawWheels = IsDebugDrawEnabled() || FBox3DPhysicsContext::IsDebugDrawForced();
         const bool bPermissive = Box3DUtils::UsesPermissiveCollisionFilter();
 
         Registry.View<SVehicleComponent, SRigidBodyComponent>().ForEach([&](ECS::FEntity Entity, SVehicleComponent& Vehicle, const SRigidBodyComponent& RigidBody)
@@ -153,7 +153,7 @@ namespace Lumina::Physics
             FWheelRay Rays[MaxWheels];
             for (int32 Index = 0; Index < WheelCount; ++Index)
             {
-                FVehicleWheel& Wheel = Vehicle.Wheels[Index];
+                SVehicleWheel& Wheel = Vehicle.Wheels[Index];
                 const float Reach = Wheel.SuspensionTravel + Wheel.Radius;
                 const b3Pos Mount = b3Body_GetWorldPoint(Body, ToB3(Wheel.Position));
 
@@ -174,11 +174,11 @@ namespace Lumina::Physics
                 const float WheelSteer = Wheel.bSteer ? TargetSteer * (Wheel.Position.z < 0.0f ? -1.0f : 1.0f) : 0.0f;
                 Wheel.SteerAngle += Math::Clamp(WheelSteer - Wheel.SteerAngle, -SteerStep, SteerStep);
 
-                if (bDebugDraw)
+                if (bDrawWheels)
                 {
                     const FVector3 From = FromB3(Mount);
                     const FVector3 To = Ray.bHit ? FromB3(Ray.Point) : From - Up * Reach;
-                    World->DrawLine(From, To, Ray.bHit ? FVector4(0.2f, 1.0f, 0.3f, 1.0f) : FVector4(1.0f, 0.3f, 0.2f, 1.0f), 1.0f, false, 0.0f);
+                    World->GetDebugInterface()->DrawLine(From, To, Ray.bHit ? FVector4(0.2f, 1.0f, 0.3f, 1.0f) : FVector4(1.0f, 0.3f, 0.2f, 1.0f), 1.0f, false, 0.0f);
                 }
             }
 
@@ -188,7 +188,7 @@ namespace Lumina::Physics
 
             for (int32 Index = 0; Index < WheelCount; ++Index)
             {
-                FVehicleWheel& Wheel = Vehicle.Wheels[Index];
+                SVehicleWheel& Wheel = Vehicle.Wheels[Index];
                 const FWheelRay& Ray = Rays[Index];
                 const bool bLocked = Vehicle.bHandbrake && Wheel.bHandbrake;
 
@@ -303,7 +303,7 @@ namespace Lumina::Physics
 
         Registry.View<SVehicleComponent>().ForEach([&](ECS::FEntity, const SVehicleComponent& Vehicle)
         {
-            for (const FVehicleWheel& Wheel : Vehicle.Wheels)
+            for (const SVehicleWheel& Wheel : Vehicle.Wheels)
             {
                 const ECS::FEntity Visual = Wheel.Visual;
                 STransformComponent* Transform = Visual != ECS::NullEntity ? Registry.TryGet<STransformComponent>(Visual) : nullptr;

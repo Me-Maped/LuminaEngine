@@ -3,7 +3,9 @@
 #include "Containers/Name.h"
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
+#include "Core/Object/ObjectArray.h"
 #include "Core/Object/ObjectCore.h"
+#include "Core/Object/ObjectReferenceProvider.h"
 #include "Core/Object/ObjectHandleTyped.h"
 #include "Core/Object/ObjectReinstancer.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
@@ -11,6 +13,7 @@
 #include "Scripting/ScriptStruct.h"
 #include "Scripting/ScriptableObject.h"
 #include "Scripting/ScriptableTest.h"
+#include "ScriptTestUtil.h"
 
 using namespace Lumina;
 
@@ -19,28 +22,6 @@ using namespace Lumina;
 
 namespace
 {
-    Scripting::FScriptExportField MakeScalarField(const char* Name, EPropertyTypeFlags Kind)
-    {
-        Scripting::FScriptExportField Field;
-        Field.Name = FName(Name);
-        Field.Type = MakeShared<Scripting::FScriptExportType>();
-        Field.Type->Kind = Kind;
-        return Field;
-    }
-
-    CScriptClass* MintWithFields(const char* ClassName, const Scripting::FScriptExportSchema& Schema)
-    {
-        CScriptClass* Minted = FScriptableRegistry::Mint(ClassName, "CScriptableTest");
-        if (Minted == nullptr)
-        {
-            return nullptr;
-        }
-        Scripting::AppendScriptPropertiesToClass(Minted, Schema);
-        ProcessNewlyLoadedCObjects();
-        Minted->GetDefaultObject();
-        return Minted;
-    }
-
     int32* FindInt(CObject* Object, const char* FieldName)
     {
         for (FProperty* Property : Object->GetClass()->GetProperties())
@@ -72,8 +53,8 @@ namespace
 TEST(ObjectReinstancer, MovesInstancesOntoTheReplacementAndKeepsMatchingValues)
 {
     Scripting::FScriptExportSchema Before;
-    Before.Fields.push_back(MakeScalarField("Kept", EPropertyTypeFlags::Int32));
-    CScriptClass* Old = MintWithFields("Reinst_Before", Before);
+    Before.Fields.push_back(ScriptTest::ScalarField("Kept", EPropertyTypeFlags::Int32));
+    CScriptClass* Old = ScriptTest::MintWith("Reinst_Before", Before);
     ASSERT_NE(Old, nullptr);
 
     CObject* Instance = NewObject(Old, nullptr, FName("ReinstSubject"), FGuid::New(), OF_Transient);
@@ -87,9 +68,9 @@ TEST(ObjectReinstancer, MovesInstancesOntoTheReplacementAndKeepsMatchingValues)
 
     // The replacement adds a field, which is exactly the change an in-place rebuild could not make.
     Scripting::FScriptExportSchema After;
-    After.Fields.push_back(MakeScalarField("Kept", EPropertyTypeFlags::Int32));
-    After.Fields.push_back(MakeScalarField("Added", EPropertyTypeFlags::Int32));
-    CScriptClass* New = MintWithFields("Reinst_After", After);
+    After.Fields.push_back(ScriptTest::ScalarField("Kept", EPropertyTypeFlags::Int32));
+    After.Fields.push_back(ScriptTest::ScalarField("Added", EPropertyTypeFlags::Int32));
+    CScriptClass* New = ScriptTest::MintWith("Reinst_After", After);
     ASSERT_NE(New, nullptr);
 
     FObjectReinstancer Reinstancer;
@@ -116,10 +97,10 @@ TEST(ObjectReinstancer, MovesInstancesOntoTheReplacementAndKeepsMatchingValues)
 TEST(ObjectReinstancer, RepointsAReferenceHeldOutsideTheObjectGraph)
 {
     Scripting::FScriptExportSchema Empty;
-    Empty.Fields.push_back(MakeScalarField("Value", EPropertyTypeFlags::Int32));
+    Empty.Fields.push_back(ScriptTest::ScalarField("Value", EPropertyTypeFlags::Int32));
 
-    CScriptClass* Old = MintWithFields("ReinstRef_Before", Empty);
-    CScriptClass* New = MintWithFields("ReinstRef_After", Empty);
+    CScriptClass* Old = ScriptTest::MintWith("ReinstRef_Before", Empty);
+    CScriptClass* New = ScriptTest::MintWith("ReinstRef_After", Empty);
     ASSERT_NE(Old, nullptr);
     ASSERT_NE(New, nullptr);
 
@@ -145,10 +126,10 @@ TEST(ObjectReinstancer, RepointsAReferenceHeldOutsideTheObjectGraph)
 TEST(ObjectReinstancer, AWeakReferenceFollowsTheInstanceOntoTheReplacement)
 {
     Scripting::FScriptExportSchema Schema;
-    Schema.Fields.push_back(MakeScalarField("Value", EPropertyTypeFlags::Int32));
+    Schema.Fields.push_back(ScriptTest::ScalarField("Value", EPropertyTypeFlags::Int32));
 
-    CScriptClass* Old = MintWithFields("ReinstWeak_Before", Schema);
-    CScriptClass* New = MintWithFields("ReinstWeak_After", Schema);
+    CScriptClass* Old = ScriptTest::MintWith("ReinstWeak_Before", Schema);
+    CScriptClass* New = ScriptTest::MintWith("ReinstWeak_After", Schema);
     ASSERT_NE(Old, nullptr);
     ASSERT_NE(New, nullptr);
 
@@ -181,8 +162,8 @@ TEST(ObjectReinstancer, DoesNothingWithoutAMapping)
 TEST(ObjectReinstancer, ThePostReplaceHookSeesEveryReplacementBeforeAnythingPointsAtIt)
 {
     Scripting::FScriptExportSchema Before;
-    Before.Fields.push_back(MakeScalarField("Value", EPropertyTypeFlags::Int32));
-    CScriptClass* Old = MintWithFields("Reinst_HookBefore", Before);
+    Before.Fields.push_back(ScriptTest::ScalarField("Value", EPropertyTypeFlags::Int32));
+    CScriptClass* Old = ScriptTest::MintWith("Reinst_HookBefore", Before);
     ASSERT_NE(Old, nullptr);
 
     CObject* First  = NewObject(Old, nullptr, FName("HookOne"), FGuid::New(), OF_Transient);
@@ -193,9 +174,9 @@ TEST(ObjectReinstancer, ThePostReplaceHookSeesEveryReplacementBeforeAnythingPoin
     *FindInt(Second, "Value") = 22;
 
     Scripting::FScriptExportSchema After;
-    After.Fields.push_back(MakeScalarField("Value", EPropertyTypeFlags::Int32));
-    After.Fields.push_back(MakeScalarField("Added", EPropertyTypeFlags::Int32));
-    CScriptClass* New = MintWithFields("Reinst_HookAfter", After);
+    After.Fields.push_back(ScriptTest::ScalarField("Value", EPropertyTypeFlags::Int32));
+    After.Fields.push_back(ScriptTest::ScalarField("Added", EPropertyTypeFlags::Int32));
+    CScriptClass* New = ScriptTest::MintWith("Reinst_HookAfter", After);
     ASSERT_NE(New, nullptr);
 
     static int32 GHookCalls = 0;
@@ -227,8 +208,8 @@ TEST(ObjectReinstancer, ThePostReplaceHookSeesEveryReplacementBeforeAnythingPoin
 TEST(ObjectReinstancer, CommitWithNoHookIsUnaffected)
 {
     Scripting::FScriptExportSchema Before;
-    Before.Fields.push_back(MakeScalarField("Value", EPropertyTypeFlags::Int32));
-    CScriptClass* Old = MintWithFields("Reinst_NoHookBefore", Before);
+    Before.Fields.push_back(ScriptTest::ScalarField("Value", EPropertyTypeFlags::Int32));
+    CScriptClass* Old = ScriptTest::MintWith("Reinst_NoHookBefore", Before);
     ASSERT_NE(Old, nullptr);
 
     CObject* Instance = NewObject(Old, nullptr, FName("NoHookSubject"), FGuid::New(), OF_Transient);
@@ -236,9 +217,9 @@ TEST(ObjectReinstancer, CommitWithNoHookIsUnaffected)
     *FindInt(Instance, "Value") = 7;
 
     Scripting::FScriptExportSchema After;
-    After.Fields.push_back(MakeScalarField("Value", EPropertyTypeFlags::Int32));
-    After.Fields.push_back(MakeScalarField("Added", EPropertyTypeFlags::Int32));
-    CScriptClass* New = MintWithFields("Reinst_NoHookAfter", After);
+    After.Fields.push_back(ScriptTest::ScalarField("Value", EPropertyTypeFlags::Int32));
+    After.Fields.push_back(ScriptTest::ScalarField("Added", EPropertyTypeFlags::Int32));
+    CScriptClass* New = ScriptTest::MintWith("Reinst_NoHookAfter", After);
     ASSERT_NE(New, nullptr);
 
     FObjectReinstancer Reinstancer;
@@ -249,4 +230,84 @@ TEST(ObjectReinstancer, CommitWithNoHookIsUnaffected)
     CObject* Moved = FindObject<CObject>(FName("NoHookSubject"));
     ASSERT_NE(Moved, nullptr);
     EXPECT_EQ(*FindInt(Moved, "Value"), 7);
+}
+
+namespace
+{
+    // Holds the instance strongly, so repointing it drops the original's last reference in the middle of the walk.
+    class FStrongTestProvider final : public IObjectReferenceProvider
+    {
+    public:
+
+        TStrongObjectPtr<CObject> Held;
+
+        const char* GetReferenceProviderName() const override { return "strong test"; }
+
+        void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override
+        {
+            Held = Func(Held.Get());
+        }
+    };
+}
+
+// The C# stress run's crash. The original died when its only holder moved, and the commit then read it.
+TEST(ObjectReinstancer, AnOriginalWhoseOnlyHolderMovesDiesAfterTheWalk)
+{
+    Scripting::FScriptExportSchema Schema;
+    Schema.Fields.push_back(ScriptTest::ScalarField("Value", EPropertyTypeFlags::Int32));
+    CScriptClass* Old = ScriptTest::MintWith("ReinstLast_Before", Schema);
+    CScriptClass* New = ScriptTest::MintWith("ReinstLast_After", Schema);
+    ASSERT_NE(Old, nullptr);
+    ASSERT_NE(New, nullptr);
+
+    FStrongTestProvider Provider;
+    Provider.Held = NewObject(Old, nullptr, NAME_None, FGuid::New(), OF_Transient);
+    const FObjectHandle OriginalHandle = Object::Internal::GetHandleByObject(Provider.Held.Get());
+    *FindInt(Provider.Held.Get(), "Value") = 9;
+    FObjectReferenceProviders::Register(&Provider);
+
+    FObjectReinstancer Reinstancer;
+    Reinstancer.MapClass(Old, New);
+    const FReinstanceResult Result = Reinstancer.Commit();
+
+    FObjectReferenceProviders::Unregister(&Provider);
+
+    EXPECT_EQ(Result.InstancesReplaced, 1);
+    EXPECT_EQ(Result.OriginalsOutlivingTheSwap, 0);
+    ASSERT_NE(Provider.Held.Get(), nullptr);
+    EXPECT_EQ(Provider.Held->GetClass(), New);
+    EXPECT_EQ(*FindInt(Provider.Held.Get(), "Value"), 9);
+    EXPECT_EQ(Object::Internal::ResolveHandle(OriginalHandle), Provider.Held.Get()) << "the original handle redirects to the replacement";
+}
+
+extern "C" void* LuminaSharp_PinObject(void* Object);
+extern "C" void LuminaSharp_UnpinObject(void* Pin);
+
+// The C# stress run's leak. A replacement for an object only C# held was left with no owner at all.
+TEST(ObjectReinstancer, AManagedPinMovesOntoTheReplacement)
+{
+    Scripting::FScriptExportSchema Schema;
+    Schema.Fields.push_back(ScriptTest::ScalarField("Value", EPropertyTypeFlags::Int32));
+    CScriptClass* Old = ScriptTest::MintWith("ReinstPin_Before", Schema);
+    CScriptClass* New = ScriptTest::MintWith("ReinstPin_After", Schema);
+    ASSERT_NE(Old, nullptr);
+    ASSERT_NE(New, nullptr);
+
+    CObject* Original = NewObject(Old, nullptr, NAME_None, FGuid::New(), OF_Transient);
+    *FindInt(Original, "Value") = 5;
+    void* Pin = LuminaSharp_PinObject(Original);
+    auto* Held = static_cast<TStrongObjectPtr<CObject>*>(Pin);
+
+    FObjectReinstancer Reinstancer;
+    Reinstancer.MapClass(Old, New);
+    const FReinstanceResult Result = Reinstancer.Commit();
+
+    EXPECT_EQ(Result.OriginalsOutlivingTheSwap, 0) << "the pin kept the original alive";
+    ASSERT_NE(Held->Get(), nullptr);
+    EXPECT_EQ(Held->Get()->GetClass(), New);
+    EXPECT_EQ(*FindInt(Held->Get(), "Value"), 5);
+
+    const FObjectHandle Replacement = Object::Internal::GetHandleByObject(Held->Get());
+    LuminaSharp_UnpinObject(Pin);
+    EXPECT_EQ(Object::Internal::ResolveHandle(Replacement), nullptr) << "the replacement outlived the only reference to it";
 }

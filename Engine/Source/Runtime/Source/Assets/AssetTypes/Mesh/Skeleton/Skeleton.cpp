@@ -16,11 +16,19 @@ namespace Lumina
         }
 
         Ar << *SkeletonResource;
+        BumpSocketGeneration();
+    }
+
+    void CSkeleton::PostPropertyChange(FProperty* ChangedProperty)
+    {
+        CObject::PostPropertyChange(ChangedProperty);
+        BumpSocketGeneration();
     }
 
     void CSkeleton::SetSkeletonResource(TUniquePtr<FSkeletonResource>&& NewResource)
     {
         SkeletonResource = std::move(NewResource);
+        BumpSocketGeneration();
 
         // Derived caches key on (skeleton, generation), so one that arrived without a cache reads empty.
         if (SkeletonResource && !SkeletonResource->HasBindPoseCache())
@@ -31,7 +39,7 @@ namespace Lumina
 
     int32 CSkeleton::FindSocketBoneIndex(const FName& SocketName) const
     {
-        const FMeshSocket* Socket = FindSocket(SocketName);
+        const SMeshSocket* Socket = FindSocket(SocketName);
         if (Socket == nullptr || !SkeletonResource)
         {
             return Constants::kIndexNone;

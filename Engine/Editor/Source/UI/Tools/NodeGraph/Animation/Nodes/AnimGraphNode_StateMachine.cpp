@@ -263,7 +263,7 @@ namespace Lumina
         {
             int64 FromNodeID = 0;
             int64 ToNodeID = 0;
-            TVector<FAnimTransitionCondition> Conditions;
+            TVector<SAnimTransitionCondition> Conditions;
             bool  bRequireAll = true;
             float BlendDuration = 0.2f;
             bool  bCanInterrupt = false;
@@ -399,7 +399,7 @@ namespace Lumina
                     if (Exit != nullptr)
                     {
                         Resolved.bRequireAll = true;
-                        for (const FAnimTransitionCondition& Condition : Exit->Conditions)
+                        for (const SAnimTransitionCondition& Condition : Exit->Conditions)
                         {
                             Resolved.Conditions.push_back(Condition);
                         }
@@ -437,7 +437,7 @@ namespace Lumina
             Runtime.BlendDuration = Edge.BlendDuration;
             Runtime.bCanInterrupt = Edge.bCanInterrupt;
 
-            for (const FAnimTransitionCondition& Condition : Edge.Conditions)
+            for (const SAnimTransitionCondition& Condition : Edge.Conditions)
             {
                 FAnimGraphTransitionTerm Term;
                 Term.ConditionSource = Condition.ConditionSource;

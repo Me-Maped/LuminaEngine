@@ -9,7 +9,7 @@
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/Object.h"
-#include "Core/Object/ObjectArray.h"
+#include "Core/Object/ObjectIteration.h"
 #include "Core/Object/ObjectCore.h"
 #include "Core/Object/Package/Package.h"
 #include "Core/Serialization/Archiver.h"
@@ -173,7 +173,11 @@ namespace Lumina
             Bytes += MR.GeometrySurfaces.capacity() * sizeof(FGeometrySurface);
 
             Bytes += MR.MeshletData.Meshlets.capacity()              * sizeof(FMeshlet);
-            Bytes += MR.MeshletData.MeshletVertices.capacity()       * sizeof(FMeshletVertex);
+            Bytes += MR.MeshletData.VertexPositions.capacity()       * sizeof(FMeshVertexPosition);
+            Bytes += MR.MeshletData.VertexAttributes.capacity()      * sizeof(FMeshVertexAttributes);
+            Bytes += MR.MeshletData.VertexUV1s.capacity()            * sizeof(uint32);
+            Bytes += MR.MeshletData.VertexColors.capacity()          * sizeof(uint32);
+            Bytes += MR.MeshletData.MeshletVertexRefs.capacity()     * sizeof(uint32);
             Bytes += MR.MeshletData.MeshletSkinnedVertices.capacity()* sizeof(FMeshletSkinnedVertex);
             Bytes += MR.MeshletData.MeshletTriangles.capacity()      * sizeof(uint32);
             Bytes += MR.MeshletData.MeshletSpheres.capacity()        * sizeof(FMeshletSphere);
@@ -185,11 +189,11 @@ namespace Lumina
         if (const CMaterial* Material = Cast<CMaterial>(Asset))
         {
             uint64 Bytes = 0;
-            for (const FMaterialStageBlob& Blob : Material->Stages)
+            for (const SMaterialStageBlob& Blob : Material->Stages)
             {
                 Bytes += Blob.Spirv.capacity() * sizeof(uint32);
             }
-            Bytes += Material->Parameters.capacity() * sizeof(FMaterialParameter);
+            Bytes += Material->Parameters.capacity() * sizeof(SMaterialParameter);
             return Bytes;
         }
 
@@ -231,7 +235,7 @@ namespace Lumina
         }
 
         THashSet<CObject*> Collected;
-        GObjectArray.ForEachObject([&](CObjectBase* Base, int32)
+        ForEachObject([&](CObjectBase* Base, int32)
         {
             CObject* Candidate = static_cast<CObject*>(Base);
             if (Candidate == Target || Candidate->GetClass() == nullptr)
@@ -312,7 +316,7 @@ namespace Lumina
             Rows.reserve(Assets.size());
             RowIndexByGUID.reserve(Assets.size());
 
-            for (const TUniquePtr<FAssetData>& Data : Assets)
+            for (const TSharedPtr<FAssetData>& Data : Assets)
             {
                 FAssetRow Row;
                 Row.GUID      = Data->AssetGUID;

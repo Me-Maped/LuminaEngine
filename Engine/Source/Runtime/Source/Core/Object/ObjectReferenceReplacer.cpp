@@ -123,17 +123,17 @@ namespace Lumina
         // a handle resolves to null once that happens instead of handing back freed memory. Taking a strong
         // reference instead would be worse, since releasing one an object never had destroys it outright.
         TVector<FObjectHandle> Live;
-        GObjectArray.ForEachObject([&](CObjectBase* Base, int32)
+        ForEachObject([&](CObjectBase* Base, int32)
         {
             if (Base != nullptr && !Base->HasAnyFlag(OF_MarkedDestroy))
             {
-                Live.push_back(GObjectArray.GetHandleByObject(Base));
+                Live.push_back(Object::Internal::GetHandleByObject(Base));
             }
         });
 
         for (const FObjectHandle& Handle : Live)
         {
-            if (CObjectBase* Object = GObjectArray.ResolveHandle(Handle))
+            if (CObjectBase* Object = Object::Internal::ResolveHandle(Handle))
             {
                 ApplyTo(static_cast<CObject*>(Object));
             }

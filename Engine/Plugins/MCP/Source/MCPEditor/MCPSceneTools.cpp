@@ -17,7 +17,6 @@
 #include "World/Entity/Components/TagComponent.h"
 #include "World/Entity/Components/Component.h"
 #include "World/Entity/EntityUtils.h"
-#include "World/Entity/Components/RelationshipComponent.h"
 #include "Assets/AssetTypes/Prefabs/Prefab.h"
 #include "Assets/AssetTypes/Prefabs/PrefabComponents.h"
 #include "World/World.h"
@@ -51,7 +50,7 @@ namespace Lumina::MCP
 
                 // The direct op table hands back the live pointer, which the meta trampoline will not.
                 const FComponentOps* Ops = FindComponentOps(FStringView(Reflected->GetName().ToString()));
-                void* Data = Ops != nullptr && Ops->Get != nullptr ? Ops->Get(Registry, Entity) : nullptr;
+                void* Data = Ops != nullptr ? Ops->Get(Registry, Entity) : nullptr;
 
                 if (Data == nullptr)
                 {
@@ -157,10 +156,9 @@ namespace Lumina::MCP
                         SEntityInfo Info;
                         Info.Id   = Agent::FEntityTokens::Mint(Registry, Entity);
                         Info.Name = Name;
-                        if (const FRelationshipComponent* Relationship = Registry.TryGet<FRelationshipComponent>(Entity);
-                            Relationship != nullptr && Relationship->Parent != ECS::NullEntity && Registry.IsValid(Relationship->Parent))
+                        if (const ECS::FEntity Parent = Registry.GetHierarchy().GetParent(Entity); Parent != ECS::NullEntity)
                         {
-                            Info.Parent = Agent::FEntityTokens::Mint(Registry, Relationship->Parent);
+                            Info.Parent = Agent::FEntityTokens::Mint(Registry, Parent);
                         }
                         if (const SPrefabInstanceComponent* Instance = Registry.TryGet<SPrefabInstanceComponent>(Entity))
                         {
@@ -575,7 +573,7 @@ namespace Lumina::MCP
                     {
                         Reflected = Type;
                         Ops = FindComponentOps(FStringView(Reflected->GetName().ToString()));
-                        Data = Ops != nullptr && Ops->Get != nullptr ? Ops->Get(Registry, Entity) : nullptr;
+                        Data = Ops != nullptr ? Ops->Get(Registry, Entity) : nullptr;
                     }
                     else if (CEntityScript* Script =
                                  FindEntityScriptByName(Registry, Entity, FStringView(In.Component)))
@@ -958,13 +956,6 @@ namespace Lumina::MCP
                     else
                     {
                         Storage.RemoveEntity(Entity);
-
-                        // The single-tag path also records its tag in the unnamed storage, which would otherwise outlive it.
-                        const STagComponent* Unnamed = Registry.TryGet<STagComponent>(Entity);
-                        if (Unnamed != nullptr && Unnamed->Tag == Tag)
-                        {
-                            Registry.Remove<STagComponent>(Entity);
-                        }
                     }
                     ++Out.Changed;
                 }
@@ -1060,6 +1051,42 @@ namespace Lumina::MCP
             return Agent::FToolResult::Ok(Lumina::Format("{} tag(s).", Out.Tags.size()));
         }
 
+        void RegisterListSystems(FStringView Owner)
+        {
+            Agent::FToolRegistry::Get().Register<SListSystemsParams, SListSystemsResult>(
+                Owner, "world.list_systems",
+                "List the entity systems the world editor's Systems panel shows, C++ and C# alike, with the stages each ticks in.",
+                Agent::EToolEffect::ReadOnly, Agent::EToolThread::GameThread,
+                [](const SListSystemsParams& In, SListSystemsResult& Out)
+                {
+                    FString Error;
+                    CWorld* World = SessionOps::GetSceneWorld(Error);
+                    if (World == nullptr)
+                    {
+                        return Agent::FToolResult::Error(Error);
+                    }
+
+                    TVector<CWorld::FSystemInfo> Infos;
+                    World->GetAllSystems(Infos);
+                    for (const CWorld::FSystemInfo& Info : Infos)
+                    {
+                        const FString Name(Info.Name.ToString().c_str());
+                        if (!ContainsTextFold(FStringView(Name), In.Contains))
+                        {
+                            continue;
+                        }
+                        SSystemListing& Listing = Out.Systems.emplace_back();
+                        Listing.Name = Name;
+                        Listing.bEnabled = Info.bEnabled;
+                        for (EUpdateStage Stage : Info.Stages)
+                        {
+                            Listing.Stages.push_back((int32)Stage);
+                        }
+                    }
+                    return Agent::FToolResult::Ok(Lumina::Format("{} system(s).", Out.Systems.size()));
+                });
+        }
+
         void RegisterTagTools(FStringView Owner)
         {
             Agent::FToolRegistry::Get().Register<SEntityTagParams, SEntityTagResult>(
@@ -1090,6 +1117,7 @@ namespace Lumina::MCP
 
     void RegisterSceneTools(FStringView Owner)
     {
+        RegisterListSystems(Owner);
         RegisterTagTools(Owner);
         RegisterListComponentTypes(Owner);
         RegisterListEntities(Owner);

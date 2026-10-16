@@ -16,14 +16,17 @@
 #include "Memory/Memory.h"
 #include "Tools/UI/ImGui/Widgets/TreeListView.h"
 #include "UI/Properties/PropertyTable.h"
+#include "UI/Widgets/CategorizedPicker.h"
 #include "World/Entity/Components/NameComponent.h"
 #include "World/Entity/Systems/EntitySystem.h"
+#include "World/World.h"
 #include "World/WorldContext.h"
 #include "Events/MouseCodes.h"
 #include "Input/InputMode.h"
 
 namespace Lumina
 {
+    class CPrefab;
     class CStaticMesh;
     DECLARE_MULTICAST_DELEGATE(FOnGamePreview);
     
@@ -46,6 +49,9 @@ namespace Lumina
 
         // Hides the grid, billboards, AABBs and gizmos so the viewport shows what a runtime camera would.
         void ToggleGameViewMode();
+
+        // Swaps in a transient world holding the shadow range demo, discarding whatever world was open.
+        void OpenShadowRangeDemo();
 
         /** Frames the default scene's floor and sphere. */
         void GetDefaultCameraPose(FVector3& OutLocation, FVector3& OutTarget) const override;
@@ -74,7 +80,6 @@ namespace Lumina
         void DrawViewportToolbarModeSelector(float ButtonSize) override;
         void DrawViewModeExtraItems() override;
 
-        void PushAddTagModal(ECS::FEntity Entity);
         void PushAddComponentModal(ECS::FEntity Entity);
 
         // GetComponentEditTargets / ApplyAddComponentToTargets / DrawAddableComponentList and the
@@ -83,9 +88,14 @@ namespace Lumina
         void PushCreatePrefabFromSelectionModal();
         void PushCreatePrefabModalForEntity(ECS::FEntity Entity);
 
+        // The modal's Create button, also reached from agent tools so both take one path.
+        EDITOR_API CPrefab* CreatePrefabFromSelection(FStringView Folder, FStringView Name, FFixedString& OutError);
+        CPrefab* CreatePrefabFromRoots(const TVector<ECS::FEntity>& Roots, const FVector3& Pivot, FStringView Folder, FStringView Name, FFixedString& OutError);
+        TVector<ECS::FEntity> GatherPrefabSelectionRoots() const;
+
         // Prefab instance context-menu actions, shared between the outliner and viewport menus.
-        void ResyncPrefabInstance(ECS::FEntity InstanceRoot);
-        void DetachPrefabInstance(ECS::FEntity InstanceRoot);
+        EDITOR_API void ResyncPrefabInstance(ECS::FEntity InstanceRoot);
+        EDITOR_API void DetachPrefabInstance(ECS::FEntity InstanceRoot);
 
         // Script context-menu helpers, shared between the outliner and viewport menus. The inline
         // assign/change dropdown is always offered; "Remove Script" only when one is present.
@@ -261,13 +271,7 @@ namespace Lumina
 
         void DrawWorldSettings(bool bFocused);
         void DrawSystemsPanel(bool bFocused);
-        void DrawEntityActionButtons(ECS::FEntity Entity);
-        void DrawTagList(ECS::FEntity Entity);
-
-        // The shared details panel lives in FSceneEditorTool; the world editor adds the Tags UI
-        // through these hooks (the add-tag header button + the tag-chip section).
-        void DrawDetailsHeaderExtraButtons(ECS::FEntity Entity) override;
-        void DrawDetailsExtraSections(ECS::FEntity Entity) override;
+        void DrawSelectedSystemDetails(const CWorld::FSystemInfo& Info, const TVector<FSystemScheduleEntry>& Schedule);
 
 
     private:
@@ -347,6 +351,15 @@ namespace Lumina
         // Name filter for the Systems panel.
         ImGuiTextFilter                         SystemsFilter;
 
+        // The Systems panel's list of system classes, refreshed on a timer since gathering it configures every one.
+        TVector<CWorld::FSystemInfo>            CachedSystemInfos;
+        const CWorld*                           CachedSystemsWorld = nullptr;
+        double                                  CachedSystemsTime = 0.0;
+        FName                                   SelectedSystem;
+
+        // The outliner's Attach Script submenu, which keeps its open categories between uses.
+        FCategorizedPicker                      ScriptAttachPicker;
+
         TVector<TUniquePtr<IWorldEditorMode>>   EditorModes;
         int32                                   ActiveModeIndex = 0;
 
@@ -372,7 +385,7 @@ namespace Lumina
 
         // Physics-body grab. Held across frames: the spring needs the attach point that was picked on the
         // initial click, not whatever the ray hits as the body swings away.
-        FPhysicsBodyTarget                      GrabbedTarget;
+        SPhysicsBodyTarget                      GrabbedTarget;
         float                                   GrabDistance = 0.0f;
         FVector3                                GrabLocalOffset = FVector3(0.0f);
 

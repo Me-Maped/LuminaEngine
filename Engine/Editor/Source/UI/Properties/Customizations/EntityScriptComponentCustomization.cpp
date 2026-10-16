@@ -1,5 +1,6 @@
 #include "EntityScriptComponentCustomization.h"
 #include "Localization/Localization.h"
+#include "UI/Properties/Customizations/AssetPickerFilter.h"
 
 #include "imgui.h"
 #include "Core/Object/Class.h"
@@ -13,15 +14,13 @@
 #include "UI/Properties/PropertyTable.h"
 #include "Session/SessionOps.h"
 #include "UI/Tools/EditorToolContext.h"
+#include "UI/Widgets/EntityScriptPicker.h"
 
 namespace Lumina
 {
     namespace
     {
         constexpr const char* GScriptIcon = LE_ICON_LANGUAGE_CSHARP;
-
-        // The object picker's button size, so a script header and an asset slot use the same controls.
-        constexpr ImVec2 GButtonSize(42, 0);
 
         /** "Game.ZombieFPS.ZombieBrain" -> "ZombieBrain" plus "Game.ZombieFPS", so the name can lead. */
         void SplitTypeName(const FString& Full, FStringView& OutShort, FStringView& OutNamespace)
@@ -36,27 +35,6 @@ namespace Lumina
             }
             OutShort = View.substr(Dot + 1);
             OutNamespace = View.substr(0, Dot);
-        }
-
-        // Rebuilt per frame, since this is an inspector and the set changes on every script hot reload.
-        void GatherScriptClasses(TVector<CClass*>& Out)
-        {
-            Out.clear();
-            CClass* Base = CEntityScript::StaticClass();
-
-            for (TObjectIterator<CClass> It; It; ++It)
-            {
-                CClass* Class = *It;
-                if (Class == nullptr || Class == Base || !Class->IsChildOf(Base))
-                {
-                    continue;
-                }
-                if (Class->HasAnyFlag(OF_DefaultObject) || Class->HasAnyFlag(OF_MarkedDestroy))
-                {
-                    continue;
-                }
-                Out.push_back(Class);
-            }
         }
     }
 
@@ -93,7 +71,7 @@ namespace Lumina
 
             const float Spacing     = ImGui::GetStyle().ItemSpacing.x;
             const float HeaderRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-            const float ButtonsLeft = HeaderRight - GButtonSize.x * 3.0f - Spacing * 2.0f;
+            const float ButtonsLeft = HeaderRight - AssetPickerFilter::kButtonSize.x * 3.0f - Spacing * 2.0f;
 
             // Breathing room around the title, which is what stops the stack of scripts reading as one block.
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 6.0f));
@@ -115,7 +93,7 @@ namespace Lumina
 
             ImGui::SameLine(ButtonsLeft);
             ImGui::BeginDisabled(View.SourceFile.empty());
-            if (ImGui::Button(LE_ICON_FILE_CODE "##OpenEntityScriptSource", GButtonSize))
+            if (ImGui::Button(LE_ICON_FILE_CODE "##OpenEntityScriptSource", AssetPickerFilter::kButtonSize))
             {
                 // The Content Browser's route, which honors the script editor chosen in the editor settings.
                 if (IEditorToolContext* Tools = SessionOps::GetToolContext())
@@ -128,7 +106,7 @@ namespace Lumina
 
             ImGui::SameLine();
             ImGui::BeginDisabled(!bValid);
-            if (ImGui::Button(LE_ICON_CONTENT_COPY "##CopyEntityScriptName", GButtonSize))
+            if (ImGui::Button(LE_ICON_CONTENT_COPY "##CopyEntityScriptName", AssetPickerFilter::kButtonSize))
             {
                 ImGui::SetClipboardText(TypeName.c_str());
             }
@@ -139,7 +117,7 @@ namespace Lumina
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.25f, 0.25f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f, 0.15f, 0.15f, 1.0f));
-            const bool bRemove = ImGui::Button(LE_ICON_CLOSE_CIRCLE "##RemoveEntityScript", GButtonSize);
+            const bool bRemove = ImGui::Button(LE_ICON_CLOSE_CIRCLE "##RemoveEntityScript", AssetPickerFilter::kButtonSize);
             ImGui::PopStyleColor(3);
             if (bRemove)
             {
@@ -174,15 +152,24 @@ namespace Lumina
                     });
                     View.ValueTable->SetFinishEditCallback([this](const FPropertyChangedEvent&) { NestedChangeOp = EPropertyChangeOp::Finished; });
 
-                    DotNet::GatherScriptButtons(Script->GetClass()->GetName().ToString(), View.Buttons);
-                    View.SourceFile = DotNet::FindScriptSourceFile(Script->GetClass()->GetName().ToString());
+                    View.Buttons.clear();
+                    for (const FFunction* Function : Script->GetClass()->GetFunctions())
+                    {
+                        if (Function->HasMetadata("Button") && Function->GetArguments().empty())
+                        {
+                            View.Buttons.push_back(Function);
+                        }
+                    }
+                    View.SourceFile = Script->GetClass()->HasMeta("SourceFile")
+                        ? Script->GetClass()->GetMeta("SourceFile")
+                        : DotNet::FindScriptSourceFile(Script->GetClass()->GetName().ToString());
 
                     View.BoundScript = Script;
                     View.BoundClass = Script->GetClass();
                 }
                 if (View.ValueTable)
                 {
-                    View.ValueTable->DrawTree();
+                    View.ValueTable->DrawTree(Args);
                 }
 
                 // The instance is created on demand, so a script that has never been dispatched to still has
@@ -194,9 +181,10 @@ namespace Lumina
                     const float Right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
                     for (int32 ButtonIndex = 0; ButtonIndex < (int32)View.Buttons.size(); ++ButtonIndex)
                     {
-                        const Scripting::FScriptButton& Button = View.Buttons[ButtonIndex];
-                        const FString& Label = Button.Label.empty() ? Button.Method : Button.Label;
-                        const FString Text = Lumina::Format("{} {}", LE_ICON_PLAY_CIRCLE, Label);
+                        const FFunction& Button = *View.Buttons[ButtonIndex];
+                        const FCStringView Label = Button.GetMetadata("Button");
+                        const FString Text = Lumina::Format("{} {}", LE_ICON_PLAY_CIRCLE,
+                            Label.empty() ? Button.GetFunctionName().ToString() : FString(Label.data(), Label.size()));
                         const float Width = ImGui::CalcTextSize(Text.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 
                         // Wrapped by hand, since a row of actions should use the width it has and then break.
@@ -207,14 +195,12 @@ namespace Lumina
 
                         if (ImGui::Button(Text.c_str()))
                         {
-                            if (void* Instance = Scriptable::GetOrCreateInstance(Script))
-                            {
-                                DotNet::InvokeScriptButton(Instance, Button.Method);
-                            }
+                            FFunctionFrame Frame(Button);
+                            Frame.Invoke(Script);
                         }
-                        if (!Button.Tooltip.empty() && ImGui::IsItemHovered())
+                        if (const FCStringView Tooltip = Button.GetMetadata("ToolTip"); !Tooltip.empty() && ImGui::IsItemHovered())
                         {
-                            ImGui::SetTooltip("%s", Button.Tooltip.c_str());
+                            ImGui::SetTooltip("%s", Tooltip.c_str());
                         }
                     }
                 }
@@ -225,40 +211,18 @@ namespace Lumina
             ImGui::PopID();
         }
 
-        // Add picker. Listing classes rather than C# type names is what makes a C++ script selectable here.
-        TVector<CClass*> Classes;
-        GatherScriptClasses(Classes);
-
         ImGui::Separator();
         ImGui::Spacing();
 
-        // Sized to its label rather than the panel: this is an action, and a full-width field reads as one
-        // more empty property with the arrow stranded at the far edge.
-        const char* AddLabel = LOC_ICON(LE_ICON_PLUS, "Add Script");
-        const float AddWidth = ImGui::CalcTextSize(AddLabel).x
-            + ImGui::GetFrameHeight()
-            + ImGui::GetStyle().FramePadding.x * 3.0f;
-        ImGui::SetNextItemWidth(AddWidth);
+        // Filed by source folder, because a project accumulates far more script classes than a flat list stays usable for.
+        ScriptPicker.SearchHint = LOC("Search scripts...");
+        ScriptPicker.ItemNoun   = LOC("scripts");
+        ScriptPicker.TrailingCategory = EntityScriptPicker::NativeCategory;
+        const FPickerItem* Picked = ScriptPicker.DrawButton("##AddEntityScript", LOC_ICON(LE_ICON_PLUS, "Add Script"), &EntityScriptPicker::GatherItems);
 
-        // Searchable, because a project accumulates far more script classes than a flat list stays usable for.
-        const int32 Picked = ImGuiX::SearchableCombo("##AddEntityScript", AddLabel,
-            (int32)Classes.size(), Constants::kIndexNone,
-            [&Classes](int32 ItemIndex) -> FFixedString
-            {
-                FStringView Short;
-                FStringView Namespace;
-                const FString Name = Classes[ItemIndex]->GetName().ToString();
-                SplitTypeName(Name, Short, Namespace);
-                return Namespace.empty()
-                    ? FFixedString(Short.data(), Short.size())
-                    : FFixedString(Lumina::Format("{}   {}", FString(Short.data(), Short.size()),
-                        FString(Namespace.data(), Namespace.size())).c_str());
-            },
-            GScriptIcon);
-
-        if (Picked != Constants::kIndexNone && Picked < (int32)Classes.size())
+        CClass* Class = Picked != nullptr ? FindObject<CClass>(FName(Picked->Key)) : nullptr;
+        if (Class != nullptr)
         {
-            CClass* Class = Classes[Picked];
             PendingMutation = [Component, Class]
             {
                 // The driver adopts an owner-less script next tick, the same path a deserialized script takes.

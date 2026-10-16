@@ -9,7 +9,7 @@ namespace LuminaSharp;
 /// <summary>
 /// Game-thread <c>await</c> helpers (s&amp;box-style). These complete from game-thread callbacks (the world
 /// timer / async asset load), so the continuation resumes on the game thread with the ambient world restored
-///, it is safe to touch the world after the await. Pass an <c>EntityScript.DestroyToken</c> so a pending
+///, it is safe to touch the world after the await. Pass an <c>CEntityScript.DestroyToken</c> so a pending
 /// await cancels when the script is destroyed. Do NOT use these from a worker Task body.
 /// </summary>
 public static class GameTask
@@ -106,7 +106,7 @@ public static class GameTask
         Lumina.CWorld World = Engine.World;
         FPending<bool> Pending = new(World);
         Pending.CancelOn(Token);
-        uint Timer = CTimerLibrary.SetTimer(World, Seconds, ScriptCallback.OfRepeating(() => Pending.Settle(true)));
+        uint Timer = CTimerLibrary.SetTimer(World, Seconds, ScriptCallback.Of(() => Pending.Settle(true)));
         Pending.WaitOnTimer(World, Timer);
         return Pending.Source.Task;
     }
@@ -114,12 +114,19 @@ public static class GameTask
     /// <summary>Resume on the next world tick.</summary>
     public static System.Threading.Tasks.Task NextFrame(CancellationToken Token = default) => DelaySeconds(0.0f, Token);
 
-    /// <summary>Load an object without blocking; resume with the result (or null) on the game thread.</summary>
-    public static System.Threading.Tasks.Task<T?> LoadObjectAsync<T>(string Path, CancellationToken Token = default) where T : NativeObject
+    // Resumes once everything the handle asked for has loaded, which is what awaiting an FAssetHandle does.
+    public static System.Threading.Tasks.Task<FAssetHandle> WhenReady(FAssetHandle Handle, CancellationToken Token = default)
     {
-        FPending<T?> Pending = new(Engine.InWorld ? Engine.World : null);
+        FPending<FAssetHandle> Pending = new(Engine.InWorld ? Engine.World : null);
         Pending.CancelOn(Token);
-        ObjectCore.AsyncLoadObject<T>(Path, Result => Pending.Settle(Result));
+        Handle.OnReady(Loaded => Pending.Settle(Loaded));
         return Pending.Source.Task;
+    }
+
+    // Loads without blocking and resumes on the game thread with the object, or null when it failed or is not a T.
+    public static async System.Threading.Tasks.Task<T?> LoadObjectAsync<T>(string Path, CancellationToken Token = default) where T : NativeObject
+    {
+        using FAssetHandle Handle = FAssetManager.Load(Path);
+        return (await WhenReady(Handle, Token)).Get<T>();
     }
 }

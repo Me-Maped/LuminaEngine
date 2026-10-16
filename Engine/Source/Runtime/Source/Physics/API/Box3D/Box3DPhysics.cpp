@@ -24,7 +24,7 @@ namespace Lumina::Physics
 {
     static TUniquePtr<FBox3DData> Box3DData;
 
-    static TConsoleVar CVarPhysicsDebug("Physics.Debug.Draw", false, "Toggles debug drawing for Box3D physics, has severe performance impact.");
+    static TConsoleVar CVarPhysicsDebug("Physics.Debug.Draw", false, "Draws Box3D collision in every world, on top of each scene's own toggle. Severe performance impact.");
     static TConsoleVar CVarPhysicsDebugShapes("Physics.Debug.Shapes", true, "Draw collision shape wireframes.");
     static TConsoleVar CVarPhysicsDebugJoints("Physics.Debug.Joints", true, "Draw joints.");
     static TConsoleVar CVarPhysicsDebugJointExtras("Physics.Debug.JointExtras", false, "Draw joint limits and reference frames.");
@@ -324,7 +324,7 @@ namespace Lumina::Physics
         const float DrawDuration = (float)Math::Max(World->GetWorldDeltaTime(), Duration);
         const FVector4 Color(((PackedColor) & 0xFF) / 255.0f, ((PackedColor >> 8) & 0xFF) / 255.0f,
                              ((PackedColor >> 16) & 0xFF) / 255.0f, ((PackedColor >> 24) & 0xFF) / 255.0f);
-        World->DrawLine(From, To, Color, 1.0f, true, DrawDuration);
+        World->GetDebugInterface()->DrawLine(From, To, Color, 1.0f, true, DrawDuration);
     }
 
     void FBox3DDebugRenderer::Segments(const FVector3* Points, int32 PointCount, uint32 PackedColor)
@@ -561,7 +561,7 @@ namespace Lumina::Physics
         return Draw;
     }
 
-    bool FBox3DPhysicsContext::IsDebugDrawEnabled()
+    bool FBox3DPhysicsContext::IsDebugDrawForced()
     {
         return CVarPhysicsDebug.GetValue();
     }

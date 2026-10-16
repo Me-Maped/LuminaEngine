@@ -141,29 +141,29 @@ namespace Lumina
 
 	/** Identifies one playing voice. Index is the context's voice slot, Generation disambiguates reuse. */
 	REFLECT()
-	struct FAudioHandle
+	struct SAudioHandle
 	{
 		GENERATED_BODY()
 
-		PROPERTY()
+		PROPERTY(Hidden)
 		uint32 Generation = 0;
 
-		PROPERTY()
+		PROPERTY(Hidden)
 		uint32 Index      = 0;
 
 		constexpr bool IsValid() const { return Generation != 0; }
 
-		constexpr bool operator==(const FAudioHandle& Other) const
+		constexpr bool operator==(const SAudioHandle& Other) const
 		{
 			return Generation == Other.Generation && Index == Other.Index;
 		}
 
-		constexpr bool operator!=(const FAudioHandle& Other) const
+		constexpr bool operator!=(const SAudioHandle& Other) const
 		{
 			return !(*this == Other);
 		}
 
-		static constexpr FAudioHandle Invalid() { return FAudioHandle{}; }
+		static constexpr SAudioHandle Invalid() { return SAudioHandle{}; }
 	};
 
 	/** Published per voice slot so the game thread can query a voice without touching the mixer. */
@@ -177,50 +177,50 @@ namespace Lumina
 
 	/** Everything needed to start a voice. Passed by value into the pump's pending-play queue. */
 	REFLECT()
-	struct FAudioPlayParams
+	struct SAudioPlayParams
 	{
 		GENERATED_BODY()
 
-		PROPERTY()
+		PROPERTY(Hidden)
 		float Volume = 1.0f;
-		PROPERTY()
+		PROPERTY(Hidden)
 		float Pitch = 1.0f;
-		PROPERTY()
+		PROPERTY(Hidden)
 		bool bLooping = false;
-		PROPERTY()
+		PROPERTY(Hidden)
 		bool bSpatialized = false;
-		PROPERTY()
+		PROPERTY(Hidden)
 		bool bStartPaused = false;
 
-		PROPERTY()
+		PROPERTY(Hidden)
 		FVector3 Position = FVector3(0.0f);
-		PROPERTY()
+		PROPERTY(Hidden)
 		FVector3 Velocity = FVector3(0.0f);
-		PROPERTY()
+		PROPERTY(Hidden)
 		FVector3 Direction = FVector3(0.0f, 0.0f, 1.0f);
 
-		PROPERTY()
+		PROPERTY(Hidden)
 		EAudioBus Bus = EAudioBus::SFX;
-		PROPERTY()
+		PROPERTY(Hidden)
 		SAudioAttenuation Attenuation;
 
 		/** Voices are evicted lowest-priority-first when every slot is taken. */
-		PROPERTY()
+		PROPERTY(Hidden)
 		uint8 Priority = 128;
 
 		/** PCM frame to begin playback at. */
-		PROPERTY()
+		PROPERTY(Hidden)
 		uint64 StartFrame = 0;
 
-		PROPERTY()
+		PROPERTY(Hidden)
 		float FadeInSeconds = 0.0f;
 
 		/** Delays the voice without occupying the mixer, e.g. for scheduled one-shots. */
-		PROPERTY()
+		PROPERTY(Hidden)
 		float StartDelaySeconds = 0.0f;
 
 		/** Reserve an occlusion filter up front so the first trace result applies without a pop. */
-		PROPERTY()
+		PROPERTY(Hidden)
 		bool bUseOcclusion = false;
 	};
 

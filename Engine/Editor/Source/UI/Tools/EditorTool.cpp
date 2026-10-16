@@ -234,8 +234,7 @@ namespace Lumina
         Options.JointDistance  = CVarSkeletonJointDist.GetValue();
         Options.ShapeDistance  = CVarSkeletonShapeDist.GetValue();
 
-        // CWorld implements IPrimitiveDrawInterface, so it is the draw target.
-        SkeletonDebugDraw::DrawWorldSkeletons(World.Get(), World.Get(), Options);
+        SkeletonDebugDraw::DrawWorldSkeletons(World.Get(), World->GetDebugInterface(), Options);
     }
 
     void FEditorTool::DrawSkeletonNameLabels(const ImVec2& ViewportOrigin, const ImVec2& ViewportSize)
@@ -1140,6 +1139,9 @@ namespace Lumina
 
             ImGui::Checkbox(LOC("Interactive Handles"), &bVisualizerHandlesEnabled);
             ImGui::SetItemTooltip(LOC("Face, radius and cone handles you can drag in the viewport."));
+
+            ImGui::Checkbox(LOC("Show All in Hierarchy"), &bShowHierarchyVisualizers);
+            ImGui::SetItemTooltip(LOC("Draws every visualizer in the selected entity's tree, from its root down, not only the selection."));
             ImGui::Separator();
 
             for (auto&& [Struct, Visualizer] : CComponentVisualizerRegistry::Get().GetVisualizers())
@@ -1164,14 +1166,15 @@ namespace Lumina
 
         if (ImGui::BeginMenu(LOC("Physics")))
         {
-            if (const bool* bValue = FConsoleRegistry::Get().TryGetAs<bool>("Physics.Debug.Draw"))
+            // This viewport's world only, so a prefab preview's toggle never shows up in the level or in Play.
+            Physics::IPhysicsScene* PhysicsScene = HasWorld() ? World->GetPhysicsScene() : nullptr;
+            bool bDrawCollision = PhysicsScene != nullptr && PhysicsScene->IsDebugDrawEnabled();
+            ImGui::BeginDisabled(PhysicsScene == nullptr);
+            if (ImGui::MenuItem(LOC("Toggle Collision"), nullptr, &bDrawCollision))
             {
-                bool bProxy = *bValue;
-                if (ImGui::MenuItem(LOC("Toggle Collision"), nullptr, &bProxy))
-                {
-                    FConsoleRegistry::Get().SetAs("Physics.Debug.Draw", bProxy);
-                }
+                PhysicsScene->SetDebugDrawEnabled(bDrawCollision);
             }
+            ImGui::EndDisabled();
             ImGui::EndMenu();
         }
 
@@ -1250,6 +1253,7 @@ namespace Lumina
                     { ERenderSceneDebugFlags::LightComplexity, "Light Complexity" },
                     { ERenderSceneDebugFlags::ClusterGrid,     "Light Clusters"   },
                     { ERenderSceneDebugFlags::ShadowCascades,  "Shadow Cascades"  },
+                    { ERenderSceneDebugFlags::SunFarShadow,    "Sun Far Shadow"   },
                     { ERenderSceneDebugFlags::GTAO,            "GTAO"             },
                     // The two failure modes look identical in a lit view, hence two separate inspectors.
                     { ERenderSceneDebugFlags::ProbeInfluence,  "Probe Influence"  },
@@ -2062,9 +2066,9 @@ namespace Lumina
 
             if (bIsAxis)
             {
-                World->DrawLine(FVector3(Coord, 0, -Reach), FVector3(Coord, 0, Reach),
+                World->GetDebugInterface()->DrawLine(FVector3(Coord, 0, -Reach), FVector3(Coord, 0, Reach),
                                 FVector4(0.0f, 0.0f, 1.0f, 1.0f), Settings->AxisThickness);
-                World->DrawLine(FVector3(-Reach, 0, Coord), FVector3(Reach, 0, Coord),
+                World->GetDebugInterface()->DrawLine(FVector3(-Reach, 0, Coord), FVector3(Reach, 0, Coord),
                                 FVector4(1.0f, 0.0f, 0.0f, 1.0f), Settings->AxisThickness);
                 continue;
             }
@@ -2075,12 +2079,12 @@ namespace Lumina
             }
 
             // Each grid line is axis-aligned, so its own AABB prunes where a bounding sphere never would.
-            if (DebugDraw::ShouldDraw(*DrawState, FAABB(FVector3(Coord, 0.0f, -Reach), FVector3(Coord, 0.0f, Reach))))
+            if (DebugDraw::ShouldDraw(*DrawState, SAABB(FVector3(Coord, 0.0f, -Reach), FVector3(Coord, 0.0f, Reach))))
             {
                 Lines->Line(FVector3(Coord, 0, -Reach), FVector3(Coord, 0, Reach), GridColor);
             }
 
-            if (DebugDraw::ShouldDraw(*DrawState, FAABB(FVector3(-Reach, 0.0f, Coord), FVector3(Reach, 0.0f, Coord))))
+            if (DebugDraw::ShouldDraw(*DrawState, SAABB(FVector3(-Reach, 0.0f, Coord), FVector3(Reach, 0.0f, Coord))))
             {
                 Lines->Line(FVector3(-Reach, 0, Coord), FVector3(Reach, 0, Coord), GridColor);
             }
@@ -2089,7 +2093,7 @@ namespace Lumina
         if (Settings->bShowVerticalAxis)
         {
             // It used to use the line count, so it only matched the grid while spacing happened to be 1.
-            World->DrawLine(
+            World->GetDebugInterface()->DrawLine(
                 FVector3(0, -Reach, 0),
                 FVector3(0,  Reach, 0),
                 FVector4(0.0f, 1.0f, 0.0f, 1.0f),

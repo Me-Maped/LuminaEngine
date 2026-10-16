@@ -1,25 +1,22 @@
 #include "Includes/Common.slang"
 #include "Includes/SceneGlobals.slang"
-#include "Includes/GlobalRHIStorage.slang"
+#include "Includes/GlobalRHI.slang"
 #include "Includes/Sky.slang"
 
-// Bakes an HDR equirect panorama into the scene's 6-face cube map (HDRI path; downstream IBL is identical).
-// Addressing is Sky_EquirectUV, shared with the visible sky pass.
-//
-// Intensity and yaw are applied HERE, not just on the visible sky: this cube is what the irradiance and
-// GGX prefilter convolve from, so baking them in is what keeps ambient and reflections agreeing with the
-// background. The bake is gated on the environment params changing, so both are free per-frame.
+// Intensity and yaw are baked here because the IBL convolutions read this cube, not the visible sky.
 
-// No pass-local set: equirect read via bindless 2D SRV, cube written via bindless 2D-array UAV.
 struct FPushConstants
 {
-    uint  EquirectSRV;
-    uint  SkyCubeUAV;
-    float Intensity;
-    float CosYaw;
-    float SinYaw;
-    uint  _Pad0;
+    FTexture2D        Equirect;
+    FRWTexture2DArray SkyCube;
+    float             Intensity;
+    float             CosYaw;
+    float             SinYaw;
+    uint              bRemoveSun;
 };
+
+// Comfortably above the brightest sunset horizon, so only the sun and its tight halo are capped.
+static const float kSunCapOverAverage = 16.0;
 FPushConstants* Pass() { return GetPassArgs<FPushConstants>(); }
 
 #define EQUIRECT_TILE 8
@@ -28,7 +25,7 @@ FPushConstants* Pass() { return GetPassArgs<FPushConstants>(); }
 [numthreads(EQUIRECT_TILE, EQUIRECT_TILE, 1)]
 void ComputeMain(uint3 DTid : SV_DispatchThreadID)
 {
-    RWTexture2DArray<float4> uSkyCube = gRWTextures2DArray[Pass().SkyCubeUAV];
+    FRWTexture2DArray uSkyCube = Pass().SkyCube;
 
     uint Width, Height, Layers;
     uSkyCube.GetDimensions(Width, Height, Layers);
@@ -44,9 +41,18 @@ void ComputeMain(uint3 DTid : SV_DispatchThreadID)
 
     float2 EquirectUV = Sky_EquirectUV(RayDir, Pass().CosYaw, Pass().SinYaw);
 
-    // Sanitize here: this is the gate between the raw HDR panorama (which may hold Inf/NaN) and the IBL
-    // cube the convolutions read, so a finite cube keeps the whole downstream chain stable.
-    float3 Color = SanitizeRadiance(SampleTexture2DLevel(Pass().EquirectSRV, SAMPLER_LINEAR_CLAMP, EquirectUV, 0.0).rgb);
+    // The gate where a raw HDR panorama's Inf/NaN would otherwise reach every IBL convolution.
+    float3 Color = SanitizeRadiance(Pass().Equirect.SampleLevel(Samplers::LinearClamp, EquirectUV, 0.0).rgb);
+
+    // The directional light already lights and highlights with the sun, so a panorama's own sun would count twice on every glossy surface.
+    if (Pass().bRemoveSun != 0u)
+    {
+        const float3 Average = SanitizeRadiance(Pass().Equirect.SampleLevel(Samplers::LinearClamp, float2(0.5, 0.5), 16.0).rgb);
+        const float  Cap     = max(Luminance(Average), 1e-4) * kSunCapOverAverage;
+        const float  Bright  = Luminance(Color);
+        Color *= Bright > Cap ? Cap / Bright : 1.0;
+    }
+
     Color *= max(Pass().Intensity, 0.0);
 
     uSkyCube[DTid] = float4(Color, 1.0);

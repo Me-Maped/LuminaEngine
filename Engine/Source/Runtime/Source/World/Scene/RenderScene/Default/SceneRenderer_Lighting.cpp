@@ -286,7 +286,7 @@ namespace Lumina
         // Overflow shades through the default material rather than not at all. It reads the overflowed
         // material's own uniforms, so the surface is wrong but lit, which reads as a bug instead of a hole.
         CMaterial* DefaultMaterial = CMaterial::GetDefaultMaterial();
-        const FShaderH FallbackShader = IsValid(DefaultMaterial) ? DefaultMaterial->GetDeferredShader() : FShaderH{};
+        const FShaderH FallbackShader = IsValid(DefaultMaterial) ? DefaultMaterial->GetStage(EMaterialShaderStage::Deferred) : FShaderH{};
 
         // One slot held back for the fallback, so a frame that fills the table can still claim it.
         const uint32 SlotBudget = FallbackShader ? (GMaterialMaxSlots - 1u) : GMaterialMaxSlots;
@@ -368,14 +368,11 @@ namespace Lumina
         // A tile holds at most one slot per pixel, so this bound is exact and never overflows, however many shaders are visible.
         constexpr uint64 MaxSlotsPerTile = (uint64)MATERIAL_CLASSIFY_TILE * MATERIAL_CLASSIFY_TILE;
         const uint64 PairBound = NumTiles * Math::Min<uint64>(NumSlots, MaxSlotsPerTile);
-        if (NumTiles > (1ull << (32u - MATERIAL_PAIR_SLOT_BITS)))
-        {
-            return false;
-        }
         // Sorted runs, each tile's inline records, the pixels of thin pairs, then the pairs past a tile's inline records.
         const uint64 TileSlotEntries = NumTiles * MATERIAL_TILE_RECORD;
         const uint64 PixelBound      = NumTiles * Math::Min<uint64>(MaxSlotsPerTile, Math::Min<uint64>(NumSlots, MATERIAL_TILE_SLOTS) * (MATERIAL_SPARSE_PIXELS - 1u));
-        const uint64 OverflowBound   = NumTiles * (Math::Min<uint64>(NumSlots, MaxSlotsPerTile) - Math::Min<uint64>(NumSlots, MATERIAL_TILE_SLOTS));
+        const uint64 OverflowBound   = NumTiles * (Math::Min<uint64>(NumSlots, MaxSlotsPerTile) - Math::Min<uint64>(NumSlots, MATERIAL_TILE_SLOTS))
+                                     * MATERIAL_OVERFLOW_PAIR_WORDS;
         const uint64 PairListSize    = (PairBound + TileSlotEntries + PixelBound + Math::Max<uint64>(OverflowBound, 1u)) * sizeof(uint32);
 
         // Built into a local so a bail-out below leaves the member zeroed rather than half-filled.
@@ -422,8 +419,8 @@ namespace Lumina
         Layout.PixelListOffset = (PairBound + TileSlotEntries) * sizeof(uint32);
         Layout.PixelCapacity   = (uint32)PixelBound;
         Layout.OverflowOffset  = (PairBound + TileSlotEntries + PixelBound) * sizeof(uint32);
-        // From the allocation, not from what was asked for, since the classify bounds overflow writes on this.
-        Layout.OverflowCapacity = (uint32)Math::Min<uint64>((GetMaterialPairList().Size - Layout.OverflowOffset) / sizeof(uint32), 0xFFFFFFFFull);
+        // In pairs, from the allocation rather than the request, since the classify bounds overflow writes on this.
+        Layout.OverflowCapacity = (uint32)Math::Min<uint64>((GetMaterialPairList().Size - Layout.OverflowOffset) / (sizeof(uint32) * MATERIAL_OVERFLOW_PAIR_WORDS), 0xFFFFFFFFull);
 
         MaterialClassifyLayout = Layout;
         return true;
@@ -487,7 +484,7 @@ namespace Lumina
         const RHI::TGPUSpan<uint32> SortedSpan    = RHI::TGPUSpan<uint32>::FromAddress(PairAlloc.Gpu, Layout.PairCapacity);
         const RHI::TGPUSpan<uint32> TileSlotsSpan = RHI::TGPUSpan<uint32>::FromAddress(PairAlloc.Gpu + Layout.TileSlotsOffset, Layout.NumTiles * MATERIAL_TILE_RECORD);
         const RHI::TGPUSpan<uint32> PixelListSpan = RHI::TGPUSpan<uint32>::FromAddress(PairAlloc.Gpu + Layout.PixelListOffset, Layout.PixelCapacity);
-        const RHI::TGPUSpan<uint32> OverflowSpan  = RHI::TGPUSpan<uint32>::FromAddress(PairAlloc.Gpu + Layout.OverflowOffset, Layout.OverflowCapacity);
+        const RHI::TGPUSpan<uint32> OverflowSpan  = RHI::TGPUSpan<uint32>::FromAddress(PairAlloc.Gpu + Layout.OverflowOffset, Layout.OverflowCapacity * MATERIAL_OVERFLOW_PAIR_WORDS);
 
         struct FMaterialClassifyPC
         {
@@ -550,7 +547,7 @@ namespace Lumina
         ArgsPC.Cursors = CursorsSpan;
         ArgsPC.Args    = RHI::TGPUSpan<uint32>::FromAddress(Base + Layout.MaterialArgsOffset, Layout.NumSlots * 6u + 3u);
 
-        // One group scans every slot, which MATERIAL_MAX_SLOTS keeps within two slots per thread.
+        // One group scans every slot, each thread taking a contiguous run sized to the slots binned this frame.
         DispatchCompute(CL, ArgsCS, ArgsPC, 1u, 1u, 1u);
 
         RHI::CmdBarrier(CL,
@@ -672,9 +669,10 @@ namespace Lumina
             }
         }
 
-        // One allocation written in place, since the blocks differ only in SlotIndex.
+        // One allocation written in place, since the blocks differ only in SlotIndex, each on a root-data boundary.
+        constexpr uint64 ArgsStride = Math::AlignUp<uint64>(sizeof(FDeferredMaterialPC), RHI::kRootDataAlign);
         const RHI::FTransientAlloc ArgsAlloc =
-            RHI::AllocTransient(sizeof(FDeferredMaterialPC) * Layout.NumSlots);
+            RHI::AllocTransient(ArgsStride * Layout.NumSlots);
         if (ArgsAlloc.Cpu == nullptr)
         {
             LOG_ERROR("Deferred material pass: could not stage {} argument blocks; skipping the pass.",
@@ -682,11 +680,11 @@ namespace Lumina
             return;
         }
 
-        FDeferredMaterialPC* ArgsCpu = (FDeferredMaterialPC*)ArgsAlloc.Cpu;
         for (uint32 Slot = 0; Slot < Layout.NumSlots; ++Slot)
         {
-            ArgsCpu[Slot]           = PC;
-            ArgsCpu[Slot].SlotIndex = Slot;
+            FDeferredMaterialPC* Block = (FDeferredMaterialPC*)((uint8*)ArgsAlloc.Cpu + Slot * ArgsStride);
+            *Block           = PC;
+            Block->SlotIndex = Slot;
         }
 
         const uint64 bVelocity = PC.VelocityUAV != RHI::kInvalidHeapSlot ? 1u : 0u;
@@ -711,13 +709,88 @@ namespace Lumina
                 SlotPipeline = GetOrCreateComputePipeline(DefaultDeferred != nullptr ? DefaultDeferred : BinnedDeferredSlotShaders[Slot], DeferredSpec);
             }
             RHI::CmdSetPipeline(CL, SlotPipeline);
-            RHI::CmdDispatchIndirect(CL, ArgsAlloc.Gpu + Slot * sizeof(FDeferredMaterialPC), Classify.Skip(Layout.MaterialArgsOffset + Slot * (uint32)sizeof(RHI::FDispatchIndirectArguments)));
+            RHI::CmdDispatchIndirect(CL, ArgsAlloc.Gpu + Slot * ArgsStride, Classify.Skip(Layout.MaterialArgsOffset + Slot * (uint32)sizeof(RHI::FDispatchIndirectArguments)));
         }
 
         RHI::CmdBarrier(CL,
             RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
             RHI::EStageFlags::Compute | RHI::EStageFlags::PixelShader,
             RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
+    }
+
+    namespace
+    {
+        // Must match FLightFunctionArgs in LightFunctionPixelPass.slang.
+        struct FLightFunctionArgs
+        {
+            uint32   MaterialIndex;
+            uint32   LightFlags;
+            float    _Pad[2];
+            FVector4 Position;
+            FVector4 Forward;
+            FVector4 Right;
+            FVector4 Up;
+        };
+        static_assert(sizeof(FLightFunctionArgs) == 80, "FLightFunctionArgs must match LightFunctionPixelPass.slang");
+    }
+
+    void FDefaultSceneRenderer::LightFunctionPass(RHI::FCmdListH CL)
+    {
+        const auto& Draws = RenderFrame->Lighting.LightFunctionDraws;
+        if (Draws.empty() || !LightFunctionAtlas)
+        {
+            return;
+        }
+
+        LUMINA_PROFILE_SECTION_COLORED("Light Function Pass", tracy::Color::Gold);
+
+        // Cleared to white, so a tile whose pipeline is still compiling leaves its light unmasked.
+        RHI::FRenderAttachment Color;
+        Color.Texture = LightFunctionAtlas.Texture;
+        Color.LoadOp  = RHI::ELoadOp::Clear;
+        Color.StoreOp = RHI::EStoreOp::Store;
+        Color.Color[0] = Color.Color[1] = Color.Color[2] = Color.Color[3] = 1.0f;
+
+        RHI::FRenderPassDesc Pass;
+        Pass.ColorAttachments = TSpan<const RHI::FRenderAttachment>(&Color, 1);
+        Pass.RenderArea       = LightFunctionAtlas.GetExtent();
+
+        RHI::CmdBeginRenderPass(CL, Pass);
+        RHI::CmdSetDepthStencil(CL, (RHI::FDepthStencilDesc{}));
+        RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
+
+        for (const FFrameData::FLighting::FLightFunctionDraw& Draw : Draws)
+        {
+            FGraphicsPipelineKey Key;
+            Key.VS = Draw.Shaders.VertexShader;
+            Key.PS = Draw.Shaders.PixelShader;
+            Key.ColorTargets.push_back({ LightFunctionAtlas.Desc.Format, {} });
+            const RHI::FPipelineH Pipeline = FindPipeline(Key);
+            if (!Pipeline)
+            {
+                continue;
+            }
+
+            const int32 TileX = (int32)((Draw.Slot % LIGHT_FUNCTION_ATLAS_TILES) * LIGHT_FUNCTION_TILE_SIZE);
+            const int32 TileY = (int32)((Draw.Slot / LIGHT_FUNCTION_ATLAS_TILES) * LIGHT_FUNCTION_TILE_SIZE);
+            const RHI::FRect TileRect{ TileX, TileX + (int32)LIGHT_FUNCTION_TILE_SIZE, TileY, TileY + (int32)LIGHT_FUNCTION_TILE_SIZE };
+            RHI::CmdSetViewport(CL, TileRect);
+            RHI::CmdSetScissor(CL, TileRect);
+            RHI::CmdSetPipeline(CL, Pipeline);
+
+            const FLightFunctionRequest& Request = Draw.Request;
+            FLightFunctionArgs Args = {};
+            Args.MaterialIndex = Draw.MaterialIndex;
+            Args.LightFlags    = (uint32)Request.Type;
+            Args.Position      = FVector4(Request.Position, 1.0f);
+            Args.Forward       = FVector4(Request.Forward, 0.0f);
+            Args.Right         = FVector4(Request.Right, Request.ProjectionScale);
+            Args.Up            = FVector4(Request.Up, 0.0f);
+            RHI::CmdDraw(CL, MakeArgs(Args), 3, 1, 0, 0);
+        }
+
+        RHI::CmdEndRenderPass(CL);
+        Barriers::RasterToRead(CL);
     }
 
     // Background, terrain and undeferred materials were never classified, so they keep the env pass.
@@ -969,7 +1042,7 @@ namespace Lumina
             PC.FinalValuePower          = FinalValuePower;
             PC.DepthMIPSamplingOffset   = DepthMipSamplingOffset;
 
-            DispatchCompute(CL, MainCS, PC, 
+            DispatchCompute(CL, MainCS, PC,
                 RenderUtils::GetGroupCount(Width, 8u),
                 RenderUtils::GetGroupCount(Height, 8u), 1);
 
@@ -1616,10 +1689,11 @@ namespace Lumina
         PC.Density             = Math::Max(C.Density, 0.0f);
         PC.LayerBottom         = Math::Max(C.LayerBottom, 100.0f);
         PC.LayerTop            = Math::Max(C.LayerTop, C.LayerBottom + 1.0f);
-        PC.WindOffset[0]       = Wind.x * Drift;
-        PC.WindOffset[1]       = Wind.y * Drift;
-        PC.DetailWindOffset[0] = Wind.x * Drift * 2.0f;
-        PC.DetailWindOffset[1] = Wind.y * Drift * 2.0f;
+        const FVector2 WeatherDrift = Frame.Volumetrics.CloudWindOffset;
+        PC.WindOffset[0]       = Wind.x * Drift + WeatherDrift.x;
+        PC.WindOffset[1]       = Wind.y * Drift + WeatherDrift.y;
+        PC.DetailWindOffset[0] = Wind.x * Drift * 2.0f + WeatherDrift.x * 2.0f;
+        PC.DetailWindOffset[1] = Wind.y * Drift * 2.0f + WeatherDrift.y * 2.0f;
 
         PC.ShadowUAV       = (uint32)ShadowUAV;
         PC.Resolution      = Shadow.GetSizeX();
@@ -2130,7 +2204,7 @@ namespace Lumina
                 float  Intensity;
                 float  CosYaw;
                 float  SinYaw;
-                uint32 _Pad0;
+                uint32 bRemoveSun;
             };
             static_assert(sizeof(FEquirectPC) == 24, "FEquirectPC must match EquirectToCubemap.slang::FPushConstants.");
 
@@ -2142,6 +2216,7 @@ namespace Lumina
             PC.Intensity   = HDRIParams.x;
             PC.CosYaw      = HDRIParams.y;
             PC.SinYaw      = HDRIParams.z;
+            PC.bRemoveSun  = Frame.Lighting.LightData.bHasSun ? 1u : 0u;
 
             constexpr uint32 EquirectTile = 8u;
             const uint32 FaceSize = SkyCube.GetSizeX();
@@ -2591,7 +2666,7 @@ namespace Lumina
         PC.ForwardScattering = Math::Clamp(C.ForwardScattering, 0.0f, 0.95f);
         PC.BackScattering    = Math::Clamp(C.BackScattering, -0.95f, 0.0f);
         PC.PowderStrength    = Math::Clamp(C.PowderStrength, 0.0f, 1.0f);
-        PC.WindOffset        = FVector2(Wind.x * Drift, Wind.y * Drift);
+        PC.WindOffset        = FVector2(Wind.x * Drift, Wind.y * Drift) + Frame.Volumetrics.CloudWindOffset;
         PC.DetailWindOffset  = FVector2(PC.WindOffset.x * C.DetailWindFactor,
                                         PC.WindOffset.y * C.DetailWindFactor);
         PC.CloudDepthUAV     = (uint32)CloudDepthUAV;
@@ -2942,6 +3017,281 @@ namespace Lumina
         AtmosphereTerms.AerialTransmittanceIndex = (uint32)Transmittance.GetResourceID();
         AtmosphereTerms.AerialRange              = Range;
         AtmosphereTerms.AerialIntensity          = Frame.Volumetrics.AerialIntensity;
+        return true;
+    }
+
+    namespace
+    {
+        constexpr uint32 kMaxTerrainShadowRecords = 8u;
+        constexpr uint32 kTerrainShadowSteps      = 48u;
+
+        // How far past a receiver a distance-field caster can still shade it.
+        constexpr float  kSunDFMaxTrace           = 1000.0f;
+
+        // Mirror of FSunDFObject in SunDFShadowCommon.slang.
+        struct FSunDFObject
+        {
+            FTransform3x4 WorldToLocal;
+            FVector4      Sphere;
+            FVector3      VolumeMin;
+            float         MaxDistance;
+            FVector3      VolumeSize;
+            float         MinScale;
+            uint32        TextureIndex;
+            uint32        Flags;
+            uint32        _Pad0;
+            uint32        _Pad1;
+        };
+        static_assert(sizeof(FSunDFObject) == 112);
+
+        // Mirror of FSunDFShadowGrid in SunDFShadowCommon.slang.
+        struct FSunDFShadowGrid
+        {
+            RHI::TGPUSpan<FSunDFObject> Objects;
+            RHI::TGPUSpan<uint32>       CellCounts;
+            RHI::TGPUSpan<uint32>       CellItems;
+            RHI::TGPUSpan<uint32>       Counters;
+            FVector3                    SunRight;
+            float                       CellSize;
+            FVector3                    SunUp;
+            float                       MinRadius;
+            FVector2                    Origin;
+            uint32                      Dimension;
+            uint32                      CellCapacity;
+        };
+        static_assert(sizeof(FSunDFShadowGrid) == 112);
+
+        // Mirror of FPushConstants in SunDFShadowCull.slang.
+        struct FSunDFShadowCullArgs
+        {
+            RHI::TGPUSpan<uint32>             Blocks;
+            RHI::TGPUSpan<FInstanceCullEntry> RetainedCullEntries;
+            RHI::TGPUSpan<FTransform3x4>      RetainedTransforms;
+            RHI::TGPUSpan<FInstanceStatic>    RetainedStatic;
+            FSunDFShadowGrid                  Grid;
+        };
+
+        // Mirror of FTerrainShadowRecord in SunFarShadow.slang.
+        struct FTerrainShadowRecord
+        {
+            FVector2 OriginXZ;
+            float    Stride;
+            float    OriginY;
+            float    MaxHeight;
+            float    Resolution;
+            uint32   HeightmapIndex;
+            float    _Pad;
+        };
+        static_assert(sizeof(FTerrainShadowRecord) == 32);
+
+        // Mirror of FPushConstants in SunFarShadow.slang.
+        struct FSunFarShadowArgs
+        {
+            uint32   ScreenSize[2];
+            uint32   DepthIndex;
+            uint32   OutputUAV;
+            FVector3 ToSun;
+            float    TanHalfAngle;
+            float    TerrainMaxDistance;
+            uint32   TerrainSteps;
+            uint32   NumTerrains;
+            float    _Pad;
+            FSunDFShadowGrid DFGrid;
+            float    DFNear;
+            float    DFFar;
+            float    DFMaxTrace;
+            uint32   bDistanceField;
+            FTerrainShadowRecord Terrains[kMaxTerrainShadowRecords];
+        };
+    }
+
+    bool FDefaultSceneRenderer::WantsSunFarShadowMask() const
+    {
+        if (RenderFrame == nullptr || !RenderFrame->Lighting.LightData.bHasSun)
+        {
+            return false;
+        }
+        const FFrameData& Frame = *RenderFrame;
+        if (Frame.Lighting.SunFarShadow.bDistanceField)
+        {
+            return true;
+        }
+        if (!Frame.Lighting.SunFarShadow.bTerrain)
+        {
+            return false;
+        }
+        for (const FFrameData::FTerrainExtract& Terrain : Frame.Extracts.TerrainExtracts)
+        {
+            if (Terrain.bCastShadow)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool FDefaultSceneRenderer::SunFarShadowPass(RHI::FCmdListH CL)
+    {
+        const FFrameData& Frame = *RenderFrame;
+        const FSceneImage& Mask  = GetNamedImage(ENamedImage::SunFarShadowMask);
+        if (!WantsSunFarShadowMask() || !Mask.IsValid())
+        {
+            return false;
+        }
+
+        static const FShaderH TraceCS = FShaderLibrary::Get("SunFarShadow.slang");
+        const FSceneImage& Depth = GetNamedImage(ENamedImage::DepthAttachment);
+        const int32 OutputSlot   = Mask.GetMipUAVIndex(0);
+        if (!TraceCS || Depth.GetResourceID() < 0 || OutputSlot < 0)
+        {
+            return false;
+        }
+
+        const auto& Settings = Frame.Lighting.SunFarShadow;
+
+        FSunFarShadowArgs Args = {};
+        Args.ScreenSize[0]      = Mask.GetSizeX();
+        Args.ScreenSize[1]      = Mask.GetSizeY();
+        Args.DepthIndex         = (uint32)Depth.GetResourceID();
+        Args.OutputUAV          = (uint32)OutputSlot;
+        Args.ToSun              = Settings.ToSun;
+        Args.TanHalfAngle       = Settings.TanHalfAngle;
+        Args.TerrainMaxDistance = Settings.TerrainDistance;
+        Args.TerrainSteps       = kTerrainShadowSteps;
+        Args.DFNear             = Settings.DFNear;
+        Args.DFFar              = Settings.DFFar;
+        Args.DFMaxTrace         = kSunDFMaxTrace;
+        Args.bDistanceField     = (Settings.bDistanceField && bSunDFGridReady) ? 1u : 0u;
+        if (Args.bDistanceField != 0u)
+        {
+            Args.DFGrid.Objects      = { SunDFObjectBuffer, kSunDFMaxObjects };
+            Args.DFGrid.CellCounts   = { SunDFCellCountBuffer, kSunDFGridDimension * kSunDFGridDimension };
+            Args.DFGrid.CellItems    = { SunDFCellItemBuffer, kSunDFGridDimension * kSunDFGridDimension * kSunDFCellCapacity };
+            Args.DFGrid.Counters     = { SunDFCounterBuffer, 4u };
+            Args.DFGrid.SunRight     = Settings.SunRight;
+            Args.DFGrid.CellSize     = Settings.GridCellSize;
+            Args.DFGrid.SunUp        = Settings.SunUp;
+            Args.DFGrid.MinRadius    = Settings.DFMinRadius;
+            Args.DFGrid.Origin       = Settings.GridOrigin;
+            Args.DFGrid.Dimension    = kSunDFGridDimension;
+            Args.DFGrid.CellCapacity = kSunDFCellCapacity;
+        }
+
+        // Every casting terrain, not only those in view, since a ridge behind the camera still shades what is in front.
+        for (const FFrameData::FTerrainExtract& Terrain : Frame.Extracts.TerrainExtracts)
+        {
+            if (!Terrain.bCastShadow || Args.NumTerrains >= kMaxTerrainShadowRecords || Terrain.Resolution < 2)
+            {
+                continue;
+            }
+            const auto StateIt = TerrainGPUStates.find(Terrain.Entity);
+            if (StateIt == TerrainGPUStates.end() || !StateIt->second.HeightmapTexture)
+            {
+                continue;
+            }
+
+            const FVector3 Origin = FVector3(Terrain.WorldMatrix[3]);
+            const float    Half   = Terrain.TileWorldSize * 0.5f;
+
+            FTerrainShadowRecord& Record = Args.Terrains[Args.NumTerrains++];
+            Record.OriginXZ       = FVector2(Origin.x - Half, Origin.z - Half);
+            Record.Stride         = Terrain.TileWorldSize / (float)(Terrain.Resolution - 1);
+            Record.OriginY        = Origin.y;
+            Record.MaxHeight      = Terrain.MaxHeight;
+            Record.Resolution     = (float)Terrain.Resolution;
+            Record.HeightmapIndex = (uint32)StateIt->second.HeightmapTexture.GetResourceID();
+        }
+
+        // Runs even with nothing to trace yet, since the lighting reads whatever this leaves in the mask.
+        DispatchCompute(CL, TraceCS, Args,
+            RenderUtils::GetGroupCount(Args.ScreenSize[0], 8u),
+            RenderUtils::GetGroupCount(Args.ScreenSize[1], 8u), 1);
+
+        RHI::CmdBarrier(CL,
+            RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
+            RHI::EStageFlags::Compute | RHI::EStageFlags::PixelShader, RHI::EAccessFlags::ShaderRead);
+        return true;
+    }
+
+    bool FDefaultSceneRenderer::SunDFShadowCullPass(RHI::FCmdListH CL)
+    {
+        bSunDFGridReady = false;
+        const FFrameData& Frame = *RenderFrame;
+        const auto& Settings = Frame.Lighting.SunFarShadow;
+        if (!WantsSunFarShadowMask() || !Settings.bDistanceField)
+        {
+            return false;
+        }
+
+        static const FShaderH CullCS = FShaderLibrary::Get("SunDFShadowCull.slang");
+        const uint32 RetainedSlots = Frame.Geometry.RetainedUpload.SlotCount;
+        const bool bRetainedFits = RetainedSlots > 0
+                                && RetainedCullEntryBuffer.CapacityOf<FInstanceCullEntry>() >= RetainedSlots
+                                && RetainedTransformBuffer.CapacityOf<FTransform3x4>()     >= RetainedSlots
+                                && RetainedStaticBuffer.CapacityOf<FInstanceStatic>()      >= RetainedSlots;
+        if (!CullCS || !bRetainedFits)
+        {
+            return false;
+        }
+
+        constexpr uint32 NumCells = kSunDFGridDimension * kSunDFGridDimension;
+        ReserveBuffer(CL, SunDFObjectBuffer,    (uint64)kSunDFMaxObjects * sizeof(FSunDFObject), false, false);
+        ReserveBuffer(CL, SunDFCellCountBuffer, (uint64)NumCells * sizeof(uint32), false, false);
+        ReserveBuffer(CL, SunDFCellItemBuffer,  (uint64)NumCells * kSunDFCellCapacity * sizeof(uint32), false, false);
+        ReserveBuffer(CL, SunDFCounterBuffer,   4u * sizeof(uint32), false, false);
+        if (SunDFObjectBuffer.CapacityOf<FSunDFObject>() < kSunDFMaxObjects ||
+            SunDFCellCountBuffer.CapacityOf<uint32>() < NumCells ||
+            SunDFCellItemBuffer.CapacityOf<uint32>() < NumCells * kSunDFCellCapacity ||
+            SunDFCounterBuffer.CapacityOf<uint32>() < 4u)
+        {
+            return false;
+        }
+
+        RHI::CmdMemzero(CL, RHI::FGPURange{ SunDFCellCountBuffer.Gpu, (uint64)NumCells * sizeof(uint32) });
+        RHI::CmdMemzero(CL, RHI::FGPURange{ SunDFCounterBuffer.Gpu, 4u * sizeof(uint32) });
+        RHI::CmdBarrier(CL,
+            RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferWrite,
+            RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
+
+        FSunDFShadowCullArgs Args = {};
+        Args.RetainedCullEntries = { RetainedCullEntryBuffer, RetainedSlots };
+        Args.RetainedTransforms  = { RetainedTransformBuffer, RetainedSlots };
+        Args.RetainedStatic      = { RetainedStaticBuffer, RetainedSlots };
+        Args.Grid.Objects        = { SunDFObjectBuffer, kSunDFMaxObjects };
+        Args.Grid.CellCounts     = { SunDFCellCountBuffer, NumCells };
+        Args.Grid.CellItems      = { SunDFCellItemBuffer, NumCells * kSunDFCellCapacity };
+        Args.Grid.Counters       = { SunDFCounterBuffer, 4u };
+        Args.Grid.SunRight       = Settings.SunRight;
+        Args.Grid.CellSize       = Settings.GridCellSize;
+        Args.Grid.SunUp          = Settings.SunUp;
+        Args.Grid.MinRadius      = Settings.DFMinRadius;
+        Args.Grid.Origin         = Settings.GridOrigin;
+        Args.Grid.Dimension      = kSunDFGridDimension;
+        Args.Grid.CellCapacity   = kSunDFCellCapacity;
+
+        // Only the blocks holding a distance-field caster, unless the block table is not current.
+        static_assert(kInstanceCullBlockSize == 64u, "SunDFShadowCull.slang walks a block per 64-lane group.");
+        const bool bBlockList = bInstanceBlockBoundsValid && !bDistanceFieldBlocksDirty;
+        if (bBlockList && DistanceFieldBlocks.empty())
+        {
+            bSunDFGridReady = true;
+            return true;
+        }
+        const uint32 NumGroups = bBlockList ? (uint32)DistanceFieldBlocks.size() : RenderUtils::GetGroupCount(RetainedSlots, 64u);
+        if (bBlockList)
+        {
+            Args.Blocks = { SunDFBlockListBuffer, (uint32)DistanceFieldBlocks.size() };
+        }
+
+        RHI::CmdSetPipeline(CL, GetOrCreateComputePipeline(CullCS));
+        // SunDFShadowCull.slang undoes the fold with GroupID.y * MAX_DISPATCH_AXIS.
+        const FUIntVector2 Groups = RenderUtils::FoldGroupCount(NumGroups);
+        RHI::CmdDispatch(CL, MakeArgs(Args), Groups.x, Groups.y, 1u);
+
+        RHI::CmdBarrier(CL,
+            RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
+            RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderRead);
+        bSunDFGridReady = true;
         return true;
     }
 }

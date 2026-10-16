@@ -1,10 +1,12 @@
 #include "RuntimePCH.h"
 #include "World/ECS/Registry.h"
+#include <algorithm>
 #include "EntityUtils.h"
 #include "Components/CharacterComponent.h"
 #include "Components/DirtyComponent.h"
 #include "Components/EditorComponent.h"
 #include "Components/EntityTags.h"
+#include "Components/MissingComponents.h"
 #include "Components/PhysicsComponent.h"
 #include "Components/NameComponent.h"
 #include "Components/RelationshipComponent.h"
@@ -27,6 +29,7 @@
 #include "Components/Component.h"
 #include "Memory/SmartPtr.h"
 #include "Scripting/EntityScript.h"
+#include "Scripting/ScriptTypeRegistry.h"
 #include "World/World.h"
 #include "World/WorldContext.h"
 #include <atomic>
@@ -195,10 +198,13 @@ namespace Lumina::ECS::Utils
 {
     struct FComponentTypeCache
     {
+        TVector<uint32> SiblingIndices;
+
         struct FEntry
         {
             ECS::FSparseSet*   Set;
             CStruct*            Struct;
+            FName               Name;
         };
         TVector<FEntry> Entries;
 
@@ -215,7 +221,7 @@ namespace Lumina::ECS::Utils
 
                 if (CStruct* StructType = FindComponentStructByTypeId(Set.GetTypeInfo().TypeID))
                 {
-                    Entries.push_back({ &Set, StructType });
+                    Entries.push_back({ &Set, StructType, StructIdentity(StructType) });
                 }
             }
         }
@@ -225,7 +231,82 @@ namespace Lumina::ECS::Utils
     static bool SerializeEntityWrite(FArchive& RESTRICT Ar, ECS::FRegistry& RESTRICT Registry,
                                      ECS::FEntity& RESTRICT Entity, const FComponentTypeCache* Cache);
 
-    bool SerializeEntity(FArchive& RESTRICT Ar, ECS::FRegistry& RESTRICT Registry, ECS::FEntity& RESTRICT Entity)
+    LUM_DISABLE_DEPRECATION_WARNINGS
+    // Goes with REGISTRY_PARENT_LINKS's predecessor format, so it is deleted together with FRelationshipComponent.
+    static void ReadLegacyRelationship(FArchive& Ar, ECS::FEntity Entity, FParentLinks* Links)
+    {
+        bool bHasRelationship = false;
+        Ar << bHasRelationship;
+        if (!bHasRelationship)
+        {
+            return;
+        }
+
+        FRelationshipComponent Legacy;
+        Ar << Legacy.Children << Legacy.First << Legacy.Prev << Legacy.Next << Legacy.Parent;
+        if (Links == nullptr || Legacy.Parent.IsNull())
+        {
+            return;
+        }
+
+        Links->Links.push_back({ Entity, Legacy.Parent, ECS::FHierarchy::AppendPosition });
+        if (!Legacy.Next.IsNull())
+        {
+            Links->LegacyNextSibling[Entity] = Legacy.Next;
+        }
+    }
+    LUM_RESTORE_DEPRECATION_WARNINGS
+
+    void FParentLinks::Apply(ECS::FRegistry& Registry)
+    {
+        // A legacy file only names each child's next sibling, so its indices come from walking those chains.
+        if (!LegacyNextSibling.empty())
+        {
+            THashMap<ECS::FEntity, FLink*> ByChild;
+            THashSet<ECS::FEntity> HasPrev;
+            for (FLink& Link : Links)
+            {
+                ByChild[Link.Child] = &Link;
+            }
+            for (const auto& [Child, Next] : LegacyNextSibling)
+            {
+                HasPrev.insert(Next);
+            }
+            for (FLink& Head : Links)
+            {
+                if (HasPrev.contains(Head.Child))
+                {
+                    continue;
+                }
+                uint32 Index = 0;
+                for (FLink* Cursor = &Head; Cursor != nullptr; ++Index)
+                {
+                    Cursor->SiblingIndex = Index;
+                    const auto Next = LegacyNextSibling.find(Cursor->Child);
+                    const auto NextLink = Next != LegacyNextSibling.end() ? ByChild.find(Next->second) : ByChild.end();
+                    Cursor = NextLink != ByChild.end() && NextLink->second->Parent == Head.Parent ? NextLink->second : nullptr;
+                }
+            }
+            LegacyNextSibling.clear();
+        }
+
+        // Ascending index per parent, so inserting each one at its index rebuilds the saved order.
+        std::stable_sort(Links.begin(), Links.end(), [](const FLink& A, const FLink& B)
+        {
+            return A.Parent != B.Parent ? A.Parent < B.Parent : A.SiblingIndex < B.SiblingIndex;
+        });
+
+        for (const FLink& Link : Links)
+        {
+            if (Registry.IsValid(Link.Child) && Registry.IsValid(Link.Parent))
+            {
+                Registry.AttachChild(Link.Child, Link.Parent, Link.SiblingIndex);
+            }
+        }
+        Links.clear();
+    }
+
+    bool SerializeEntity(FArchive& RESTRICT Ar, ECS::FRegistry& RESTRICT Registry, ECS::FEntity& RESTRICT Entity, FParentLinks* Links)
     {
         if (Ar.IsWriting())
         {
@@ -242,13 +323,26 @@ namespace Lumina::ECS::Utils
                 Entity = New;
             }
 
-            bool bHasRelationship = false;
-            Ar << bHasRelationship;
-
-            if (bHasRelationship)
+            if (Ar.GetFileVersion() >= (int32)ELuminaEngineVersion::REGISTRY_PARENT_LINKS)
             {
-                FRelationshipComponent& RelationshipComponent = Registry.EmplaceOrReplace<FRelationshipComponent>(Entity);
-                Ar << RelationshipComponent;
+                ECS::FEntity Parent;
+                uint32 SiblingIndex = 0;
+                Ar << Parent << SiblingIndex;
+                if (!Parent.IsNull())
+                {
+                    if (Links != nullptr)
+                    {
+                        Links->Links.push_back({ Entity, Parent, SiblingIndex });
+                    }
+                    else if (Registry.IsValid(Parent))
+                    {
+                        Registry.AttachChild(Entity, Parent, SiblingIndex);
+                    }
+                }
+            }
+            else
+            {
+                ReadLegacyRelationship(Ar, Entity, Links);
             }
 
             size_t NumComponents = 0;
@@ -261,6 +355,9 @@ namespace Lumina::ECS::Utils
                 return false;
             }
 
+            // Held after the loop, so a held-components entry read later for this entity cannot replace them.
+            TVector<SHeldValue> Unloaded;
+
             for (size_t i = 0; i < NumComponents; ++i)
             {
                 FName TypeName;
@@ -271,13 +368,13 @@ namespace Lumina::ECS::Utils
 
                 int64 ComponentStart = Ar.Tell();
 
-                if (CStruct* Struct = FindObject<CStruct>(TypeName))
+                if (CStruct* Struct = ResolveStructByName(TypeName))
                 {
                     LUMINA_PROFILE_SECTION_NAMED(Struct->GetName().c_str());
                     if (Struct == STagComponent::StaticStruct())
                     {
                         STagComponent NewTagComponent;
-                        Struct->SerializeTaggedProperties(Ar, &NewTagComponent);
+                        Struct->SerializeProperties(Ar, &NewTagComponent);
                         const ECS::TComponentStorage<STagComponent> TagStorage =
                             Registry.NamedStorage<STagComponent>(NewTagComponent.Tag);
 
@@ -301,11 +398,30 @@ namespace Lumina::ECS::Utils
                 }
                 else
                 {
-                    LOG_WARN("[ECS] Entity {}: skipping unknown component '{}' ({} bytes). Disabled plugin? Save will drop this component.", (uint32)Entity, TypeName, ComponentSize);
+                    SHeldValue& Held = Unloaded.emplace_back();
+                    Held.TypeName = TypeName;
+                    if (Held.Data.Cut(Ar, ComponentSize))
+                    {
+                        LOG_WARN("[ECS] Entity {}: component type '{}' is not loaded; holding its {} bytes until it is.", (uint32)Entity, TypeName, ComponentSize);
+                    }
+                    else
+                    {
+                        Unloaded.pop_back();
+                        LOG_WARN("[ECS] Entity {}: skipping unknown component '{}' ({} bytes), which this archive cannot hold.", (uint32)Entity, TypeName, ComponentSize);
+                    }
                 }
 
                 int64 ComponentEnd = ComponentSize + ComponentStart;
                 Ar.Seek(ComponentEnd);
+            }
+
+            for (SHeldValue& Held : Unloaded)
+            {
+                MissingComponents::Hold(Registry, Entity, Move(Held));
+            }
+            if (Registry.TryGet<SMissingComponents>(Entity) != nullptr)
+            {
+                MissingComponents::Restore(Registry, Entity);
             }
         }
         
@@ -317,14 +433,13 @@ namespace Lumina::ECS::Utils
     {
         Ar << Entity;
 
-        FRelationshipComponent* RelationshipComponent = Registry.TryGet<FRelationshipComponent>(Entity);
-        bool bHasRelationship = (RelationshipComponent != nullptr);
-        Ar << bHasRelationship;
-
-        if (bHasRelationship)
+        ECS::FEntity Parent = Registry.GetHierarchy().GetParent(Entity);
+        uint32 SiblingIndex = 0;
+        if (!Parent.IsNull())
         {
-            Ar << *RelationshipComponent;
+            SiblingIndex = Cache != nullptr ? Cache->SiblingIndices[Entity.GetIndex()] : Registry.GetHierarchy().GetSiblingIndex(Entity);
         }
+        Ar << Parent << SiblingIndex;
 
         int64 NumComponentsPos = Ar.Tell();
         size_t NumComponents = 0;
@@ -345,7 +460,7 @@ namespace Lumina::ECS::Utils
                 continue;
             }
 
-            FName Name = Entry.Struct->GetName();
+            FName Name = Entry.Name;
             Ar << Name;
 
             int64 ComponentStart = Ar.Tell();
@@ -357,7 +472,7 @@ namespace Lumina::ECS::Utils
 
             {
                 LUMINA_PROFILE_SECTION_NAMED(Name.c_str());
-                Entry.Struct->SerializeTaggedProperties(Ar, Entry.Set->GetRaw(Entity));
+                Entry.Struct->SerializeProperties(Ar, Entry.Set->GetRaw(Entity));
             }
 
             int64 EndOfComponentData = Ar.Tell();
@@ -386,9 +501,10 @@ namespace Lumina::ECS::Utils
         {
             Registry.Compact();
 
-            // ONCE for the whole walk; see FComponentTypeCache for what that saves per entity.
+            // Built once for the whole walk, which is what FComponentTypeCache saves per entity.
             FComponentTypeCache TypeCache;
             TypeCache.Build(Registry);
+            Registry.GetHierarchy().BuildSiblingIndices(TypeCache.SiblingIndices);
 
             int64 PreSerializePos = Ar.Tell();
 
@@ -451,6 +567,9 @@ namespace Lumina::ECS::Utils
 
             LOG_INFO("[ECS] Loading registry: {} entities claimed by the archive", NumEntitiesSerialized);
 
+            // A child can come before its parent in the file, so links attach once every entity exists.
+            FParentLinks Links;
+
             for (int32 i = 0; i < NumEntitiesSerialized; ++i)
             {
                 int64 EntitySaveSize = 0;
@@ -459,7 +578,7 @@ namespace Lumina::ECS::Utils
                 int64 PreEntityPos = Ar.Tell();
 
                 ECS::FEntity NewEntity = ECS::NullEntity;
-                bool bSuccess = ECS::Utils::SerializeEntity(Ar, Registry, NewEntity);
+                bool bSuccess = ECS::Utils::SerializeEntity(Ar, Registry, NewEntity, &Links);
 
                 // Clear the per-entity error so one corrupt entity cannot poison the calls after it.
                 Ar.SetHasError(false);
@@ -484,6 +603,8 @@ namespace Lumina::ECS::Utils
                     Ar.Seek(PreEntityPos + EntitySaveSize);
                 }
             }
+
+            Links.Apply(Registry);
         }
 
         return !Ar.HasError();
@@ -494,6 +615,41 @@ namespace Lumina::ECS::Utils
         return Registry.NamedStorage<STagComponent>(Tag).Contains(Entity);
     }
 
+    namespace
+    {
+        template<typename TFunc>
+        void ForEachTagStorage(const ECS::FRegistry& Registry, ECS::FEntity Entity, TFunc&& Func)
+        {
+            const ECS::FComponentTypeID TagType = ECS::GetComponentTypeID<STagComponent>();
+            const ECS::FSparseSet* Unnamed = Registry.FindStorage(TagType);
+            for (ECS::FSparseSet* Storage : Registry.GetActiveStorages())
+            {
+                if (Storage != Unnamed && Storage->GetTypeInfo().TypeID == TagType && Storage->Contains(Entity))
+                {
+                    Func(*Storage);
+                }
+            }
+        }
+    }
+
+    void ForEachEntityTag(const ECS::FRegistry& Registry, ECS::FEntity Entity, TFunctionRef<void(const FName&)> Func)
+    {
+        ForEachTagStorage(Registry, Entity, [&](ECS::FSparseSet& Storage)
+        {
+            Func(static_cast<const STagComponent*>(Storage.GetRaw(Entity))->Tag);
+        });
+    }
+
+    FName GetEntityTag(const ECS::FRegistry& Registry, ECS::FEntity Entity)
+    {
+        FName First;
+        ForEachEntityTag(Registry, Entity, [&](const FName& Tag)
+        {
+            First = First.IsNone() ? Tag : First;
+        });
+        return First;
+    }
+
     void SetEntityTag(ECS::FRegistry& Registry, ECS::FEntity Entity, const FName& Tag)
     {
         if (!Registry.IsValid(Entity))
@@ -501,20 +657,11 @@ namespace Lumina::ECS::Utils
             return;
         }
 
-        // Out of the old storage first, or the entity answers to both names.
         ClearEntityTag(Registry, Entity);
-
-        if (Tag.IsNone())
+        if (!Tag.IsNone())
         {
-            return;
+            Registry.NamedStorage<STagComponent>(Tag).Emplace(Entity).Tag = Tag;
         }
-
-        STagComponent Component;
-        Component.Tag = Tag;
-        Registry.NamedStorage<STagComponent>(Tag).EmplaceOrReplace(Entity, Component);
-
-        // A lookup by type alone cannot see into a named storage, so the unnamed copy records which one.
-        Registry.GetOrEmplace<STagComponent>(Entity).Tag = Tag;
     }
 
     void ClearEntityTag(ECS::FRegistry& Registry, ECS::FEntity Entity)
@@ -524,13 +671,13 @@ namespace Lumina::ECS::Utils
             return;
         }
 
-        const STagComponent* Existing = Registry.TryGet<STagComponent>(Entity);
-        if (Existing == nullptr)
+        // Gathered first, since removing reshapes the storages being walked.
+        TVector<ECS::FSparseSet*> Tagged;
+        ForEachTagStorage(Registry, Entity, [&](ECS::FSparseSet& Storage) { Tagged.push_back(&Storage); });
+        for (ECS::FSparseSet* Storage : Tagged)
         {
-            return;
+            Storage->RemoveEntity(Entity);
         }
-
-        Registry.NamedStorage<STagComponent>(Existing->Tag).RemoveEntity(Entity);
         Registry.Remove<STagComponent>(Entity);
     }
 
@@ -543,33 +690,15 @@ namespace Lumina::ECS::Utils
                 Registry.NamedStorage<STagComponent>(Component.Tag).EmplaceOrReplace(Entity, Component);
             }
         });
+
+        // Left behind, the unnamed copy would read as one more tag beside the per-tag one.
+        Registry.ClearComponent<STagComponent>();
     }
     
     // --- Hierarchy ---
 
-    void AddToParent(ECS::FRegistry& Registry, ECS::FEntity Child, ECS::FEntity Parent)
-    {
-        FRelationshipComponent& ChildRelationship = Registry.GetOrEmplace<FRelationshipComponent>(Child);
-        FRelationshipComponent& ParentRelationship = Registry.GetOrEmplace<FRelationshipComponent>(Parent);
-
-        ChildRelationship.Parent = Parent;
-
-        ChildRelationship.Prev = ECS::NullEntity;
-        ChildRelationship.Next = ParentRelationship.First;
-
-        if (ParentRelationship.First != ECS::NullEntity)
-        {
-            FRelationshipComponent& OldFirstRelationship = Registry.Get<FRelationshipComponent>(ParentRelationship.First);
-            OldFirstRelationship.Prev = Child;
-        }
-
-        ParentRelationship.First = Child;
-        ParentRelationship.Children++;
-    }
-    
     void ReparentEntity(ECS::FRegistry& Registry, ECS::FEntity Child, ECS::FEntity Parent, bool bPreserveWorld)
     {
-        // Self-parent or circular hierarchy causes an infinite loop in ForEachChild.
         if (Child == Parent)
         {
             LOG_ERROR("Cannot parent an entity to itself!");
@@ -582,21 +711,19 @@ namespace Lumina::ECS::Utils
             return;
         }
 
-        // Always guarded, since a cycle here infinite-loops ForEachChild even in shipping.
-        if (Parent != ECS::NullEntity && IsDescendantOf(Registry, Parent, Child))
+        if (Parent != ECS::NullEntity && Registry.GetHierarchy().IsDescendantOf(Parent, Child))
         {
             LOG_ERROR("Cannot create circular hierarchy - parent is a descendant of child!");
             return;
         }
 
-        FRelationshipComponent& ChildRelationship = Registry.GetOrEmplace<FRelationshipComponent>(Child);
         STransformComponent& ChildTransform = Registry.Get<STransformComponent>(Child);
 
-        if (ChildRelationship.Parent == Parent)
+        if (Registry.GetHierarchy().GetParent(Child) == Parent)
         {
             return;
         }
-        
+
         FTransform NewLocalTransform;
         if (bPreserveWorld)
         {
@@ -614,15 +741,15 @@ namespace Lumina::ECS::Utils
             NewLocalTransform.SetScale(Scale);
         }
 
-        RemoveFromParent(Registry, Child);
+        // RemoveFromParent bakes the world into the local, which would undo a caller asking to keep its local.
+        if (Registry.GetHierarchy().GetParent(Child) != ECS::NullEntity)
+        {
+            Registry.DetachFromParent(Child);
+        }
 
         if (Parent != ECS::NullEntity)
         {
-            AddToParent(Registry, Child, Parent);
-        }
-        else
-        {
-            ChildRelationship.Parent = ECS::NullEntity;
+            Registry.AttachChild(Child, Parent);
         }
 
         if (Parent != ECS::NullEntity && Registry.HasAny<SDisabledTag>(Parent))
@@ -660,44 +787,30 @@ namespace Lumina::ECS::Utils
             return;
         }
 
-        TVector<ECS::FEntity> ToDestroy;
-        CollectDescendants(Registry, Entity, ToDestroy);
-
-        // Detach first so the parent stops pointing at freed entities, then destroy the subtree.
-        if (Registry.HasAny<FRelationshipComponent>(Entity))
+        // Children before their parents, so a registry that orphans on destroy never sees one outlive its parent.
+        TVector<ECS::FEntity> Subtree;
+        Registry.GetHierarchy().ForEachDescendant(Entity, [&](ECS::FEntity Descendant) { Subtree.push_back(Descendant); });
+        for (size_t Index = Subtree.size(); Index-- > 0;)
         {
-            RemoveFromParent(Registry, Entity);
-        }
-
-        ToDestroy.push_back(Entity);
-
-        for (ECS::FEntity E : ToDestroy)
-        {
-            if (Registry.IsValid(E))
+            if (Registry.IsValid(Subtree[Index]))
             {
-                Registry.Destroy(E);
+                Registry.Destroy(Subtree[Index]);
             }
         }
+        Registry.Destroy(Entity);
     }
 
     void DetachImmediateChildren(ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
-        TVector<ECS::FEntity> ToDestroy;
-        CollectChildren(Registry, Entity, ToDestroy);
-        
-        for (auto It = ToDestroy.rbegin(); It != ToDestroy.rend(); ++It)
+        Registry.GetHierarchy().ForEachChild(Entity, [&](ECS::FEntity Child)
         {
-            if (Registry.IsValid(*It))
-            {
-                RemoveFromParent(Registry, *It);
-            }
-        }
+            RemoveFromParent(Registry, Child);
+        });
     }
 
     void RemoveFromParent(ECS::FRegistry& Registry, ECS::FEntity Child)
     {
-        FRelationshipComponent* ChildRelationship = Registry.TryGet<FRelationshipComponent>(Child);
-        if (!ChildRelationship || ChildRelationship->Parent == ECS::NullEntity)
+        if (Registry.GetHierarchy().GetParent(Child) == ECS::NullEntity)
         {
             return;
         }
@@ -711,139 +824,12 @@ namespace Lumina::ECS::Utils
             bHasTransform = true;
         }
 
-        ECS::FEntity OldParent = ChildRelationship->Parent;
-        FRelationshipComponent* ParentRelationship = Registry.TryGet<FRelationshipComponent>(OldParent);
-
-        if (!ParentRelationship)
-        {
-            return;
-        }
-
-        ParentRelationship->Children--;
-
-        if (ChildRelationship->Prev != ECS::NullEntity)
-        {
-            FRelationshipComponent& PrevRelationship = Registry.Get<FRelationshipComponent>(ChildRelationship->Prev);
-            PrevRelationship.Next = ChildRelationship->Next;
-        }
-        else
-        {
-            ParentRelationship->First = ChildRelationship->Next;
-        }
-
-        if (ChildRelationship->Next != ECS::NullEntity)
-        {
-            FRelationshipComponent& NextRelationship = Registry.Get<FRelationshipComponent>(ChildRelationship->Next);
-            NextRelationship.Prev = ChildRelationship->Prev;
-        }
-
-        ChildRelationship->Parent = ECS::NullEntity;
-        ChildRelationship->Prev = ECS::NullEntity;
-        ChildRelationship->Next = ECS::NullEntity;
+        Registry.DetachFromParent(Child);
 
         // Bake the snapshot back as local so the detached entity keeps its world placement.
         if (bHasTransform)
         {
             SetEntityWorldTransform(Registry, Child, WorldSnapshot);
-        }
-    }
-
-    bool IsDescendantOf(ECS::FRegistry& Registry, ECS::FEntity Potential, ECS::FEntity Ancestor)
-    {
-        if (Potential == ECS::NullEntity || Ancestor == ECS::NullEntity)
-        {
-            return false;
-        }
-
-        ECS::FEntity Current = Potential;
-        while (Current != ECS::NullEntity)
-        {
-            FRelationshipComponent* Relationship = Registry.TryGet<FRelationshipComponent>(Current);
-            if (!Relationship)
-            {
-                break;
-            }
-
-            if (Relationship->Parent == Ancestor)
-            {
-                return true;
-            }
-
-            Current = Relationship->Parent;
-        }
-
-        return false;
-    }
-
-    bool IsChild(ECS::FRegistry& Registry, ECS::FEntity Entity)
-    {
-        FRelationshipComponent* Relationship = Registry.TryGet<FRelationshipComponent>(Entity);
-        return Relationship ? Relationship->Parent != ECS::NullEntity : false;
-    }
-
-    bool IsParent(ECS::FRegistry& Registry, ECS::FEntity Entity)
-    {
-        return GetChildCount(Registry, Entity) != 0;
-    }
-
-    ECS::FEntity GetRootEntity(ECS::FRegistry& Registry, ECS::FEntity Entity)
-    {
-        ECS::FEntity Current = Entity;
-        while (Current != ECS::NullEntity)
-        {
-            FRelationshipComponent* Relationship = Registry.TryGet<FRelationshipComponent>(Current);
-            if (!Relationship || Relationship->Parent == ECS::NullEntity)
-            {
-                break;
-            }
-
-            Current = Relationship->Parent;
-        }
-
-        return Current;
-    }
-
-    size_t GetChildCount(ECS::FRegistry& Registry, ECS::FEntity Parent)
-    {
-        FRelationshipComponent* Relationship = Registry.TryGet<FRelationshipComponent>(Parent);
-        return Relationship ? Relationship->Children : 0;
-    }
-
-    void CollectDescendants(ECS::FRegistry& Registry, ECS::FEntity Entity, TVector<ECS::FEntity>& OutDescendants)
-    {
-        OutDescendants.push_back(Entity);
-
-        FRelationshipComponent* Relationship = Registry.TryGet<FRelationshipComponent>(Entity);
-        if (!Relationship || Relationship->First == ECS::NullEntity)
-        {
-            return;
-        }
-
-        ECS::FEntity Current = Relationship->First;
-        while (Current != ECS::NullEntity)
-        {
-            CollectDescendants(Registry, Current, OutDescendants);
-
-            FRelationshipComponent* CurrentRelationship = Registry.TryGet<FRelationshipComponent>(Current);
-            Current = CurrentRelationship ? CurrentRelationship->Next : ECS::NullEntity;
-        }
-    }
-
-    void CollectChildren(ECS::FRegistry& Registry, ECS::FEntity Entity, TVector<ECS::FEntity>& OutChildren)
-    {
-        FRelationshipComponent* Relationship = Registry.TryGet<FRelationshipComponent>(Entity);
-        if (!Relationship || Relationship->First == ECS::NullEntity)
-        {
-            return;
-        }
-
-        ECS::FEntity Current = Relationship->First;
-        while (Current != ECS::NullEntity)
-        {
-            OutChildren.push_back(Current);
-
-            FRelationshipComponent* CurrentRelationship = Registry.TryGet<FRelationshipComponent>(Current);
-            Current = CurrentRelationship ? CurrentRelationship->Next : ECS::NullEntity;
         }
     }
 
@@ -864,53 +850,132 @@ namespace Lumina::ECS::Utils
         FFiberMutex       ResolveGuard;        // one resolver writes WorldTransform at a time (fiber-aware)
 
         // Resolve scratch reused across calls; HierBySlot lets the hierarchical filter parallelize.
-        TVector<ECS::FEntity>          DrainScratch;
-        TVector<TVector<ECS::FEntity>> HierBySlot;
+        TVector<ECS::FEntity>     DrainScratch;
+        TVector<TVector<uint32>>  HierBySlot;
 
-        // Merged HierBySlot, kept as a member so the resolve reuses one allocation across frames.
-        TVector<ECS::FEntity>          HierScratch;
+        // Preorder slots of the dirty hierarchical entities, then the subtree ranges that cover them.
+        TVector<uint32>               HierScratch;
+        TVector<uint32>               RangeStarts;
+        TVector<uint8>                SlotMarks;
+        TVector<STransformComponent*> SlotTransforms;
 
-        // Published moved-transform channel, off until a consumer opts in; duplicates are fine.
-        std::atomic<bool> bPublishMoved{ false };
-        FDirtyQueue       MovedTransforms;
-
-        // One buffer per thread slot, since thousands of concurrent enqueues from a parallel pose overflow the ring into its spill lock.
+        // Published moved-transform channel, one copy per consumer and off while none has opted in; duplicates are fine.
         struct alignas(64) FMovedSlot
         {
             FMutex                Lock;
             TVector<ECS::FEntity> Items;
         };
-        TVector<TUniquePtr<FMovedSlot>> MovedSlots;
-        uint32                          NumMovedSlots = 0;
 
-        FORCEINLINE void PublishMoved(ECS::FEntity Entity)
+        // One buffer per thread slot, since thousands of concurrent enqueues from a parallel pose overflow the ring into its spill lock.
+        struct FMovedConsumer
         {
-            if (!bPublishMoved.load(std::memory_order_relaxed))
+            TVector<TUniquePtr<FMovedSlot>> Slots;
+            FDirtyQueue                     Overflow;
+        };
+
+        static constexpr uint32 kMaxMovedConsumers = 4;
+
+        // Never freed once made, so a worker publishing while a consumer leaves still writes into live memory.
+        TUniquePtr<FMovedConsumer> MovedConsumers[kMaxMovedConsumers];
+        std::atomic<uint32>        MovedConsumerMask{ 0 };
+        uint32                     NumMovedSlots = 0;
+
+        template<typename FnAppend>
+        FORCEINLINE void PublishToConsumers(FnAppend&& Append)
+        {
+            const uint32 Mask = MovedConsumerMask.load(std::memory_order_acquire);
+            if (Mask == 0)
             {
                 return;
             }
 
             const uint32 Slot = Jobs::IsInitialized() ? Jobs::GetWorkerIndex() : Constants::kIndexNoneU32;
-            if (Slot < NumMovedSlots)
+            for (uint32 Bits = Mask; Bits != 0; Bits &= Bits - 1)
             {
-                FMovedSlot& Moved = *MovedSlots[Slot];
-                TScopeLock<FMutex> Guard(Moved.Lock);
-                Moved.Items.push_back(Entity);
-                return;
+                FMovedConsumer& Consumer = *MovedConsumers[(uint32)Math::CountTrailingZeros64(Bits)];
+                if (Slot < NumMovedSlots)
+                {
+                    FMovedSlot& Moved = *Consumer.Slots[Slot];
+                    TScopeLock<FMutex> Guard(Moved.Lock);
+                    Append(Moved.Items);
+                }
+                else
+                {
+                    TVector<ECS::FEntity> Spill;
+                    Append(Spill);
+                    Consumer.Overflow.EnqueueBulk(Spill.data(), Spill.size());
+                }
             }
-
-            MovedTransforms.Enqueue(Entity);
         }
 
-        void DrainMovedSlots(TVector<ECS::FEntity>& Out)
+        FORCEINLINE void PublishMoved(ECS::FEntity Entity)
         {
-            for (uint32 Slot = 0; Slot < NumMovedSlots; ++Slot)
+            PublishToConsumers([Entity](TVector<ECS::FEntity>& Items) { Items.push_back(Entity); });
+        }
+
+        void PublishMovedBulk(const ECS::FEntity* Entities, size_t Count)
+        {
+            if (Count == 0)
             {
-                FMovedSlot& Moved = *MovedSlots[Slot];
-                TScopeLock<FMutex> Guard(Moved.Lock);
-                Out.insert(Out.end(), Moved.Items.begin(), Moved.Items.end());
-                Moved.Items.clear();
+                return;
             }
+            PublishToConsumers([Entities, Count](TVector<ECS::FEntity>& Items) { Items.insert(Items.end(), Entities, Entities + Count); });
+        }
+
+        uint32 AddMovedConsumer()
+        {
+            for (uint32 Index = 0; Index < kMaxMovedConsumers; ++Index)
+            {
+                if ((MovedConsumerMask.load(std::memory_order_relaxed) & (1u << Index)) != 0)
+                {
+                    continue;
+                }
+                if (!MovedConsumers[Index])
+                {
+                    MovedConsumers[Index] = MakeUnique<FMovedConsumer>();
+                    MovedConsumers[Index]->Slots.reserve(NumMovedSlots);
+                    for (uint32 Slot = 0; Slot < NumMovedSlots; ++Slot)
+                    {
+                        MovedConsumers[Index]->Slots.push_back(MakeUnique<FMovedSlot>());
+                    }
+                }
+                MovedConsumerMask.fetch_or(1u << Index, std::memory_order_release);
+                return Index;
+            }
+            return Constants::kIndexNoneU32;
+        }
+
+        void DrainMovedConsumer(uint32 Index, TVector<ECS::FEntity>& Out)
+        {
+            if (Index >= kMaxMovedConsumers || !MovedConsumers[Index])
+            {
+                return;
+            }
+            FMovedConsumer& Consumer = *MovedConsumers[Index];
+            for (TUniquePtr<FMovedSlot>& Slot : Consumer.Slots)
+            {
+                TScopeLock<FMutex> Guard(Slot->Lock);
+                Out.insert(Out.end(), Slot->Items.begin(), Slot->Items.end());
+                Slot->Items.clear();
+            }
+
+            ECS::FEntity Batch[256];
+            size_t Count;
+            while ((Count = Consumer.Overflow.DequeueBulk(Batch, 256)) != 0)
+            {
+                Out.insert(Out.end(), Batch, Batch + Count);
+            }
+        }
+
+        void RemoveMovedConsumer(uint32 Index)
+        {
+            if (Index >= kMaxMovedConsumers)
+            {
+                return;
+            }
+            MovedConsumerMask.fetch_and(~(1u << Index), std::memory_order_acq_rel);
+            TVector<ECS::FEntity> Discard;
+            DrainMovedConsumer(Index, Discard);
         }
 
         FTransformDirtyState()
@@ -918,11 +983,6 @@ namespace Lumina::ECS::Utils
             const uint32 Slots = Jobs::IsInitialized() ? Jobs::GetNumThreadSlots() : 1;
             HierBySlot.resize(Slots);
             NumMovedSlots = Slots;
-            MovedSlots.reserve(Slots);
-            for (uint32 Slot = 0; Slot < Slots; ++Slot)
-            {
-                MovedSlots.push_back(MakeUnique<FMovedSlot>());
-            }
         }
     };
     
@@ -945,6 +1005,15 @@ namespace Lumina::ECS::Utils
         State->bAnyDirty.store(true, std::memory_order_release);
     }
 
+    static void OnHierarchyChanged(FTransformDirtyState* State, ECS::FRegistry& Registry, ECS::FEntity Entity)
+    {
+        if (STransformComponent* Transform = Registry.TryGet<STransformComponent>(Entity))
+        {
+            Transform->bIsFlat = IsEntityTransformFlat(Registry, Entity);
+        }
+        OnTransformDirtied(State, Registry, Entity);
+    }
+
     FTransformDirtyState* EnsureTransformDirtyState(ECS::FRegistry& Registry)
     {
         if (TUniquePtr<FTransformDirtyState>* Holder = Registry.Ctx().Find<TUniquePtr<FTransformDirtyState>>())
@@ -954,6 +1023,18 @@ namespace Lumina::ECS::Utils
 
         FTransformDirtyState& State = *Registry.Ctx().Emplace<TUniquePtr<FTransformDirtyState>>(MakeUnique<FTransformDirtyState>());
         Registry.GetSignals<FNeedsTransformUpdate>().OnConstruct.Connect<&OnTransformDirtied>(&State);
+        Registry.OnHierarchyChanged().Connect<&OnHierarchyChanged>(&State);
+
+        // A load links children before this state exists, so they raised no signal and would keep a never-resolved world transform.
+        const ECS::FHierarchy& Hierarchy = Registry.GetHierarchy();
+        if (Hierarchy.NumLinked() != 0)
+        {
+            Hierarchy.EnsureOrder();
+            for (ECS::FEntity Linked : Hierarchy.GetOrder())
+            {
+                OnHierarchyChanged(&State, Registry, Linked);
+            }
+        }
         return &State;
     }
 
@@ -964,7 +1045,7 @@ namespace Lumina::ECS::Utils
 
     bool IsEntityTransformFlat(ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
-        return !Registry.HasAll<FRelationshipComponent>(Entity);
+        return !Registry.GetHierarchy().IsLinked(Entity);
     }
 
     void PublishFlatMove(FTransformDirtyGate* Gate, ECS::FEntity Entity, bool bPublish, bool bQueueBody)
@@ -1060,57 +1141,6 @@ namespace Lumina::ECS::Utils
         }
     }
 
-    // Recompute world from parentWorld and local for every descendant via cached relationship storage.
-    template<typename TTransformStorage, typename TRelStorage>
-    static void PropagateTransformsToDescendants(TTransformStorage& TransformStorage, TRelStorage& RelStorage, ECS::FEntity Root, bool bClearDirty,
-                                                 FTransformDirtyState* PublishState = nullptr, bool bFromResolve = false)
-    {
-        TFixedVector<ECS::FEntity, 64> Stack;
-        Stack.push_back(Root);
-
-        while (!Stack.empty())
-        {
-            const ECS::FEntity Parent = Stack.back();
-            Stack.pop_back();
-
-            if (!RelStorage.Contains(Parent))
-            {
-                continue;
-            }
-
-            const FTransform ParentWorld = TransformStorage.Get(Parent).GetWorldTransformCached();
-            ECS::FEntity Child = RelStorage.Get(Parent).First;
-            while (Child != ECS::NullEntity)
-            {
-                const ECS::FEntity Next = RelStorage.Contains(Child) ? RelStorage.Get(Child).Next : ECS::NullEntity;
-
-                STransformComponent& ChildTransform = TransformStorage.Get(Child);
-                ChildTransform.WorldTransform = ParentWorld * ChildTransform.LocalTransform;
-
-                if (bClearDirty)
-                {
-                    ChildTransform.bWorldDirty = false;
-                }
-
-                // A descendant moved because its ancestor did, so its own bWorldDirty was never set.
-                if (PublishState != nullptr)
-                {
-                    if (bFromResolve)
-                    {
-                        PublishState->PublishMoved(Child);
-                    }
-                    else
-                    {
-                        PublishState->PublishMoved(Child);
-                    }
-                }
-
-                Stack.push_back(Child);
-                Child = Next;
-            }
-        }
-    }
-
     bool AnyTransformsDirty(ECS::FRegistry& Registry)
     {
         TUniquePtr<FTransformDirtyState>* Holder = Registry.Ctx().Find<TUniquePtr<FTransformDirtyState>>();
@@ -1118,78 +1148,65 @@ namespace Lumina::ECS::Utils
         return State != nullptr && State->bAnyDirty.load(std::memory_order_acquire);
     }
 
-    void ResolveTransformChain(ECS::FRegistry& Registry, ECS::FEntity Entity)
+    FTransform ComputeWorldTransform(const ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
-        FTransformDirtyState& DirtyState = *EnsureTransformDirtyState(Registry);
-        if (!DirtyState.bAnyDirty.load(std::memory_order_acquire))
+        const auto XFormStorage = Registry.FindStorage<STransformComponent>();
+        if (!XFormStorage || !XFormStorage.Contains(Entity))
         {
-            return;
+            return FTransform();
         }
+        const ECS::FHierarchy& Hierarchy = Registry.GetHierarchy();
 
-        // Serialized against the other resolvers so a shared ancestor is never written concurrently.
-        FFiberScopeLock ResolveLock(DirtyState.ResolveGuard);
-
-        TFixedVector<ECS::FEntity, 64> AncestorChain;
-        int32 TopmostDirtyIndex = -1;
+        // Everything above the highest ancestor that moved still has a current cached world, so the walk stops being needed there.
+        TFixedVector<ECS::FEntity, 64> Chain;
+        int32 TopmostDirty = -1;
 
         ECS::FEntity Current = Entity;
-        auto RelStorage = Registry.GetStorage<FRelationshipComponent>();
-        auto XFormStorage = Registry.GetStorage<STransformComponent>();
-        
         while (Current != ECS::NullEntity)
         {
             if (XFormStorage.Contains(Current) && XFormStorage.Get(Current).bWorldDirty)
             {
-                TopmostDirtyIndex = (int32)AncestorChain.size();
+                TopmostDirty = (int32)Chain.size();
             }
+            Chain.push_back(Current);
 
-            AncestorChain.push_back(Current);
-
-            if (!Registry.HasAll<FRelationshipComponent>(Current))
+            const ECS::FEntity Parent = Hierarchy.GetParent(Current);
+            if (Parent == ECS::NullEntity || !Registry.IsValid(Parent) || !XFormStorage.Contains(Parent))
             {
                 break;
             }
-
-            ECS::FEntity Parent = RelStorage.Get(Current).Parent;
-            if (Parent == ECS::NullEntity || !Registry.IsValid(Parent))
-            {
-                break;
-            }
-
             Current = Parent;
         }
 
-        if (TopmostDirtyIndex < 0)
+        if (TopmostDirty < 0)
         {
-            return;
+            return XFormStorage.Get(Entity).GetWorldTransformCached();
         }
 
-        for (int32 i = TopmostDirtyIndex; i >= 0; --i)
+        FTransform World = XFormStorage.Get(Chain[TopmostDirty]).LocalTransform;
+        if (TopmostDirty + 1 < (int32)Chain.size())
         {
-            ECS::FEntity Ancestor = AncestorChain[i];
-            auto& Transform = XFormStorage.Get(Ancestor);
-
-            FRelationshipComponent* Rel = Registry.TryGet<FRelationshipComponent>(Ancestor);
-            if (Rel && Rel->Parent != ECS::NullEntity && Registry.IsValid(Rel->Parent))
-            {
-                const FTransform& ParentWorld = XFormStorage.Get(Rel->Parent).GetWorldTransformCached();
-                Transform.WorldTransform = ParentWorld * Transform.LocalTransform;
-            }
-            else
-            {
-                Transform.WorldTransform = Transform.LocalTransform;
-            }
-
-            DirtyState.PublishMoved(Ancestor);
+            World = XFormStorage.Get(Chain[TopmostDirty + 1]).GetWorldTransformCached() * World;
         }
-
-        // Propagate to the full subtree. Compute-only (no flag clearing), so no lock needed.
-        PropagateTransformsToDescendants(XFormStorage, RelStorage, AncestorChain[TopmostDirtyIndex], /*bClearDirty*/ false, &DirtyState);
+        for (int32 i = TopmostDirty - 1; i >= 0; --i)
+        {
+            World = World * XFormStorage.Get(Chain[i]).LocalTransform;
+        }
+        return World;
     }
 
-    void SetPublishMovedTransforms(ECS::FRegistry& Registry, bool bEnable)
+    uint32 AddMovedTransformConsumer(ECS::FRegistry& Registry)
     {
-        EnsureTransformDirtyState(Registry)->bPublishMoved.store(bEnable, std::memory_order_release);
+        return EnsureTransformDirtyState(Registry)->AddMovedConsumer();
+    }
+
+    void RemoveMovedTransformConsumer(ECS::FRegistry& Registry, uint32 Consumer)
+    {
+        TUniquePtr<FTransformDirtyState>* Holder = Registry.Ctx().Find<TUniquePtr<FTransformDirtyState>>();
+        if (Holder != nullptr && Holder->get() != nullptr)
+        {
+            (*Holder)->RemoveMovedConsumer(Consumer);
+        }
     }
 
     void PublishMovedTransform(ECS::FRegistry& Registry, ECS::FEntity Entity)
@@ -1201,7 +1218,7 @@ namespace Lumina::ECS::Utils
         }
     }
 
-    bool DrainMovedTransforms(ECS::FRegistry& Registry, TVector<ECS::FEntity>& Out)
+    bool DrainMovedTransforms(ECS::FRegistry& Registry, uint32 Consumer, TVector<ECS::FEntity>& Out)
     {
         TUniquePtr<FTransformDirtyState>* Holder = Registry.Ctx().Find<TUniquePtr<FTransformDirtyState>>();
         FTransformDirtyState* State = Holder ? Holder->get() : nullptr;
@@ -1211,15 +1228,7 @@ namespace Lumina::ECS::Utils
         }
 
         const SIZE_T Before = Out.size();
-
-        State->DrainMovedSlots(Out);
-
-        ECS::FEntity Batch[256];
-        std::size_t Count;
-        while ((Count = State->MovedTransforms.DequeueBulk(Batch, 256)) != 0)
-        {
-            Out.insert(Out.end(), Batch, Batch + Count);
-        }
+        State->DrainMovedConsumer(Consumer, Out);
 
         // Bumping the epoch opens the next publish window, so no clearing pass over drained entities.
         State->PublishEpoch.fetch_add(1, std::memory_order_relaxed);
@@ -1231,15 +1240,14 @@ namespace Lumina::ECS::Utils
     {
         LUMINA_PROFILE_SCOPE();
 
-        // Writes WorldTransform across the registry and walks parent chains -> a calling system must declare it.
         ValidateSystemAccess(static_cast<uint32>(ECS::GetComponentTypeID<STransformComponent>()), true, "Write<STransformComponent>");
-        ValidateSystemAccess(static_cast<uint32>(ECS::GetComponentTypeID<FRelationshipComponent>()), false, "Read<FRelationshipComponent>");
+        ValidateSystemAccess(static_cast<uint32>(ECS::GetComponentTypeID<SystemResource::Hierarchy>()), false, "Read<SystemResource::Hierarchy>");
 
         FTransformDirtyState& DirtyState = *EnsureTransformDirtyState(Registry);
         FFiberScopeLock ResolveLock(DirtyState.ResolveGuard);   // one resolver writes WorldTransform at a time
 
         auto TransformStorage = Registry.GetStorage<STransformComponent>();
-        auto RelStorage       = Registry.GetStorage<FRelationshipComponent>();   // cached, avoids per-entity try_get
+        const ECS::FHierarchy& Hierarchy = Registry.GetHierarchy();
 
         // Fold external FNeedsTransformUpdate tags into the queue; bWorldDirty dedups already-queued.
         for (ECS::FEntity Tagged : Registry.View<FNeedsTransformUpdate>())
@@ -1261,7 +1269,7 @@ namespace Lumina::ECS::Utils
         {
             return;
         }
-        
+
         // The raw drain is serial and cheap; the per-entity filter and flat resolve run in parallel.
         TVector<ECS::FEntity>& Raw = DirtyState.DrainScratch;
         Raw.clear();
@@ -1281,114 +1289,216 @@ namespace Lumina::ECS::Utils
             return;
         }
 
-        for (TVector<ECS::FEntity>& Slot : DirtyState.HierBySlot)
+        const bool bAnyHierarchy = Hierarchy.NumLinked() != 0;
+        if (bAnyHierarchy)
+        {
+            Hierarchy.EnsureOrder();
+        }
+
+        for (TVector<uint32>& Slot : DirtyState.HierBySlot)
         {
             Slot.clear();
         }
-        
-        auto Filter = [&](uint32 Index)
+
+        auto FilterChunk = [&](const Task::FParallelRange& Chunk)
         {
-            const ECS::FEntity E = Raw[Index];
-            if (!TransformStorage.Contains(E))
+            uint32 Worker = Jobs::GetWorkerIndex();
+            if (Worker >= DirtyState.HierBySlot.size()) { Worker = 0; }
+            TVector<uint32>& WorkerSlots = DirtyState.HierBySlot[Worker];
+
+            constexpr uint32 MovedBatch = 128;
+            ECS::FEntity Moved[MovedBatch];
+            uint32 NumMoved = 0;
+
+            for (uint32 Index = Chunk.Start; Index < Chunk.End; ++Index)
             {
-                return;
+                const ECS::FEntity E = Raw[Index];
+                STransformComponent* T = TransformStorage.TryGet(E);
+                if (T == nullptr || !T->bWorldDirty)
+                {
+                    continue;
+                }
+
+                // An entity outside the preorder has no parent to compose with, whatever its flat bit says.
+                if (const uint32 OrderSlot = bAnyHierarchy ? Hierarchy.GetSlotOfLive(E) : ECS::FHierarchy::NoSlot; OrderSlot != ECS::FHierarchy::NoSlot)
+                {
+                    WorkerSlots.push_back(OrderSlot);
+                    continue;
+                }
+                T->WorldTransform = T->LocalTransform;
+                T->bWorldDirty    = false;
+
+                Moved[NumMoved++] = E;
+                if (NumMoved == MovedBatch)
+                {
+                    DirtyState.PublishMovedBulk(Moved, NumMoved);
+                    NumMoved = 0;
+                }
             }
-            STransformComponent& T = TransformStorage.Get(E);
-            if (!T.bWorldDirty)
-            {
-                return;
-            }
-            if (RelStorage.Contains(E))
-            {
-                uint32 Slot = Jobs::GetWorkerIndex();
-                if (Slot >= DirtyState.HierBySlot.size()) { Slot = 0; }
-                DirtyState.HierBySlot[Slot].push_back(E);
-                return;
-            }
-            T.WorldTransform = T.LocalTransform;
-            T.bWorldDirty    = false;
-            DirtyState.PublishMoved(E);
+            DirtyState.PublishMovedBulk(Moved, NumMoved);
         };
 
+        LUMINA_PROFILE_VALUE("Transform/Dirty", (int64)Raw.size());
         if (Raw.size() > 1000)
         {
-            Task::ParallelFor((uint32)Raw.size(), Filter);
+            LUMINA_PROFILE_SECTION("FilterDirty");
+            Task::ParallelFor((uint32)Raw.size(), FilterChunk);
         }
         else
         {
-            for (uint32 i = 0; i < (uint32)Raw.size(); ++i)
-            {
-                Filter(i);
-            }
+            FilterChunk(Task::FParallelRange{ 0, (uint32)Raw.size(), 0 });
         }
 
-        // Gather hierarchical entities from the per-slot buffers with one reserve and one memcpy each.
-        TVector<ECS::FEntity>& HierEntities = DirtyState.HierScratch;
-        HierEntities.clear();
+        TVector<uint32>& DirtySlots = DirtyState.HierScratch;
+        DirtySlots.clear();
         {
             size_t Total = 0;
-            for (const TVector<ECS::FEntity>& Slot : DirtyState.HierBySlot)
+            for (const TVector<uint32>& Slot : DirtyState.HierBySlot)
             {
                 Total += Slot.size();
             }
 
-            HierEntities.reserve(Total);
-            for (const TVector<ECS::FEntity>& Slot : DirtyState.HierBySlot)
+            DirtySlots.reserve(Total);
+            for (const TVector<uint32>& Slot : DirtyState.HierBySlot)
             {
-                HierEntities.insert(HierEntities.end(), Slot.begin(), Slot.end());
+                DirtySlots.insert(DirtySlots.end(), Slot.begin(), Slot.end());
             }
         }
 
-        if (HierEntities.empty())
+        if (DirtySlots.empty())
         {
             return;
         }
 
-        auto ResolveHier = [&](uint32 Index)
+        const TVector<ECS::FEntity>& Order = Hierarchy.GetOrder();
+        const TVector<uint32>& SubtreeSizes = Hierarchy.GetSubtreeSizes();
+        const TVector<uint32>& ParentSlots  = Hierarchy.GetParentSlots();
+
+        // Ascending slots make a dirty descendant of a dirty ancestor fall inside the ancestor's range.
+        TVector<uint32>& RangeStarts = DirtyState.RangeStarts;
+        RangeStarts.clear();
+        uint32 RangeTotal = 0;
+
+        constexpr size_t SortedDirtyRatio = 16;
+        if (DirtySlots.size() * SortedDirtyRatio < Order.size())
         {
-            const ECS::FEntity DirtyEntity = HierEntities[Index];
-            STransformComponent& DirtyTransform = TransformStorage.Get(DirtyEntity);
+            std::sort(DirtySlots.begin(), DirtySlots.end());
 
-            const FRelationshipComponent& Rel = RelStorage.Get(DirtyEntity);
-            const bool bHasParent = Rel.Parent != ECS::NullEntity && Registry.IsValid(Rel.Parent) && TransformStorage.Contains(Rel.Parent);
-
-            if (bHasParent && TransformStorage.Get(Rel.Parent).bWorldDirty)
+            uint32 CoveredEnd = 0;
+            for (const uint32 Slot : DirtySlots)
             {
-                return;
+                if (Slot < CoveredEnd)
+                {
+                    continue;
+                }
+                RangeStarts.push_back(Slot);
+                CoveredEnd = Slot + SubtreeSizes[Slot];
+                RangeTotal += SubtreeSizes[Slot];
             }
-
-            if (bHasParent)
-            {
-                const FTransform& ParentWorld = TransformStorage.Get(Rel.Parent).GetWorldTransformCached();
-                DirtyTransform.WorldTransform = ParentWorld * DirtyTransform.LocalTransform;
-            }
-            else
-            {
-                DirtyTransform.WorldTransform = DirtyTransform.LocalTransform;
-            }
-
-            DirtyState.PublishMoved(DirtyEntity);
-            PropagateTransformsToDescendants(TransformStorage, RelStorage, DirtyEntity, /*bClearDirty*/ false, &DirtyState, /*bFromResolve*/ true);
-        };
-
-        if (HierEntities.size() > 1000)
-        {
-            Task::ParallelFor((uint32)HierEntities.size(), ResolveHier);
         }
         else
         {
-            for (uint32 i = 0; i < (uint32)HierEntities.size(); ++i)
+            // Most of the tree is dirty, so one pass over a mark per slot beats sorting the slots.
+            TVector<uint8>& Marks = DirtyState.SlotMarks;
+            Marks.assign(Order.size(), 0);
+            for (const uint32 Slot : DirtySlots)
             {
-                ResolveHier(i);
+                Marks[Slot] = 1;
+            }
+
+            const uint32 NumSlots = (uint32)Order.size();
+            for (uint32 Slot = 0; Slot < NumSlots;)
+            {
+                if (Marks[Slot] == 0)
+                {
+                    ++Slot;
+                    continue;
+                }
+                RangeStarts.push_back(Slot);
+                RangeTotal += SubtreeSizes[Slot];
+                Slot += SubtreeSizes[Slot];
             }
         }
 
-        for (ECS::FEntity Resolved : HierEntities)
+        TVector<STransformComponent*>& SlotTransforms = DirtyState.SlotTransforms;
+        if (SlotTransforms.size() < Order.size())
         {
-            if (TransformStorage.Contains(Resolved))
+            SlotTransforms.resize(Order.size());
+        }
+
+        auto ResolveRange = [&](uint32 RangeIndex)
+        {
+            const uint32 Begin = RangeStarts[RangeIndex];
+            const uint32 End   = Begin + SubtreeSizes[Begin];
+
+            // Every parent inside the range was written earlier in this walk, so only the head looks outside it.
+            const uint32 HeadParent = ParentSlots[Begin];
+            const STransformComponent* HeadParentTransform = HeadParent != ECS::FHierarchy::NoSlot ? TransformStorage.TryGet(Order[HeadParent]) : nullptr;
+
+            for (uint32 Slot = Begin; Slot < End; ++Slot)
             {
-                TransformStorage.Get(Resolved).bWorldDirty = false;
+                const ECS::FEntity Entity = Order[Slot];
+                STransformComponent* T = TransformStorage.TryGet(Entity);
+                SlotTransforms[Slot] = T;
+                if (T == nullptr)
+                {
+                    continue;
+                }
+
+                const FTransform* ParentWorld = nullptr;
+                if (Slot == Begin)
+                {
+                    ParentWorld = HeadParentTransform != nullptr ? &HeadParentTransform->GetWorldTransformCached() : nullptr;
+                }
+                else if (const STransformComponent* InRange = SlotTransforms[ParentSlots[Slot]])
+                {
+                    ParentWorld = &InRange->WorldTransform;
+                }
+
+                T->WorldTransform = ParentWorld != nullptr ? *ParentWorld * T->LocalTransform : T->LocalTransform;
+                T->bWorldDirty    = false;
             }
+        };
+
+        // Ranges are contiguous runs of the preorder, so a chunk publishes them in batches rather than one lock each.
+        auto ResolveRangeChunk = [&](const Task::FParallelRange& Chunk)
+        {
+            constexpr uint32 MovedBatch = 128;
+            ECS::FEntity Moved[MovedBatch];
+            uint32 NumMoved = 0;
+
+            for (uint32 RangeIndex = Chunk.Start; RangeIndex < Chunk.End; ++RangeIndex)
+            {
+                ResolveRange(RangeIndex);
+
+                const uint32 Begin = RangeStarts[RangeIndex];
+                const uint32 Count = SubtreeSizes[Begin];
+                if (NumMoved + Count > MovedBatch)
+                {
+                    DirtyState.PublishMovedBulk(Moved, NumMoved);
+                    NumMoved = 0;
+                }
+                if (Count > MovedBatch)
+                {
+                    DirtyState.PublishMovedBulk(&Order[Begin], Count);
+                    continue;
+                }
+                std::copy_n(&Order[Begin], Count, Moved + NumMoved);
+                NumMoved += Count;
+            }
+            DirtyState.PublishMovedBulk(Moved, NumMoved);
+        };
+
+        LUMINA_PROFILE_VALUE("Transform/Ranges", (int64)RangeStarts.size());
+        LUMINA_PROFILE_VALUE("Transform/RangeEntities", (int64)RangeTotal);
+        if (RangeTotal > 1000 && RangeStarts.size() > 1)
+        {
+            LUMINA_PROFILE_SECTION("ResolveRanges");
+            Task::ParallelFor((uint32)RangeStarts.size(), ResolveRangeChunk);
+        }
+        else
+        {
+            ResolveRangeChunk(Task::FParallelRange{ 0, (uint32)RangeStarts.size(), 0 });
         }
     }
 
@@ -1489,32 +1599,33 @@ namespace Lumina::ECS::Utils
         }
 
         template<typename Visitor>
-        void ForEachEntityRefOnEntity(ECS::FRegistry& Registry, ECS::FEntity Entity, Visitor& Visit)
+        void ForEachEntityRefInComponent(const CStruct* Struct, void* Value, Visitor& Visit)
         {
-            for (Lumina::ECS::FSparseSet* StoragePtr : Registry.GetActiveStorages())
-            {
-                const Lumina::ECS::FComponentTypeID ID = StoragePtr->GetTypeInfo().TypeID;
-                Lumina::ECS::FSparseSet& Storage = *StoragePtr;
-                if (!Storage.Contains(Entity))
-                {
-                    continue;
-                }
+            ForEachEntityRefInStruct(const_cast<CStruct*>(Struct), Value, Visit);
 
-                if (CStruct* Struct = FindComponentStructByTypeId(ID))
-                {
-                    ForEachEntityRefInStruct(Struct, Storage.GetRaw(Entity), Visit);
-                }
-            }
-
-            // A script is held BY a component, so its reflected properties are invisible to the storage walk.
-            if (SEntityScriptComponent* Scripts = Registry.TryGet<SEntityScriptComponent>(Entity))
+            // A script is an object the component holds, so its reflected properties are invisible to the component's own walk.
+            if (Struct == SEntityScriptComponent::StaticStruct())
             {
-                for (const TStrongObjectPtr<CEntityScript>& Held : Scripts->Scripts)
+                for (const TStrongObjectPtr<CEntityScript>& Held : static_cast<SEntityScriptComponent*>(Value)->Scripts)
                 {
-                    CEntityScript* Script = Held.Get();
-                    if (Script != nullptr && Script->GetClass() != nullptr)
+                    if (CEntityScript* Script = Held.Get(); Script != nullptr && Script->GetClass() != nullptr)
                     {
                         ForEachEntityRefInStruct(Script->GetClass(), Script, Visit);
+                    }
+                }
+            }
+        }
+
+        template<typename Visitor>
+        void ForEachEntityRefOnEntity(ECS::FRegistry& Registry, ECS::FEntity Entity, Visitor& Visit)
+        {
+            for (Lumina::ECS::FSparseSet* Storage : Registry.GetActiveStorages())
+            {
+                if (Storage->Contains(Entity))
+                {
+                    if (CStruct* Struct = FindComponentStructByTypeId(Storage->GetTypeInfo().TypeID))
+                    {
+                        ForEachEntityRefInComponent(Struct, Storage->GetRaw(Entity), Visit);
                     }
                 }
             }
@@ -1525,11 +1636,50 @@ namespace Lumina::ECS::Utils
 
     void RemapEntityReferences(ECS::FRegistry& Registry, ECS::FEntity Entity, const THashMap<ECS::FEntity, ECS::FEntity>& Map, bool bClearUnmapped)
     {
-        auto Visit = [&](uint32& Value)
+        for (Lumina::ECS::FSparseSet* Storage : Registry.GetActiveStorages())
         {
-            RemapEntityHandle(Value, Map, bClearUnmapped);
+            if (Storage->Contains(Entity))
+            {
+                RemapEntityReferences(FindComponentStructByTypeId(Storage->GetTypeInfo().TypeID), Storage->GetRaw(Entity), Map, bClearUnmapped);
+            }
+        }
+    }
+
+    void RemapEntityReferences(const CStruct* Struct, void* Value, const THashMap<ECS::FEntity, ECS::FEntity>& Map, bool bClearUnmapped)
+    {
+        if (Struct == nullptr || Value == nullptr)
+        {
+            return;
+        }
+        auto Visit = [&](uint32& Handle)
+        {
+            RemapEntityHandle(Handle, Map, bClearUnmapped);
         };
-        ForEachEntityRefOnEntity(Registry, Entity, Visit);
+        ForEachEntityRefInComponent(Struct, Value, Visit);
+
+        // A held value cannot be read until its type returns, so it records the remap instead.
+        if (Struct == SEntityScriptComponent::StaticStruct())
+        {
+            for (SHeldValue& Held : static_cast<SEntityScriptComponent*>(Value)->Pending)
+            {
+                Held.RemapEntities(Map, bClearUnmapped);
+            }
+        }
+        else if (Struct == SMissingComponents::StaticStruct())
+        {
+            for (SHeldValue& Held : static_cast<SMissingComponents*>(Value)->Entries)
+            {
+                Held.RemapEntities(Map, bClearUnmapped);
+            }
+        }
+    }
+
+    void RemapEntityReferences(CObject* Object, const THashMap<ECS::FEntity, ECS::FEntity>& Map, bool bClearUnmapped)
+    {
+        if (Object != nullptr)
+        {
+            RemapEntityReferences(Object->GetClass(), Object, Map, bClearUnmapped);
+        }
     }
 
     void CollectEntityReferences(ECS::FRegistry& Registry, ECS::FEntity Entity, TVector<ECS::FEntity>& Out)
@@ -1548,7 +1698,7 @@ namespace Lumina::ECS::Utils
     void SetEntityWorldRotationCached(ECS::FRegistry& Registry, ECS::FEntity Entity, const FQuat& WorldRotation)
     {
         ValidateSystemAccess(static_cast<uint32>(ECS::GetComponentTypeID<STransformComponent>()), true, "Write<STransformComponent>");
-        ValidateSystemAccess(static_cast<uint32>(ECS::GetComponentTypeID<FRelationshipComponent>()), false, "Read<FRelationshipComponent>");
+        ValidateSystemAccess(static_cast<uint32>(ECS::GetComponentTypeID<SystemResource::Hierarchy>()), false, "Read<SystemResource::Hierarchy>");
 
         STransformComponent* Transform = Registry.TryGet<STransformComponent>(Entity);
         if (Transform == nullptr)
@@ -1557,14 +1707,11 @@ namespace Lumina::ECS::Utils
         }
 
         FQuat LocalRotation = WorldRotation;
-        if (const FRelationshipComponent* Relationship = Registry.TryGet<FRelationshipComponent>(Entity))
+        if (const ECS::FEntity ParentEntity = Registry.GetHierarchy().GetParent(Entity); ParentEntity != ECS::NullEntity)
         {
-            if (Relationship->Parent != ECS::NullEntity)
+            if (const STransformComponent* Parent = Registry.TryGet<STransformComponent>(ParentEntity))
             {
-                if (const STransformComponent* Parent = Registry.TryGet<STransformComponent>(Relationship->Parent))
-                {
-                    LocalRotation = Math::Normalize(Math::Inverse(Parent->GetWorldTransformCached().GetRotation()) * WorldRotation);
-                }
+                LocalRotation = Math::Normalize(Math::Inverse(Parent->ComputeWorldTransform().GetRotation()) * WorldRotation);
             }
         }
 
@@ -1579,9 +1726,8 @@ namespace Lumina::ECS::Utils
 
     void SetEntityWorldTransform(ECS::FRegistry& Registry, ECS::FEntity Entity, const FTransform& WorldTransform)
     {
-        // Writes the entity's local transform and reads the parent's world matrix via FRelationshipComponent.
         ValidateSystemAccess(static_cast<uint32>(ECS::GetComponentTypeID<STransformComponent>()), true, "Write<STransformComponent>");
-        ValidateSystemAccess(static_cast<uint32>(ECS::GetComponentTypeID<FRelationshipComponent>()), false, "Read<FRelationshipComponent>");
+        ValidateSystemAccess(static_cast<uint32>(ECS::GetComponentTypeID<SystemResource::Hierarchy>()), false, "Read<SystemResource::Hierarchy>");
 
         STransformComponent* Transform = Registry.TryGet<STransformComponent>(Entity);
         if (Transform == nullptr)
@@ -1590,11 +1736,11 @@ namespace Lumina::ECS::Utils
         }
 
         FMatrix4 ParentWorldMatrix(1.0f);
-        if (const FRelationshipComponent* Relationship = Registry.TryGet<FRelationshipComponent>(Entity))
+        if (const ECS::FEntity Parent = Registry.GetHierarchy().GetParent(Entity); Parent != ECS::NullEntity)
         {
-            if (Relationship->Parent != ECS::NullEntity)
+            if (const STransformComponent* ParentTransform = Registry.TryGet<STransformComponent>(Parent))
             {
-                ParentWorldMatrix = Registry.Get<STransformComponent>(Relationship->Parent).GetWorldMatrix();
+                ParentWorldMatrix = ParentTransform->GetWorldMatrix();
             }
         }
 

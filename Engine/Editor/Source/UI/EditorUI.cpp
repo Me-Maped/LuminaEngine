@@ -41,9 +41,9 @@
 #include <Tools/Screenshot/ScreenshotCapture.h>
 #include <World/World.h>
 #include <World/Entity/Systems/CameraSystem.h>
-#include "UI/Tools/NodeGraph/Material/MaterialGraphCompile.h"
 #include "Config/EngineSettings.h"
 #include "Input/Key.h"
+#include "Renderer/RenderLayers.h"
 #include "implot.h"
 #include "LuminaEditor.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
@@ -92,7 +92,8 @@
 #include "Properties/Customizations/CustomPrimitiveDataCustomization.h"
 #include "Tools/AssetEditors/ParticleSystemEditor/ParticleParamCustomization.h"
 #include "Tools/AssetEditors/ParticleSystemEditor/ParticleParameterCustomization.h"
-#include "Properties/Customizations/AssetRefPropertyCustomization.h"
+#include "Assets/AssetManager/AssetManager.h"
+#include "Properties/Customizations/AssetIdPropertyCustomization.h"
 #include "Properties/Customizations/UIDocumentPropertyCustomization.h"
 #include "UI/UIDocumentRef.h"
 #include "Properties/Customizations/GameplayTagPropertyCustomization.h"
@@ -495,6 +496,7 @@ namespace Lumina
     {
         // Before any tool exists, so a reinstance during startup still finds this holder.
         FObjectReferenceProviders::Register(this);
+        AssetDeletedHandle = FCoreEditorDelegates::OnAssetDeleted.AddMember(this, &FEditorUI::OnAssetDeleted);
 
         // A prefab save rewrites placed instances, and recording that keeps later undos from replaying stale entities.
         CPrefab::SetLoadedWorldRefreshHook([this](CWorld* World, bool bBegin)
@@ -515,6 +517,9 @@ namespace Lumina
 
         // Editor links its own ImGui copy; install allocator here because StartupModule never runs (editor links directly, not LoadModule'd).
         ImGuiX::InstallImGuiAllocator();
+
+        // Only the ImGui copy that builds the font atlas fills its word-wrap tables, so this one breaks text mid-word until told to.
+        ImTextInitClassifiers();
 
         // Plugin DLLs link their own ImGui, so the module manager syncs every plugin that opted in.
         FModuleManager::Get().NotifyImGuiReady(Context, PlotContext);
@@ -551,19 +556,19 @@ namespace Lumina
         NamePicker::RegisterBuiltInSources();
 
         PropertyCustomizationRegistry = Memory::New<FPropertyCustomizationRegistry>();
-        PropertyCustomizationRegistry->RegisterPropertyCustomization(TBaseStructure<FVector2>::Get()->GetName(), []
+        PropertyCustomizationRegistry->RegisterPropertyCustomization(StaticStruct<FVector2>()->GetName(), []
         {
             return FVec2PropertyCustomization::MakeInstance();
         });
-        PropertyCustomizationRegistry->RegisterPropertyCustomization(TBaseStructure<FVector3>::Get()->GetName(), []
+        PropertyCustomizationRegistry->RegisterPropertyCustomization(StaticStruct<FVector3>()->GetName(), []
         {
             return FVec3PropertyCustomization::MakeInstance();
         });
-        PropertyCustomizationRegistry->RegisterPropertyCustomization(TBaseStructure<FVector4>::Get()->GetName(), []
+        PropertyCustomizationRegistry->RegisterPropertyCustomization(StaticStruct<FVector4>()->GetName(), []
         {
             return FVec4PropertyCustomization::MakeInstance();
         });
-        PropertyCustomizationRegistry->RegisterPropertyCustomization(TBaseStructure<FQuat>::Get()->GetName(), []
+        PropertyCustomizationRegistry->RegisterPropertyCustomization(StaticStruct<FQuat>()->GetName(), []
         {
             return FVec3PropertyCustomization::MakeInstance();
         });
@@ -571,19 +576,19 @@ namespace Lumina
         {
             return FEntityScriptComponentCustomization::MakeInstance();
         });
-        PropertyCustomizationRegistry->RegisterPropertyCustomization(TBaseStructure<FTransform>::Get()->GetName(), []
+        PropertyCustomizationRegistry->RegisterPropertyCustomization(StaticStruct<FTransform>()->GetName(), []
         {
             return FTransformPropertyCustomization::MakeInstance();
         });
 
-        PropertyCustomizationRegistry->RegisterPropertyCustomization(FAssetRef::StaticStruct()->GetName(), []
-        {
-           return FAssetRefPropertyCustomization::MakeInstance();
-        });
-
-        PropertyCustomizationRegistry->RegisterPropertyCustomization(FUIDocumentRef::StaticStruct()->GetName(), []
+        PropertyCustomizationRegistry->RegisterPropertyCustomization(SUIDocumentRef::StaticStruct()->GetName(), []
         {
            return FUIDocumentPropertyCustomization::MakeInstance();
+        });
+
+        PropertyCustomizationRegistry->RegisterPropertyCustomization(SAssetId::StaticStruct()->GetName(), []
+        {
+            return FAssetIdPropertyCustomization::MakeInstance();
         });
         
         PropertyCustomizationRegistry->RegisterPropertyCustomization(SCustomPrimitiveData::StaticStruct()->GetName(), []
@@ -591,7 +596,7 @@ namespace Lumina
            return FCustomPrimDataPropertyCustomization::MakeInstance();
         });
 
-        PropertyCustomizationRegistry->RegisterPropertyCustomization(FParticleParameter::StaticStruct()->GetName(), []
+        PropertyCustomizationRegistry->RegisterPropertyCustomization(SParticleParameter::StaticStruct()->GetName(), []
         {
            return FParticleParameterCustomization::MakeInstance();
         });
@@ -616,12 +621,17 @@ namespace Lumina
            return FKeyPropertyCustomization::MakeInstance();
         });
 
-        PropertyCustomizationRegistry->RegisterPropertyCustomization(FInputActionHandle::StaticStruct()->GetName(), []
+        PropertyCustomizationRegistry->RegisterPropertyCustomization(SRenderLayerMask::StaticStruct()->GetName(), []
+        {
+           return FRenderLayerMaskPropertyCustomization::MakeInstance();
+        });
+
+        PropertyCustomizationRegistry->RegisterPropertyCustomization(SInputActionHandle::StaticStruct()->GetName(), []
         {
            return FInputActionHandlePropertyCustomization::MakeInstance();
         });
 
-        PropertyCustomizationRegistry->RegisterPropertyCustomization(FGameplayTag::StaticStruct()->GetName(), []
+        PropertyCustomizationRegistry->RegisterPropertyCustomization(SGameplayTag::StaticStruct()->GetName(), []
         {
            return FGameplayTagPropertyCustomization::MakeInstance();
         });
@@ -694,6 +704,7 @@ namespace Lumina
 
     void FEditorUI::Deinitialize(const FUpdateContext& UpdateContext)
     {
+        FCoreEditorDelegates::OnAssetDeleted.Remove(AssetDeletedHandle);
         FObjectReferenceProviders::Unregister(this);
         CPrefab::SetLoadedWorldRefreshHook({});
         GApp->GetEventProcessor().UnregisterEventHandler(&ShortcutLayer);
@@ -706,6 +717,7 @@ namespace Lumina
 
         // Shutting down is not the user closing their tabs; see bTearingDownTools.
         bTearingDownTools = true;
+        ModalManager.Dismiss();
 
         while (!EditorTools.empty())
         {
@@ -1076,9 +1088,8 @@ namespace Lumina
         // A small budget avoids a hitch while cold thumbnails fill in a few per frame.
         CThumbnailManager::Get().ProcessRenderQueue();
 
-        // Queued in CMaterial::PostLoad when an asset's baked shaders predate the current templates.
-        ProcessMaterialRecompiles();
-        ProcessMaterialPermutationRequests();
+        MaterialCompiles.Tick();
+        ParticleCompiles.Tick();
     }
 
     void FEditorUI::OnUpdate(const FUpdateContext& UpdateContext)
@@ -1568,6 +1579,7 @@ namespace Lumina
 
         // Lookup walks the class hierarchy most-derived first, so an override resolves before its base.
         Registry.RegisterAssetEditor<CParticleSystem,     FParticleSystemEditorTool>(Owner);
+        Registry.RegisterAssetEditor<CParticleEmitter,    FParticleSystemEditorTool>(Owner);
         Registry.RegisterAssetEditor<CMaterial,           FMaterialEditorTool>(Owner);
         Registry.RegisterAssetEditor<CMaterialInstance,   FMaterialInstanceEditorTool>(Owner);
         Registry.RegisterAssetEditor<CMaterialFunction,   FMaterialFunctionEditorTool>(Owner);
@@ -1988,10 +2000,17 @@ namespace Lumina
                 ImGuiX::Notifications::NotifyInfo(LOCF("Undo history was cleared, since it could restore instances of the deleted prefab."));
             }
         }
+    }
 
-        if (ActiveAssetTools.find(InAsset) != ActiveAssetTools.end())
+    void FEditorUI::OnAssetDeleted(FStringView AssetPath)
+    {
+        for (FEditorTool* Tool : EditorTools)
         {
-            ToolsPendingDestroy.push(ActiveAssetTools.at(InAsset));
+            const FFixedString ToolPath = Tool->GetAssetVirtualPath();
+            if (!ToolPath.empty() && FStringView(ToolPath.c_str(), ToolPath.size()) == AssetPath)
+            {
+                ToolsPendingDestroy.push(Tool);
+            }
         }
     }
 
@@ -2117,6 +2136,26 @@ namespace Lumina
                 if (Drawer.Shortcut != 0 && ImGui::IsKeyChordPressed(Drawer.Shortcut))
                 {
                     ActivateDrawer(Drawer);
+                }
+            }
+        }
+
+        // Backtick works like a game console, opening the log ready to type and closing it from the command line.
+        if (ConsoleLogTool != nullptr && ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false) && ImGui::GetIO().KeyMods == ImGuiMod_None)
+        {
+            if (FFooterDrawer* ConsoleDrawer = FindDrawerForTool(ConsoleLogTool))
+            {
+                if (ConsoleLogTool->IsCommandInputActive())
+                {
+                    if (!ConsoleDrawer->bDocked && OpenDrawer == ConsoleLogTool)
+                    {
+                        ActivateDrawer(*ConsoleDrawer);
+                    }
+                }
+                else if (!ImGui::GetIO().WantTextInput)
+                {
+                    ShowDrawer(*ConsoleDrawer);
+                    ConsoleLogTool->FocusCommandInput();
                 }
             }
         }
@@ -2923,6 +2962,33 @@ namespace Lumina
                         ToolWindowFlags |= ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
                     }
                     
+                    // A window added after this tool's layout was saved has no settings, so it joins a docked sibling instead of floating.
+                    if (ImGui::FindWindowByName(ToolWindowName.c_str()) == nullptr && ImGui::FindWindowSettingsByID(ImHashStr(ToolWindowName.c_str())) == nullptr)
+                    {
+                        auto FindToolWindow = [&](const FName& Name)
+                        {
+                            return ImGui::FindWindowByName(FEditorTool::GetToolWindowName(Name.c_str(), Tool->GetCurrentDockspaceID()).c_str());
+                        };
+
+                        // A sibling tabbed behind the viewport would hide the new window there too.
+                        ImGuiID ViewportDockId = 0;
+                        for (auto& Sibling : Tool->ToolWindows)
+                        {
+                            ImGuiWindow* SiblingWindow = Sibling->bViewport ? FindToolWindow(Sibling->Name) : nullptr;
+                            ViewportDockId = SiblingWindow != nullptr ? SiblingWindow->DockId : ViewportDockId;
+                        }
+
+                        for (auto& Sibling : Tool->ToolWindows)
+                        {
+                            ImGuiWindow* SiblingWindow = (Sibling != Window && !Sibling->bViewport) ? FindToolWindow(Sibling->Name) : nullptr;
+                            if (SiblingWindow != nullptr && SiblingWindow->DockId != 0 && SiblingWindow->DockId != ViewportDockId)
+                            {
+                                ImGui::SetNextWindowDockID(SiblingWindow->DockId, ImGuiCond_FirstUseEver);
+                                break;
+                            }
+                        }
+                    }
+
                     ImGui::SetNextWindowClass(&Tool->ToolWindowsClass);
                     // Floor the size so a panel can't be dragged to a degenerate extent (child widgets assert at zero width).
                     ImGui::SetNextWindowSizeConstraints(ImVec2(100.0f, 80.0f), ImVec2(FLT_MAX, FLT_MAX));
@@ -3003,6 +3069,14 @@ namespace Lumina
 
     void FEditorUI::OpenAssetSearchModal()
     {
+        // A package has a thumbnail and its own editor, while a loose file opens by path.
+        enum class EOpenAs : uint8
+        {
+            Package,
+            FileEditor,
+            ScriptEditor,
+        };
+
         // The list cannot change while a modal is up, and re-walking the registry per keystroke is waste.
         struct FEntry
         {
@@ -3011,6 +3085,9 @@ namespace Lumina
             FFixedString Path;
             // Precomputed, since the alternative is interning the path on every visible row every frame.
             FName        PathName;
+            EOpenAs      OpenAs = EOpenAs::Package;
+            // A script opens in the external editor, which needs its disk path rather than the virtual one shown.
+            FString      DiskPath;
         };
 
         TVector<FEntry> Entries;
@@ -3018,6 +3095,30 @@ namespace Lumina
         {
             Entries.push_back(FEntry{ Asset->AssetGUID, FFixedString(Asset->AssetName.c_str()), Asset->Path,
                                       FName(Asset->Path.c_str()) });
+        }
+
+        for (const FTextAssetData* Text : FAssetRegistry::Get().GetTextAssetsOfKind(ETextAssetKind::None))
+        {
+            const FStringView FileName = VFS::FileName(FStringView(Text->Path.c_str(), Text->Path.size()));
+            Entries.push_back(FEntry{ Text->Guid, FFixedString(FileName.data(), FileName.size()), Text->Path, FName(), EOpenAs::FileEditor });
+        }
+
+        TVector<FString> ScriptFiles;
+        DotNet::GatherScriptSourceFiles(ScriptFiles);
+        for (FString& Script : ScriptFiles)
+        {
+            const FStringView   DiskPath(Script.c_str(), Script.size());
+            const FStringView   FileName    = VFS::FileName(DiskPath);
+            const FStringView   Parent      = VFS::Parent(DiskPath, true);
+            if (FileName.ends_with(".generated.cs") ||
+                (VFS::FileName(Parent) == "Generated" && VFS::FileName(VFS::Parent(Parent, true)) == "Scripts"))
+            {
+                continue;
+            }
+            const FFixedString  VirtualPath = VFS::ResolveToVirtualPath(DiskPath);
+            Entries.push_back(FEntry{ FGuid(), FFixedString(FileName.data(), FileName.size()),
+                                      VirtualPath.empty() ? FFixedString(Script.c_str()) : VirtualPath, FName(),
+                                      EOpenAs::ScriptEditor, Move(Script) });
         }
 
         if (Entries.empty())
@@ -3135,7 +3236,9 @@ namespace Lumina
 
                         // A miss starts the async resolve and draws the generic icon, same as the content browser tiles.
                         ImTextureRef Thumbnail = ImGuiX::ToImTextureRef(GenericAssetIcon);
-                        if (FPackageThumbnail* Ready = CThumbnailManager::Get().GetThumbnailForPackage(Entry.PathName))
+                        FPackageThumbnail* Ready = Entry.OpenAs == EOpenAs::Package
+                            ? CThumbnailManager::Get().GetThumbnailForPackage(Entry.PathName) : nullptr;
+                        if (Ready != nullptr)
                         {
                             Thumbnail = ImGuiX::ToImTextureRef(Ready->LoadedImage);
                         }
@@ -3164,7 +3267,19 @@ namespace Lumina
 
             if (bChosen)
             {
-                OpenAssetEditor(Matches[Selected]->GUID);
+                const FEntry& Chosen = *Matches[Selected];
+                switch (Chosen.OpenAs)
+                {
+                case EOpenAs::Package:
+                    OpenAssetEditor(Chosen.GUID);
+                    break;
+                case EOpenAs::FileEditor:
+                    OpenFileEditor(FStringView(Chosen.Path.c_str(), Chosen.Path.size()));
+                    break;
+                case EOpenAs::ScriptEditor:
+                    OpenScriptEditor(FStringView(Chosen.DiskPath.c_str(), Chosen.DiskPath.size()));
+                    break;
+                }
                 return true;
             }
 
@@ -3654,7 +3769,7 @@ namespace Lumina
         }
 
         FormatTo(Stats.Perf, LE_ICON_GAUGE " {:>3.0f} FPS / {:.2f} ms", SmoothedFPS, SmoothedFrameTime);
-        FormatTo(Stats.Objects, LE_ICON_CUBE_OUTLINE " {}", GObjectArray.GetNumAliveObjects());
+        FormatTo(Stats.Objects, LE_ICON_CUBE_OUTLINE " {}", Object::Internal::GetNumAliveObjects());
         FormatTo(Stats.Memory, LE_ICON_MEMORY " {:.0f} MiB", SmoothedMemoryMiB);
         FormatTo(Stats.GPUMemory, LE_ICON_EXPANSION_CARD " {:.0f} / {:.0f} MiB", SmoothedGPUMemoryMiB, GPUMemoryBudgetMiB);
 

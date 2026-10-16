@@ -31,10 +31,10 @@
                     const FVector3 B(M.x + s, Y, M.z);
                     const FVector3 Cc(M.x + s, Y, M.z + s);
                     const FVector3 D(M.x,     Y, M.z + s);
-                    World->DrawLine(A, B,  CellColor, 1.0f, false, -1.0f);
-                    World->DrawLine(B, Cc, CellColor, 1.0f, false, -1.0f);
-                    World->DrawLine(Cc, D, CellColor, 1.0f, false, -1.0f);
-                    World->DrawLine(D, A,  CellColor, 1.0f, false, -1.0f);
+                    World->GetDebugInterface()->DrawLine(A, B,  CellColor, 1.0f, false, -1.0f);
+                    World->GetDebugInterface()->DrawLine(B, Cc, CellColor, 1.0f, false, -1.0f);
+                    World->GetDebugInterface()->DrawLine(Cc, D, CellColor, 1.0f, false, -1.0f);
+                    World->GetDebugInterface()->DrawLine(D, A,  CellColor, 1.0f, false, -1.0f);
                 }
             }
         }
@@ -49,7 +49,7 @@
             {
                 const float a = (static_cast<float>(i) / Segs) * 6.2831853f;
                 const FVector3 P(Center.x + std::cos(a) * Radius, Center.y, Center.z + std::sin(a) * Radius);
-                if (i > 0) { World->DrawLine(Prev, P, Col, 1.5f, false, -1.0f); }
+                if (i > 0) { World->GetDebugInterface()->DrawLine(Prev, P, Col, 1.5f, false, -1.0f); }
                 Prev = P;
             }
         };
@@ -75,16 +75,16 @@
             const FNetClientView& CV = CVKV.second;
             for (const auto& RKV : CV.Relevant)
             {
-                const ECS::FEntity E = Net->GuidTable.Find(FNetGUID{ RKV.first });
+                const ECS::FEntity E = Net->GuidTable.Find(SNetGUID{ RKV.first });
                 if (E == ECS::NullEntity || !Registry.IsValid(E)) { continue; }
                 STransformComponent* T = Registry.TryGet<STransformComponent>(E);
                 if (T == nullptr) { continue; }
                 const FVector3  P   = T->GetWorldLocationCached();
                 const FVector4& Col = TierCol[static_cast<int>(RKV.second.Tier) & 3];
                 const float     r   = 0.5f;
-                World->DrawLine(P - FVector3(r, 0, 0), P + FVector3(r, 0, 0), Col, 2.0f, false, -1.0f);
-                World->DrawLine(P - FVector3(0, 0, r), P + FVector3(0, 0, r), Col, 2.0f, false, -1.0f);
-                World->DrawLine(P, P + FVector3(0, r * 2.0f, 0),               Col, 2.0f, false, -1.0f);
+                World->GetDebugInterface()->DrawLine(P - FVector3(r, 0, 0), P + FVector3(r, 0, 0), Col, 2.0f, false, -1.0f);
+                World->GetDebugInterface()->DrawLine(P - FVector3(0, 0, r), P + FVector3(0, 0, r), Col, 2.0f, false, -1.0f);
+                World->GetDebugInterface()->DrawLine(P, P + FVector3(0, r * 2.0f, 0),               Col, 2.0f, false, -1.0f);
             }
         }
     }

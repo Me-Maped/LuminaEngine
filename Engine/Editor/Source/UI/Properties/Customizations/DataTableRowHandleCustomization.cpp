@@ -1,12 +1,13 @@
 ﻿#include "DataTableRowHandleCustomization.h"
 #include "Localization/Localization.h"
+#include "UI/Properties/Customizations/AssetPickerFilter.h"
 
 #include "Assets/AssetRegistry/AssetData.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Containers/Vector.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/ObjectCore.h"
-#include "Scripting/ScriptDataStruct.h"
+#include "Scripting/ScriptTypeRegistry.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiDragDrop.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
@@ -15,8 +16,6 @@ namespace Lumina
 {
     namespace
     {
-        const ImVec4 GMutedText(0.6f, 0.6f, 0.6f, 1.0f);
-        const ImVec4 GEmptyText(1.0f, 0.19f, 0.19f, 1.0f);
         const ImVec4 GWarnText(1.0f, 0.55f, 0.45f, 1.0f);
 
         // The row type the owning field demands, from PROPERTY(Editable, RowType = "SMyRow").
@@ -26,7 +25,7 @@ namespace Lumina
             {
                 return nullptr;
             }
-            return ResolveDataStructByName(FName(Property->GetMetadata("RowType")));
+            return ResolveStructByName(FName(Property->GetMetadata("RowType")));
         }
 
         TVector<FAssetData*> GatherDataTables()
@@ -84,7 +83,7 @@ namespace Lumina
 
         ImGui::SetNextItemWidth(TextWidth);
         FFixedString TableLabel = Table != nullptr ? Table->GetName().c_str() : LOC("None");
-        ImGui::PushStyleColor(ImGuiCol_Text, Table != nullptr ? GMutedText : GEmptyText);
+        ImGui::PushStyleColor(ImGuiCol_Text, Table != nullptr ? AssetPickerFilter::kMutedText : AssetPickerFilter::kEmptyText);
         ImGuiX::InputText("##Table", TableLabel,
             ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_AutoSelectAll);
         ImGui::PopStyleColor();

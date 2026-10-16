@@ -3,7 +3,6 @@
 #include "Core/Object/ObjectMacros.h"
 #include "Core/Object/SoftObjectPtr.h"
 #include "Core/Object/SubclassOf.h"
-#include "Core/Engine/GameInstance.h"
 #include "Config/DeveloperSettings.h"
 #include "Containers/Vector.h"
 #include "Containers/String.h"
@@ -24,10 +23,6 @@ namespace Lumina
         // What the game window is titled, and the project name when left empty.
         PROPERTY(Editable, Category = "Project")
         FString GameDisplayName;
-
-        /** CGameInstance subclass to instantiate at runtime */
-        PROPERTY(Editable, Category = "Scripting")
-        TSubclassOf<CGameInstance> GameInstanceClass;
 
         /** World loaded when the standalone game starts. */
         PROPERTY(Editable, Category = "Maps")
@@ -52,6 +47,9 @@ namespace Lumina
         // Scales Box3D's length tolerances, 1 for meter-scale content and about 0.1 for millimeter-thin bodies such as coins.
         PROPERTY(Editable, Category = "Physics", ClampMin = 0.01f, ClampMax = 100.0f)
         float PhysicsLengthUnitsPerMeter = 1.0f;
+
+        PROPERTY(Editable, Category = "Artifact Cache", ToolTip = "A folder the whole team can reach, such as a network share or a folder in the repository, so one person's shader compile serves everyone. Relative paths start at the project. Empty keeps the cache local.")
+        FString SharedArtifactCachePath;
     };
 
     // Texture streaming budget and policy. Project-scoped rather than per-user: the pool size a project
@@ -229,6 +227,18 @@ namespace Lumina
         FVector4 ComponentHeader = FVector4(0.175f, 0.190f, 0.235f, 1.00f);
     };
 
+    // Names for the render layers that drawables pick from and cameras filter by, persisted with the project's renderer settings.
+    REFLECT(MinimalAPI, ConfigFile = "/Config/RendererSettings.json", DisplayName = "Render Layers", Category = "Engine")
+    class CRenderLayerSettings : public CDeveloperSettings
+    {
+        GENERATED_BODY()
+    public:
+
+        // Entry N names layer N, read through SRenderLayerMask::GetLayerName. The last layer is always Foreground.
+        PROPERTY(Editable, Category = "Layers")
+        TVector<FName> LayerNames = { FName("Default") };
+    };
+
     REFLECT()
     enum class ESMAAQuality : uint8
     {
@@ -257,6 +267,33 @@ namespace Lumina
         Medium,
         High,
         Ultra,
+    };
+
+    // None is the built-in spatial upscale, which an unsupported or unregistered choice also falls back to.
+    REFLECT()
+    enum class EUpscaler : uint8
+    {
+        None,
+        DLSS,
+        FSR,
+    };
+
+    // The standard upscaler quality modes, which each upscaler maps onto its own, plus a free percentage.
+    REFLECT()
+    enum class EUpscalerMode : uint8
+    {
+        // Renders at ScreenPercentage.
+        Custom,
+        // Full resolution, using the upscaler only as anti-aliasing, which DLSS calls DLAA.
+        NativeAA,
+        // About 67 percent per axis.
+        Quality,
+        // About 58 percent per axis.
+        Balanced,
+        // Half per axis.
+        Performance,
+        // A third per axis, meant for very high display resolutions.
+        UltraPerformance,
     };
 
     // S2x and 4x are absent because both add 2x MSAA, which a visibility-buffer deferred path does not run.
@@ -329,9 +366,13 @@ namespace Lumina
         PROPERTY(Editable, Category = "Shadows")
         EShadowQuality ShadowQuality = EShadowQuality::High;
 
-        // Multiplies every mesh's imported LOD switch distances, so a close third-person camera can push them out.
+        // At 1 a mesh switches LOD once its simplification error shrinks to one display pixel, and 2 waits for half a pixel.
         PROPERTY(Editable, Category = "Level of Detail", ClampMin = 0.25f, ClampMax = 16.0f, Delta = 0.25f)
         float LODDistanceScale = 1.0f;
+
+        // The same for shadow casters, measured in shadow map texels of the view that draws them.
+        PROPERTY(Editable, Category = "Level of Detail", ClampMin = 0.25f, ClampMax = 16.0f, Delta = 0.25f)
+        float ShadowLODScale = 1.0f;
 
         // Sharpens textures seen at a glancing angle, such as floors and roads, for a little bandwidth. 1 turns it off.
         PROPERTY(Editable, Category = "Textures", ClampMin = 1, ClampMax = 16)
@@ -372,6 +413,21 @@ namespace Lumina
             asks for it. Takes effect on the next frame. */
         PROPERTY(Editable, Category = "Skinning", ClampMin = 0, ClampMax = 4096, Units = "MiB")
         int32 PreSkinnedVertexBudgetMiB = 0;
+
+        // How far below the display the scene renders, which the upscaler restores before tonemapping.
+        PROPERTY(Editable, Category = "Resolution")
+        EUpscalerMode UpscalerMode = EUpscalerMode::Custom;
+
+        // Percentage of the display each axis renders at while UpscalerMode is Custom.
+        PROPERTY(Editable, Category = "Resolution", ClampMin = 25.0f, ClampMax = 100.0f)
+        float ScreenPercentage = 100.0f;
+
+        PROPERTY(Editable, Category = "Resolution")
+        EUpscaler Upscaler = EUpscaler::None;
+
+        // Sharpening on the built-in spatial upscale, which softens the image it enlarges.
+        PROPERTY(Editable, Category = "Resolution", ClampMin = 0.0f, ClampMax = 1.0f)
+        float UpscaleSharpness = 0.25f;
 
         // SMAA1x is morphological only; SMAAT2x adds a second jittered subsample resolved against a reprojected history.
         PROPERTY(Editable, Category = "Anti-Aliasing")

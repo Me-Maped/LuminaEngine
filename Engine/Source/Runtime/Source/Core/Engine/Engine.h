@@ -2,6 +2,7 @@
 
 #include "Core/UpdateContext.h"
 #include "Core/Delegates/Delegate.h"
+#include "Core/ArtifactCache/ArtifactCache.h"
 #include "Core/Engine/EngineURL.h"
 #include "Memory/SmartPtr.h"
 #include "Core/Object/ObjectHandleTyped.h"
@@ -20,7 +21,6 @@ namespace Lumina
     class FAssetManager;
     class FApplication;
     class FWindow;
-    class CGameInstance;
     class CWorld;
 }
 
@@ -30,7 +30,7 @@ namespace Lumina
     DECLARE_MULTICAST_DELEGATE(FProjectLoadedDelegate);
 
     
-    class LUMINA_VISIBLE_TYPE FEngine : public IObjectReferenceProvider
+    class LUMINA_VISIBLE_TYPE FEngine
     {
     public:
         
@@ -78,34 +78,28 @@ namespace Lumina
 
         RUNTIME_API void SetReadyToClose(bool bReadyToClose) { bEngineReadyToClose = bReadyToClose; }
         
-        RUNTIME_API NODISCARD double GetDeltaTime() const { return UpdateContext.DeltaTime; }
+        NODISCARD RUNTIME_API double GetDeltaTime() const { return UpdateContext.DeltaTime; }
         
-        RUNTIME_API NODISCARD bool HasLoadedProject() const { return !ProjectName.empty(); }
+        NODISCARD RUNTIME_API bool HasLoadedProject() const { return !ProjectName.empty(); }
 
         RUNTIME_API const FUpdateContext& GetUpdateContext() const { return UpdateContext; }
 
         RUNTIME_API void SetEngineReadyToClose(bool bReady) { bEngineReadyToClose = bReady; }
-        RUNTIME_API NODISCARD bool IsCloseRequested() const { return bCloseRequested; }
+        NODISCARD RUNTIME_API bool IsCloseRequested() const { return bCloseRequested; }
         
         RUNTIME_API FProjectLoadedDelegate& GetProjectLoadedDelegate() { return OnProjectLoaded; }
         
-        RUNTIME_API NODISCARD FStringView GetProjectName() const { return ProjectName; }
-        RUNTIME_API NODISCARD FStringView GetProjectPath() const { return ProjectPath; }
-        RUNTIME_API NODISCARD FFixedString GetProjectContentDirectory() const;
-        RUNTIME_API NODISCARD FFixedString GetProjectScriptsDirectory() const;
-        RUNTIME_API NODISCARD FFixedString GetProjectShadersDirectory() const;
+        NODISCARD RUNTIME_API FStringView GetProjectName() const { return ProjectName; }
+        NODISCARD RUNTIME_API FStringView GetProjectPath() const { return ProjectPath; }
+        NODISCARD RUNTIME_API FStringView GetProjectFile() const { return ProjectFile; }
+        NODISCARD RUNTIME_API FArtifactCache& GetArtifactCache() { return ArtifactCache; }
+        NODISCARD RUNTIME_API FFixedString GetProjectContentDirectory() const;
+        NODISCARD RUNTIME_API FFixedString GetProjectScriptsDirectory() const;
+        NODISCARD RUNTIME_API FFixedString GetProjectShadersDirectory() const;
 
         // Union of project + enabled-plugin cook roots; legacy GameStartupMap auto-converts
         // to a single root when no explicit roots exist. Cooker iterates this for BFS seeds.
         RUNTIME_API TVector<FCookRoot> GetCookRoots() const;
-
-        RUNTIME_API CGameInstance* GetGameInstance() const { return GameInstance.Get(); }
-
-        //~ IObjectReferenceProvider: the engine holds the one live object no registry owns.
-
-        const char* GetReferenceProviderName() const override { return "engine"; }
-
-        RUNTIME_API void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override;
 
         // A tool's temporary frame rate cap, which wins over the saved setting until set back to a negative value.
         RUNTIME_API void SetFrameRateCapOverride(int32 Cap) { FrameRateCapOverride = Cap; }
@@ -148,18 +142,11 @@ namespace Lumina
 
     protected:
 
-        /** Constructs Project.GameInstanceClass (or base CGameInstance) and calls Init. */
-        RUNTIME_API virtual void CreateGameInstance();
-
         /** Loads Project.GameStartupMap as a Game world. Editor overrides to no-op. */
         RUNTIME_API virtual void LoadStartupMap();
 
         // A headless process of -bots=N scripted clients that connect to a server, for load testing it.
         void LoadBotWorlds(FStringView MapName);
-
-        RUNTIME_API virtual void DestroyGameInstance();
-
-        void RepointGameInstanceContexts(CGameInstance* Instance);
 
         // The game's name, followed by engine and frame details in any build but Shipping.
         void RefreshWindowTitle(double AverageFrameSeconds = 0.0);
@@ -168,6 +155,9 @@ namespace Lumina
 
         // The half of opening a project that needs no engine subsystem, so a startup project runs it before any starts.
         RUNTIME_API bool MountProject(FStringView Path);
+
+        // False refuses the mount, which the editor does for a project another editor already has open.
+        virtual bool ClaimProject(FStringView /*ProjectDirectory*/) { return true; }
 
         // Settings, the project module, assets, scripts and the game instance, once the engine is up.
         RUNTIME_API void StartProject();
@@ -229,7 +219,8 @@ namespace Lumina
         
         FString                     ProjectName;
         FFixedString                ProjectPath;
-        TStrongObjectPtr<CGameInstance> GameInstance;
+        FFixedString                ProjectFile;
+        FArtifactCache              ArtifactCache;
 
         // Read by MountProject, applied by StartProject once project settings are writable.
         TVector<FString>            LegacyCookRoots;

@@ -8,33 +8,79 @@ using System.Runtime.InteropServices;
 
 namespace LuminaSharp;
 
-/// One argument of a data-event-* call; mirrors native RmlUi::FUIArg (UTF-8 ptr+len).
+// One argument of a data-event-* call, as UTF-8.
 [StructLayout(LayoutKind.Sequential)]
+[NativeLayout("FUIArg")]
 internal struct UIArg
 {
     public IntPtr Ptr;
     public int Len;
 }
 
-// Binds a ViewModel's or UIScript's [Bind] members to a named RmlUi data model, comparing them once a frame so plain assignments reach the view.
+// What the view wrote into a two-way bound variable; Str is set for a string and valid only for the call.
+[StructLayout(LayoutKind.Sequential)]
+[NativeLayout("FUIDataSet")]
+internal unsafe struct UIDataSet
+{
+    public int Field;
+    public int Type;
+    public double Number;
+    public IntPtr Str;
+    public int StrLen;
+}
+
+// A data-event-* command the view fired.
+[StructLayout(LayoutKind.Sequential)]
+[NativeLayout("FUIDataEvent")]
+internal unsafe struct UIDataEvent
+{
+    public int CommandId;
+    public int ArgCount;
+    public UIArg* Args;
+}
+
+internal sealed unsafe class UIDataSetClosure : ScriptClosure
+{
+    public required UIDataModel Model;
+
+    public override ulong Invoke(ulong Payload)
+    {
+        UIDataSet* Set = (UIDataSet*)Payload;
+        Model.ApplyFromNative(Set->Field, Set->Number, Set->Str, Set->StrLen);
+        return 0;
+    }
+}
+
+internal sealed unsafe class UIDataEventClosure : ScriptClosure
+{
+    public required UIDataModel Model;
+
+    public override ulong Invoke(ulong Payload)
+    {
+        UIDataEvent* Fired = (UIDataEvent*)Payload;
+        Model.InvokeCommand(Fired->CommandId, Fired->ArgCount, Fired->Args);
+        return 0;
+    }
+}
+
+// Binds a ViewModel's or CUIScript's Bind members to a named RmlUi data model, comparing them once a frame so plain assignments reach the view.
 public sealed unsafe class UIDataModel : IDisposable
 {
-    // Game-thread only, so a plain dictionary is fine. Lets World.UI.GetModel re-fetch a model by name.
     private static readonly Dictionary<(ulong World, string Name), UIDataModel> Registry = new();
 
     private readonly ulong _world;
     private readonly string _name;
     private readonly object _target;
     private readonly UIModelShape _shape;
-    private Lumina.FUIDataModel _native;
-    private GCHandle _self;
+    private Lumina.SUIDataModel _native;
 
     // Native field id per scalar and per list, parallel to the shape's lists. Negative when the bind failed.
     private readonly int[] _scalarField;
     private readonly int[] _listField;
 
     // What the view last received, so a frame where nothing changed pushes nothing.
-    private readonly object?[] _lastScalar;
+    private readonly double[] _lastNumber;
+    private readonly string?[] _lastText;
     private readonly long[] _lastList;
 
     private readonly Dictionary<string, int> _scalarByName = new(StringComparer.Ordinal);
@@ -42,6 +88,11 @@ public sealed unsafe class UIDataModel : IDisposable
 
     // Set while applying a value the view sent, so the property setter's Set() does not echo it back.
     private bool _applyingFromNative;
+
+    public UIDataModel(Lumina.CWorld World, string Name, ViewModel Target)
+        : this(World.WorldHandle, Name, Target)
+    {
+    }
 
     internal UIDataModel(ulong World, string Name, object Target)
     {
@@ -51,15 +102,14 @@ public sealed unsafe class UIDataModel : IDisposable
         _shape = UIModelShape.Of(Target.GetType());
         _scalarField = new int[_shape.Scalars.Count];
         _listField = new int[_shape.Lists.Count];
-        _lastScalar = new object?[_shape.Scalars.Count];
+        _lastNumber = new double[_shape.Scalars.Count];
+        _lastText = new string?[_shape.Scalars.Count];
         _lastList = new long[_shape.Lists.Count];
-        _self = GCHandle.Alloc(this);
 
-        _native = Lumina.CUILibrary.CreateDataModel(UI.WorldOf(World), Name,
-            (ulong)GCHandle.ToIntPtr(_self), (ulong)SetThunkPtr, (ulong)EventThunkPtr);
+        _native = Lumina.CUILibrary.CreateDataModel(UIWorld.FromHandle(World), Name,
+            ScriptCallback.Bind(new UIDataSetClosure { Model = this }), ScriptCallback.Bind(new UIDataEventClosure { Model = this }));
         if (!_native.IsValid)
         {
-            _self.Free();
             return;
         }
 
@@ -77,12 +127,14 @@ public sealed unsafe class UIDataModel : IDisposable
 
     public string Name => _name;
 
-    // The view-model this binding drives, or null when the target is a UIScript.
+    // The view-model this binding drives, or null when the target is a CUIScript.
     public ViewModel? ViewModel => _target as ViewModel;
 
     public object Target => _target;
 
     internal ulong World => _world;
+
+    public static UIDataModel? Find(Lumina.CWorld World, string Name) => Find(World.WorldHandle, Name);
 
     internal static UIDataModel? Find(ulong World, string Name)
         => Registry.TryGetValue((World, Name), out UIDataModel? Model) ? Model : null;
@@ -128,7 +180,7 @@ public sealed unsafe class UIDataModel : IDisposable
         }
         if (_scalarByName.TryGetValue(Name, out int Scalar))
         {
-            PushScalar(Scalar, ReadScalar(Scalar));
+            SyncScalar(Scalar, bForce: true, bMarkDirty: true);
         }
         else if (_listByName.TryGetValue(Name, out int List))
         {
@@ -145,9 +197,7 @@ public sealed unsafe class UIDataModel : IDisposable
         }
         for (int Index = 0; Index < _shape.Scalars.Count; ++Index)
         {
-            object? Value = ReadScalar(Index);
-            _lastScalar[Index] = Value;
-            WriteScalar(Index, Value);
+            SyncScalar(Index, bForce: true, bMarkDirty: false);
         }
         for (int Index = 0; Index < _shape.Lists.Count; ++Index)
         {
@@ -165,11 +215,7 @@ public sealed unsafe class UIDataModel : IDisposable
         }
         for (int Index = 0; Index < _shape.Scalars.Count; ++Index)
         {
-            object? Value = ReadScalar(Index);
-            if (!Equals(Value, _lastScalar[Index]))
-            {
-                PushScalar(Index, Value);
-            }
+            SyncScalar(Index, bForce: false, bMarkDirty: true);
         }
         for (int Index = 0; Index < _shape.Lists.Count; ++Index)
         {
@@ -177,45 +223,49 @@ public sealed unsafe class UIDataModel : IDisposable
         }
     }
 
-    private object? ReadScalar(int Index)
+    // Reads one member and sends it when it differs from what the view holds, or always when forced.
+    private void SyncScalar(int Index, bool bForce, bool bMarkDirty)
     {
+        UIModelShape.FScalar Scalar = _shape.Scalars[Index];
+        int Field = _scalarField[Index];
         try
         {
-            return _shape.Scalars[Index].Get(_target);
+            if (Scalar.ReadText != null)
+            {
+                string Text = Scalar.ReadText(_target) ?? string.Empty;
+                if (!bForce && string.Equals(Text, _lastText[Index], StringComparison.Ordinal))
+                {
+                    return;
+                }
+                _lastText[Index] = Text;
+                if (Field >= 0)
+                {
+                    Lumina.CUILibrary.SetString(_native, Field, Text);
+                }
+            }
+            else
+            {
+                double Number = Scalar.ReadNumber!(_target);
+                if (!bForce && Number.Equals(_lastNumber[Index]))
+                {
+                    return;
+                }
+                _lastNumber[Index] = Number;
+                if (Field >= 0)
+                {
+                    Lumina.CUILibrary.SetNumber(_native, Field, Number);
+                }
+            }
         }
         catch (Exception Exception)
         {
             Interop.LogException(Exception);
-            return _lastScalar[Index];
-        }
-    }
-
-    private void PushScalar(int Index, object? Value)
-    {
-        _lastScalar[Index] = Value;
-        if (_scalarField[Index] < 0)
-        {
             return;
         }
-        WriteScalar(Index, Value);
-        Lumina.CUILibrary.MarkDirty(_native, _scalarField[Index]);
-    }
 
-    private void WriteScalar(int Index, object? Value)
-    {
-        int Field = _scalarField[Index];
-        if (Field < 0)
+        if (bMarkDirty && Field >= 0)
         {
-            return;
-        }
-        Lumina.EUIVarType Type = _shape.Scalars[Index].VarType;
-        if (Type == Lumina.EUIVarType.String)
-        {
-            Lumina.CUILibrary.SetString(_native, Field, Value as string ?? string.Empty);
-        }
-        else
-        {
-            Lumina.CUILibrary.SetNumber(_native, Field, ToNumber(Value, Type));
+            Lumina.CUILibrary.MarkDirty(_native, Field);
         }
     }
 
@@ -238,7 +288,7 @@ public sealed unsafe class UIDataModel : IDisposable
             return;
         }
 
-        long Signature = UIModelShape.Signature(Collection);
+        long Signature = List.Signature(Collection);
         if (!force && Signature == _lastList[Index])
         {
             return;
@@ -270,7 +320,7 @@ public sealed unsafe class UIDataModel : IDisposable
 
     // ---- native -> managed ----
 
-    private void ApplyFromNative(int Field, double Number, IntPtr Str, int StrLen)
+    internal void ApplyFromNative(int Field, double Number, IntPtr Str, int StrLen)
     {
         int Index = Array.IndexOf(_scalarField, Field);
         if (Index < 0)
@@ -292,7 +342,14 @@ public sealed unsafe class UIDataModel : IDisposable
         {
             using var Scope = EnterTarget();
             Scalar.Set(_target, Value);
-            _lastScalar[Index] = Value;
+            if (Value is string Text)
+            {
+                _lastText[Index] = Text;
+            }
+            else
+            {
+                _lastNumber[Index] = Number;
+            }
         }
         catch (Exception Exception)
         {
@@ -304,7 +361,7 @@ public sealed unsafe class UIDataModel : IDisposable
         }
     }
 
-    private void InvokeCommand(int CommandId, int ArgCount, UIArg* Args)
+    internal void InvokeCommand(int CommandId, int ArgCount, UIArg* Args)
     {
         if (CommandId < 0 || CommandId >= _shape.Commands.Count)
         {
@@ -330,15 +387,15 @@ public sealed unsafe class UIDataModel : IDisposable
         }
     }
 
-    // A UIScript's handlers run inside its own script context, the same as its other callbacks.
+    // A CUIScript's handlers run inside its own script context, the same as its other callbacks.
     private Engine.Scope EnterTarget()
     {
-        return _target is EntityScript Script && !Script.Entity.IsNull ? Engine.Push(Script.World, Script.Entity, Script) : Engine.Snapshot();
+        return _target is Lumina.CEntityScript Script && !Script.Entity.IsNull ? Engine.Push(Script.World, Script.Entity, Script) : Engine.Snapshot();
     }
 
     private void Report(string Member, Exception Exception)
     {
-        if (_target is EntityScript)
+        if (_target is Lumina.CEntityScript)
         {
             NativeBindings.ScriptEventException(_target, Member, Exception);
         }
@@ -347,44 +404,6 @@ public sealed unsafe class UIDataModel : IDisposable
             Interop.LogException(Exception);
         }
     }
-
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void SetThunk(IntPtr Context, int Field, int Type, double Number, IntPtr Str, int StrLen)
-    {
-        try
-        {
-            if (GCHandle.FromIntPtr(Context).Target is UIDataModel Self)
-            {
-                Self.ApplyFromNative(Field, Number, Str, StrLen);
-            }
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void EventThunk(IntPtr Context, int CommandId, int ArgCount, UIArg* Args)
-    {
-        try
-        {
-            if (GCHandle.FromIntPtr(Context).Target is UIDataModel Self)
-            {
-                Self.InvokeCommand(CommandId, ArgCount, Args);
-            }
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    private static readonly IntPtr SetThunkPtr =
-        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, int, int, double, IntPtr, int, void>)&SetThunk;
-
-    private static readonly IntPtr EventThunkPtr =
-        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, int, int, UIArg*, void>)&EventThunk;
 
     // Called by native once a frame per world, just before that world's UI updates.
     [ManagedExport]
@@ -397,12 +416,24 @@ public sealed unsafe class UIDataModel : IDisposable
             {
                 return;
             }
-            foreach (UIDataModel Model in new List<UIDataModel>(Registry.Values))
+
+            // Copied out, since a model's getters may create or dispose models mid-poll.
+            int Count = Registry.Count;
+            UIDataModel[] Models = System.Buffers.ArrayPool<UIDataModel>.Shared.Rent(Count);
+            Registry.Values.CopyTo(Models, 0);
+            try
             {
-                if (Model._world == World)
+                for (int Index = 0; Index < Count; ++Index)
                 {
-                    Model.Poll();
+                    if (Models[Index]._world == World)
+                    {
+                        Models[Index].Poll();
+                    }
                 }
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<UIDataModel>.Shared.Return(Models, clearArray: true);
             }
         }
         catch (Exception Exception)
@@ -444,10 +475,6 @@ public sealed unsafe class UIDataModel : IDisposable
             Lumina.CUILibrary.DestroyDataModel(_native);
             _native = default;
         }
-        if (_self.IsAllocated)
-        {
-            _self.Free();
-        }
         if (_target is ViewModel Model && ReferenceEquals(Model.Binding, this))
         {
             Model.Binding = null;
@@ -455,15 +482,6 @@ public sealed unsafe class UIDataModel : IDisposable
     }
 
     // ---- conversions ----
-
-    private static double ToNumber(object? Value, Lumina.EUIVarType Type)
-    {
-        if (Value == null)
-        {
-            return 0.0;
-        }
-        return Type == Lumina.EUIVarType.Bool ? ((bool)Value ? 1.0 : 0.0) : Convert.ToDouble(Value, CultureInfo.InvariantCulture);
-    }
 
     private static string ToCell(object? Value)
     {

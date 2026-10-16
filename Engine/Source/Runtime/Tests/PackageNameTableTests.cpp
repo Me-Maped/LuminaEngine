@@ -7,7 +7,7 @@
 #include "Core/Object/Package/Package.h"
 #include "FileSystem/FileSystem.h"
 #include "Core/Object/ObjectCore.h"
-#include "Core/Reflection/Type/Properties/PropertyTag.h"
+#include "Core/Reflection/Type/Properties/PropertyHeader.h"
 #include "Core/Serialization/MemoryArchiver.h"
 #include "Core/Serialization/Package/PackageNameTable.h"
 #include "Core/Versioning/CoreVersion.h"
@@ -17,38 +17,6 @@ using namespace Lumina;
 namespace
 {
     constexpr int32 kNameTableVersion = (int32)ELuminaEngineVersion::PACKAGE_NAME_TABLE;
-
-    // stands in for FPackageSaver and FPackageLoader, which need a CPackage behind them
-    class FNameMapWriter : public FMemoryWriter
-    {
-    public:
-        explicit FNameMapWriter(TVector<uint8>& InBytes) : FMemoryWriter(InBytes) {}
-
-        using FArchive::operator<<;
-        FArchive& operator<<(FName& Value) override
-        {
-            SerializePackageName(*this, Value, &Map, nullptr);
-            return *this;
-        }
-
-        FPackageNameMap Map;
-    };
-
-    class FNameMapReader : public FMemoryReader
-    {
-    public:
-        FNameMapReader(const TVector<uint8>& InBytes, const FPackageNameTable& InTable)
-            : FMemoryReader(InBytes), Table(&InTable) {}
-
-        using FArchive::operator<<;
-        FArchive& operator<<(FName& Value) override
-        {
-            SerializePackageName(*this, Value, nullptr, Table);
-            return *this;
-        }
-
-        const FPackageNameTable* Table;
-    };
 }
 
 TEST(PackageNameTable, ANameSurvivesTheSlotRoundTrip)
@@ -61,14 +29,14 @@ TEST(PackageNameTable, ANameSurvivesTheSlotRoundTrip)
     FPackageNameTable Table;
 
     {
-        FNameMapWriter Writer(Stream);
+        FPackageContainerWriter Writer(Stream);
         for (FName& Name : Written)
         {
             Writer << Name;
         }
 
         FMemoryWriter TableWriter(TableBytes);
-        Writer.Map.Serialize(TableWriter);
+        Writer.GetNameMap().Serialize(TableWriter);
     }
 
     {
@@ -78,13 +46,48 @@ TEST(PackageNameTable, ANameSurvivesTheSlotRoundTrip)
 
     EXPECT_EQ(Table.Num(), 4u) << "a name used twice must take one slot";
 
-    FNameMapReader Reader(Stream, Table);
+    FPackageContainerReader Reader(Stream);
+    Reader.SetNameTable(&Table);
     for (const FName& Expected : Written)
     {
         FName Read;
         Reader << Read;
         EXPECT_EQ(Read, Expected);
         EXPECT_EQ(Read.IsNone(), Expected.IsNone());
+    }
+}
+
+TEST(PackageNameTable, ANameWithTwoNumericSuffixesKeepsBoth)
+{
+    TVector<FName> Written = { "SM_Tree_1_1", "SM_Tree_2_2" };
+
+    TVector<uint8>    Stream;
+    TVector<uint8>    TableBytes;
+    FPackageNameTable Table;
+
+    {
+        FPackageContainerWriter Writer(Stream);
+        for (FName& Name : Written)
+        {
+            Writer << Name;
+        }
+
+        FMemoryWriter TableWriter(TableBytes);
+        Writer.GetNameMap().Serialize(TableWriter);
+    }
+
+    {
+        FMemoryReader TableReader(TableBytes);
+        Table.Serialize(TableReader);
+    }
+
+    FPackageContainerReader Reader(Stream);
+    Reader.SetNameTable(&Table);
+    for (const FName& Expected : Written)
+    {
+        FName Read;
+        Reader << Read;
+        EXPECT_EQ(Read.ToString(), Expected.ToString());
     }
 }
 
@@ -98,13 +101,13 @@ TEST(PackageNameTable, ANumberedNameSharesItsBaseSlot)
     FPackageNameTable Table;
 
     {
-        FNameMapWriter Writer(Stream);
+        FPackageContainerWriter Writer(Stream);
         for (FName& Name : Written)
         {
             Writer << Name;
         }
         FMemoryWriter TableWriter(TableBytes);
-        Writer.Map.Serialize(TableWriter);
+        Writer.GetNameMap().Serialize(TableWriter);
     }
 
     {
@@ -114,7 +117,8 @@ TEST(PackageNameTable, ANumberedNameSharesItsBaseSlot)
 
     EXPECT_EQ(Table.Num(), 1u) << "the number is not part of the interned text";
 
-    FNameMapReader Reader(Stream, Table);
+    FPackageContainerReader Reader(Stream);
+    Reader.SetNameTable(&Table);
     for (const FName& Expected : Written)
     {
         FName Read;
@@ -160,9 +164,9 @@ TEST(PackageNameTable, ACorruptEntryCountIsRefused)
     EXPECT_EQ(Table.Num(), 0u);
 }
 
-TEST(PropertyTag, ATagRoundTripsAtTheCurrentVersion)
+TEST(PropertyHeader, RoundTripsAtTheCurrentVersion)
 {
-    FPropertyTag Written;
+    FPropertyHeader Written;
     Written.Type = EPropertyTypeFlags::Float;
     Written.Name = "NoiseScale";
     Written.Size = 4;
@@ -177,7 +181,7 @@ TEST(PropertyTag, ATagRoundTripsAtTheCurrentVersion)
     // 1 kind + the name + 4 size, where the name costs 8 bytes of text length before its 10 characters.
     EXPECT_LT(Bytes.size(), 24u) << "the tag is what the stream pays per property";
 
-    FPropertyTag Read;
+    FPropertyHeader Read;
     FMemoryReader Reader(Bytes);
     Reader.SetFileVersion(kNameTableVersion);
     Reader << Read;
@@ -188,9 +192,9 @@ TEST(PropertyTag, ATagRoundTripsAtTheCurrentVersion)
 }
 
 // files written before PACKAGE_NAME_TABLE spell the kind out and carry an offset nothing reads
-TEST(PropertyTag, ALegacyTagStillDecodesItsKind)
+TEST(PropertyHeader, ALegacyHeaderStillDecodesItsKind)
 {
-    FPropertyTag Written;
+    FPropertyHeader Written;
     Written.Type = EPropertyTypeFlags::Struct;
     Written.Name = "ShapeSize";
     Written.Size = 12;
@@ -202,7 +206,7 @@ TEST(PropertyTag, ALegacyTagStillDecodesItsKind)
         Writer << Written;
     }
 
-    FPropertyTag Read;
+    FPropertyHeader Read;
     FMemoryReader Reader(Bytes);
     Reader.SetFileVersion(kNameTableVersion - 1);
     Reader << Read;
@@ -212,7 +216,7 @@ TEST(PropertyTag, ALegacyTagStillDecodesItsKind)
     EXPECT_EQ(Read.Size, Written.Size);
 }
 
-TEST(PropertyTag, EveryKindNameMapsBackToItsKind)
+TEST(PropertyHeader, EveryKindNameMapsBackToItsKind)
 {
     for (uint16 Kind = 0; Kind < (uint16)EPropertyTypeFlags::Count; ++Kind)
     {
@@ -222,7 +226,7 @@ TEST(PropertyTag, EveryKindNameMapsBackToItsKind)
 }
 
 // IsValueValidForType tested "IntProperty" where the real name is Int32Property, so int32 always failed
-TEST(PropertyTag, EveryNumericKindAcceptsAValueInItsRange)
+TEST(PropertyHeader, EveryNumericKindAcceptsAValueInItsRange)
 {
     const EPropertyTypeFlags Numeric[] = {
         EPropertyTypeFlags::Int8,  EPropertyTypeFlags::Int16,  EPropertyTypeFlags::Int32,  EPropertyTypeFlags::Int64,
@@ -250,7 +254,7 @@ namespace
     {
         static const bool bReady = []
         {
-            ProcessNewlyLoadedCObjects();
+            RegisterPendingTypes();
             VFS::Mount<VFS::FMemoryFileSystem>(kCompatAlias);
             return true;
         }();

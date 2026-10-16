@@ -47,6 +47,10 @@ namespace Lumina
         /** Raw parameter memory, for the anim system's offset reads. Null when no struct is assigned. */
         void* GetParameterMemory();
 
+        // The parameter block when the graph names TypeName as its parameter struct, so a caller's mirror cannot misread it.
+        FUNCTION(ScriptInternal)
+        void* GetParameterMemoryAs(FName TypeName);
+
         // Brings Parameters up as an instance of the graph's struct, copying the graph's authored values.
         void EnsureParametersInitialized() const;
 
@@ -57,6 +61,14 @@ namespace Lumina
          */
         PROPERTY(Editable, Category = "Animation")
         ERootMotionLockMode RootMotionLock = ERootMotionLockMode::FromAsset;
+
+        // When false the graph holds its current pose, clocks and montages included.
+        PROPERTY(Editable, Replicated, Category = "Animation")
+        bool bPlaying = true;
+
+        // Playback rate multiplier for the whole graph, 1 being normal speed.
+        PROPERTY(Editable, Replicated, Category = "Animation")
+        float PlaybackSpeed = 1.0f;
 
         // Per-instance VM state (registers, playback clocks, parameter values). Sized lazily from Graph; not serialized.
         FAnimGraphVMState VMState;
@@ -183,7 +195,7 @@ namespace Lumina
         bool HasCurve(const FName& CurveName) const;
 
         // Sizes VMState from the current graph if it has not been initialized
-        // yet, so Lua / the system can set parameters before the VM's first tick.
+        // yet, so a script or the system can set parameters before the VM's first tick.
         void EnsureStateInitialized();
     };
 }

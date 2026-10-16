@@ -116,7 +116,7 @@ namespace Lumina
 
     void FAssetEditorTool::SerializeAssetForUndo(FArchive& Ar, CObject* InAsset)
     {
-        InAsset->GetClass()->SerializeTaggedProperties(Ar, InAsset);
+        InAsset->GetClass()->SerializeProperties(Ar, InAsset);
     }
 
     FObjectSnapshotCommand::FSerializer FAssetEditorTool::MakeAssetUndoSerializer()
@@ -272,17 +272,23 @@ namespace Lumina
             return;
         }
 
-        if (ShouldGenerateThumbnailOnSave() && Asset->GetPackage())
+        CPackage* Package = Asset->GetPackage();
+        if (Package == nullptr || !Package->IsDirty())
         {
-            if (!CThumbnailManager::Get().GenerateThumbnail(Asset.Get(), Asset->GetPackage()))
+            return;
+        }
+
+        if (ShouldGenerateThumbnailOnSave())
+        {
+            if (!CThumbnailManager::Get().GenerateThumbnail(Asset.Get(), Package))
             {
-                GenerateThumbnail(Asset->GetPackage());
+                GenerateThumbnail(Package);
             }
         }
 
         FCoreEditorDelegates::OnAssetPreSave.Broadcast(Asset.Get());
 
-        if (CPackage::SavePackage(Asset->GetPackage(), Asset->GetPackage()->GetPackagePath()))
+        if (CPackage::SavePackage(Package, Package->GetPackagePath()))
         {
             FAssetRegistry::Get().AssetSaved(Asset.Get());
             FCoreEditorDelegates::OnAssetSaved.Broadcast(Asset.Get());
@@ -301,18 +307,14 @@ namespace Lumina
 
     FFixedString FAssetEditorTool::GetAssetVirtualPath() const
     {
-        if (!Asset.IsValid())
+        if (Asset.IsValid())
         {
-            return {};
+            if (CPackage* Package = Asset->GetPackage())
+            {
+                AssetVirtualPath = Package->GetPackagePath();
+            }
         }
 
-        CPackage* Package = Asset->GetPackage();
-        if (Package == nullptr)
-        {
-            return {};
-        }
-
-        // The mount-relative virtual path with the .lasset extension, as the browser tiles carry it.
-        return Package->GetPackagePath();
+        return AssetVirtualPath;
     }
 }

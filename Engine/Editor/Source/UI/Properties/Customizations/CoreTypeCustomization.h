@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <string>
 #include "imgui.h"
 #include "Core/Math/Transform.h"
@@ -11,8 +11,10 @@
 #include "Core/Reflection/Type/LuminaTypes.h"
 #include "Core/Math/Math.h"
 #include "Input/Key.h"
+#include "Tools/UI/ImGui/ImGuiX.h"
 #include "Tools/UI/ImGui/Widgets/TreeListView.h"
 #include "UI/Properties/NamePicker.h"
+#include "Tools/UI/ImGui/ImGuiXNumeric.h"
 
 namespace Lumina
 {
@@ -61,22 +63,16 @@ namespace Lumina
      */
     inline float ResolveBaseStep(const FProperty* Prop, float FallbackSpeed)
     {
-        if (Prop != nullptr && Prop->HasMetadata("Delta"))
-        {
-            return std::stof(Prop->GetMetadata("Delta").c_str());
-        }
-        return FallbackSpeed;
+        const TOptional<float> Delta = Prop != nullptr ? Prop->GetMetadataNumber<float>("Delta") : TOptional<float>();
+        return Delta ? *Delta : FallbackSpeed;
     }
 
     // Step for a click-drag: the base, scaled by cursor speed unless the property authored a Delta.
     // Single place so every numeric widget agrees on the rule.
     inline float ResolveDragSpeed(const FProperty* Prop, float FallbackSpeed)
     {
-        if (Prop != nullptr && Prop->HasMetadata("Delta"))
-        {
-            return std::stof(Prop->GetMetadata("Delta").c_str());
-        }
-        return FallbackSpeed * MouseAdaptiveDragScale();
+        const TOptional<float> Delta = Prop != nullptr ? Prop->GetMetadataNumber<float>("Delta") : TOptional<float>();
+        return Delta ? *Delta : FallbackSpeed * MouseAdaptiveDragScale();
     }
 
     // Default printf format ImGui uses for each scalar type, so we can append a
@@ -140,17 +136,8 @@ namespace Lumina
             FProperty* Prop = Property->Property;
             float Speed = ResolveDragSpeed(Prop, IsFloatType(DT) ? 0.01f : 1.0f);
             
-            TOptional<ValueType> MinOpt;
-            TOptional<ValueType> MaxOpt;
-
-            if (Prop->HasMetadata("ClampMin"))
-            {
-                MinOpt = static_cast<ValueType>(std::stod(Prop->GetMetadata("ClampMin").c_str()));
-            }
-            if (Prop->HasMetadata("ClampMax"))
-            {
-                MaxOpt = static_cast<ValueType>(std::stod(Prop->GetMetadata("ClampMax").c_str()));
-            }
+            TOptional<ValueType> MinOpt = Prop->GetMetadataNumber<ValueType>("ClampMin");
+            TOptional<ValueType> MaxOpt = Prop->GetMetadataNumber<ValueType>("ClampMax");
 
             const ValueType* Min = MinOpt ? &MinOpt.value() : nullptr;
             const ValueType* Max = MaxOpt ? &MaxOpt.value() : nullptr;
@@ -159,12 +146,12 @@ namespace Lumina
             const char* Format = UnitFormat.empty() ? nullptr : UnitFormat.c_str();
 
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
-            if (Prop->HasMetadata("NoDrag"))
+            if (Prop->HasEditorFlag(EPropertyEditorFlags::NoDrag))
             {
                 // Type-only entry; +/- buttons step by Delta, no click-drag scrubbing. The UNSCALED base:
                 // a button press must step by the same amount every time.
                 ValueType Step = static_cast<ValueType>(ResolveBaseStep(Prop, IsFloatType(DT) ? 0.01f : 1.0f));
-                ImGui::InputScalar("##Value", DT, &DisplayValue, &Step, nullptr, Format);
+                ImGuiX::InputScalar("##Value", DT, &DisplayValue, &Step, nullptr, Format);
                 if (Min && DisplayValue < *Min)
                 {
                     DisplayValue = *Min;
@@ -176,7 +163,7 @@ namespace Lumina
             }
             else
             {
-                ImGui::DragScalar("##Value", DT, &DisplayValue, Speed, Min, Max, Format);
+                ImGuiX::DragScalar("##Value", DT, &DisplayValue, Speed, Min, Max, Format);
             }
             ImGui::PopItemWidth();
 
@@ -241,9 +228,7 @@ namespace Lumina
         
         EPropertyChangeOp DrawProperty(const TSharedPtr<FPropertyHandle>& Property, const FPropertyDrawArgs& Args) override
         {
-            ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
-            ImGui::Checkbox("##", &bValue);
-            ImGui::PopItemWidth();
+            ImGuiX::ToggleSwitch("##Value", &bValue);
 
             EPropertyChangeOp Result = EPropertyChangeOp::None;
             if (ImGui::IsItemEdited())
@@ -415,6 +400,41 @@ namespace Lumina
     private:
 
         int64 CachedValue = 0;
+        FPropertyEditSession EditSession;
+    };
+
+    // A component reference is bound at attach rather than authored, so it shows what it names and whether it is bound.
+    class FComponentRefPropertyCustomization : public IPropertyTypeCustomization
+    {
+    public:
+
+        static TSharedPtr<FComponentRefPropertyCustomization> MakeInstance()
+        {
+            return MakeShared<FComponentRefPropertyCustomization>();
+        }
+
+        EPropertyChangeOp DrawProperty(const TSharedPtr<FPropertyHandle>& Property, const FPropertyDrawArgs& Args) override;
+        void UpdatePropertyValue(const TSharedPtr<FPropertyHandle>& Property) override {}
+        void HandleExternalUpdate(const TSharedPtr<FPropertyHandle>& Property) override {}
+    };
+
+    // A checkbox per named render layer, read from CRenderLayerSettings.
+    class FRenderLayerMaskPropertyCustomization : public IPropertyTypeCustomization
+    {
+    public:
+
+        static TSharedPtr<FRenderLayerMaskPropertyCustomization> MakeInstance()
+        {
+            return MakeShared<FRenderLayerMaskPropertyCustomization>();
+        }
+
+        EPropertyChangeOp DrawProperty(const TSharedPtr<FPropertyHandle>& Property, const FPropertyDrawArgs& Args) override;
+        void UpdatePropertyValue(const TSharedPtr<FPropertyHandle>& Property) override;
+        void HandleExternalUpdate(const TSharedPtr<FPropertyHandle>& Property) override;
+
+    private:
+
+        uint32 CachedBits = 0;
         FPropertyEditSession EditSession;
     };
 

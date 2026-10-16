@@ -19,6 +19,7 @@
 #include "World/Scene/RenderScene/EnvironmentRenderTypes.h"
 #include "World/Scene/RenderScene/MeshDrawCommand.h"
 #include "World/Scene/RenderScene/RenderScene.h"
+#include "World/Scene/RenderScene/SceneUpscaler.h"
 #include "World/Scene/RenderScene/SceneCullContext.h"
 #include "World/Scene/RenderScene/ScenePrimitiveSet.h"
 #include "World/Scene/RenderScene/TerrainRenderTypes.h"
@@ -28,15 +29,18 @@
 #include "TaskSystem/FiberSync.h"
 #include "World/Entity/Components/PostProcessSettings.h"
 #include "World/Entity/Components/CloudComponent.h"
+#include "World/Entity/Systems/WeatherState.h"
 
 namespace Lumina
 {
     class CMesh;
+    enum class ESMAAMode : uint8;
     struct FLineBatcherComponent;
     struct FTriangleBatcherComponent;
     struct SDirectionalLightComponent;
     struct SSpotLightComponent;
     struct SPointLightComponent;
+    struct SAreaLightComponent;
     struct SExponentialHeightFogComponent;
     struct SEnvironmentComponent;
     class CWorld;
@@ -65,16 +69,16 @@ namespace Lumina
         ~FDefaultSceneRenderer() override;
         LE_NO_COPYMOVE(FDefaultSceneRenderer);
 
-        // A skinned slot past the frame data's current size, written by the merge once it has grown the array.
+        // A skinned index past the frame data's current size, written by the merge once it has grown the array.
         struct FDeferredSkinnedSlot
         {
-            uint32              InstanceSlot;
+            uint32              SkinnedIndex;
             FSkinnedFrameData   Data;
         };
 
         struct CACHE_ALIGN FThreadLocalDrawData
         {
-            TVector<uint32>                     SkinnedSlots;
+            TVector<uint32>                     SkinnedIndices;
             TVector<FDeferredSkinnedSlot>       DeferredSlots;
             TVector<FUIntVector2>               BoneUploadRanges;
 
@@ -82,14 +86,16 @@ namespace Lumina
             bool                                bTouched = false;
 
             FThreadLocalDrawData() = default;
+            ~FThreadLocalDrawData() = default;
             FThreadLocalDrawData(const FThreadLocalDrawData&) = delete;
+            FThreadLocalDrawData& operator=(const FThreadLocalDrawData&) = delete;
 
             FThreadLocalDrawData(FThreadLocalDrawData&&) = default;
             FThreadLocalDrawData& operator=(FThreadLocalDrawData&&) noexcept = default;
 
             void ResetForFrame()
             {
-                SkinnedSlots.clear();
+                SkinnedIndices.clear();
                 DeferredSlots.clear();
                 BoneUploadRanges.clear();
                 Stats = {};
@@ -110,6 +116,20 @@ namespace Lumina
             float       OuterFOVDegrees;
             // Point lights only, one bit per cube face that some view can see a receiver through.
             uint32      FaceMask = kAllCubeFaces;
+        };
+
+        // Gathered by the light tasks and resolved serially, since resolving touches the material.
+        struct FLightFunctionRequest
+        {
+            CMaterialInterface* Material = nullptr;
+            uint32      LightIndex = 0;
+            ELightFlags Type = ELightFlags::None;
+            FVector3    Position = FVector3(0.0f);
+            // The way the light travels, so a spot's aim and the sun's opposite of its to-light direction.
+            FVector3    Forward = FVector3(0.0f, 0.0f, -1.0f);
+            FVector3    Right = FVector3(1.0f, 0.0f, 0.0f);
+            FVector3    Up = FVector3(0.0f, 1.0f, 0.0f);
+            float       ProjectionScale = 1.0f;
         };
 
         static constexpr uint32 kAllCubeFaces = 0x3Fu;
@@ -152,6 +172,9 @@ namespace Lumina
             struct FGrassSpeciesExtract
             {
                 CStaticMesh* Mesh      = nullptr;
+                // Resolved during extraction, since worlds render in parallel and the cache is not safe to mutate there.
+                uint32  ResolveHandle  = INVALID_MESH_RESOLVE_HANDLE;
+                FName   TypeName;
                 uint32  LayerIndex     = 0;
                 float   CellSize       = 1.0f;   // world units between candidates, from density
                 float   MinWeight      = 0.25f;
@@ -189,7 +212,6 @@ namespace Lumina
                 /** Empty unless the terrain carries SGrassComponent and its material declares species. */
                 TVector<FGrassSpeciesExtract> Grass;
                 uint32              GrassMaxInstances = 0;
-                float               GrassMaxDrawDistance = 0.0f;
 
                 // Height upload: 0 none, 1 full map, 2 packed dirty rect.
                 uint8               HeightUpload    = 0;
@@ -220,6 +242,7 @@ namespace Lumina
                 float                   SpawnRateMultiplier = 1.0f;
                 bool                    bEmit               = true;
                 bool                    bBurstOnSpawn       = true;
+                bool                    bOnDrawnLayer       = true;
 
                 // Extract-phase Activate()/Deactivate() intents, applied once then cleared.
                 bool                    bForceBurst         = false;
@@ -271,6 +294,7 @@ namespace Lumina
             };
 
             FViewVolume                      ViewVolume = {};
+            FViewLayerSettings               ViewLayers = {};
             FFrustum                         CameraFrustum = {};
             FSceneGlobalData                 SceneGlobalData = {};
             float                            CachedWorldDeltaTime = 0.0f;
@@ -293,10 +317,9 @@ namespace Lumina
                 uint32                           BoneCount = 0;
                 // Slices whose pose or base moved this frame. Everything else is already resident.
                 TVector<FUIntVector2>            BoneUploadRanges;
-                // Per-frame skinned data indexed by RETAINED slot; only gathered slots are written, and
-                // SkinnedSlots lists which. Stale entries are rejected by their frame tag, not cleared.
+                // Indexed by skinned index, only gathered entries are written, and stale ones fail their frame tag.
                 TVector<FSkinnedFrameData>       SkinnedFrameData;
-                TVector<uint32>                  SkinnedSlots;
+                TVector<uint32>                  SkinnedIndices;
                 TVector<FMeshDrawCommand>        DrawCommands;
                 TVector<uint32>                  OpaqueDrawList;
                 TVector<uint32>                  TranslucentDrawList;
@@ -311,19 +334,27 @@ namespace Lumina
 
                     TVector<uint32>             DirtySlots;
                     TVector<uint32>             DirtyStaticSlots;
+                    TVector<uint32>             DeactivatedSlots;
 
                     bool                        bSurfaceDescsChanged = false;
                     uint32                      SurfaceDescCount = 0;
 
                     uint32                      MaxSurfaceDescMeshlets = 0;
+
+                    uint32                      MeshletVisibilityWords = 0;
                 } RetainedUpload;
             } Geometry;
 
             struct FViews
             {
                 TVector<FCullView>               CullViews;
+                // The primary camera's LOD inputs, ready before the skinned gather that reads them on workers.
+                FCullView                        CameraLODView       = {};
                 uint32                           NumDrawsPerView     = 0;
                 uint32                           CascadeViewBase     = Constants::kIndexNoneU32;
+                uint32                           NumCascadeViews     = 0;
+                // The far cascade, when present, follows these and takes only far casters.
+                uint32                           NumNearCascadeViews = 0;
                 TVector<uint32>                  PointShadowCullViewBases;
                 TVector<uint32>                  SpotShadowCullViewBases;
                 TVector<FCaptureViewData>        CaptureViews;
@@ -341,7 +372,38 @@ namespace Lumina
                 TVector<FFrustum>                RelevanceFrusta;
                 TVector<FShadowRequest>          ShadowRequests;
                 FMutex                           ShadowRequestMutex;
+
+                struct FLightFunctionDraw
+                {
+                    FRenderMaterialShaders       Shaders;
+                    FLightFunctionRequest        Request;
+                    uint32                       MaterialIndex = 0;
+                    uint32                       Slot = 0;
+                };
+                TVector<FLightFunctionRequest>   LightFunctionRequests;
+                FMutex                           LightFunctionRequestMutex;
+                TVector<FLightFunctionDraw>      LightFunctionDraws;
+                TArray<FLightFunction, MAX_LIGHT_FUNCTIONS> LightFunctions = {};
                 TVector<FShadowTile>             AtlasTiles;
+
+                // What the sun's screen-space far shadow pass traces this frame.
+                struct FSunFarShadow
+                {
+                    bool                         bTerrain = false;
+                    FVector3                     ToSun = FVector3(0.0f, 1.0f, 0.0f);
+                    float                        TanHalfAngle = 0.0f;
+                    float                        TerrainDistance = 0.0f;
+
+                    bool                         bDistanceField = false;
+                    float                        DFNear = 0.0f;
+                    float                        DFFar = 0.0f;
+                    float                        DFMinRadius = 0.0f;
+                    // The grid the casters are binned into, square in the plane facing the sun.
+                    FVector3                     SunRight = FVector3(1.0f, 0.0f, 0.0f);
+                    FVector3                     SunUp = FVector3(0.0f, 0.0f, 1.0f);
+                    FVector2                     GridOrigin = FVector2(0.0f);
+                    float                        GridCellSize = 1.0f;
+                } SunFarShadow;
             } Lighting;
 
             struct FPrimitives
@@ -385,6 +447,8 @@ namespace Lumina
 
                 bool                             bClouds              = false;
                 SCloudComponent                  Clouds               = {};
+                // Weather wind drift added on top of the cloud component's own.
+                FVector2                         CloudWindOffset      = FVector2(0.0f);
 
                 TVector<FGPUFogVolume>           FogVolumes;
                 uint32                           FarShaftSteps        = 0;
@@ -392,6 +456,23 @@ namespace Lumina
                 bool                             bLocalVolumetricLights = false;
                 float                            FarShaftDistance     = 4000.0f;
             } Volumetrics;
+
+            // Inactive unless a weather component is playing, which leaves every weather pass and allocation idle.
+            struct FWeather
+            {
+                bool                             bActive                  = false;
+                bool                             bDrops                   = false;
+                FWeatherState                    State                    = {};
+                int32                            OcclusionShadowDataIndex = Constants::kIndexNone;
+                uint32                           OcclusionCullView        = Constants::kIndexNoneU32;
+                uint32                           OcclusionResolution      = 0;
+                FMatrix4                         OcclusionViewProjection  = FMatrix4(1.0f);
+                float                            OcclusionDepthRange      = 1.0f;
+                float                            OcclusionTexelWorld      = 0.1f;
+                FVector3                         FallDirection            = FVector3(0.0f, -1.0f, 0.0f);
+                uint32                           NumDrops                 = 0;
+                uint32                           NumSplashes              = 0;
+            } Weather;
 
             // Splines uploaded this frame. Headers index into the two shared arrays; everything is world
             // space (SSplineComponent authors in entity-local space and the extract bakes the transform in).
@@ -469,6 +550,7 @@ namespace Lumina
             GTAO,
             GTAODenoise,
             GTAOBlur,
+            SunFarShadowMask,
             SSRTrace,
             SSRPyramid,
             SSRSurface,
@@ -512,6 +594,7 @@ namespace Lumina
             Velocity,
             TemporalHistoryA,
             TemporalHistoryB,
+            UpscaledHDR,
 
             #if USING(WITH_EDITOR)
             PointLightIcon,
@@ -532,7 +615,12 @@ namespace Lumina
         struct FSceneView
         {
             FSceneImage                                     Output;
+            // The render resolution, which every scene pass and ScreenSize use.
             FUIntVector2                                    Size = FUIntVector2(0);
+            // What Output and every pass after the upscale draw at.
+            FUIntVector2                                    DisplaySize = FUIntVector2(0);
+            // Resolved each extract, since a plugin can register or drop one between frames.
+            IUpscaler*                                      Upscaler = nullptr;
             bool                                            bIsPrimary = false;
             FViewVolume                                     PendingViewVolume;
             bool                                            bEnabled = false;
@@ -547,6 +635,7 @@ namespace Lumina
             RHI::EQueueType                                 CloudNoiseQueue  = RHI::EQueueType::Graphics;
             RHI::FGPUAllocation                                    ClusterBuffer;
             RHI::FGPUAllocation                                    ClusterLightMaskBuffer;
+            RHI::FGPUAllocation                                    ClusterRangeBuffer;
             FMatrix4                                        LastClusterInvProjection = FMatrix4(0.0f);
             FVector2                                        LastClusterNearFar       = FVector2(0.0f);
             FUIntVector2                                    LastClusterScreenSize    = FUIntVector2(0);
@@ -562,7 +651,7 @@ namespace Lumina
 
         void Init() override;
 
-        void Extract(const FViewVolume& ViewVolume, const SPostProcessSettings* PostProcess) override;
+        void Extract(const FViewVolume& ViewVolume, const SPostProcessSettings* PostProcess, const FViewLayerSettings& Layers) override;
         void PrepareRender(uint8 FrameIndex) override;
         void RenderView(uint8 FrameIndex) override;
         void SetActivePostProcessMaterials(const TVector<CMaterialInterface*>& Materials) override { PendingPostProcessMaterials = Materials; }
@@ -590,6 +679,7 @@ namespace Lumina
         // Read by both meshlet-cull dispatches and written by neither: that is what makes them partition.
         RHI::FGPUAllocation GetInstanceVisibilityPrev()  const { return InstanceVisibilityBuffers[InstanceVisibilityWriteIndex ^ 1u]; }
         RHI::FGPUAllocation GetInstanceVisibilityWrite() const { return InstanceVisibilityBuffers[InstanceVisibilityWriteIndex]; }
+        RHI::FGPUAllocation GetMeshletVisibility() const       { return MeshletVisibilityBuffer; }
         RHI::FGPUAllocation GetBlockDispatchArgs() const { return BlockDispatchArgsRing[CurrentFrameSlot]; }
         RHI::FGPUAllocation GetSkinDispatchArgs()  const { return SkinDispatchArgsRing[CurrentFrameSlot]; }
         /** One workgroup per written meshlet block, sized by BuildMeshletCullArgs. */
@@ -644,6 +734,15 @@ namespace Lumina
 
         // Applies a deferred SetPrimaryViewSize. Called from Extract, which only runs for a ticking world.
         void ApplyPendingPrimarySize();
+
+        // The primary view's render size for its display size, from the screen percentage and the upscaler.
+        static FUIntVector2 ComputeRenderSize(const FUIntVector2& DisplaySize, const IUpscaler* Upscaler);
+
+        // Resolves the primary view's upscaler and reallocates when the screen percentage or upscaler changed it.
+        void RefreshPrimaryRenderSize();
+
+        // Editor clicks arrive in display pixels and the picker is drawn at render resolution.
+        FUIntVector2 DisplayToPickerTexel(uint32 X, uint32 Y) const;
 
         /** Cleared the first time something sizes the primary view explicitly (an editor tool panel). */
         bool bPrimaryTracksSwapchain = true;
@@ -732,9 +831,14 @@ namespace Lumina
         void VisBufferClassifyPass(RHI::FCmdListH CL);
         void MaterialGBufferPass(RHI::FCmdListH CL);
         void DeferredLightingPass(RHI::FCmdListH CL);
+        void LightFunctionPass(RHI::FCmdListH CL);
         #if USING(WITH_EDITOR)
         void PickerResolvePass(RHI::FCmdListH CL);
         void SelectionOutlinePass(RHI::FCmdListH CL);
+        FSceneBuffer SelectionTileStampBuffer { "Editor.SelectionOutlineTiles", 1.5f, EBufferInit::Zeroed };
+        FSceneBuffer SelectionTileListBuffer { "Editor.SelectionOutlineTileList", 1.5f };
+        FSceneBuffer SelectionOutlineDrawArgsBuffer { "Editor.SelectionOutlineDrawArgs", 1.0f, EBufferInit::Zeroed };
+        uint32       SelectionTileStamp = 0;
         #endif
         #if !defined(LE_SHIPPING)
         void SceneDebugViewPass(RHI::FCmdListH CL);
@@ -745,6 +849,31 @@ namespace Lumina
         void DrawShadowBatch(RHI::FCmdListH CL, const FMeshDrawCommand& Batch, bool bUseMesh,
                              uint32 CullViewIndex, int32 ShadowDataIndex, int32 ShadowViewIndex,
                              const FUIntVector2& ViewportExtent);
+
+        // The Vulkan minimum for maxViewports under multiViewport, and the size of the RHI's fixed viewport array.
+        static constexpr uint32 kMaxShadowViewportsPerDraw = 16;
+
+        struct FShadowViewRun
+        {
+            TVector<FShadowRasterViewGPU> Views;
+            TVector<RHI::FRect>           Tiles;
+            uint32                        FirstCullView = Constants::kIndexNoneU32;
+            bool                          bContiguous   = true;
+
+            void Add(uint32 CullView, int32 ShadowDataIndex, int32 ViewIndex, const RHI::FRect& Tile)
+            {
+                if (Views.empty())
+                {
+                    FirstCullView = CullView;
+                }
+                bContiguous = bContiguous && CullView == FirstCullView + (uint32)Views.size();
+                Views.push_back({ ShadowDataIndex, ViewIndex, { (float)(Tile.MaxX - Tile.MinX), (float)(Tile.MaxY - Tile.MinY) } });
+                Tiles.push_back(Tile);
+            }
+        };
+
+        // One indirect draw per batch for each group of up to 16 views, or false when the run cannot be drawn that way.
+        bool DrawShadowViewsTogether(RHI::FCmdListH CL, const FShadowViewRun& Run, FShaderH PixelShader);
         
 
         void ApplyCullFreeze(FFrameData& Frame);
@@ -785,6 +914,9 @@ namespace Lumina
         // The prefilter reads scene depth into GTAO's own working depth, and the trace reads only that.
         enum class EGTAOStage : uint8 { Prefilter, Trace };
         bool GTAOPass(RHI::FCmdListH CL, EGTAOStage Stage);
+        bool WantsSunFarShadowMask() const;
+        bool SunFarShadowPass(RHI::FCmdListH CL);
+        bool SunDFShadowCullPass(RHI::FCmdListH CL);
         void TransparentPass(RHI::FCmdListH CL);
         void OITResolvePass(RHI::FCmdListH CL);
         void UnorderedTranslucentPass(RHI::FCmdListH CL);
@@ -811,6 +943,8 @@ namespace Lumina
         void DepthOfFieldPass(RHI::FCmdListH CL);
         void BloomPass(RHI::FCmdListH CL);
         void AutoExposurePass(RHI::FCmdListH CL);
+        void UpscalePass(RHI::FCmdListH CL);
+        void SpatialUpscalePass(RHI::FCmdListH CL);
         void ToneMappingPass(RHI::FCmdListH CL);
         void PostProcessMaterialPass(RHI::FCmdListH CL);
         void SMAAEdgeDetectionPass(RHI::FCmdListH CL);
@@ -823,8 +957,13 @@ namespace Lumina
         #endif
         //~ End Render Passes
 
-        static bool IsTemporalAARequested();
+        // SMAA steps aside for a temporal upscaler, and T2x drops to 1x under a spatial one, whose jitter it was not built for.
+        static ESMAAMode GetViewSMAAMode(const FSceneView& View);
         static bool IsTemporalAAEnabledFor(const FSceneView& View);
+        static bool IsTemporalUpscalerFor(const FSceneView& View);
+        static bool IsUpscalingView(const FSceneView& View);
+        // What tonemapping and post-process materials read, the upscaled image when the view has one.
+        const FSceneImage& GetPostInputImage() const;
         bool IsTemporalAAEnabled() const;
         bool IsTemporalResolveReady() const;
         bool IsVelocityDebugActive() const;
@@ -833,6 +972,8 @@ namespace Lumina
         ENamedImage GetTemporalCurrentImage() const;
         ENamedImage GetTemporalHistoryImage() const;
         static FVector2 GetTemporalJitterNDC(const FSceneView& View, uint32 FrameIndex);
+        // How many jitter positions one cycle visits, two for T2x and the upscaler's count for a temporal upscaler.
+        static uint32 GetTemporalPhaseCount(const FSceneView& View);
         // AreaTex slice the blend-weight pass resolves against, matched to the jitter this frame rendered.
         FVector4 GetSMAASubsampleIndices() const;
 
@@ -860,6 +1001,8 @@ namespace Lumina
         const SEnvironmentComponent* ExtractEnvironment(ECS::FRegistry& Registry, FFrameData& Frame);
         void ExtractSkyLight(ECS::FRegistry& Registry, FFrameData& Frame, const SEnvironmentComponent* ActiveEnv);
         void ExtractFog(ECS::FRegistry& Registry, FFrameData& Frame);
+        void ExtractWeather(ECS::FRegistry& Registry, FFrameData& Frame);
+        void ApplyWeatherToClouds(FFrameData& Frame);
 
         // Render-phase half: buffer resize + upload commands; reads extract-phase state.
         void CompileDrawCommands_Render(RHI::FCmdListH CL);
@@ -871,6 +1014,10 @@ namespace Lumina
 
         uint32 LastResolvedPendingGeneration = 0;
         uint32 LastDynamicResolveGeneration = 0;
+        TVector<uint8> DynamicResolveFlags;
+
+        // DependencyBits of the materials invalidated since the last dynamic resolve, filled by FMeshResolveCache.
+        std::atomic<uint64> DynamicMaterialInvalidations{ ~0ull };
 
         // Dirty-slot runs for the partial retained upload; keeps capacity.
         TVector<FUIntVector2> RetainedRunScratch;
@@ -897,6 +1044,13 @@ namespace Lumina
         TVector<uint32>                        SkinnedCandidates;
         TVector<uint32>                        SkinnedCandidateBones;
         TVector<uint32>                        PendingSliceAllocs;
+        // Candidates that may skin from their leader's slice, settled once every own slice is laid out.
+        TVector<uint32>                        SharedPoseCandidates;
+        TAtomic<uint32>                        SharedPoseCursor{0};
+        // Per primitive, set when this frame's slice is the leader's, so the emit leaves it to the leader.
+        TVector<uint8>                         BoneSliceBorrowed;
+        // Ranges the layout packed for ungathered leaders, kept apart because other gather tasks own the thread locals then.
+        TVector<FUIntVector2>                  LeaderPoseUploadRanges;
         TAtomic<uint32>                        SkinnedCandidateCursor{0};
         TAtomic<uint32>                        PendingSliceCursor{0};
         uint32                                 SkinnedCandidateCount = 0;
@@ -914,16 +1068,21 @@ namespace Lumina
             FLight         Lights[Capacity];
             // LightIndex holds the slot within Lights until the batch is committed.
             FShadowRequest Shadows[Capacity];
+            FLightFunctionRequest LightFunctions[Capacity];
             uint32         NumLights  = 0;
             uint32         NumShadows = 0;
+            uint32         NumLightFunctions = 0;
         };
 
         void ProcessPointLight(const SPointLightComponent& PointLight, const STransformComponent& TransformComponent, FLightBatch& Batch, TAtomic<uint32>& LightCount);
         void ProcessSpotLight(const SSpotLightComponent& SpotLight, const STransformComponent& TransformComponent, FLightBatch& Batch, TAtomic<uint32>& LightCount);
+        void ProcessAreaLight(const SAreaLightComponent& AreaLight, const STransformComponent& TransformComponent, FLightBatch& Batch, TAtomic<uint32>& LightCount);
         void FlushLightBatch(FLightBatch& Batch, TAtomic<uint32>& LightCount);
         void ProcessDirectionalLight(const SDirectionalLightComponent& DirectionalLight);
 
         void AllocateShadowTiles();
+        // Hands each resolvable light function an atlas tile and flags its light, serially after the light tasks.
+        void ResolveLightFunctions();
         
         void BuildCullViews(const FViewVolume& ViewVolume);
         
@@ -994,6 +1153,8 @@ namespace Lumina
             int32             ShadowViewIndex   = 0;
             float             ViewportW         = 0.0f;
             float             ViewportH         = 0.0f;
+            // Non-empty for a draw over consecutive shadow cull views starting at CullViewIndex.
+            RHI::TGPUSpan<FShadowRasterViewGPU> ShadowViews;
             /** Which part of the bucket's draw region to rasterize. The two VisBuffer phases each take
                 their own slice; every single-phase pass takes All, which is final by the time it runs. */
             EMeshletSlice     Slice             = EMeshletSlice::All;
@@ -1001,9 +1162,15 @@ namespace Lumina
 
         /** Culls every view's meshlets into the draw list and publishes the slice each pass draws.
             The sole authority: nothing rasterizes a meshlet this did not keep. */
-        void MeshletCullPass(RHI::FCmdListH CL, EMeshletSlice Slice);
+        void MeshletCullPass(RHI::FCmdListH CL, EMeshletSlice Slice, bool bCascadePhase = false);
 
         void DrawMeshletBatch(RHI::FCmdListH CL, const FMeshDrawCommand& Batch, const FMeshletPassContext& Ctx);
+
+        // Survivors one sub-draw covers, the mesh workgroup limit or one unsplit instanced draw on the vertex path.
+        static uint32 MeshletsPerSubDraw()
+        {
+            return RHI::SupportsMeshShaders() ? Math::Max(RHI::GetMaxMeshWorkGroupCount(), 1u) : kVertexPathMeshletsPerDraw;
+        }
 
         // Fallback rewrites the key to one that can stand in while the material's own pipeline compiles, or returns false to skip the batch.
         template<typename TSetup, typename TBound, typename TFallback>
@@ -1113,8 +1280,11 @@ namespace Lumina
         // Same staging as WriteBuffer, deferred so writes sharing a destination collapse into one copy
         // command. Stage all of one buffer's runs before starting the next, or nothing groups.
         void StageWrite(RHI::GPUPtr Dst, const void* Data, uint64 Size, bool bFillBeforeSubmit = false);
-        void UpdateInstanceBlockBounds(RHI::FCmdListH CL, bool bFull, const TVector<uint32>& DirtySlots, uint32 NumSlots);
-        void DispatchMeshletBlockBuild(RHI::FCmdListH CL, bool bLatePass);
+        // Launched once the retained slots are synced, so the bounds build on workers while the rest of the frame records.
+        void LaunchInstanceBlockBounds();
+        void JoinInstanceBlockBounds();
+        void FinishInstanceBlockBounds(RHI::FCmdListH CL);
+        void DispatchMeshletBlockBuild(RHI::FCmdListH CL, bool bLatePass, bool bCascadePhase = false);
         bool bSplitMeshletPhasesThisFrame = false;
         void FlushStagedWrites(RHI::FCmdListH CL);
 
@@ -1128,8 +1298,11 @@ namespace Lumina
                              const TVector<FUIntVector2>& Runs, bool bFillBeforeSubmit = false);
 
         // Stages each listed element compactly and scatters it to its slot on the GPU, for a fragmented dirty set.
+        // Clears the active bit of each listed slot in the retained cull entries on the GPU.
+        void DeactivateRetainedSlots(RHI::FCmdListH CL, const TVector<uint32>& Slots);
+
         void WriteBufferScatter(RHI::FCmdListH CL, RHI::GPUPtr Dst, uint64 DstBytes, const void* Src, uint64 Stride,
-                                RHI::FGPURange Slots, const TVector<uint32>& SlotList);
+                                RHI::FGPURange Slots, const TVector<uint32>& SlotList, bool bFillBeforeSubmit = false);
 
         // The fill skips the first RewrittenBytes, which the upload ring rewrites ahead of this list and a later fill would erase.
         void ReserveBuffer(RHI::FCmdListH CL, FSceneBuffer& Buffer, uint64 NeededBytes, bool bAllowShrink = true,
@@ -1165,6 +1338,8 @@ namespace Lumina
             bool               bHasCascadeShadow  = false;
 
             uint32             CascadeViewBase  = Constants::kIndexNoneU32;
+            uint32             NumCascadeViews  = 0;
+            uint32             NumNearCascadeViews = 0;
             bool               bValid           = false;
         };
         FFrozenCull FrozenCull;
@@ -1175,10 +1350,15 @@ namespace Lumina
         // Sharing one buffer would clear the flags the late dispatch still needs to read.
         TArray<FSceneBuffer, 2> InstanceVisibilityBuffers = MakeSceneRing<2>("Retained.InstanceVisibility", 1.5f, EBufferInit::Zeroed);
         uint32                                             InstanceVisibilityCapacity = 0;
+        // One word per block of each instance's camera LOD, read and written in place since the late phase reads a word before replacing it.
+        FSceneBuffer                                       MeshletVisibilityBuffer { "Retained.MeshletVisibility", 1.5f, EBufferInit::Zeroed };
+        uint32                                             MeshletVisibilityCapacity = 0;
         uint8                                              InstanceVisibilityWriteIndex = 0;
         // Stamped by the late cull; starts past zero so a never-written slot can never read as visible.
         uint32                                             InstanceVisibilityTag = 1;
-        uint32                                             LastStaleValidationGeneration = 0;
+        uint32                                             StaleValidationCursor = 0;
+        uint32                                             StaleValidationSurfaces = 0;
+        uint32                                             StaleValidationEntities = 0;
         TArray<FSceneImage, (int)ENamedImage::Num>          NamedImages = {};
 
         /** Reconcile cached sample count with the world setting; reallocates every view's MS images when it changes. */
@@ -1290,16 +1470,21 @@ namespace Lumina
             const uint8*    Source;
             uint64          Bytes;
             RHI::GPUPtr     UploadDest = 0;
+            // Set for a gather, which copies Bytes of elements of GatherWords 16-byte words from Source at these slots.
+            const uint32*   GatherSlots = nullptr;
+            uint32          GatherWords = 0;
         };
         TVector<FDeferredStageFill>                                     DeferredStageFills;
         FTaskHandle                                                     DeferredStageFillTask;
         std::atomic<uint32>                                             DeferredFillCursor{0};
         bool                                                            bDeferredUploadsQueued = false;
+        bool                                                            bDeferredGatherQueued  = false;
         TVector<RHI::FBufferCopy>                                       UploadCopyScratch;
         TVector<uint64>                                                 UploadCursorScratch;
         uint64                                                          CurrentSceneRootAddr = 0;
         // Builds the per-view FSceneRoot transient (shared addrs + view camera/clusters/IBL) -> address.
         uint64 BuildViewSceneRoot(FSceneView& View);
+        void   EnsureClusterLightMaskCapacity(FSceneView& View);
 
         /** Texture-streaming feedback (see RequestTextureResolution in SceneGlobals.slang). One uint per
          *  bindless slot, OR-accumulated by the material lanes over STREAMING_FEEDBACK_WINDOW frames, then
@@ -1317,6 +1502,8 @@ namespace Lumina
         // Live prefix of Frame.Lighting.Lights / .Shadows; the GPU side reads these off the spans.
         uint32                                              NumLiveLights  = 0;
         uint32                                              NumLiveShadows = 0;
+        // Created on the first frame any light carries a light function, then kept.
+        FSceneImage                                         LightFunctionAtlas;
         uint64                                              StreamingFeedbackFrame = 0;
         // Frames counted toward the current feedback window, and the newest window already handed to streaming.
         uint64                                              StreamingFeedbackTick = 0;
@@ -1339,22 +1526,47 @@ namespace Lumina
 
         FSceneBuffer RetainedCullEntryBuffer { "Retained.CullEntries", 1.5f, EBufferInit::Zeroed };
         FSceneBuffer InstanceBlockBoundsBuffer { "Retained.InstanceBlockBounds", 1.5f, EBufferInit::Zeroed };
+
+        // The sun's distance-field casters for this frame and the grid they are binned into.
+        FSceneBuffer SunDFObjectBuffer    { "SunDF.Objects",    1.0f, EBufferInit::Undefined, false };
+        FSceneBuffer SunDFCellCountBuffer { "SunDF.CellCounts", 1.0f, EBufferInit::Zeroed,    false };
+        FSceneBuffer SunDFCellItemBuffer  { "SunDF.CellItems",  1.0f, EBufferInit::Undefined, false };
+        FSceneBuffer SunDFCounterBuffer   { "SunDF.Counters",   1.0f, EBufferInit::Zeroed,    false };
+        FSceneBuffer SunDFBlockListBuffer { "SunDF.Blocks",     1.5f, EBufferInit::Undefined };
+        static constexpr uint32 kSunDFGridDimension = 128u;
+        static constexpr uint32 kSunDFCellCapacity  = 32u;
+        static constexpr uint32 kSunDFMaxObjects    = 16384u;
+        bool                    bSunDFGridReady     = false;
         TVector<FInstanceBlockBounds> InstanceBlockBounds;
         TVector<uint32>               DirtyInstanceBlocks;
+        // Per block, whether it holds a distance-field caster, and the compact list the sun's distance-field cull walks.
+        TVector<uint8>                InstanceBlockHasDF;
+        TVector<uint32>               DistanceFieldBlocks;
+        bool                          bDistanceFieldBlocksDirty = true;
         TVector<FUIntVector2>         GPUWrittenSlotRanges;
         bool                          bInstanceBlockBoundsValid = false;
+        FTaskHandle                   InstanceBlockBoundsTask;
+        std::atomic<bool>             bBlockDFChanged{ false };
+        bool                          bBlockBoundsLaunched   = false;
+        bool                          bBlockBoundsRebuildAll = false;
+        uint32                        BlockBoundsNumBlocks   = 0;
         FSceneBuffer RetainedTransformBuffer { "Retained.Transforms", 1.5f, EBufferInit::Zeroed };
         FSceneBuffer RetainedStaticBuffer { "Retained.Static", 1.5f, EBufferInit::Zeroed };
         FSceneBuffer SurfaceDescBuffer { "Retained.SurfaceDescs", 1.5f, EBufferInit::Zeroed };
-        FSceneBuffer BoneArenaBuffer { "Skinning.BoneArena", 1.5f };
+        // One arena per frame slot, since the next frame's upload can run on compute while this frame's passes still read poses.
+        TArray<FSceneBuffer, RHI::kFramesInFlight> BoneArenaRing = MakeSceneRing<RHI::kFramesInFlight>("Skinning.BoneArena", 1.5f);
+        // The upload serial each slot's arena last matched the mirror at, so it knows which dirty ranges it missed.
+        TArray<uint64, RHI::kFramesInFlight>       BoneArenaSyncedSerial = {};
+        uint64                                     BoneUploadSerial = 0;
+        TVector<FUIntVector2>                      LastBoneUploadRanges;
+        RHI::FGPUAllocation GetBoneArena() const { return BoneArenaRing[CurrentFrameSlot]; }
         // Snapshots taken before each frame's incremental uploads land, so motion vectors have a past.
-        RHI::FGPUAllocation                                        PrevBoneArenaBuffer;
         RHI::FGPUAllocation                                        PrevRetainedTransformBuffer;
         bool                                                bPrevMotionStateValid = false;
         void SnapshotMotionState(RHI::FCmdListH CL);
         FSceneBuffer SkinnedFrameDataBuffer { "Skinning.FrameData", 1.25f };
         FSceneBuffer SkinnedSlotListBuffer { "Skinning.SlotList", 1.5f };
-        TVector<uint32>                                     SkinnedUploadScratch;
+        TVector<uint64>                                     SkinnedSlotBits;
         TVector<FUIntVector2>                               SkinnedRunScratch;
         uint32                                              CurrentSkinnedFrameTag = 0;
         // Per-frame posed meshlet spheres, so the cull can reject skinned geometry per meshlet.
@@ -1396,11 +1608,41 @@ namespace Lumina
 
         std::atomic<bool>                                   bCascadePyramidValid{false};
 
+        static constexpr uint32                             kReceiverMaskDim = 128;
+        FSceneBuffer                                        ReceiverMaskBuffer { "Shadow.ReceiverMask", 1.0f };
+        bool                                                bShadowReceiverCullThisFrame = false;
+        bool                                                bReceiverMaskValid = false;
+        RHI::TGPUSpan<uint32>                               ReceiverMaskFinal;
+        bool WantsShadowReceiverCull(const FFrameData& Frame) const;
+        void ShadowReceiverMaskPass(RHI::FCmdListH CL);
+
+        // The graphics value the next frame's compute cull waits on, the last submission that reads what the cull rewrites.
+        uint64                                              FrameCullGateValue = 0;
+        // Set when the cascade pyramid was released to compute for the next frame's cull, and names the image released.
+        RHI::FTextureH                                      CascadePyramidOnCompute = {};
+        bool ShouldCullOnCompute(const FFrameData& Frame) const;
+        static bool HasGrassScatter(const FFrameData& Frame);
+
+        FSceneImage                                         RainOcclusionImage;
+        FSceneBuffer                                        RainVisibleBuffer  { "Weather.RainVisible", 1.25f };
+        FSceneBuffer                                        RainArgsBuffer     { "Weather.RainArgs", 1.0f };
+        FSceneBuffer                                        RainSplashBuffer   { "Weather.Splashes", 1.0f, EBufferInit::Zeroed };
+        uint32                                              RainSplashCursor   = 0;
+        uint32                                              WeatherIdleFrames  = 0;
+
+        void PublishWeatherGlobals(FSceneGlobalData& Globals);
+        void WeatherOcclusionPass(RHI::FCmdListH CL);
+        void RainPass(RHI::FCmdListH CL);
+        void ReleaseIdleWeatherResources();
+
         FMatrix4                                            CascadeHZBViewProjection[NumCascades] = {};
         FVector4                                            CascadeHZBNdcScale[NumCascades] = {};
         bool                                                bCascadeHZBTransformsValid = false;
 
         float                                               CascadeMinTexels = 1.0f;
+        float                                               CasterMinScreenRadius = 0.0f;
+        int32                                               ActiveCascadeCount = NumCascades;
+        int32                                               NearCascadeCount = NumCascades;
 
         static constexpr uint32                             kTotalsSlots = 8;
 
@@ -1495,6 +1737,7 @@ namespace Lumina
             uint32              Capacity = 0;
             RHI::FGPURange      Cursor;
             RHI::FGPUAllocation PrevCursor;
+            RHI::FGPUAllocation CursorReadback;
         };
         TVector<FGrassRetireItem>                       GrassRetireScratch;
         uint32                                          GrassCursorCursor = 0;
@@ -1515,16 +1758,59 @@ namespace Lumina
         };
         TArray<FParticleCollisionReadback, RHI::kFramesInFlight> ParticleCollisionReadback = {};
         // Read back but not yet handed to the components, which the next extract does.
-        THashMap<ECS::FEntity, TVector<FParticleCollision>> ParticleCollisionResults;
+        THashMap<ECS::FEntity, TVector<SParticleCollision>> ParticleCollisionResults;
         void ReadParticleCollisions();
         void CopyParticleCollisions(RHI::FCmdListH CL);
         THashMap<uint64, TVector<RHI::FGPUAllocation>>    ParticleBufferPool;
         uint64                                            ParticlePoolBytes = 0;
         // Set once a pooled buffer is handed out this frame, since its previous frame's reads need a barrier before the clear.
         bool                                              bParticlePoolReuseBarrierIssued = false;
+        // Emitters given buffers this frame, held under a cap so a mass spawn ramps in over a few frames.
+        uint32                                            ParticleSetupsThisFrame = 0;
+
+        // One simulation dispatch, planned before any is recorded so independent emitters can share a barrier.
+        struct FParticleSimStep
+        {
+            RHI::FPipelineH Pipeline;
+            // Where this step's FParticleSimArgs sit in ParticleSimArgsScratch.
+            uint32          ArgsOffset = 0;
+            // Zero for a batched step, whose counters sit in ParticleCounterArena and are cleared together.
+            RHI::GPUPtr     SpawnCounter = 0;
+            RHI::GPUPtr     EventCounts = 0;
+            uint32          Groups = 0;
+            bool            bBarrierAfter = false;
+        };
+        // Spawn counters for every batched emitter, so one fill clears them all.
+        RHI::FGPUAllocation                               ParticleCounterArena = {};
+        uint32                                            ParticleCounterArenaSlots = 0;
+        uint32                                            ParticleCounterSlotsUsed = 0;
+        // Per-emitter sort arguments gathered for the single compact sort dispatch. Reused each frame.
+        TVector<uint8>                                    ParticleSortScratch;
+        // Planned simulation arguments, and the emitter and group tables of the dispatch being built. Reused each frame.
+        TVector<uint8>                                    ParticleSimArgsScratch;
+        TVector<uint8>                                    ParticleSimBatchEmitters;
+        TVector<FUIntVector2>                             ParticleSimBatchGroups;
+        // One planned particle draw, so consecutive ones on a pipeline go out as a single multi-draw.
+        struct FParticleDraw
+        {
+            RHI::FPipelineH Pipeline;
+            bool            bWriteDepth = false;
+        };
+        // Planned draws with their FParticlePushConstants and FParticleDrawArgsSource bytes. Reused each frame.
+        TVector<FParticleDraw>                            ParticleDraws;
+        TVector<uint8>                                    ParticleDrawConstants;
+        TVector<uint8>                                    ParticleDrawArgSources;
+        // Every particle draw's indirect arguments back to back, gathered on the GPU each frame.
+        RHI::FGPUAllocation                               ParticleDrawArgsArena = {};
+        uint32                                            ParticleDrawArgsArenaSlots = 0;
+        // Single-step emitters with no parent run back to back; the rest keep a barrier around every step. Reused each frame.
+        TVector<FParticleSimStep>                         ParticleBatchedSteps;
+        TVector<FParticleSimStep>                         ParticleSerialSteps;
+        void RecordParticleSimSteps(RHI::FCmdListH CL);
 
         FScenePrimitiveSet                      ScenePrimitives;
         TVector<ECS::FEntity>                   MovedTransformScratch;
+        uint32                                  MovedTransformConsumer = Constants::kIndexNoneU32;
         TVector<uint64>                         DirtySlotBits;
 
         // Merge scratch, sized by draw slots (not by entities). Members so capacity survives frames.

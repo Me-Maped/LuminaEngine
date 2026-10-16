@@ -42,7 +42,7 @@ namespace Lumina
 
         /** Layer and mask controlling which bodies this one collides with. */
         PROPERTY(Editable, Category = "Physics")
-        FCollisionProfile CollisionProfile;
+        SCollisionProfile CollisionProfile;
 
         /** Bounciness override for this body (0 = no bounce, 1 = perfectly elastic). */
         PROPERTY(Editable, ClampMin = 0.001f, ClampMax = 1.0f, Category = "Physics")
@@ -108,23 +108,23 @@ namespace Lumina
         PROPERTY(Editable, Category = "Physics|Constraints")
         bool bLockRotationZ = false;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         TScriptDelegate<SCollisionEvent> OnContactBegin;
 
         // Velocities are zero in this payload.
-        PROPERTY()
+        PROPERTY(Hidden)
         TScriptDelegate<SCollisionEvent> OnContactEnd;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         TScriptDelegate<SCollisionEvent> OnOverlapBegin;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         TScriptDelegate<SCollisionEvent> OnOverlapEnd;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FScriptDelegate OnWake;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FScriptDelegate OnSleep;
 
     };

@@ -6,6 +6,7 @@
 #include "Core/Reflection/PropertyChangedEvent.h"
 #include "Core/Reflection/PropertyCustomization/PropertyCustomization.h"
 #include "Memory/SmartPtr.h"
+#include "Scripting/ManagedTypeRegistry.h"
 #include "imgui.h"
 
 namespace Lumina
@@ -19,6 +20,7 @@ namespace Lumina
     class FArrayProperty;
     class FMapProperty;
     class FMapPropertyRow;
+    class FCategoryPropertyRow;
     class FOptionalProperty;
     class FInstancedStructProperty;
     class FProperty;
@@ -130,6 +132,9 @@ namespace Lumina
         void SetIsArrayElement(bool bTrue) { bArrayElement = bTrue; }
         bool IsArrayElementProperty() const { return bArrayElement; }
 
+        // A row directly under the table's own categories, which is what multi-value display and trailing controls are scoped to.
+        bool IsTopLevel() const;
+
         // True only for FCategoryPropertyRow; lets category rows find existing
         // nested-category children when fanning out a `Foo|Bar|Baz` path.
         virtual bool IsCategory() const { return false; }
@@ -165,6 +170,11 @@ namespace Lumina
         // Null for a category row, an array element or a map entry, none of which can carry an EditCondition.
         void* GetEditConditionContainer() const;
 
+        // Replaces Children with a row per visible member of Type, grouped under its categories, so members share the owning table's columns.
+        void BuildMemberRows(CStruct* Type, void* Instance, void* DefaultInstance);
+
+        FCategoryPropertyRow* FindOrCreateCategoryChild(const FName& InCategory, void* OwnerObject);
+
 
         FPropertyChangedEventCallbacks          Callbacks;
         FPropertyEditCondition                  EditCondition;
@@ -192,6 +202,9 @@ namespace Lumina
         // filter, since filtering overwrites bExpanded to reveal matches.
         bool                                    bPassesFilter = true;
         bool                                    bExpandedSaved = true;
+
+        // The row's own height when it was last drawn, which an offscreen row reserves instead of drawing.
+        float                                   LastDrawnHeight = 0.0f;
     };
 
     class FPropertyPropertyRow : public FPropertyRow
@@ -244,8 +257,19 @@ namespace Lumina
 
         void DrawTruncationRow(float Offset, int HiddenCount);
 
+        int32 GetElementCount() const;
+        TUniquePtr<FPropertyRow> CreateElementRow(int32 Index);
+
+        // Children hold rows for elements [WindowBegin, WindowBegin + Children.size()), so a million-element array keeps only what is on screen.
+        void SetWindow(int32 Begin, int32 End);
+        void CoverElements(int32 Begin, int32 End);
+
         TVector<TFunction<void()>>  PendingMutations;
         bool                        bShowAllElements = false;
+        int32                       WindowBegin = 0;
+        int32                       LastVisibleBegin = 0;
+        int32                       LastVisibleEnd = 0;
+        float                       ElementRowHeight = -1.0f;
     };
 
     // Editor row for THashMap<K,V> / a C# Dictionary: an Add/Clear header with one FMapEntryRow per entry.
@@ -285,6 +309,10 @@ namespace Lumina
 
         FMapEntryRow(FMapPropertyRow* InMapRow, int64 InIndex, const FPropertyChangedEventCallbacks& InCallbacks);
         ~FMapEntryRow() override;
+        FMapEntryRow(const FMapEntryRow&) = delete;
+        FMapEntryRow& operator=(const FMapEntryRow&) = delete;
+        FMapEntryRow(FMapEntryRow&&) = delete;
+        FMapEntryRow& operator=(FMapEntryRow&&) = delete;
         void Update() override;
         void DrawHeader(float Offset, const FPropertyDrawArgs& Args) override;
         void DrawEditor(const FPropertyDrawArgs& Args) override;
@@ -330,12 +358,11 @@ namespace Lumina
 
     private:
 
+        FString GetHeaderLabel() const;
         FStructProperty*            StructProperty = nullptr;
-        TUniquePtr<FPropertyTable>  PropertyTable;
     };
 
-    // Editor row for TInstancedStruct<T>. A type-picker combo (T or derived) plus an inline nested
-    // table editing the chosen instance.
+    // Editor row for TInstancedStruct<T>, a type picker in the value cell with the chosen instance's members as child rows.
     class FInstancedStructPropertyRow : public FPropertyRow
     {
     public:
@@ -349,14 +376,13 @@ namespace Lumina
         float GetMeasuredHeaderTextWidth() const override;
         void OnValueResetToDefault() override { RebuildChildren(); }
 
-        // Rebuilds the nested table over the currently-stored instance (after a type change or reset).
+        // Rebuilds the member rows over the currently stored instance, after a type change or reset.
         void RebuildChildren();
 
     private:
 
         FInstancedStructProperty*   InstancedStructProperty = nullptr;
         CStruct*                    CachedType = nullptr;
-        TUniquePtr<FPropertyTable>  PropertyTable;
     };
 
     // Editor row for TOptional<T>: a "Set" checkbox; when engaged, the inner T
@@ -410,12 +436,12 @@ namespace Lumina
         FName Category;
     };
     
-    class EDITOR_API FPropertyTable
+    // A script reload rebinds it onto a reinstanced object and drops its rows, since they point into the layouts the reload rebuilt.
+    class EDITOR_API FPropertyTable : public Scripting::IScriptReloadListener
     {
-        friend class FStructPropertyRow;
-        friend class FInstancedStructPropertyRow;
-
     public:
+
+        void OnScriptsReloaded(const Scripting::FScriptReload& Reload) override;
 
         FPropertyTable() = default;
         ~FPropertyTable() = default;
@@ -425,8 +451,7 @@ namespace Lumina
         // "modified" indicator and reset-to-default for CObject-rooted details panels.
         explicit FPropertyTable(CObject* InObject);
 
-        // Explicit default-object form, for callers that have a hand-built
-        // default to compare against (e.g. nested struct rebuild paths).
+        // For callers holding a hand-built default to compare against.
         FPropertyTable(void* InObject, CStruct* InType, void* InDefaultObject);
 
         FPropertyTable(const FPropertyTable&) = delete;
@@ -438,15 +463,19 @@ namespace Lumina
         void MarkDirty();
         void DrawTree(bool bReadOnly = false);
 
+        // What DrawTree does besides drawing, for a table scrolled out of view that still owes queued edits their apply.
+        void UpdateRows();
+
+        // Out-of-view rows and sections reserve their last height, and this frame draws them all so no height stays stale.
+        static bool IsDetailsRemeasureFrame() { return ImGui::GetFrameCount() % 32 == 0; }
+
         // Nested tables draw with the parent's args, which is how a struct row inherits its context.
         void DrawTree(const FPropertyDrawArgs& Args);
 
         // Borrowed for as long as the table draws. Providers own the storage.
         void SetContext(const FPropertyEditContext* InContext) { Context = InContext; }
 
-        // Search box filtering the tree by property/category name. On by default so every tool's details
-        // panel gets one; nested tables (a struct or instanced-struct row hosting its own table) turn it
-        // off, since a search box per nested row is noise rather than a feature.
+        // On by default, and off for a panel that drives one search box across several tables.
         void SetShowSearchBar(bool bShow) { bShowSearchBar = bShow; }
 
         // Clears the search text and restores every row's pre-filter collapse state.
@@ -495,11 +524,12 @@ namespace Lumina
         void ApplyFilterState();
 
     private:
-        
+
+        // Points the table at an object without touching its rows, which the caller rebuilds or drops.
+        void Bind(void* InObject, CStruct* StructType, void* InDefaultObject);
+
         bool                                                bDirty = true;
 
-        // A C# reload rebuilds a minted class's property block, so rows built against the old one must go.
-        int32                                               BuiltScriptGeneration = -1;
         TSharedPtr<IPropertyTypeCustomization>              Customization;
         TSharedPtr<FPropertyHandle>                         PropertyHandle;
         CStruct*                                            Struct = nullptr;

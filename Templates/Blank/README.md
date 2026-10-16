@@ -4,13 +4,13 @@
 
 ## 环境要求
 
-- `LUMINA_DIR` 环境变量必须指向你的引擎安装目录（Windows 上由引擎的 `Setup.bat` 设置，Linux 上由 `Setup.sh` 设置）。
+- 一个已经运行过一次 `Setup.bat`（Windows）或 `Setup.sh`（Linux）的 Lumina 引擎检出目录。
 - **Windows：** Visual Studio 2026 (18.0+)，并安装 C++ 工作负载。（引擎的 C# 层目标框架为 `net10.0`，需要 VS 18.0+；仅安装独立的 .NET 10 SDK 是不够的。）
 - **Linux：** GCC 13+ 以及 .NET 10 SDK。完整的依赖包列表见引擎的 README。
 
 ## 首次配置（Windows）
 
-1. 在本文件夹中运行 `GenerateProject.bat`。它会为本项目调用 `%LUMINA_DIR%\LuminaBuild.bat GenerateProjectFiles` 并写出 `$PROJECTNAME.sln`。
+1. 在本文件夹中运行 `GenerateProject.bat`。它会在本机找到引擎，并为本项目运行该引擎的 `LuminaBuild.bat GenerateProjectFiles`，写出 `$PROJECTNAME.sln`。
 2. 在 **Visual Studio** 或 **JetBrains Rider** 中打开 `$PROJECTNAME.sln`。
 3. 按 **F5**。
 
@@ -21,8 +21,8 @@ Lumina 编辑器。`IMPLEMENT_MODULE` 一运行，你游戏模块中的断点就
 
 ```bash
 ./GenerateProject.sh                                              # writes compile_commands.json
-"$LUMINA_DIR/LuminaBuild.sh" Build $PROJECTNAME -TargetType=Editor
-"$LUMINA_DIR/LuminaBuild.sh" Run   $PROJECTNAME -TargetType=Editor
+/path/to/LuminaEngine/LuminaBuild.sh Build $PROJECTNAME -TargetType=Editor -Project="$PWD"
+/path/to/LuminaEngine/LuminaBuild.sh Run   $PROJECTNAME -TargetType=Editor -Project="$PWD"
 ```
 
 这会构建游戏共享库（`Binaries/Linux64/lib$PROJECTNAME-Development.so`）并启动已预加载本项目的

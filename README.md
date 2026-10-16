@@ -226,8 +226,8 @@ https://github.com/user-attachments/assets/3d797479-fc47-4b8f-baf4-87315709d0c2
    ```
    它会下载一个预编译的依赖包
    （`External-Win64.zip`，约 192 MB），用本仓库中固定的 SHA-256 哈希进行校验
-   （需要维护者先录入，见 [`DEPENDENCIES.md`](DEPENDENCIES.md)），持久化 `LUMINA_DIR`
-   环境变量，配置 git hooks，并生成 `Lumina.sln`。
+   （需要维护者先录入，见 [`DEPENDENCIES.md`](DEPENDENCIES.md)），配置 git hooks，
+   注册 `.lproject` 文件类型，并生成 `Lumina.sln`。
 
    该依赖包包含 .NET 10 运行时（C# 脚本）、LLVM/Clang 19
    （反射代码生成）、Slang shader 编译器、RenderDoc 和 Tracy。每一项都是开源的；
@@ -274,8 +274,8 @@ https://github.com/user-attachments/assets/3d797479-fc47-4b8f-baf4-87315709d0c2
    ```
 
    它会检查上述先决条件、下载一个预编译的依赖包
-   （`External-Linux64.tar.gz`，约 186 MB）、用本仓库中固定的 SHA-256 哈希校验、
-   配置 git hooks，并询问是否将 `LUMINA_DIR` 添加到你的 shell 配置文件中。
+   （`External-Linux64.tar.gz`，约 186 MB）、用本仓库中固定的 SHA-256 哈希校验，
+   并配置 git hooks。
 
    该依赖包包含 .NET 10 运行时（C# 脚本）、LLVM/Clang 19
    （反射代码生成）、Slang shader 编译器、RenderDoc 和 Tracy。每一项都是开源的；
@@ -426,13 +426,9 @@ GenerateProjectFiles.bat --tracy=off --validation=on --verbose-logging=off
 联系我们。
 
 > [!NOTE]
-> 独立游戏项目通过 `LUMINA_DIR` 定位引擎。`Setup.bat`
-> 通过 `setx` 持久化它；`Setup.sh` 则询问是否将其加入你的 shell 配置文件，
-> 因为 Linux 没有等效的用户环境变量存储。若要手动设置：
-> ```bash
-> setx LUMINA_DIR "C:\path\to\lumina"          # Windows
-> export LUMINA_DIR="/path/to/lumina"          # Linux, in your shell profile
-> ```
+> 不再需要环境变量。每个引擎检出目录会在其中首次运行任何 `LuminaBuild` 命令时记录自身，
+> 项目可以用 Switch Engine 指定它的引擎（右键点击 `.lproject`，或
+> `LuminaBuild SwitchEngine <file>`）。没有指定引擎的项目会使用打开它的那个引擎。
 
 > [!CAUTION]
 > 在拉取或合并之后，删除 `Binaries/` 和 `Intermediates/`，然后在 Windows 上运行

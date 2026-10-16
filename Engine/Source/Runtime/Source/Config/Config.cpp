@@ -7,7 +7,7 @@
 #include "Core/Delegates/CoreDelegates.h"
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
-#include "Core/Object/ObjectArray.h"
+#include "Core/Object/ObjectIteration.h"
 #include "Core/Object/ObjectCore.h"
 #include "Core/Serialization/Structured/JsonStructuredArchive.h"
 
@@ -26,7 +26,7 @@ namespace Lumina
 
         // Collect candidates first; creating CDOs/snapshots mutates the object array.
         TVector<CClass*> Candidates;
-        GObjectArray.ForEachObject([&](CObjectBase* Object, int32)
+        ForEachObject([&](CObjectBase* Object, int32)
         {
             if (Object == nullptr || !Object->IsA<CClass>())
             {
@@ -109,17 +109,6 @@ namespace Lumina
 
         static_cast<CDeveloperSettings*>(Class->GetDefaultObject())->PostInitSettings();
         SettingsFileLoaded.insert(Class);
-    }
-
-    void FConfig::ReloadSettings(CClass* SettingsClass)
-    {
-        if (SettingsClass == nullptr)
-        {
-            return;
-        }
-        // Class-reference properties may now resolve to classes that did not exist at first load.
-        SettingsFileLoaded.erase(SettingsClass);
-        LoadSettingsForClass(SettingsClass);
     }
 
     FString FConfig::GetSettingsSection(CClass* SettingsClass)

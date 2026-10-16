@@ -31,15 +31,34 @@ namespace Lumina
             return Project != EPresentMode::FIFO ? Project : EPresentMode::Immediate;
         }
 
-        FString UserDataDirectory()
+        const char* UpscalerName(EUpscaler Upscaler)
         {
-            #if defined(_WIN32)
-            return Platform::GetEnvVariable("LOCALAPPDATA");
-            #else
-            const FString Xdg = Platform::GetEnvVariable("XDG_CONFIG_HOME");
-            return !Xdg.empty() ? Xdg : Platform::GetEnvVariable("HOME") + "/.config";
-            #endif
+            switch (Upscaler)
+            {
+            case EUpscaler::DLSS: return "DLSS";
+            case EUpscaler::FSR:  return "FSR";
+            case EUpscaler::None: break;
+            }
+            return "None";
         }
+
+        const char* UpscalerModeName(EUpscalerMode Mode)
+        {
+            switch (Mode)
+            {
+            case EUpscalerMode::NativeAA:         return "NativeAA";
+            case EUpscalerMode::Quality:          return "Quality";
+            case EUpscalerMode::Balanced:         return "Balanced";
+            case EUpscalerMode::Performance:      return "Performance";
+            case EUpscalerMode::UltraPerformance: return "UltraPerformance";
+            case EUpscalerMode::Custom:           break;
+            }
+            return "Custom";
+        }
+
+        constexpr const char* kUpscalerKey          = "RendererSettings.Upscaler";
+        constexpr const char* kUpscalerModeKey      = "RendererSettings.UpscalerMode";
+        constexpr const char* kScreenPercentageKey  = "RendererSettings.ScreenPercentage";
     }
 
     CGameUserSettings& CGameUserSettings::Get()
@@ -61,7 +80,7 @@ namespace Lumina
         }
 
         const FStringView ProjectName = GEngine != nullptr ? GEngine->GetProjectName() : FStringView();
-        FString Directory = UserDataDirectory();
+        FString Directory = Paths::GetUserDataDirectory();
         Directory += "/";
         Directory += ProjectName.empty() ? FString("Lumina") : FString(ProjectName.data(), ProjectName.size());
         return Directory + "/UserSettings.json";
@@ -119,6 +138,22 @@ namespace Lumina
             const EScalabilityGroup Group = static_cast<EScalabilityGroup>(Index);
             Scalability::ApplyGroup(Group, GetQuality(Group));
         }
+        ApplyUpscaling();
+    }
+
+    void CGameUserSettings::ApplyUpscaling()
+    {
+        if (!bOverrideUpscaling)
+        {
+            Scalability::RestoreSetting(kUpscalerKey);
+            Scalability::RestoreSetting(kUpscalerModeKey);
+            Scalability::RestoreSetting(kScreenPercentageKey);
+            return;
+        }
+
+        Scalability::OverrideSetting(kUpscalerKey, Lumina::Format("\"{}\"", UpscalerName(Upscaler)));
+        Scalability::OverrideSetting(kUpscalerModeKey, Lumina::Format("\"{}\"", UpscalerModeName(UpscalerMode)));
+        Scalability::OverrideSetting(kScreenPercentageKey, Lumina::Format("{}", Math::Clamp(ScreenPercentage, 25.0f, 100.0f)));
     }
 
     void CGameUserSettings::ApplyDisplay()
@@ -173,6 +208,10 @@ namespace Lumina
         bVSync = GetDefault<CRendererSettings>()->PresentMode == EPresentMode::FIFO;
         FrameRateLimit = GetDefault<CRendererSettings>()->MaxFPS;
         SetOverallQuality(EQualityLevel::Default);
+        bOverrideUpscaling = false;
+        Upscaler = EUpscaler::None;
+        UpscalerMode = EUpscalerMode::Custom;
+        ScreenPercentage = 100.0f;
     }
 
     EQualityLevel& CGameUserSettings::QualitySlot(EScalabilityGroup Group)

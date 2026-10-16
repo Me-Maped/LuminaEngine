@@ -21,7 +21,7 @@ namespace Lumina
 		uint32           Generation = 0;
 		IAudioSource*    Source = nullptr;
 		bool             bGenerated = false;
-		FAudioPlayParams Params;
+		SAudioPlayParams Params;
 	};
 
 	/** One listener's pose, published by the pump and sampled by the mixer once per block. */
@@ -56,6 +56,8 @@ namespace Lumina
 
 		FAudioMixer(const FAudioMixer&) = delete;
 		FAudioMixer& operator=(const FAudioMixer&) = delete;
+		FAudioMixer(FAudioMixer&&) = delete;
+		FAudioMixer& operator=(FAudioMixer&&) = delete;
 
 		bool Initialize(uint32 InSampleRate, uint32 InChannels);
 		void Shutdown();
@@ -74,6 +76,12 @@ namespace Lumina
 		/** Free means the mixer has let go of the slot's source and the pump may release it. */
 		EAudioVoiceState GetSlotState(uint32 Slot) const;
 		uint64 GetSlotFrame(uint32 Slot) const;
+
+		// The voice the device thread has actually started in this slot, zero before any.
+		uint32 GetSlotGeneration(uint32 Slot) const;
+
+		// True while the device thread may still read the source of this exact voice.
+		bool IsVoiceLive(uint32 Slot, uint32 Generation) const;
 
 		uint32 GetActiveVoiceCount() const { return ActiveVoices.load(Atomic::MemoryOrderRelaxed); }
 
@@ -192,6 +200,9 @@ namespace Lumina
 
 		TAtomic<uint8>  SlotState[MaxVoices];
 		TAtomic<uint64> SlotFrame[MaxVoices];
+
+		// Stored after SlotState, so a reader that loads it first is guaranteed that voice's state or a later one.
+		TAtomic<uint32> SlotGeneration[MaxVoices];
 
 		TAtomic<float> BusVolumes[NumAudioBuses];
 		TAtomic<bool>  BusMuted[NumAudioBuses];

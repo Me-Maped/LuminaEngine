@@ -289,7 +289,7 @@ namespace Lumina
             }
 
             Out.Center = Centroid;
-            Out.Bounds = FAABB(Mn, Mx);
+            Out.Bounds = SAABB(Mn, Mx);
             return true;
         }
 
@@ -314,11 +314,10 @@ namespace Lumina
 
                     for (uint32 v = 0; v < M.VertexCount; ++v)
                     {
-                        const FMeshletVertex& Vertex = MD.MeshletVertices[M.VertexOffset + v];
-                        OutPositions.push_back(DecodeMeshletPosition(M, Vertex));
+                        OutPositions.push_back(GetMeshletVertexPosition(MD, M, v, false));
                         if (OutColors != nullptr)
                         {
-                            OutColors->push_back(Vertex.Color);
+                            OutColors->push_back(MD.VertexColors.empty() ? 0xFFFFFFFFu : MD.VertexColors[GetStaticVertexIndex(MD, M, v)]);
                         }
                     }
 
@@ -387,7 +386,7 @@ namespace Lumina
             return;
         }
 
-        const FAABB Bounds = SourceMesh->GetAABB();
+        const SAABB Bounds = SourceMesh->GetAABB();
         const FVector3 Mn = Bounds.Min;
         const FVector3 Mx = Bounds.Max;
         const FVector3 Size = Math::Max(Mx - Mn, FVector3(1e-4f));

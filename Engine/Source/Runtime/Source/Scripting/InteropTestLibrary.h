@@ -19,30 +19,30 @@ namespace Lumina
 {
     /** Holds an FName so it cannot blit, which is what makes it bind as an opaque wrapper. */
     REFLECT()
-    struct FInteropOpaqueStruct
+    struct SInteropOpaqueStruct
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FName Label;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float Value = 0.0f;
 
         /** A key whose managed form is not its native bytes, which the map binder used to refuse. */
-        PROPERTY()
+        PROPERTY(Hidden)
         THashMap<FString, float> Weights;
 
         /** The same on the value side. */
-        PROPERTY()
+        PROPERTY(Hidden)
         THashMap<int32, FString> Labels;
 
         /** Both sides plain values, so a benchmark can show the marshalled branch folding away. */
-        PROPERTY()
+        PROPERTY(Hidden)
         THashMap<int32, float> Scores;
 
         /** A payload a Nullable cannot spell, which the optional binder used to refuse. */
-        PROPERTY()
+        PROPERTY(Hidden)
         TOptional<FString> Note;
     };
 
@@ -90,18 +90,18 @@ namespace Lumina
 
         /** A string argument, which costs a UTF-8 encode into stack scratch on the managed side. */
         FUNCTION()
-        static int32 BenchMeasureName(const FName& Name);
+        static int32 BenchMeasureString(const FString& Text);
 
         /** A string return, which is the two-pass caller-buffer protocol. */
         FUNCTION()
-        static FName BenchGetName();
+        static const FString& BenchGetString();
 
         /** The one-uint64 handle shape a non-reflectable native pointer crosses in. */
         FUNCTION()
-        static FUIElement MakeHandle(uint64 Value);
+        static SUIElement MakeHandle(uint64 Value);
 
         FUNCTION()
-        static uint64 ReadHandle(FUIElement Handle);
+        static uint64 ReadHandle(SUIElement Handle);
 
         /** Returns a name of exactly Length characters, so a test can straddle the managed scratch buffer. */
         FUNCTION()
@@ -116,6 +116,6 @@ namespace Lumina
 
         /** An opaque struct argument, which crosses as the address its managed wrapper views. */
         FUNCTION()
-        static float ReadOpaqueValue(const FInteropOpaqueStruct& Opaque);
+        static float ReadOpaqueValue(const SInteropOpaqueStruct& Opaque);
     };
 }

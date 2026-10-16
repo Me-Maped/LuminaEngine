@@ -107,28 +107,28 @@ namespace Lumina
 
     // Where a particle hit, read back from the GPU for an emitter that reports its collisions.
     REFLECT()
-    struct RUNTIME_API FParticleCollision
+    struct RUNTIME_API SParticleCollision
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Position = FVector3(0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Normal = FVector3(0.0f, 1.0f, 0.0f);
 
         // After the bounce, so a particle that dies on the hit reports zero.
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Velocity = FVector3(0.0f);
 
         // How fast it was moving into the surface when it struck.
-        PROPERTY()
+        PROPERTY(Hidden)
         float ImpactSpeed = 0.0f;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float Size = 0.0f;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         int32 EmitterIndex = 0;
     };
 
@@ -165,14 +165,14 @@ namespace Lumina
 
     /** Named, typed value on a particle asset; component overrides reuse the same shape. */
     REFLECT()
-    struct RUNTIME_API FParticleParameter
+    struct RUNTIME_API SParticleParameter
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FName Name;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         EParticleParameterType Type = EParticleParameterType::Float;
 
         float       Scalar  = 0.0f;
@@ -184,7 +184,7 @@ namespace Lumina
         /** Writes only the storage matching Type. */
         bool Serialize(FArchive& Ar);
 
-        void CopyFrom(const FParticleParameter& Other)
+        void CopyFrom(const SParticleParameter& Other)
         {
             Name    = Other.Name;
             Type    = Other.Type;
@@ -194,7 +194,7 @@ namespace Lumina
             Vector  = Other.Vector;
         }
 
-        bool operator==(const FParticleParameter& Other) const
+        bool operator==(const SParticleParameter& Other) const
         {
             return Name    == Other.Name
                 && Type    == Other.Type
@@ -207,14 +207,14 @@ namespace Lumina
 
     /** Routes a built-in simulation property through a named user parameter. */
     REFLECT()
-    struct RUNTIME_API FParticlePropertyBinding
+    struct RUNTIME_API SParticlePropertyBinding
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FName PropertyName;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FName ParameterName;
     };
 
@@ -256,18 +256,18 @@ namespace Lumina
         /** Declared by the module that owns the input, never chosen by the user: it picks the editor
          *  widget and filters which user parameters the bind menu offers. Set by the constructor from
          *  whatever value the module initialized the input with, so a module author gets it for free. */
-        PROPERTY()
+        PROPERTY(Hidden)
         EParticleParameterType Type = EParticleParameterType::Float;
 
         /** The authored value, used whenever ParameterName is None. Kept when a binding is added so that
          *  unbinding restores what was there -- and it stays in the compiled slot as the fallback, which
          *  is what the editor preview and any unresolved binding fall back to. */
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector4 Constant = FVector4(0.0f);
 
         /** None means "use Constant". Otherwise the value comes from the system's user parameter of this
          *  name, with a component override taking priority over the asset's declared default. */
-        PROPERTY()
+        PROPERTY(Hidden)
         FName ParameterName;
 
         bool IsBound() const { return !ParameterName.IsNone(); }
@@ -292,15 +292,15 @@ namespace Lumina
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FName ParameterName;
 
         /** Index into CParticleEmitter::ModuleParamValues. */
-        PROPERTY()
+        PROPERTY(Hidden)
         int32 SlotIndex = 0;
 
         /** Width the module declared the input at; a narrower parameter broadcasts to fill it. */
-        PROPERTY()
+        PROPERTY(Hidden)
         EParticleParameterType Type = EParticleParameterType::Float;
     };
 
@@ -345,7 +345,7 @@ namespace Lumina
      *  and debris, each wanting its own particle count, lifetime, blend mode and texture -- so the whole
      *  block moved here and the system became a list of these.
      *
-     *  Emitters simulate independently: one dispatch and one draw each, with no shared buffers. */
+     *  Emitters simulate independently, with no shared buffers. */
     REFLECT()
     class RUNTIME_API CParticleEmitter : public CObject
     {
@@ -355,8 +355,20 @@ namespace Lumina
 
         CParticleEmitter() = default;
 
+        void Serialize(FArchive& Ar) override;
         void PostLoad() override;
         void OnDestroy() override;
+
+        // An emitter saved as its own package, which systems reference and share, rather than one living inside a system.
+        bool IsAsset() const override;
+
+        // The shader sources a generated simulation can reach, hashed once per run.
+        static uint64 GetSimulationTemplateHash();
+
+        // A generated stack with no shader for the current templates, which only an editor recompile can supply.
+        bool NeedsShaderCompile() const { return ShaderMode == EParticleShaderMode::Custom && !HasCustomComputeShader(); }
+
+        void StoreShaderInArtifactCache() const;
 
         /** The Particle-domain material to shade sprites with, or null when the texture path applies. */
         CMaterialInterface* GetRenderMaterial() const;
@@ -378,14 +390,20 @@ namespace Lumina
             return true;
         }
 
-        PROPERTY()
+        PROPERTY(Hidden)
         TVector<uint32> ComputeShaderBinaries;
+
+        // GetSimulationTemplateHash when the binaries in memory were built, never saved so a shader edit cannot dirty the asset.
+        uint64 CompiledTemplateHash = 0;
+
+        // Set when the asset still carried binaries from before the artifact cache, so the recompile asks for one save to drop them.
+        bool bLoadedEmbeddedBinaries = false;
 
         /** Module-stack value inputs, one float4 slot per parameter, in the order the compiler assigned.
          *  Uploaded verbatim each frame as the shader's ModuleParams array. Editing a module input
          *  rewrites a slot here and needs no recompile; only a structural stack change rebuilds the
          *  shader. Empty for legacy data-driven assets, which read the SimParams uniforms instead. */
-        PROPERTY()
+        PROPERTY(Hidden)
         TVector<FVector4> ModuleParamValues;
 
         /** Slots of ModuleParamValues that a named user parameter drives, produced by the compiler from
@@ -394,24 +412,24 @@ namespace Lumina
          *
          *  Not part of CompiledCodeHash on purpose: a binding changes who writes a slot, never the shader
          *  that reads it, so adding or clearing one takes the no-recompile path. */
-        PROPERTY()
+        PROPERTY(Hidden)
         TVector<SParticleParamBinding> ParamBindings;
 
         /** Layout the compiled shader was built against. A value-only refresh compares the freshly
          *  generated layout to this and forces a full rebuild on mismatch, so a slot can never be read
          *  at the wrong width or index. */
-        PROPERTY()
+        PROPERTY(Hidden)
         uint64 CompiledCodeHash = 0;
 
         /** Floats per particle in the declared-attribute buffer, matching PARTICLE_ATTR_FLOATS in the
          *  compiled shader. 1 when no module declared anything (the buffer still exists so indexing stays
          *  well-formed). Structural, so it only changes when the shader is rebuilt. */
-        PROPERTY()
+        PROPERTY(Hidden)
         uint32 AttributeFloatCount = 1;
 
         /** Slot index per ParticleRenderAttribute::Type, or -1 when the stack never declared it. Resolved
          *  at compile time, so it only moves with a rebuild -- same lifetime as AttributeFloatCount. */
-        PROPERTY()
+        PROPERTY(Hidden)
         TVector<int32> RenderAttributeSlots;
 
         /** Slot for a renderer-consumed attribute, or -1. Safe on an asset saved before the entry existed. */
@@ -434,7 +452,7 @@ namespace Lumina
          *  so it is linked by NAME rather than by TStrongObjectPtr: a hard reference from a runtime asset would
          *  drag editor-only data into cooked builds. Stable across reorder and rename, and empty only until
          *  the editor first opens the emitter. */
-        PROPERTY()
+        PROPERTY(Hidden)
         FString AuthoringStackName;
 
         PROPERTY(Editable, Category = "Simulation", ClampMin = 1, ClampMax = 1048576)
@@ -520,68 +538,68 @@ namespace Lumina
 
         // Below: legacy uniform-driven fields kept (non-editable) for assets not yet compiled to a
         // module stack; superseded by editor modules baked into the compute shader. Don't surface in editor.
-        PROPERTY()
+        PROPERTY(Hidden)
         EParticleShaderMode ShaderMode = EParticleShaderMode::Default;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         EParticleEmitterShape Shape = EParticleEmitterShape::Point;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 ShapeSize = FVector3(1.0f, 1.0f, 1.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float ShapeAngle = 30.0f;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         EParticleVelocityMode VelocityMode = EParticleVelocityMode::Explicit;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 VelocityMin = FVector3(-0.5f, 1.0f, -0.5f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 VelocityMax = FVector3(0.5f, 3.0f, 0.5f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector2 SpeedRange = FVector2(1.0f, 3.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector2 LifetimeRange = FVector2(1.0f, 2.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Gravity = FVector3(0.0f, -9.8f, 0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float Drag = 0.0f;
 
         /** 0 = world-space spawns; 1 = particles flow with emitter motion. Applied at spawn regardless of modules. */
         PROPERTY(Editable, Category = "Emitter", ClampMin = 0.0f, ClampMax = 1.0f)
         float InheritEmitterVelocity = 0.0f;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector4 StartColor = FVector4(1.0f, 0.6f, 0.2f, 1.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector4 EndColor = FVector4(1.0f, 0.0f, 0.0f, 0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector2 StartSizeRange = FVector2(0.2f, 0.3f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector2 EndSizeRange = FVector2(0.0f, 0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector2 RotationRange = FVector2(0.0f, 0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector2 RotationSpeedRange = FVector2(0.0f, 0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 NoiseStrength = FVector3(0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float NoiseScale = 1.0f;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         float NoiseSpeed = 1.0f;
 
         /** Superseded by Material, which carries the blend its graph was authored against. */
@@ -615,7 +633,7 @@ namespace Lumina
         int32 SubUVRows = 1;
 
         /** Kept so assets authored before FacingMode still load; FacingMode supersedes it. */
-        PROPERTY()
+        PROPERTY(Hidden)
         bool bBillboardToCamera = true;
 
         /** Superseded by Material, which declares its own depth write. */
@@ -673,6 +691,13 @@ namespace Lumina
         PROPERTY(Editable, Category = "Render")
         bool bRandomStartFrame = false;
 
+    private:
+
+        uint64 MakeArtifactKey() const;
+        bool LoadShaderFromArtifactCache();
+        void CommitComputeShader();
+        void ReleaseComputeShader();
+
         FShaderH ComputeShader = {};
     };
 
@@ -696,7 +721,7 @@ namespace Lumina
 
         /** Emitters in draw order. Never empty after PostLoad: an asset that somehow has none gets one, so
          *  no caller has to handle a system that cannot render anything. */
-        PROPERTY()
+        PROPERTY(Hidden)
         TVector<TStrongObjectPtr<CParticleEmitter>> Emitters;
 
         /** Appends a new emitter with a unique display name. Returns it. */
@@ -710,12 +735,12 @@ namespace Lumina
         void MoveEmitter(CParticleEmitter* Emitter, int32 Direction);
 
         PROPERTY(Editable, Category = "User Parameters")
-        TVector<FParticleParameter> UserParameters;
+        TVector<SParticleParameter> UserParameters;
 
-        PROPERTY()
-        TVector<FParticlePropertyBinding> PropertyBindings;
+        PROPERTY(Hidden)
+        TVector<SParticlePropertyBinding> PropertyBindings;
 
-        const FParticleParameter* FindUserParameter(const FName& InName) const;
+        const SParticleParameter* FindUserParameter(const FName& InName) const;
 
         // Seconds from activation until the last burst particle dies, or zero when an emitter streams forever.
         FUNCTION()
@@ -744,9 +769,14 @@ namespace Lumina
      *  NOT on the component, so the render thread never touches a component the game thread may have destroyed. */
     struct FParticleGPUState
     {
+        // The one allocation every buffer below is a region of, so an emitter costs one allocation and one clear to set up.
+        RHI::FGPUAllocation Block = {};
+        uint64          BlockSize = 0;
         RHI::FGPUAllocation ParticleBuffer = {};  // RW structured buffer of FGPUParticle
         uint64          ParticleBufferSize = 0;
         RHI::FGPUAllocation SpawnCounterBuffer = {};  // Single uint, cleared per frame
+        // The counters this frame's simulation used, SpawnCounterBuffer or a slot of the renderer's shared counter buffer.
+        RHI::GPUPtr     FrameSpawnCounter   = 0;
         // Declared per-particle attributes, parallel to ParticleBuffer and indexed by the same index.
         RHI::FGPUAllocation AttributeBuffer = {};
         uint64          AttributeBufferSize = 0;

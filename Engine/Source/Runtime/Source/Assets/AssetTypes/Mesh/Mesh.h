@@ -72,6 +72,7 @@ namespace Lumina
         
         FORCEINLINE const FGeometrySurface& GetSurface(size_t Slot) const { return MeshResources->GeometrySurfaces[Slot]; }
         FORCEINLINE FMeshResource& GetMeshResource() const { return *MeshResources.get(); }
+        FORCEINLINE const FMeshResource* TryGetMeshResource() const { return MeshResources.get(); }
 
         void SetMeshResource(TUniquePtr<FMeshResource>&& NewResource);
 
@@ -87,7 +88,7 @@ namespace Lumina
         virtual bool IsSkinned() const { return false; }
         
         FUNCTION()
-        FORCEINLINE const FAABB& GetAABB() const { return BoundingBox; }
+        FORCEINLINE const SAABB& GetAABB() const { return BoundingBox; }
         
         template<typename TCallable>
         void ForEachSurface(TCallable&& Lambda) const;
@@ -98,10 +99,10 @@ namespace Lumina
         PROPERTY(Editable, NoResize, NoReorder, Category = "Materials")
         TVector<TStrongObjectPtr<CMaterialInterface>> Materials;
 
-        PROPERTY(Category = "AABB")
-        FAABB BoundingBox;
+        PROPERTY(Hidden, Category = "AABB")
+        SAABB BoundingBox;
 
-        // Scales every LOD switch distance, so a heavy mesh such as card foliage can coarsen sooner than the scene-wide setting.
+        // Multiplies this mesh's LOD errors, so 2 switches twice as far away and 0.5 lets card foliage coarsen sooner.
         PROPERTY(Editable, Category = "Level Of Detail", ClampMin = 0.05f, ClampMax = 4.0f)
         float LODDistanceScale = 1.0f;
 
@@ -114,7 +115,7 @@ namespace Lumina
         /** File this mesh was last imported from, so "Reimport From File..." can open on it. Empty for
          *  procedurally generated meshes and for assets imported before this was recorded. Matches the
          *  SourcePath that CTexture / CFont / CAudioStream already keep. */
-        PROPERTY()
+        PROPERTY(Hidden)
         FString SourcePath;
         
     private:

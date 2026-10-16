@@ -6,6 +6,9 @@
 #include "imgui.h"
 #include "Core/Engine/Engine.h"
 #include "Scripting/DotNet/DotNetHost.h"
+#include "Core/Object/Class.h"
+#include "Core/Object/ObjectIterator.h"
+#include "Core/Object/ScriptClass.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Containers/StringFormat.h"
@@ -49,6 +52,44 @@ namespace Lumina
         // The managed host is only polled from DrawWindow, so closing the window already stops every cost.
     }
 
+    namespace
+    {
+        FString SummarizeMintedClasses()
+        {
+            TVector<TPair<const CClass*, int32>> Counts;
+            for (TObjectIterator<CClass> It; It; ++It)
+            {
+                const CClass* Class = *It;
+                if (Class == nullptr || ToScriptClass(Class) == nullptr || Class->IsAbstract() || Class->IsSuperseded())
+                {
+                    continue;
+                }
+                const CClass* NativeBase = Class;
+                while (NativeBase != nullptr && ToScriptClass(NativeBase) != nullptr)
+                {
+                    NativeBase = NativeBase->GetSuperClass();
+                }
+                auto Found = std::find_if(Counts.begin(), Counts.end(), [&](const TPair<const CClass*, int32>& Entry) { return Entry.first == NativeBase; });
+                if (Found != Counts.end())
+                {
+                    ++Found->second;
+                }
+                else
+                {
+                    Counts.emplace_back(NativeBase, 1);
+                }
+            }
+
+            FString Summary;
+            for (const TPair<const CClass*, int32>& Entry : Counts)
+            {
+                Summary += Lumina::Format("{}{} {}", Summary.empty() ? "" : ", ", Entry.second,
+                    Entry.first != nullptr ? Entry.first->GetName().c_str() : LOC("unparented"));
+            }
+            return Summary.empty() ? FString(LOC("no script classes")) : Summary;
+        }
+    }
+
     void FScriptDiagnosticsEditorTool::Refresh(bool bForceCollect)
     {
         DotNet::FScriptDiagnostics New;
@@ -74,6 +115,7 @@ namespace Lumina
         bHavePrevAlloc = true;
         Snapshot       = New;
         bAvailable     = true;
+        MintedClassSummary = SummarizeMintedClasses();
     }
 
     void FScriptDiagnosticsEditorTool::DrawWindow(bool)
@@ -142,8 +184,8 @@ namespace Lumina
                 Snapshot.AliveScriptAlcCount, Snapshot.OldestAliveGeneration);
         }
         ImGui::SameLine(0.0f, 18.0f);
-        ImGui::TextDisabled(LOC("Gen %d  |  %d type(s): %d script(s), %d system(s)"),
-            Snapshot.Generation, Snapshot.LoadedTypeCount, Snapshot.EntityScriptCount, Snapshot.EntitySystemCount);
+        ImGui::TextDisabled(LOC("Gen %d  |  %d type(s): %s"),
+            Snapshot.Generation, Snapshot.LoadedTypeCount, MintedClassSummary.c_str());
 
         ImGui::Separator();
 

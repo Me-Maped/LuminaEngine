@@ -30,6 +30,10 @@ namespace Lumina
         
         FDirectoryWatcher();
         ~FDirectoryWatcher();
+        FDirectoryWatcher(const FDirectoryWatcher&) = delete;
+        FDirectoryWatcher& operator=(const FDirectoryWatcher&) = delete;
+        FDirectoryWatcher(FDirectoryWatcher&&) = delete;
+        FDirectoryWatcher& operator=(FDirectoryWatcher&&) = delete;
 
         bool Stop();
         bool Watch(const FFixedString& InPath, FFileEventCallback InCallback, bool bRecursive = true);
@@ -37,7 +41,7 @@ namespace Lumina
         bool IsRunning() const { return bRunning.load(Atomic::MemoryOrderRelaxed); }
     
     private:
-        void WatchThreadFunc();
+        void WatchThreadFunc(const FThreadStop& Stop);
         FString WideToUtf8(const FWString& Wide);
         
         FFixedString Path;

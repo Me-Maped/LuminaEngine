@@ -26,17 +26,20 @@
 
 #define LUM_DEPRECATED(Version, Reason) [[deprecated("Deprecated since " #Version ": " Reason)]]
 
-#define LE_NO_COPY(X) \
-    X(const X&) = delete; \
-    X& operator = (const X&) = delete \
-
-#define LE_NO_MOVE(X) \
-    X(X&&) = delete; \
-    X& operator = (X&&) = delete \
+// Brackets the code that still has to read a deprecated type, such as a loader for an old file format.
+#if defined(_MSC_VER) && !defined(__clang__)
+#define LUM_DISABLE_DEPRECATION_WARNINGS __pragma(warning(push)) __pragma(warning(disable : 4996))
+#define LUM_RESTORE_DEPRECATION_WARNINGS __pragma(warning(pop))
+#else
+#define LUM_DISABLE_DEPRECATION_WARNINGS _Pragma("GCC diagnostic push") _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
+#define LUM_RESTORE_DEPRECATION_WARNINGS _Pragma("GCC diagnostic pop")
+#endif
 
 #define LE_NO_COPYMOVE(X) \
-    LE_NO_COPY(X); \
-    LE_NO_MOVE(X) \
+    X(const X&) = delete; \
+    X& operator = (const X&) = delete; \
+    X(X&&) = delete; \
+    X& operator = (X&&) = delete \
     
 #define LE_DEFAULT_MOVE(X) \
     X(X&&) = default; \

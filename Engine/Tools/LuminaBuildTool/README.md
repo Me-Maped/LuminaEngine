@@ -24,12 +24,13 @@ LuminaBuild.bat Build Lumina -TargetType=Editor -Configuration=Development
 
 | 模式 | 用途 |
 | --- | --- |
-| `Setup` | 获取并校验外部依赖包、持久化 LUMINA_DIR、设置 git hooks |
+| `Setup` | 获取并校验外部依赖包、设置 git hooks、注册文件类型 |
 | `Build <Target>` | 编译并链接一个目标 |
 | `Clean [Target]` | 删除某个目标的产物，或删除全部中间产物 |
 | `Query [Target]` | 列出目标、模块和插件，或描述某个已解析的目标 |
 | `Includes <Target>` | 按包含该头文件的翻译单元数量对头文件排名 |
 | `Deps <Target>` | 将模块声明的依赖与它实际触及的依赖进行对比 |
+| `Tidy [PathFilter]` | 使用工作区 `.clang-tidy` 对第一方源码运行 clang-tidy |
 | `GenerateProjectFiles` | 写出 `.vcxproj`、`.filters`、解决方案以及 `compile_commands.json` |
 
 目标：`Lumina`（编辑器与游戏启动器）、`Reflector`（反射生成器）
@@ -111,6 +112,14 @@ ForbidDependency(
 条目按文件而非按 unity blob 划分，因为 blob 的命令行并未指出它吸收了哪些源文件。
 
 该文件是生成产物、与机器相关，并且被 git 忽略。
+
+`Tidy` 会对编译数据库中每个第一方条目并行运行 clang-tidy，使用工作区 `.clang-tidy` 中的检查项，
+这正是 Rider 和 clangd 在你输入时读取的同一个文件。某个头文件的问题会从每个包含它的源文件返回，
+因此每个问题只报告一次，采用 IDE 错误列表能够识别的 MSVC `file(line,col): warning` 形式。
+第三方代码（`ThirdParty`、`External`、`imgui-node-editor`）和生成代码会被跳过。一个路径片段可以缩小
+运行范围，`-Checks=` 覆盖检查列表，`-Jobs=` 覆盖并行度，`-WarningsAsErrors` 则让任何问题都使运行失败。
+clang-tidy 按以下顺序查找：`-ClangTidy=<path>`、`LUMINA_CLANG_TIDY`、`PATH`，或 Visual Studio
+可选的 Clang 工具。
 
 ## 编写规则
 

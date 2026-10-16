@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include "Assets/AssetManager/AssetManager.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Assets/AssetRegistry/AssetData.h"
 #include "Assets/AssetRegistry/CookRoot.h"
@@ -22,6 +23,10 @@
 #include "Cooker/Graph/CookGraph.h"
 #include "Assets/AssetTypes/Material/Material.h"
 #include "Assets/AssetTypes/Material/MaterialInterface.h"
+#include "Assets/AssetTypes/Material/MaterialInstance.h"
+#include "Assets/AssetTypes/ParticleSystem/ParticleSystem.h"
+#include "Particles/ParticleOps.h"
+#include "Core/Math/Hash/Hash.h"
 #include "Assets/AssetTypes/Textures/Texture.h"
 #include "Core/Object/Class.h"
 #include "Core/Console/ConsoleVariable.h"
@@ -112,21 +117,20 @@ namespace Lumina
             return true;
         }
 
-        // One bad asset falls back to a verbatim copy with a WARN rather than killing the whole cook.
-        // Script packages of modules the shipped game never loads, whose objects in an asset are editor state such as a node graph.
-        const THashSet<FName>& EditorScriptPackages()
+        // Type packages of modules the shipped game never loads, whose objects in an asset are editor state such as a node graph.
+        const THashSet<FName>& EditorTypePackages()
         {
             static const THashSet<FName> Packages = []
             {
                 THashSet<FName> Out;
-                Out.insert(FName("/Script/Editor"));
+                Out.insert(FName("/Types/Editor"));
                 for (const FPlugin* Plugin : FPluginManager::Get().GetAllPlugins())
                 {
                     for (const FPluginModuleDescriptor& Module : Plugin->GetDescriptor().Modules)
                     {
                         if (Module.Type != EPluginModuleType::Runtime)
                         {
-                            Out.insert(FName((FString("/Script/") + Module.Name).c_str()));
+                            Out.insert(FName((FString("/Types/") + Module.Name).c_str()));
                         }
                     }
                 }
@@ -139,16 +143,51 @@ namespace Lumina
         bool IsEditorOnlyObject(const CObject* Object)
         {
             const CClass* Class = Object->GetClass();
-            return Class != nullptr && Class->GetPackage() != nullptr && EditorScriptPackages().contains(Class->GetPackage()->GetName());
+            return Class != nullptr && Class->GetPackage() != nullptr && EditorTypePackages().contains(Class->GetPackage()->GetName());
         }
 
+        // Every instance under a master, through instances of instances, since each may select its own permutation.
+        void CollectMaterialInstances(const FGuid& Parent, TVector<FAssetData*>& OutInstances, THashSet<FGuid>& Visited)
+        {
+            for (FAssetData* Referencer : FAssetRegistry::Get().GetReferencersOf(Parent))
+            {
+                if (Referencer == nullptr || Referencer->AssetClass != CMaterialInstance::StaticClass()->GetName()
+                    || !Visited.insert(Referencer->AssetGUID).second)
+                {
+                    continue;
+                }
+                OutInstances.push_back(Referencer);
+                CollectMaterialInstances(Referencer->AssetGUID, OutInstances, Visited);
+            }
+        }
+
+        // One bad asset falls back to a verbatim copy with a WARN rather than killing the whole cook.
         bool BundleAssetCooked(FPakWriter& Writer, FStringView VirtualPath, const TFunction<void(FStringView)>& LogFunc)
         {
             FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(VirtualPath);
             const bool bMaterial = Data != nullptr && Data->AssetClass == CMaterial::StaticClass()->GetName();
+            // An emitter asset carries its own simulation shader, which systems sharing it reference rather than embed.
+            const bool bParticleSystem = Data != nullptr && (Data->AssetClass == CParticleSystem::StaticClass()->GetName()
+                                                          || Data->AssetClass == CParticleEmitter::StaticClass()->GetName());
+
+            // Permutations are baked into the master at cook time, so its instances are inputs to its cooked bytes.
+            TVector<FAssetData*> Instances;
+            if (bMaterial)
+            {
+                THashSet<FGuid> Visited;
+                CollectMaterialInstances(Data->AssetGUID, Instances, Visited);
+            }
 
             // A material's cooked bytes carry shaders built from the templates, so a template edit must miss the cache too.
-            const uint64 SourceHash = Data ? Data->ContentHash ^ (bMaterial ? CMaterial::GetShaderTemplateHash() : 0) : 0;
+            uint64 SourceHash = Data ? Data->ContentHash ^ (bMaterial ? CMaterial::GetShaderTemplateHash() : 0) : 0;
+            if (bParticleSystem)
+            {
+                SourceHash ^= CParticleEmitter::GetSimulationTemplateHash();
+            }
+            for (const FAssetData* Instance : Instances)
+            {
+                SourceHash = Hash::GetHash64(&Instance->ContentHash, sizeof(Instance->ContentHash), SourceHash);
+            }
             const FCookInputHash Key = FCookDDC::ComputeKey(SourceHash);
 
             TVector<uint8> CookedBytes;
@@ -182,6 +221,52 @@ namespace Lumina
                 else if (bStale)
                 {
                     LogCooker(LogFunc, Format("  recompiled {} against the current shader templates", VirtualPath).c_str());
+                }
+
+                // Editor assets carry no permutations, so each one an instance selects is pulled from the cache or compiled now.
+                if (Material != nullptr && !Material->StaticSwitches.empty())
+                {
+                    TVector<uint64> Keys;
+                    for (const FAssetData* InstanceData : Instances)
+                    {
+                        CPackage* InstancePackage = CPackage::LoadPackage(FStringView(InstanceData->Path.c_str(), InstanceData->Path.size()));
+                        const CMaterialInstance* Instance = InstancePackage != nullptr
+                            ? Cast<CMaterialInstance>(InstancePackage->LoadObjectByName(InstanceData->AssetName)) : nullptr;
+                        if (Instance != nullptr && Instance->GetMaterial() == Material && !Algo::Contains(Keys, Instance->GetStaticSwitchKey()))
+                        {
+                            Keys.push_back(Instance->GetStaticSwitchKey());
+                        }
+                    }
+
+                    if (const uint32 Failed = EnsureMaterialPermutations(Material, Keys); Failed != 0)
+                    {
+                        LogCooker(LogFunc, Format("  [warn] {} of {}'s static switch permutations could not be built; those instances draw with default switches",
+                            Failed, VirtualPath).c_str());
+                    }
+                }
+            }
+
+            if (bParticleSystem)
+            {
+                CObject* Loaded = Package->LoadObjectByName(Data->AssetName);
+                CParticleEmitter* Standalone = Cast<CParticleEmitter>(Loaded);
+                const TStrongObjectPtr<CParticleSystem> System = Standalone != nullptr ? ParticleOps::WrapEmitter(Standalone) : TStrongObjectPtr<CParticleSystem>(Cast<CParticleSystem>(Loaded));
+                const int32 NumEmitters = System ? (int32)System->Emitters.size() : 0;
+                for (int32 Index = 0; Index < NumEmitters; ++Index)
+                {
+                    const CParticleEmitter* Emitter = System->Emitters[Index].Get();
+                    if (Emitter == nullptr || Emitter->GetPackage() != Package || !Emitter->NeedsShaderCompile())
+                    {
+                        continue;
+                    }
+
+                    // The cache had nothing for the current templates, and a game cannot compile, so the cook builds it now.
+                    FParticleEmitterCompileOutput Output;
+                    if (ParticleOps::FindStack(System.Get(), Index) == nullptr || !ParticleOps::CompileEmitter(System.Get(), Index, Output))
+                    {
+                        LogCooker(LogFunc, Format("  [warn] {} emitter {} has no simulation shader and could not be recompiled, so it will not simulate",
+                            VirtualPath, Index).c_str());
+                    }
                 }
             }
 
@@ -272,7 +357,7 @@ namespace Lumina
             const bool bEligible = Class != nullptr
                 && !Class->IsChildOf(CMaterialInterface::StaticClass())
                 && !Class->IsChildOf(CTexture::StaticClass())
-                && !(Class->GetPackage() != nullptr && EditorScriptPackages().contains(Class->GetPackage()->GetName()))
+                && !(Class->GetPackage() != nullptr && EditorTypePackages().contains(Class->GetPackage()->GetName()))
                 && !HasEditorOnlyData(Class, StructMemo);
 
             ClassMemo[Data->AssetClass] = bEligible;
@@ -621,7 +706,7 @@ namespace Lumina
             Result.ErrorMessage =
                 "No cook roots defined.\n"
                 "  Open Project Settings -> Maps -> Cook Roots and add at least one asset path,\n"
-                "  declare CookRoots in a plugin's .lplugin, or flag an asset EAssetFlags::Primary.";
+                "  declare CookRoots in a plugin's .lplugin, or put assets in a REFLECT(Group = ...) class.";
             return Result;
         }
 
@@ -633,15 +718,15 @@ namespace Lumina
 
         // FindByPredicate returns hash order, so sort by GUID before adding to keep the graph deterministic.
         {
-            TVector<FAssetData*> Primaries = FAssetRegistry::Get().FindByPredicate(
-                [](const FAssetData& D) { return HasFlag(D.Flags, EAssetFlags::Primary); });
-            Algo::Sort(Primaries,
+            TVector<FAssetData*> Grouped = FAssetRegistry::Get().FindByPredicate(
+                [](const FAssetData& D) { return !FAssetManager::Get().GetGroupOfClass(D.AssetClass).IsNone(); });
+            Algo::Sort(Grouped,
                 [](const FAssetData* A, const FAssetData* B) { return A->AssetGUID < B->AssetGUID; });
-            if (!Primaries.empty())
+            if (!Grouped.empty())
             {
-                LogCooker(LogFunc, Format("  Primary assets: {} -> implicit cook roots", Primaries.size()).c_str());
+                LogCooker(LogFunc, Format("  Grouped assets: {} -> implicit cook roots", Grouped.size()).c_str());
             }
-            for (const FAssetData* Data : Primaries)
+            for (const FAssetData* Data : Grouped)
             {
                 FCookRoot Root;
                 Root.Asset = FString(Data->Path.c_str(), Data->Path.size());

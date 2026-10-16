@@ -9,6 +9,7 @@
 #include "Core/Reflection/Type/Properties/StructProperty.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
+#include "Tools/UI/ImGui/ImGuiXNumeric.h"
 #include "Containers/StringFormat.h"
 
 namespace Lumina
@@ -72,7 +73,7 @@ namespace Lumina
         // The Color tag distinguishes a color from any other float4, as it does for a plain FVector4.
         EParticleParameterType ResolveInputType(const SParticleParam& Value, const FProperty* Property)
         {
-            if (Value.Type == EParticleParameterType::Vec4 && Property != nullptr && Property->HasMetadata("Color"))
+            if (Value.Type == EParticleParameterType::Vec4 && Property != nullptr && Property->HasEditorFlag(EPropertyEditorFlags::Color))
             {
                 return EParticleParameterType::Color;
             }
@@ -105,16 +106,8 @@ namespace Lumina
         FProperty* Prop = Property->Property;
         const EParticleParameterType InputType = ResolveInputType(Value, Prop);
 
-        float Min = 0.0f;
-        float Max = 0.0f;
-        if (Prop != nullptr && Prop->HasMetadata("ClampMin"))
-        {
-            Min = std::stof(Prop->GetMetadata("ClampMin").c_str());
-        }
-        if (Prop != nullptr && Prop->HasMetadata("ClampMax"))
-        {
-            Max = std::stof(Prop->GetMetadata("ClampMax").c_str());
-        }
+        const float Min = Prop != nullptr ? Prop->GetMetadataNumber<float>("ClampMin").value_or(0.0f) : 0.0f;
+        const float Max = Prop != nullptr ? Prop->GetMetadataNumber<float>("ClampMax").value_or(0.0f) : 0.0f;
 
         EPropertyChangeOp Result = EPropertyChangeOp::None;
 
@@ -154,26 +147,26 @@ namespace Lumina
             case EParticleParameterType::Int:
             {
                 int32 Int = (int32)Value.Constant.x;
-                if (ImGui::DragInt("##Value", &Int, 1.0f, (int32)Min, (int32)Max))
+                if (ImGuiX::DragInt("##Value", &Int, 1.0f, (int32)Min, (int32)Max))
                 {
                     Value.Constant.x = (float)Int;
                 }
                 break;
             }
             case EParticleParameterType::Vec2:
-                ImGui::DragFloat2("##Value", &Value.Constant.x, 0.01f, Min, Max);
+                ImGuiX::DragFloat2("##Value", &Value.Constant.x, 0.01f, Min, Max);
                 break;
             case EParticleParameterType::Vec3:
-                ImGui::DragFloat3("##Value", &Value.Constant.x, 0.01f, Min, Max);
+                ImGuiX::DragFloat3("##Value", &Value.Constant.x, 0.01f, Min, Max);
                 break;
             case EParticleParameterType::Vec4:
-                ImGui::DragFloat4("##Value", &Value.Constant.x, 0.01f, Min, Max);
+                ImGuiX::DragFloat4("##Value", &Value.Constant.x, 0.01f, Min, Max);
                 break;
             case EParticleParameterType::Color:
                 ImGui::ColorEdit4("##Value", &Value.Constant.x, ImGuiColorEditFlags_AlphaBar);
                 break;
             default:
-                ImGui::DragFloat("##Value", &Value.Constant.x, 0.01f, Min, Max);
+                ImGuiX::DragFloat("##Value", &Value.Constant.x, 0.01f, Min, Max);
                 break;
             }
             ImGui::PopItemWidth();
@@ -226,7 +219,7 @@ namespace Lumina
             }
             else
             {
-                for (const FParticleParameter& Param : System->UserParameters)
+                for (const SParticleParameter& Param : System->UserParameters)
                 {
                     if (Param.Name.IsNone())
                     {
@@ -258,7 +251,7 @@ namespace Lumina
                 ImGui::Separator();
                 if (ImGui::Selectable(LOC("New Parameter From Value")))
                 {
-                    FParticleParameter& New = System->UserParameters.emplace_back();
+                    SParticleParameter& New = System->UserParameters.emplace_back();
                     New.Name   = MakeUniqueParameterName(*System, Prop != nullptr ? Prop->GetPropertyName() : FName());
                     New.Type   = InputType;
                     New.Scalar = Value.Constant.x;

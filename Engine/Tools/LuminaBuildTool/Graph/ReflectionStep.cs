@@ -41,6 +41,12 @@ public sealed class ReflectionProjectEntry
 
 public sealed class ReflectionInputDocument
 {
+    public int CodeGenerationVersion { get; set; }
+
+    public string ReflectorFingerprint { get; set; } = string.Empty;
+
+    public string CoreReflectionFingerprint { get; set; } = string.Empty;
+
     public string WorkspaceName { get; set; } = string.Empty;
 
     /// <summary>Root the Reflector writes Intermediates/Reflection and CSharpBindings under.</summary>
@@ -58,6 +64,8 @@ public sealed class EngineReflectionManifest
 /// <summary>Wires the reflection code generator into the action graph.</summary>
 public static class ReflectionStep
 {
+    private const int CodeGenerationVersion = 3;
+
     /// <summary>Must match kUnityShardCount in Reflector/CodeGeneration/CodeGenerator.cpp.</summary>
     public const int UnityShardCount = 8;
 
@@ -96,6 +104,9 @@ public static class ReflectionStep
 
         ReflectionInputDocument Document = new()
         {
+            CodeGenerationVersion = CodeGenerationVersion,
+            ReflectorFingerprint = ContentHash.OfFileContents(ReflectorPath),
+            CoreReflectionFingerprint = ComputeCoreReflectionFingerprint(Target),
             WorkspaceName = Target.Name,
             WorkspacePath = Target.Directories.OutputRoot,
         };
@@ -171,6 +182,13 @@ public static class ReflectionStep
                 Action.PrerequisiteItems.Add(Header);
             }
 
+            // The bindings are shared across configurations, so a stamp another configuration wrote reruns the reflector to re-emit them.
+            string LayoutStamp = GetLayoutStampPath(Target, Module);
+            if (File.Exists(LayoutStamp))
+            {
+                Action.PrerequisiteItems.Add(FileItem.Get(LayoutStamp));
+            }
+
             // Only the owner declares the shared engine files; two claimants would each regenerate the other's.
             bool bOwnsOutput = Target.Directories.IsEngineOwned(Module.Rules.ModuleDirectory) == bIsEngineTarget;
 
@@ -187,7 +205,24 @@ public static class ReflectionStep
             }
         }
 
+        foreach (ReflectionProjectEntry Project in Document.Projects.Where(Project => Project.ReferenceOnly))
+        {
+            foreach (string Header in Project.Files)
+            {
+                Action.PrerequisiteItems.Add(FileItem.Get(Header));
+            }
+        }
+
         return new ReflectionActions { Generate = Action, Inputs = InputActions };
+    }
+
+    // Must match MakeLayoutStampPath in Reflector/CodeGeneration/CodeGenerator.cpp.
+    private static string GetLayoutStampPath(BuildTarget Target, BuildModule Module)
+    {
+        string Directory = Module.Rules.bRouteCSharpTypeBindings && !string.IsNullOrEmpty(Module.Rules.CSharpBindingsDirectory)
+            ? Module.Rules.CSharpBindingsDirectory
+            : Path.Combine(Target.Directories.OutputRoot, "Intermediates", "CSharpBindings", Module.Name);
+        return Path.Combine(Directory, Module.Name + ".Layout.generated.cs");
     }
 
     /// <summary>An .inl/.ipp is an include fragment, so parsing it as its own file misreads X-macro bodies.</summary>
@@ -206,6 +241,19 @@ public static class ReflectionStep
             WriteIndented = true,
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault,
         });
+    }
+
+    private static string ComputeCoreReflectionFingerprint(BuildTarget Target)
+    {
+        string Root = Path.Combine(Target.Directories.EngineRuntimeDirectory, "Source", "Core", "Reflection");
+        if (!Directory.Exists(Root))
+        {
+            return string.Empty;
+        }
+
+        return ContentHash.OfStrings(Directory.EnumerateFiles(Root, "*", SearchOption.AllDirectories)
+            .OrderBy(FilePath => FilePath, StringComparer.OrdinalIgnoreCase)
+            .Select(FilePath => Path.GetRelativePath(Root, FilePath) + ContentHash.OfFileContents(FilePath)));
     }
 
     private static string ResolveReflectorPath(BuildTarget Target)

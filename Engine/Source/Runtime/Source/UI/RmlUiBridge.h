@@ -9,6 +9,7 @@
 #include "Containers/String.h"
 #include "Memory/SmartPtr.h"
 #include "Renderer/RHI.h"
+#include "Scripting/ScriptCallback.h"
 #include "UI/UITypes.h"
 
 namespace Rml
@@ -86,6 +87,8 @@ namespace Lumina::RmlUi
 
         FLockedWorldContext(const FLockedWorldContext&)            = delete;
         FLockedWorldContext& operator=(const FLockedWorldContext&) = delete;
+        FLockedWorldContext(FLockedWorldContext&&) = delete;
+        FLockedWorldContext& operator=(FLockedWorldContext&&) = delete;
 
         Rml::Context* Get() const { return Context; }
         Rml::Context* operator->() const { return Context; }
@@ -159,17 +162,6 @@ namespace Lumina::RmlUi
 
     RUNTIME_API void EnumerateEditorSlots(Rml::Context* Context, TVector<FRmlEditorSlot>& OutSlots);
 
-    //--------------------------------------------------------------------------------------------
-    // Scripting surface: screen documents + element manipulation + event listeners.
-    //
-    // These drive a world's own full-screen Rml::Context (the HUD/menu context input is already
-    // forwarded to, see FInputViewport) -- distinct from world-space SWidgetComponents and editor
-    // previews. Every call takes the bridge StateMutex, which also guards re-entrant event
-    // callbacks. Documents/elements cross as opaque handles (Rml::ElementDocument*
-    // / Rml::Element* as void*); they are valid while the owning document is loaded. Backs LuminaSharp's
-    // World.UI facade (LuminaSharp_UI_* exports in DotNetGameplay.cpp).
-    //--------------------------------------------------------------------------------------------
-
     // Blittable payload handed to a managed UI event callback; mirrors LuminaSharp's UIEventData.
     struct FUIEventData
     {
@@ -231,19 +223,29 @@ namespace Lumina::RmlUi
     // The listener's FScriptDelegateBase, which script binds to and whose destructor releases those binds.
     RUNTIME_API void* GetElementEventListenerDelegate(void* Listener);
     
-    // Native -> managed writeback for two-way bound variables. For String, Number is 0 and (Str,StrLen) is
-    // the UTF-8 value (valid only for the call); otherwise Str is null and Number carries the value.
-    using FManagedDataSetThunk   = void (*)(void* Context, int32 Field, int32 Type, double Number, const char* Str, int32 StrLen);
+    // A two-way bound variable the view edited, the payload of a model's OnSet. Str is set for a string and valid only for the call.
+    struct FUIDataSet
+    {
+        int32       Field;
+        int32       Type;
+        double      Number;
+        const char* Str;
+        int32       StrLen;
+    };
 
-    // One argument of a data-event-* call (e.g. the 3 in data-event-click="Select(3)"). UTF-8, valid only
-    // for the dispatch call. RmlUi event args arrive as Variants; the bridge stringifies them uniformly.
+    // One argument of a data-event-* call (e.g. the 3 in data-event-click="Select(3)"), stringified and valid only for the call.
     struct FUIArg { const char* Ptr; int32 Len; };
-    // Native -> managed command dispatch for a data-event-* binding, with its (stringified) arguments.
-    using FManagedDataEventThunk = void (*)(void* Context, int32 CommandId, int32 ArgCount, const FUIArg* Args);
 
-    // Create a named data model on the world's context. Context is the managed GCHandle passed back to the
-    // thunks. Returns an opaque model handle, or null on failure (no context / duplicate name).
-    RUNTIME_API void* CreateDataModel(CWorld* World, FStringView Name, void* Context, FManagedDataSetThunk SetThunk, FManagedDataEventThunk EventThunk);
+    // A data-event-* command the view fired, the payload of a model's OnEvent.
+    struct FUIDataEvent
+    {
+        int32         CommandId;
+        int32         ArgCount;
+        const FUIArg* Args;
+    };
+
+    // Creates a named data model on the world's context, which owns both callbacks from here. Null when there is no context or the name is taken.
+    RUNTIME_API void* CreateDataModel(CWorld* World, FStringView Name, SScriptCallback OnSet, SScriptCallback OnEvent);
 
     // Register a scalar variable (Type is EUIVarType); returns its field id (a dense index), or -1 on failure.
     RUNTIME_API int32 DataModelBindScalar(void* Model, FStringView Name, int32 Type);

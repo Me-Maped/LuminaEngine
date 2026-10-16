@@ -4,7 +4,6 @@
 #include "Agent/AgentAssetResolve.h"
 #include "Agent/AgentEntityToken.h"
 #include "Agent/AgentToolRegistry.h"
-#include "Assets/AssetRef.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Assets/AssetTypes/Prefabs/Prefab.h"
 #include "Assets/AssetTypes/Prefabs/PrefabComponents.h"
@@ -18,10 +17,10 @@
 #include "World/ECS/Registry.h"
 #include "World/Entity/Components/Component.h"
 #include "World/Entity/Components/NameComponent.h"
-#include "World/Entity/Components/RelationshipComponent.h"
 #include "World/Entity/Components/TransformComponent.h"
 #include "World/Entity/EntityUtils.h"
 #include "World/World.h"
+#include "Scripting/EntityScript.h"
 
 namespace Lumina::MCP
 {
@@ -40,6 +39,70 @@ namespace Lumina::MCP
             const bool bPrefab = Class != nullptr && Class->IsChildOf(CPrefab::StaticClass());
             Cache.emplace(ClassName, bPrefab);
             return bPrefab;
+        }
+
+        void RegisterInstanceActions(FStringView Owner)
+        {
+            using FInstanceAction = bool (*)(ECS::FEntity, FString&);
+            auto RegisterAction = [Owner](const char* Name, const char* Description, FInstanceAction Action)
+            {
+                Agent::FToolRegistry::Get().Register<SPrefabInstanceParams, SPrefabInstanceResult>(
+                    Owner, Name, Description, Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
+                    [Action](const SPrefabInstanceParams& In, SPrefabInstanceResult& Out)
+                    {
+                        FString Error;
+                        ECS::FRegistry* Registry = SessionOps::GetSceneRegistry(Error);
+                        ECS::FEntity Root = ECS::NullEntity;
+                        if (Registry == nullptr || !Agent::FEntityTokens::Resolve(*Registry, FStringView(In.Entity), Root, Error))
+                        {
+                            return Agent::FToolResult::Error(Error);
+                        }
+                        Out.bDone = Action(Root, Error);
+                        return Out.bDone ? Agent::FToolResult::Ok("Done.") : Agent::FToolResult::Error(Error);
+                    });
+            };
+
+            RegisterAction("prefab.resync", "Resync a placed instance from its prefab, as the outliner's Resync from Prefab does.",
+                &SessionOps::ResyncPrefabInstance);
+            RegisterAction("prefab.detach", "Unlink a placed instance from its prefab, as the outliner's Detach from Prefab does.",
+                &SessionOps::DetachPrefabInstance);
+
+            Agent::FToolRegistry::Get().Register<SCreatePrefabFromEntitiesParams, SCreateVariantResult>(
+                Owner, "prefab.create_from_selection",
+                "Select world entities and save them as a new prefab, as Create Prefab from Selected does.",
+                Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
+                [](const SCreatePrefabFromEntitiesParams& In, SCreateVariantResult& Out)
+                {
+                    FString Error;
+                    ECS::FRegistry* Registry = SessionOps::GetSceneRegistry(Error);
+                    if (Registry == nullptr)
+                    {
+                        return Agent::FToolResult::Error(Error);
+                    }
+                    TVector<ECS::FEntity> Entities;
+                    for (const FString& Token : In.Entities)
+                    {
+                        ECS::FEntity Entity = ECS::NullEntity;
+                        if (!Agent::FEntityTokens::Resolve(*Registry, FStringView(Token), Entity, Error))
+                        {
+                            return Agent::FToolResult::Error(Error);
+                        }
+                        Entities.push_back(Entity);
+                    }
+                    if (!SessionOps::SelectEntities(Entities, Error))
+                    {
+                        return Agent::FToolResult::Error(Error);
+                    }
+                    CPrefab* Prefab = SessionOps::CreatePrefabFromSelection(FStringView(In.Folder.empty() ? FString("/Game/Content") : In.Folder),
+                        FStringView(In.Name), Error);
+                    if (Prefab == nullptr)
+                    {
+                        return Agent::FToolResult::Error(Error);
+                    }
+                    Out.Guid = FString(Prefab->GetGUID().ToString().c_str());
+                    Out.Path = FString(Prefab->GetPackage()->GetPackagePath().c_str());
+                    return Agent::FToolResult::Ok(Lumina::Format("Created {}.", Out.Path));
+                });
         }
 
         void RegisterList(FStringView Owner)
@@ -119,12 +182,43 @@ namespace Lumina::MCP
 
                     ECS::FRegistry& Registry = Prefab->Registry;
 
+                    auto StableIDOf = [&Registry](ECS::FEntity Entity)
+                    {
+                        const SPrefabComponent* Node = Registry.IsValid(Entity) ? Registry.TryGet<SPrefabComponent>(Entity) : nullptr;
+                        return Node != nullptr ? FString(Node->StableID.c_str()) : FString();
+                    };
+
                     Registry.ForEachEntity([&](ECS::FEntity Entity)
                     {
                         ++Out.EntityCount;
 
-                        const FRelationshipComponent* Link = Registry.TryGet<FRelationshipComponent>(Entity);
-                        if (Link != nullptr && Link->Parent != ECS::NullEntity)
+                        SPrefabNodeInfo& Node = Out.Nodes.emplace_back();
+                        Node.StableID = StableIDOf(Entity);
+                        Node.ParentStableID = StableIDOf(Registry.GetHierarchy().GetParent(Entity));
+                        if (const SNameComponent* Named = Registry.TryGet<SNameComponent>(Entity))
+                        {
+                            Node.Name = FString(Named->Name.ToString().c_str());
+                        }
+                        ForEachComponentStruct([&](CStruct* Reflected)
+                        {
+                            if (ECS::Utils::HasComponent(Registry, Entity, Reflected))
+                            {
+                                Node.Components.push_back(FString(Reflected->GetName().ToString().c_str()));
+                            }
+                        });
+                        if (const SEntityScriptComponent* Scripts = Registry.TryGet<SEntityScriptComponent>(Entity))
+                        {
+                            for (const TStrongObjectPtr<CEntityScript>& Script : Scripts->Scripts)
+                            {
+                                Node.Scripts.push_back(Script.Get() != nullptr ? FString(Script->GetClass()->GetName().c_str()) : FString("<null>"));
+                            }
+                            for (const SHeldValue& Held : Scripts->Pending)
+                            {
+                                Node.Scripts.push_back(FString("held:") + Held.TypeName.c_str());
+                            }
+                        }
+
+                        if (Registry.GetHierarchy().GetParent(Entity) != ECS::NullEntity)
                         {
                             return;
                         }
@@ -193,11 +287,10 @@ namespace Lumina::MCP
                     Transform.SetRotationFromEuler(FVector3(In.Rotation.X, In.Rotation.Y, In.Rotation.Z));
                     Transform.SetScale(FVector3(In.Scale, In.Scale, In.Scale));
 
-                    FAssetRef Ref;
-                    Ref.Guid = In.Asset;
+                    TSoftObjectPtr<CPrefab> Ref;
                     if (CPackage* Package = Prefab->GetPackage())
                     {
-                        Ref.Path = FString(Package->GetPackagePath().c_str());
+                        Ref.SetPath(Package->GetPackagePath().c_str());
                     }
 
                     ECS::FEntity Root = ECS::NullEntity;
@@ -275,9 +368,8 @@ namespace Lumina::MCP
                     FName PreviousRootName;
                     Prefab->Registry.ForEachEntity([&](ECS::FEntity E)
                     {
-                        const FRelationshipComponent* Rel = Prefab->Registry.TryGet<FRelationshipComponent>(E);
                         const SNameComponent* Name = Prefab->Registry.TryGet<SNameComponent>(E);
-                        if ((Rel == nullptr || Rel->Parent == ECS::NullEntity) && Name != nullptr)
+                        if (Prefab->Registry.GetHierarchy().GetParent(E) == ECS::NullEntity && Name != nullptr)
                         {
                             PreviousRootName = Name->Name;
                         }
@@ -288,7 +380,7 @@ namespace Lumina::MCP
 
                     // A plain source becomes the prefab's first instance, so a later capture from it still matches the others.
                     bool bPlainSource = Instance == nullptr;
-                    ECS::Utils::ForEachDescendant(Registry, Root, [&](ECS::FEntity E)
+                    Registry.GetHierarchy().ForEachDescendant(Root, [&](ECS::FEntity E)
                     {
                         bPlainSource = bPlainSource && !Registry.HasAll<SPrefabInstanceComponent>(E);
                     });
@@ -298,8 +390,7 @@ namespace Lumina::MCP
                     {
                         Prefab->Registry.ForEachEntity([&](ECS::FEntity E)
                         {
-                            const FRelationshipComponent* Rel = Prefab->Registry.TryGet<FRelationshipComponent>(E);
-                            if (Rel == nullptr || Rel->Parent == ECS::NullEntity)
+                            if (Prefab->Registry.GetHierarchy().GetParent(E) == ECS::NullEntity)
                             {
                                 if (SNameComponent* Name = Prefab->Registry.TryGet<SNameComponent>(E))
                                 {
@@ -313,8 +404,7 @@ namespace Lumina::MCP
                     Prefab->Registry.ForEachEntity([&](ECS::FEntity E)
                     {
                         Out.EntityCount++;
-                        const FRelationshipComponent* Rel = Prefab->Registry.TryGet<FRelationshipComponent>(E);
-                        if (Rel != nullptr && Rel->Parent != ECS::NullEntity)
+                        if (Prefab->Registry.GetHierarchy().GetParent(E) != ECS::NullEntity)
                         {
                             return;
                         }
@@ -323,6 +413,12 @@ namespace Lumina::MCP
                             Tx->SetLocalTransform(FTransform());
                         }
                     });
+
+                    // A variant saves only its delta, so without this the capture would be thrown away on save.
+                    if (Prefab->IsVariant())
+                    {
+                        Prefab->CaptureVariantDelta();
+                    }
 
                     CPackage* Package = Prefab->GetPackage();
                     if (Package == nullptr)
@@ -401,6 +497,7 @@ namespace Lumina::MCP
 
     void RegisterPrefabTools(FStringView Owner)
     {
+        RegisterInstanceActions(Owner);
         RegisterList(Owner);
         RegisterDescribePrefab(Owner);
         RegisterSpawn(Owner);

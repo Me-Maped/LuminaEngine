@@ -19,6 +19,7 @@ namespace Lumina
         TSharedPtr<FPhysicsCharacterHandle> Handle;
 
         FCharacterHandleRef() = default;
+        ~FCharacterHandleRef() = default;
         FCharacterHandleRef(const FCharacterHandleRef&) {}
         FCharacterHandleRef(FCharacterHandleRef&&) noexcept = default;
         FCharacterHandleRef& operator=(const FCharacterHandleRef&) { Handle.reset(); return *this; }
@@ -52,7 +53,7 @@ namespace Lumina
 
         /** Layer and mask controlling which bodies this character collides with. */
         PROPERTY(Editable, Category = "Physics")
-        FCollisionProfile CollisionProfile;
+        SCollisionProfile CollisionProfile;
 
         /** Half-height of the capsule cylinder in meters, so total height is 2*(HalfHeight+Radius). */
         PROPERTY(Editable, Category = "Collision", Units = "m")
@@ -102,9 +103,6 @@ namespace Lumina
         /** When false, the mover passes through the capsules of other characters instead of being blocked. */
         PROPERTY(Editable, Category = "Physics")
         bool bCollideWithCharacters = true;
-
-        FUNCTION()
-
     };
 
     REFLECT(Component, Category = "Character")
@@ -157,7 +155,7 @@ namespace Lumina
         float Gravity = Physics::GEarthGravity;
 
         /** Current velocity of the character in world space. */
-        PROPERTY(Category = "Movement", Units = "m/s")
+        PROPERTY(Hidden, Category = "Movement", Units = "m/s")
         FVector3 Velocity;
 
         /** When true, the character's yaw matches the controller's look direction. */

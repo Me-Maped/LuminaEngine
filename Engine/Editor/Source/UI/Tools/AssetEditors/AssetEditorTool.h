@@ -23,6 +23,7 @@ namespace Lumina
         void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override
         {
             FEditorTool::VisitObjectReferences(Func);
+            (void)GetAssetVirtualPath();
             Asset = Func(Asset.Get());
         }
 
@@ -35,6 +36,11 @@ namespace Lumina
             Asset = InAsset;
             if (InAsset != nullptr)
             {
+                if (CPackage* Package = InAsset->GetPackage())
+                {
+                    AssetVirtualPath = Package->GetPackagePath();
+                }
+
                 // SetObject auto-resolves the class CDO as the diff/reset
                 // default, no explicit plumbing needed here.
                 PropertyTable.SetObject(InAsset, InAsset->GetClass());
@@ -72,6 +78,10 @@ namespace Lumina
 
 
         ~FAssetEditorTool() override;
+        FAssetEditorTool(const FAssetEditorTool&) = delete;
+        FAssetEditorTool& operator=(const FAssetEditorTool&) = delete;
+        FAssetEditorTool(FAssetEditorTool&&) = delete;
+        FAssetEditorTool& operator=(FAssetEditorTool&&) = delete;
 
         void OnInitialize() override;
         void Deinitialize(const FUpdateContext& UpdateContext) override;
@@ -182,6 +192,7 @@ namespace Lumina
     protected:
 
         TStrongObjectPtr<CObject>   Asset;
+        mutable FFixedString        AssetVirtualPath;
         FPropertyTable              PropertyTable;
         uint8                       bAssetLoadBroadcasted:1;
         uint8                       bOpenedOnAsset:1;

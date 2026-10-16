@@ -481,8 +481,8 @@ namespace Lumina
             .bValidation = bValidation,
             .bDebugUtils = bDebugUtils,
             .bHeadless   = false,
-            // The scene renderer draws every meshlet through the mesh path; there is no fallback.
-            .RequiredFeatures = RHI::EDeviceFeature::MeshShading,
+            // Meshlets draw through the vertex path without mesh shading, and -nomeshshaders forces that path.
+            .DisabledFeatures = GCommandLine != nullptr && GCommandLine->Has("nomeshshaders") ? RHI::EDeviceFeature::MeshShading : RHI::EDeviceFeature::None,
             .MinDeviceLocalMemoryMiB = MinVRAMMiB,
             .PipelineCachePath = PipelineCachePath(),
         });
@@ -559,6 +559,8 @@ namespace Lumina
             // Before the scene renders, so last frame's present blit reaches the queue ahead of this frame's work.
             SwapchainTarget.FinishPresent();
 
+            ResolveWindowCapture(ThisFrameIndex);
+
             ApplyPendingResize();
 
             // Read every frame like the other renderer settings, and a no-op unless the value moved.
@@ -596,7 +598,7 @@ namespace Lumina
             {
                 LUMINA_PROFILE_SECTION_COLORED("ImGui Record", tracy::Color::SlateBlue3);
                 RHI::CmdBeginMarker(CL, "ImGui");
-                ImGuiRenderer->OnEndFrame_NewRHI(CL, SwapImage, Extent, ImGuiDrawData);
+                ImGuiRenderer->OnEndFrame(CL, SwapImage, Extent, ImGuiDrawData);
                 RHI::CmdEndMarker(CL);
             }
             #endif
@@ -622,15 +624,14 @@ namespace Lumina
             }
             #endif
 
+            RecordWindowCapture(CL, SwapImage, Extent, ThisFrameIndex);
+
             RHI::CmdEndMarker(CL);
 
             {
                 LUMINA_PROFILE_SECTION_COLORED("Present", tracy::Color::Orange4);
-                #if WITH_EDITOR
-                SwapchainTarget.Present(CL);
-                #else
+                // A secondary viewport's present waits this one out, so only a frame with tool windows torn off serializes.
                 SwapchainTarget.PresentAsync(CL);
-                #endif
             }
 
             #if WITH_EDITOR
@@ -641,6 +642,78 @@ namespace Lumina
             }
             #endif
         }
+    }
+
+    uint64 FRenderManager::RequestWindowCapture()
+    {
+        FScopeLock Lock(WindowCaptureMutex);
+        RequestedWindowCapture = NextWindowCaptureTicket++;
+        return RequestedWindowCapture;
+    }
+
+    bool FRenderManager::TakeWindowCapture(uint64 Ticket, FWindowCapture& Out)
+    {
+        FScopeLock Lock(WindowCaptureMutex);
+        if (Ticket == 0 || CompletedWindowCaptureTicket != Ticket)
+        {
+            return false;
+        }
+
+        Out = Move(CompletedWindowCapture);
+        CompletedWindowCapture = {};
+        CompletedWindowCaptureTicket = 0;
+        return true;
+    }
+
+    void FRenderManager::RecordWindowCapture(RHI::FCmdListH CL, RHI::FTextureH SwapImage, const FUIntVector2& Extent, uint8 FrameIndex)
+    {
+        FScopeLock Lock(WindowCaptureMutex);
+        if (RequestedWindowCapture == 0 || InFlightWindowCapture.Ticket != 0 || Extent.x == 0 || Extent.y == 0)
+        {
+            return;
+        }
+
+        const uint64 Bytes = (uint64)Extent.x * Extent.y * 4u;
+        const RHI::FGPUAllocation Readback = RHI::Malloc(Bytes, RHI::kDefaultAlign, RHI::EMemoryType::CPURead);
+        if (Readback.Gpu == 0)
+        {
+            return;
+        }
+        RHI::SetDebugName(Readback.Gpu, "Readback.WindowCapture");
+
+        // Recorded after every UI pass and ahead of the present transition the submit appends.
+        RHI::CmdBarrier(CL,
+            RHI::EStageFlags::RasterColorOut | RHI::EStageFlags::Transfer, RHI::EAccessFlags::ColorWrite | RHI::EAccessFlags::TransferWrite,
+            RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferRead);
+        RHI::CmdCopyTextureToMemory(CL, SwapImage, RHI::FTextureSlice{}, Readback, Extent.x);
+        RHI::CmdBarrier(CL,
+            RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferWrite,
+            RHI::EStageFlags::Host, RHI::EAccessFlags::HostRead);
+
+        InFlightWindowCapture = { RequestedWindowCapture, Readback, Extent, FrameIndex };
+        RequestedWindowCapture = 0;
+    }
+
+    void FRenderManager::ResolveWindowCapture(uint8 FrameIndex)
+    {
+        FScopeLock Lock(WindowCaptureMutex);
+        if (InFlightWindowCapture.Ticket == 0 || InFlightWindowCapture.FrameIndex != FrameIndex)
+        {
+            return;
+        }
+
+        const FUIntVector2 Extent = InFlightWindowCapture.Extent;
+        const uint8* Mapped = InFlightWindowCapture.Readback.CpuAs<const uint8>();
+        if (Mapped != nullptr)
+        {
+            CompletedWindowCapture.Width  = Extent.x;
+            CompletedWindowCapture.Height = Extent.y;
+            CompletedWindowCapture.Pixels.assign(Mapped, Mapped + (size_t)Extent.x * Extent.y * 4u);
+            CompletedWindowCaptureTicket = InFlightWindowCapture.Ticket;
+        }
+
+        RHI::Retire(InFlightWindowCapture.Readback);
+        InFlightWindowCapture = {};
     }
 
     void FRenderManager::SwapchainResized(FVector2 NewSize)

@@ -77,7 +77,7 @@ namespace Lumina
 
         /** World-local bounds of the committed mesh (empty until the first Commit). */
         FUNCTION()
-        FAABB GetAABB() const;
+        SAABB GetAABB() const;
 
         /** Declare a sub-range of the index buffer that draws with one material slot. Optional: with no
          *  sections, Commit() makes a single section covering every index on slot 0. */
@@ -180,20 +180,7 @@ namespace Lumina
         PROPERTY(Editable, Category = "Rendering")
         bool bGenerateTangents = true;
 
-        /** Keep the CPU-side meshlet streams alive after Commit has uploaded them to the GPU.
-         *
-         *  TURN THIS OFF for any mesh that is only rendered. The streams are by far the largest thing a
-         *  committed dynamic mesh holds: FMeshletVertex is 28 bytes and the meshlet vertex list is the
-         *  EXPANDED per-meshlet list across every LOD (a vertex on a meshlet boundary appears in each), so
-         *  it typically outweighs the source geometry it was built from. Nothing in the render path reads
-         *  it -- drawing goes through the GPU buffers -- so on a render-only mesh this is pure retention,
-         *  once per component, for as long as the component lives. Chunked geometry that keeps hundreds of
-         *  components alive is where it adds up.
-         *
-         *  On by default because SDynamicMeshColliderComponent builds its collision shape from these streams,
-         *  and it does so after the commit that produced them -- so defaulting off would silently cost
-         *  colliders their bodies. With it off, that collider logs an error naming this flag rather than
-         *  retrying forever. */
+        /** Keeps the CPU meshlet streams after Commit uploads them, which a dynamic mesh collider builds from; turn it off for a render-only mesh. */
         PROPERTY(Editable, Category = "Rendering")
         bool bKeepCPUMeshletData = true;
 
@@ -233,6 +220,12 @@ namespace Lumina
 
         // Last RenderDataVersion whose materials the resolve pass examined. Transient, never serialized.
         uint32 ResolvedRenderDataVersion = 0;
+
+        // FMeshResolveCache::DependencyBit of every material the last resolve read, so an unrelated change skips this mesh.
+        uint64 ResolvedMaterialBits = 0;
+
+        // A material was still compiling at the last resolve, so any pending resolve work looks again.
+        bool bResolvedMaterialsPending = true;
 
         /// Re-runs the material half of the resolve against the current MaterialOverrides. Called by the
         /// render scene's resolve pass while a material is still compiling, and after an override changes.

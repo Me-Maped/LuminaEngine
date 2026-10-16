@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "Memory/MemoryTracking.h"
 #include "Class.h"
 #include "ScriptClass.h"
@@ -46,10 +46,17 @@ namespace Lumina
 
     RUNTIME_API void AllocateStaticScriptClass(const TCHAR* Package, const TCHAR* Name, CScriptClass** OutClass, uint32 Size, uint32 Alignment, CClass* (*SuperClassFn)(), CClass::FactoryFunctionType FactoryFunc)
     {
+        AllocateStaticScriptClass(Package, Name, OutClass, Size, Alignment, SuperClassFn(), FactoryFunc);
+    }
+
+    RUNTIME_API void AllocateStaticScriptClass(const TCHAR* Package, const TCHAR* Name, CScriptClass** OutClass, uint32 Size, uint32 Alignment, CClass* SuperClass, CClass::FactoryFunctionType FactoryFunc)
+    {
         DEBUG_ASSERT(*OutClass == nullptr);
 
         *OutClass = Memory::New<CScriptClass>(ResolveClassPackage(Package), FName(Name), Size, Alignment, OF_None, FactoryFunc);
-        LinkAndQueueStaticClass(*OutClass, SuperClassFn);
+        (*OutClass)->SetSuperStruct(SuperClass != *OutClass ? SuperClass : nullptr);
+        (*OutClass)->RegisterDependencies();
+        (*OutClass)->BeginRegister();
     }
     
 
@@ -92,7 +99,7 @@ namespace Lumina
         FRecursiveScopeLock Lock(GDefaultObjectMutex);
 
         // Inside the lock because the pass is not thread safe either, and it can build this very CDO.
-        SettleDeferredRegistrations();
+        SettlePendingTypes();
 
         // Re-read, since settling builds this one on the way past and another thread may have too.
         if (ClassDefaultObject.load(std::memory_order_relaxed) == nullptr)
@@ -178,35 +185,4 @@ namespace Lumina
         // That root reference is the only strong one a CDO has, so un-rooting is the destruction.
         Discarded->RemoveFromRoot();
     }
-
-    static CStruct* StaticGetBaseStructureInternal(const FName& Name)
-    {
-        CStruct* Result = static_cast<CStruct*>(FindObjectImpl(Name, CStruct::StaticClass()));
-        return Result;
-    }
-
-    CStruct* TBaseStructure<FVector2>::Get()
-    {
-        static CStruct* Struct = StaticGetBaseStructureInternal("FVector2");
-        return Struct;
-    }
-
-    CStruct* TBaseStructure<FVector3>::Get()
-    {
-        static CStruct* Struct = StaticGetBaseStructureInternal("FVector3");
-        return Struct;
-    }
-
-    CStruct* TBaseStructure<FVector4>::Get()
-    {
-        static CStruct* Struct = StaticGetBaseStructureInternal("FVector4");
-        return Struct;
-    }
-
-    CStruct* TBaseStructure<FQuat>::Get()
-    {
-        static CStruct* Struct = StaticGetBaseStructureInternal("FQuat");
-        return Struct;
-    }
-
 }

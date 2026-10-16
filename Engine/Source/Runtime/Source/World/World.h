@@ -3,8 +3,10 @@
 #include "World/ECS/Registry.h"
 #include "World/ECS/EventDispatcher.h"
 #include "World/ECS/CommandBus.h"
+#include "GameplayTags/GameplayMessageBus.h"
 
 #include "Containers/BoundedQueue.h"
+#include "Containers/Span.h"
 #include "Core/Object/Object.h"
 #include "Core/UpdateContext.h"
 #include "Core/Delegates/Delegate.h"
@@ -20,6 +22,7 @@
 #include "Subsystems/TweenManager.h"
 #include "Physics/Ray/RayCast.h"
 #include "Renderer/PrimitiveDrawInterface.h"
+#include "DebugDrawTypes.h"
 #include "WorldTypes.h"
 #include "World/WorldContext.h"
 #include "Containers/FunctionRef.h"
@@ -28,7 +31,6 @@
 
 namespace Lumina
 {
-    struct FAssetRef;
     struct SDefaultWorldSettings;
     struct SSceneFolderComponent;
     struct FLineBatcherComponent;
@@ -54,7 +56,7 @@ namespace Lumina
 
 namespace Lumina
 {
-    // One queued screen-space debug-text line (DrawDebugText). Drained by the render scene each frame.
+    // One queued screen-space debug-text line drained by the render scene each frame.
     struct FDebugTextLine
     {
         FString  Text;
@@ -77,10 +79,18 @@ namespace Lumina
         bool            bManaged   = false;
     };
 
-    struct FWorldDebugInterface
+    struct RUNTIME_API FWorldDebugInterface : IPrimitiveDrawInterface
     {
         CWorld* World = nullptr;
 
+        using IPrimitiveDrawInterface::DrawBox;
+        using IPrimitiveDrawInterface::DrawSphere;
+        using IPrimitiveDrawInterface::DrawCapsule;
+        using IPrimitiveDrawInterface::DrawCone;
+        using IPrimitiveDrawInterface::DrawArrow;
+
+        void DrawBillboard(int32 ResourceID, const FVector3& Location, float Scale) override;
+        void DrawLine(const FVector3& Start, const FVector3& End, const FVector4& Color, float Thickness = 1.0f, bool bDepthTest = true, float Duration = 0.0f) override;
         void DrawText(FStringView Text, TOptional<FVector4> Color);
         void DrawLine(FVector3 Start, FVector3 End, FVector4 Color, TOptional<float> Thickness, TOptional<bool> bDepthTest, TOptional<float> Duration);
         void DrawBox(FVector3 Center, FVector3 HalfExtents, FQuat Rotation, FVector4 Color, TOptional<float> Thickness, TOptional<bool> bDepthTest, TOptional<float> Duration);
@@ -88,15 +98,28 @@ namespace Lumina
         void DrawCapsule(FVector3 Start, FVector3 End, float Radius, FVector4 Color, TOptional<float> Thickness, TOptional<bool> bDepthTest, TOptional<float> Duration);
         void DrawCone(FVector3 Apex, FVector3 Direction, float AngleRadians, float Length, FVector4 Color, TOptional<float> Thickness, TOptional<bool> bDepthTest, TOptional<float> Duration);
         void DrawArrow(FVector3 Start, FVector3 Direction, float Length, FVector4 Color, TOptional<float> Thickness, TOptional<bool> bDepthTest, TOptional<float> Duration);
+        void DrawSolidTriangles(TVector<FSimpleElementVertex>&& Vertices, ESolidDrawMode Mode = ESolidDrawMode::Translucent, float Duration = -1.0f);
+        void DrawSolidTriangles(TSpan<const SDebugDrawVertex> Vertices, EDebugFillMode Mode = EDebugFillMode::Translucent, float Duration = -1.0f);
+        void DrawSolidTriangle(FVector3 A, FVector3 B, FVector3 C, FVector4 Color, EDebugFillMode Mode = EDebugFillMode::Translucent, float Duration = -1.0f);
+        void DrawSolidQuad(FVector3 A, FVector3 B, FVector3 C, FVector3 D, FVector4 Color, EDebugFillMode Mode = EDebugFillMode::Translucent, float Duration = -1.0f);
+        void DrawSolidBox(FVector3 Center, FVector3 HalfExtents, FQuat Rotation, FVector4 Color, EDebugFillMode Mode = EDebugFillMode::Translucent, float Duration = -1.0f);
+        void DrawSolidSphere(FVector3 Center, float Radius, FVector4 Color, EDebugFillMode Mode = EDebugFillMode::Translucent, float Duration = -1.0f);
+        void DrawSolidCylinder(FVector3 Start, FVector3 End, float Radius, FVector4 Color, EDebugFillMode Mode = EDebugFillMode::Translucent, float Duration = -1.0f);
+        void DrawSolidCone(FVector3 Apex, FVector3 Direction, float AngleRadians, float Length, FVector4 Color, EDebugFillMode Mode = EDebugFillMode::Translucent, float Duration = -1.0f);
+        void DrawSolidCapsule(FVector3 Start, FVector3 End, float Radius, FVector4 Color, EDebugFillMode Mode = EDebugFillMode::Translucent, float Duration = -1.0f);
+        void DrawSolidCircle(FVector3 Center, FVector3 Normal, float Radius, FVector4 Color, EDebugFillMode Mode = EDebugFillMode::Translucent, float Duration = -1.0f);
+        void DrawSolidArc(FVector3 Center, FVector3 Normal, float Radius, float StartAngle, float SweepAngle, FVector4 Color, EDebugFillMode Mode = EDebugFillMode::Translucent, float Duration = -1.0f);
+        void DrawSolidArrow(FVector3 Start, FVector3 Direction, float Length, FVector4 Color, float HeadSize = 0.2f, EDebugFillMode Mode = EDebugFillMode::Translucent, float Duration = -1.0f);
     };
 
     REFLECT()
-    class RUNTIME_API CWorld : public CObject, public IPrimitiveDrawInterface
+    class RUNTIME_API CWorld : public CObject
     {
         GENERATED_BODY()
         
         friend class FWorldManager;
         friend struct FSystemContext;
+        friend struct FWorldDebugInterface;
         friend struct SRenderComponent;
         friend ECS::FRegistry& ECS::GetWorldRegistry(CWorld&);
 
@@ -111,12 +134,20 @@ namespace Lumina
             uint8          StagePriority = 255;
         };
 
+        // Slots that may run together, as indices into SystemUpdateList.
+        struct FSystemBatch
+        {
+            TVector<uint16> Members;
+        };
+
         // One reflected engine system, as surfaced to the World Editor's Systems panel.
         struct FSystemInfo
         {
             FName                   Name;
             bool                    bEnabled = true;
             TVector<EUpdateStage>   Stages;     // stages this system participates in
+            // The priority it asked for in each of Stages, parallel to it, which a disabled system still reports.
+            TVector<uint8>          Priorities;
         };
 
         //~ Construction and the CObject contract.
@@ -124,6 +155,9 @@ namespace Lumina
         CWorld();
 
         void Serialize(FArchive& Ar) override;
+
+        // Both registries, so a world loaded but never initialized, or no longer managed, still shows what its entities hold.
+        void VisitAdditionalObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override;
 
         void PreLoad() override;
 
@@ -227,6 +261,13 @@ namespace Lumina
         FUNCTION()
         bool IsPaused() const { return bPaused; }
 
+        // Whether a paused editor world still previews animation, which an asset or prefab preview may not want.
+        FUNCTION()
+        void SetAnimatesWhilePaused(bool bAnimate) { bAnimatesWhilePaused = bAnimate; }
+
+        FUNCTION()
+        bool AnimatesWhilePaused() const { return bAnimatesWhilePaused; }
+
         // True from the start of teardown, so an OnDetach can tell the whole world going away from its own entity being removed.
         FUNCTION()
         bool IsTearingDown() const { return bTearingDown; }
@@ -316,6 +357,9 @@ namespace Lumina
         FVector3 GetEntityLocation(ECS::FEntity Entity);
 
         FUNCTION()
+        FQuat GetEntityRotation(ECS::FEntity Entity);
+
+        FUNCTION()
         void SetEntityLocation(ECS::FEntity Entity, FVector3 Location);
 
         FUNCTION()
@@ -343,6 +387,8 @@ namespace Lumina
 
         FUNCTION()
         ECS::FEntity GetRootEntity(ECS::FEntity Entity);
+
+        NODISCARD const ECS::FHierarchy& GetHierarchy() const { return EntityRegistry.GetHierarchy(); }
 
         //~ Entity scripts.
 
@@ -455,15 +501,18 @@ namespace Lumina
         // The using-declaration keeps CObject's destroy hook visible alongside the component sink.
         using CObject::OnDestroy;
 
-        template<typename T> NODISCARD auto& OnConstruct() { return EntityRegistry.GetSignals<T>().OnConstruct; }
+        template<typename T> 
+        NODISCARD ECS::FComponentSignal& OnConstruct()          { return EntityRegistry.GetSignals<T>().OnConstruct; }
 
-        template<typename T> NODISCARD auto& OnDestroy()   { return EntityRegistry.GetSignals<T>().OnDestroy; }
+        template<typename T> 
+        NODISCARD ECS::FComponentSignal& OnDestroy()            { return EntityRegistry.GetSignals<T>().OnDestroy; }
 
-        template<typename T> NODISCARD auto& OnUpdate()    { return EntityRegistry.GetSignals<T>().OnUpdate; }
+        template<typename T> 
+        NODISCARD ECS::FComponentSignal& OnUpdate()             { return EntityRegistry.GetSignals<T>().OnUpdate; }
 
-        NODISCARD auto& OnEntityConstruct() { return EntityRegistry.OnEntityCreated(); }
+        NODISCARD ECS::FComponentSignal& OnEntityConstruct()    { return EntityRegistry.OnEntityCreated(); }
 
-        NODISCARD auto& OnEntityDestroy()   { return EntityRegistry.OnEntityDestroyed(); }
+        NODISCARD ECS::FComponentSignal& OnEntityDestroy()      { return EntityRegistry.OnEntityDestroyed(); }
 
         //~ Singletons.
 
@@ -528,11 +577,11 @@ namespace Lumina
         void SetSystemEnabled(FName System, bool bEnabled);
 
         // Read-only snapshot of the per-stage parallel system batches + each system's declared access, for the
-        // Gameplay Insights editor tool. Replays the TickSystems batching; main thread.
+        // Gameplay Insights editor tool. Replays the last frame's batching, so idle systems are absent; main thread.
         void GetSystemSchedule(TVector<FSystemScheduleEntry>& Out) const;
 
         // One instance of every enabled system class; the per-stage FStageSlots only point into it.
-        PROPERTY(NoSerialize)
+        PROPERTY(Hidden, NoSerialize)
         TVector<TStrongObjectPtr<CEntitySystem>>           Systems;
 
         //~ Subsystems. One CObject per subsystem class per world, so a C++ and a C# one are the same
@@ -552,14 +601,10 @@ namespace Lumina
 
         NODISCARD const TVector<TStrongObjectPtr<CWorldSubsystem>>& GetSubsystems() const { return Subsystems; }
 
-        // Holds an object until the world is torn down, since a managed wrapper is only weak.
-        FUNCTION()
-        void RetainObject(CObject* Object) { if (Object != nullptr) { RetainedObjects.emplace_back(Object); } }
-
         // Runtime state rather than map data, but reflected so the hot reload reinstancer reaches it.
-        PROPERTY(NoSerialize)
+        PROPERTY(Hidden, NoSerialize)
         TVector<TStrongObjectPtr<CWorldSubsystem>>         Subsystems;
-        TVector<TStrongObjectPtr<CObject>>                 RetainedObjects;
+
 
         //~ Physics scene and queries.
 
@@ -640,22 +685,10 @@ namespace Lumina
 
         //~ Debug drawing.
 
-        void DrawBillboard(int32 ResourceID, const FVector3& Location, float Scale) override;
+        void DrawBillboard(int32 ResourceID, const FVector3& Location, float Scale);
 
-        void DrawLine(const FVector3& Start, const FVector3& End, const FVector4& Color, float Thickness = 1.0f, bool bDepthTest = true, float Duration = -1.0f) override;
-
-        /** Immediate-mode line sink, or null when this world has no renderer (dedicated server) or is
-         *  suspended. Single frame, thickness 1, no CPU cull -- the path for the hundred-thousand-line
-         *  cases. DrawLine above is still the one to use for timed or thick lines. */
+        // Immediate line sink for large single-frame batches when the world has an active renderer.
         FImmediateLineRenderer* GetImmediateLines() const;
-
-        /** Submit a solid triangle batch (3 pre-colored verts per tri). Duration <= 0 draws one frame.
-         *  Mode picks the depth/blend state: Opaque for meshes that must occlude themselves, Translucent
-         *  for blended overlays, XRay to ignore scene depth entirely. */
-        void DrawSolidTriangles(TVector<FSimpleElementVertex>&& Vertices, ESolidDrawMode Mode = ESolidDrawMode::Translucent, float Duration = -1.0f);
-
-        /** Queue a line of screen-space debug text for this frame, stacked top-left on the world viewport */
-        void DrawDebugText(const FString& Text, const FVector4& Color = FVector4(1.0f));
 
         /** Render scene drains the queued debug-text lines each frame (moves them out + clears). */
         void DrainDebugTextLines(TVector<FDebugTextLine>& Out);
@@ -686,10 +719,6 @@ namespace Lumina
         const FTimerManager& GetTimerManager() const { return EntityRegistry.Ctx().Get<FTimerManager>(); }
 
         //~ Registry signal handlers, connected during world initialization.
-
-        void OnRelationshipComponentDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity);
-
-        void OnRelationshipComponentConstruct(ECS::FRegistry& Registry, ECS::FEntity Entity);
 
         void OnTransformComponentConstruct(ECS::FRegistry& Registry, ECS::FEntity Entity);
 
@@ -726,17 +755,22 @@ namespace Lumina
 
         ECS::FCommandBus& GetCommandBus() { return CommandBus; }
 
+        FGameplayMessageBus& GetMessageBus() { return MessageBus; }
+
     private:
 
     private:
         
-        ECS::FRegistry                                     RegistryPending;
-        ECS::FRegistry                                     EntityRegistry;
-        ECS::FEventDispatcher                              SingletonDispatcher;
-        ECS::FEntity                                       SingletonEntity;
+        ECS::FRegistry                                      RegistryPending;
+        ECS::FRegistry                                      EntityRegistry;
+        ECS::FEventDispatcher                               SingletonDispatcher;
+        ECS::FEntity                                        SingletonEntity;
 
         // After the registry it records against, before the context that hands it out.
-        ECS::FCommandBus                                   CommandBus;
+        ECS::FCommandBus                                    CommandBus;
+
+        // After the command bus, since a send from a parallel system is replayed at its flush.
+        FGameplayMessageBus                                 MessageBus;
 
         FSystemContext                                      SystemContext;
         
@@ -748,9 +782,11 @@ namespace Lumina
         // Per-stage, priority-sorted update slots (direct-call fn-ptr + Self) consumed by TickSystems.
         TVector<FStageSlot>                                SystemUpdateList[(int32)EUpdateStage::Max];
 
-        // Which of those slots may run together, as index lists into SystemUpdateList. A pure function of
-        // the stage lists, so it is built once by RegisterSystems rather than per tick.
-        TVector<TVector<uint16>>                           SystemBatches[(int32)EUpdateStage::Max];
+        // Which of the slots with work may run together, rebuilt only when that set changes from one frame to the next.
+        TVector<FSystemBatch>                              SystemBatches[(int32)EUpdateStage::Max];
+
+        // Per slot, whether it had work when SystemBatches was last built. Empty forces a rebuild.
+        TVector<uint8>                                     SystemsWithWork[(int32)EUpdateStage::Max];
 
         // Set once the world has run its startup pass; gates StartupPendingSystems.
         bool                                               bSystemsStarted = false;
@@ -771,7 +807,7 @@ namespace Lumina
         FLineBatcherComponent*                              LineBatcherComponent;
         FTriangleBatcherComponent*                          TriangleBatcherComponent;
 
-        // Screen-space debug-text lines queued this frame (DrawDebugText); drained by the render scene.
+        // Screen-space debug-text lines drained by the render scene.
         TVector<FDebugTextLine>                             DebugTextLines;
 
         // Render-target paint/clear requests; drained each Extract into the frame snapshot.
@@ -796,6 +832,7 @@ namespace Lumina
         void AdvanceThrottle(double NowSeconds);
 
         uint32                                              bPaused:1 = true;
+        uint32                                              bAnimatesWhilePaused:1 = true;
         uint32                                              bActive:1 = true;
         uint32                                              bThrottledThisFrame:1 = false;
         
@@ -832,6 +869,16 @@ namespace Lumina
     T* CWorld::TryGetComponent(ECS::FEntity Entity)
     {
         return EntityRegistry.TryGet<T>(Entity);
+    }
+
+    // The scheduling CWorld::TickSystems runs, as free functions so it can be tested without a world.
+    namespace SystemSchedule
+    {
+        // Priority first. Equal priority promises no order, so exclusive systems go last there and the class name settles the rest the same way every run.
+        RUNTIME_API void SortStage(TVector<CWorld::FStageSlot>& Stage);
+
+        // A slot lands in the first batch after the last one holding anything it conflicts with, and slots without work are left out.
+        RUNTIME_API TVector<CWorld::FSystemBatch> BuildBatches(const TVector<CWorld::FStageSlot>& Stage, const TVector<uint8>& WithWork);
     }
 }
 

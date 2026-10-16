@@ -14,6 +14,8 @@
 
 namespace Lumina
 {
+    struct FPropertyChangedEvent;
+
     class CWorld;
     class CCollisionShape;
     class CPhysicsMaterial;
@@ -24,17 +26,17 @@ namespace Lumina
     {
         GENERATED_BODY()
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Position = FVector3(0.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector4 Rotation = FVector4(0.0f, 0.0f, 0.0f, 1.0f);
 
-        PROPERTY()
+        PROPERTY(Hidden)
         FVector3 Scale = FVector3(1.0f);
 
         /** Index into the owning component's Types array. */
-        PROPERTY()
+        PROPERTY(Hidden)
         int32 TypeIndex = 0;
 
         FQuat GetRotationQuat() const { return FQuat(Rotation.w, Rotation.x, Rotation.y, Rotation.z); }
@@ -96,6 +98,14 @@ namespace Lumina
         PROPERTY(Editable, Category = "Rendering")
         bool bCastShadow = true;
 
+        // Also casts into the sun's far cascade, for trees that should shade distant hills.
+        PROPERTY(Editable, Category = "Rendering")
+        bool bCastFarShadow = false;
+
+        // Past this view distance instances thin out so the count on screen stays level, and the survivors widen to keep the coverage. 0 keeps every instance.
+        PROPERTY(Editable, Category = "Rendering", ClampMin = 0.0f, Units = "m")
+        float ThinningStartDistance = 0.0f;
+
         PROPERTY(Editable, Category = "Rendering")
         bool bReceiveShadow = true;
 
@@ -114,6 +124,9 @@ namespace Lumina
         /** Physics material for this type's bodies; null uses the engine defaults. */
         PROPERTY(Editable, Category = "Collision")
         TStrongObjectPtr<CPhysicsMaterial> PhysicsMaterial;
+
+        // The type's own shape when it holds collision, else the mesh's loaded default, else null.
+        CCollisionShape* GetDefaultCollisionShape() const;
 
         // Transient resolve cache (not serialized); refreshed by ResolveDirtyMeshComponents.
         uint32          CachedMeshletHeaderSlot = 0;
@@ -148,7 +161,7 @@ namespace Lumina
         PROPERTY(Editable, Category = "Foliage")
         TVector<SFoliageType> Types;
 
-        PROPERTY(Category = "Foliage")
+        PROPERTY(Hidden, Category = "Foliage")
         TVector<SFoliageInstance> Instances;
 
         // Transient: last terrain HeightmapVersion this component re-projected against (terrain follow).
@@ -193,6 +206,9 @@ namespace Lumina
 
         /** Marks the render cache stale so the next frame rebakes. Call after any edit to Instances/Types. */
         void MarkInstancesChanged() { ++InstancesVersion; }
+
+        // A details panel or tool edit to a type rebakes like a paint stroke, or the renderer keeps the old values.
+        void PostEditChange(const FPropertyChangedEvent& Event);
 
         void AddInstance(const SFoliageInstance& Instance)
         {

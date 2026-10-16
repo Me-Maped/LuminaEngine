@@ -57,6 +57,17 @@ namespace Lumina
                  + A4((int32)sizeof(dtOffMeshConnection)  * H->offMeshConCount);
         }
 
+        // Detour frees a tile's data itself, so a blob is copied into its allocator before it is handed over.
+        uint8* CopyForDetour(const TVector<uint8>& Blob)
+        {
+            uint8* Owned = (uint8*)dtAlloc((int)Blob.size(), DT_ALLOC_PERM);
+            if (Owned != nullptr)
+            {
+                memcpy(Owned, Blob.data(), Blob.size());
+            }
+            return Owned;
+        }
+
         // addTile only checks magic and version, and neither changes when the ref width or the block
         // alignment does, so a stale blob would otherwise be read at the wrong offsets.
         bool ValidateTileBlob(const TVector<uint8>& Blob, int32 TileX, int32 TileY)
@@ -85,6 +96,166 @@ namespace Lumina
             }
             return true;
         }
+
+        void PolyCenter(const dtNavMesh& Mesh, dtPolyRef Ref, float* Out)
+        {
+            const dtMeshTile* Tile = nullptr;
+            const dtPoly* Poly = nullptr;
+            Mesh.getTileAndPolyByRefUnsafe(Ref, &Tile, &Poly);
+            dtVset(Out, 0.0f, 0.0f, 0.0f);
+            for (int32 i = 0; i < Poly->vertCount; ++i)
+            {
+                dtVadd(Out, Out, &Tile->verts[Poly->verts[i] * 3]);
+            }
+            dtVscale(Out, Out, 1.0f / (float)Math::Max<int32>(1, Poly->vertCount));
+        }
+
+        // False once the corridor is full. A poly already near the tail cuts the loop back to it, where a segment doubled back.
+        bool AppendCorridor(dtPolyRef* Path, int32& PathLen, int32 MaxPath, const dtPolyRef* Segment, int32 Count)
+        {
+            constexpr int32 kLoopLookback = 64;
+            for (int32 i = 0; i < Count; ++i)
+            {
+                int32 Seen = -1;
+                for (int32 j = PathLen - 1; j >= Math::Max(0, PathLen - kLoopLookback) && Seen < 0; --j)
+                {
+                    Seen = Path[j] == Segment[i] ? j : -1;
+                }
+                if (Seen >= 0)
+                {
+                    PathLen = Seen + 1;
+                    continue;
+                }
+                if (PathLen == MaxPath)
+                {
+                    return false;
+                }
+                Path[PathLen++] = Segment[i];
+            }
+            return true;
+        }
+
+        enum class ECorridor : uint8
+        {
+            Fallback,
+            Done,
+            Restart,
+        };
+
+        // Plans over tile clusters, then has Detour search two segments ahead and keeps one, so its node pool never sees the whole distance.
+        template <typename TYield>
+        ECorridor FindLongCorridor(const dtNavMesh& Mesh, const FNavClusterGraph& Clusters, dtNavMeshQuery& Query, const dtQueryFilter& Filter,
+                                   dtPolyRef StartRef, dtPolyRef EndRef, const float* StartPos, const float* EndPos, float SegmentLength,
+                                   dtPolyRef* Path, int32& PathLen, int32 MaxPath, dtStatus& OutStatus, const std::atomic<uint32>& Abandon, TYield&& YieldToSwap)
+        {
+            TVector<FNavClusterGraph::FStep> Route;
+            const FNavClusterGraph::ERoute Planned = Clusters.FindRoute(Mesh, Filter, StartRef, EndRef, Unpack(StartPos), Unpack(EndPos), Abandon, Route);
+            if (Planned == FNavClusterGraph::ERoute::Abandoned)
+            {
+                return ECorridor::Restart;
+            }
+            if (Planned == FNavClusterGraph::ERoute::Failed)
+            {
+                return ECorridor::Fallback;
+            }
+
+            // An unreachable goal is swapped for the nearest point the start can reach, which Detour then walks to in full.
+            const bool bReachable = Planned == FNavClusterGraph::ERoute::Reached;
+            float GoalPos[3];
+            dtVcopy(GoalPos, EndPos);
+            const dtPolyRef GoalRef = bReachable ? EndRef : Clusters.NearestPoly(Mesh, Route.back().Key, Unpack(EndPos));
+            if (!bReachable)
+            {
+                PolyCenter(Mesh, GoalRef, GoalPos);
+            }
+            const dtStatus Arrived = bReachable ? DT_SUCCESS : (DT_SUCCESS | DT_PARTIAL_RESULT);
+
+            constexpr int32 kSegmentPolys = 1024;
+            dtPolyRef Segment[kSegmentPolys];
+            dtPolyRef CurrentRef = StartRef;
+            float CurrentPos[3];
+            dtVcopy(CurrentPos, StartPos);
+            int32 Progress = 0;
+            PathLen = 0;
+
+            const int32 MaxSegments = 2 * (int32)Route.size() + 8;
+            for (int32 Iteration = 0; Iteration < MaxSegments; ++Iteration)
+            {
+                if (YieldToSwap())
+                {
+                    return ECorridor::Restart;
+                }
+
+                int32 Target = Progress;
+                while (Target + 1 < (int32)Route.size() && Route[Target].Distance - Route[Progress].Distance < 2.0f * SegmentLength)
+                {
+                    ++Target;
+                }
+                const bool bFinal = Target + 1 >= (int32)Route.size();
+                const dtPolyRef TargetRef = bFinal ? GoalRef : Route[Target].EntryRef;
+                float TargetPos[3];
+                if (bFinal)
+                {
+                    dtVcopy(TargetPos, GoalPos);
+                }
+                else
+                {
+                    PolyCenter(Mesh, TargetRef, TargetPos);
+                }
+
+                int32 Count = 0;
+                const dtStatus Status = Query.findPath(CurrentRef, TargetRef, CurrentPos, TargetPos, &Filter, Segment, &Count, kSegmentPolys);
+                if (dtStatusFailed(Status) || Count == 0)
+                {
+                    return ECorridor::Fallback;
+                }
+                const bool bReached = Segment[Count - 1] == TargetRef;
+                // Short of a target the clusters say is connected, and not for want of nodes, means the filter disagrees with the plan.
+                if (!bReached && (Status & DT_OUT_OF_NODES) == 0)
+                {
+                    return ECorridor::Fallback;
+                }
+                if (bFinal && bReached)
+                {
+                    OutStatus = AppendCorridor(Path, PathLen, MaxPath, Segment, Count) ? Arrived : (DT_SUCCESS | DT_PARTIAL_RESULT | DT_BUFFER_TOO_SMALL);
+                    return ECorridor::Done;
+                }
+
+                int32 Keep = 1;
+                float Covered = 0.0f;
+                float Previous[3];
+                dtVcopy(Previous, CurrentPos);
+                while (Keep < Count && Covered < SegmentLength)
+                {
+                    float Center[3];
+                    PolyCenter(Mesh, Segment[Keep], Center);
+                    Covered += dtVdist(Previous, Center);
+                    dtVcopy(Previous, Center);
+                    ++Keep;
+                }
+                if (!AppendCorridor(Path, PathLen, MaxPath, Segment, Keep))
+                {
+                    OutStatus = DT_SUCCESS | DT_PARTIAL_RESULT | DT_BUFFER_TOO_SMALL;
+                    return ECorridor::Done;
+                }
+                CurrentRef = Path[PathLen - 1];
+                PolyCenter(Mesh, CurrentRef, CurrentPos);
+
+                int32 Nearest = Progress;
+                float NearestDistance = FLT_MAX;
+                for (int32 i = Progress; i <= Target; ++i)
+                {
+                    const float Distance = dtVdist(&Route[i].Center.x, CurrentPos);
+                    if (Distance < NearestDistance)
+                    {
+                        NearestDistance = Distance;
+                        Nearest = i;
+                    }
+                }
+                Progress = Math::Min(Math::Max(Nearest, Progress + 1), (int32)Route.size() - 1);
+            }
+            return ECorridor::Fallback;
+        }
 #endif
     }
 
@@ -97,11 +268,11 @@ namespace Lumina
 
     bool FNavMesh::Initialize(const FVector3& InOrigin, float InTileWorldSize, int32 MaxResidentTiles, int32 MaxPolysPerTile)
     {
-        TVector<FNavTileData> None;
+        TVector<SNavTileData> None;
         return Initialize(InOrigin, InTileWorldSize, MaxResidentTiles, MaxPolysPerTile, std::move(None));
     }
 
-    bool FNavMesh::Initialize(const FVector3& InOrigin, float InTileWorldSize, int32 MaxResidentTiles, int32 MaxPolysPerTile, TVector<FNavTileData>&& Tiles)
+    bool FNavMesh::Initialize(const FVector3& InOrigin, float InTileWorldSize, int32 MaxResidentTiles, int32 MaxPolysPerTile, TVector<SNavTileData>&& Tiles)
     {
         Shutdown();
 
@@ -144,7 +315,7 @@ namespace Lumina
         int32 Skipped = 0;
         int32 Rejected = 0;
         int32 Stale = 0;
-        for (FNavTileData& Tile : Tiles)
+        for (SNavTileData& Tile : Tiles)
         {
             if (Tile.Blob.empty())
             {
@@ -159,13 +330,12 @@ namespace Lumina
             }
 
             const size_t Size = Tile.Blob.size();
-            uint8* Owned = (uint8*)dtAlloc((int)Size, DT_ALLOC_PERM);
+            uint8* Owned = CopyForDetour(Tile.Blob);
             if (!Owned)
             {
                 ++Rejected;
                 continue;
             }
-            memcpy(Owned, Tile.Blob.data(), Size);
 
             dtTileRef Ref = 0;
             const dtStatus Status = NavMesh->addTile(Owned, (int)Size, DT_TILE_FREE_DATA, 0, &Ref);
@@ -179,6 +349,8 @@ namespace Lumina
                 ++Added;
             }
         }
+        Clusters.Rebuild(*NavMesh);
+
         if (Stale > 0)
         {
             LOG_ERROR("FNavMesh::Initialize: {} of {} non-empty tiles were baked against a different Detour layout. Re-bake this navmesh.",
@@ -235,8 +407,47 @@ namespace Lumina
 #endif
     }
 
+    bool FNavMesh::TryBeginClusterRelabel()
+    {
+        {
+            FQueryScope Topology(*this);
+            if (!bReady || !Clusters.NeedsExactLabels() || Clusters.HasPendingLabels())
+            {
+                return false;
+            }
+        }
+        uint32 Idle = 0;
+        return RelabelsInFlight.compare_exchange_strong(Idle, 1, std::memory_order_acq_rel);
+    }
+
+    void FNavMesh::RelabelClusters()
+    {
+        // Normal priority while it holds the topology, or a swap could wait on a thread the scheduler is starving.
+        Threading::SetCurrentThreadPriority(EThreadPriority::Normal);
+        {
+            FQueryScope Topology(*this);
+            Clusters.PrepareExactLabels(PendingSwaps);
+        }
+        Threading::SetCurrentThreadPriority(EThreadPriority::Background);
+        RelabelsInFlight.store(0, std::memory_order_release);
+    }
+
+    void FNavMesh::AdoptClusterLabels()
+    {
+        if (Clusters.HasPendingLabels())
+        {
+            FSwapScope Topology(*this);
+            Clusters.AdoptPendingLabels();
+        }
+    }
+
     void FNavMesh::Shutdown()
     {
+        while (RelabelsInFlight.load(std::memory_order_acquire) != 0)
+        {
+            Threading::ThreadYield();
+        }
+
 #if defined(LUMINA_HAS_RECAST)
         for (FQuerySlot& Slot : QueryPool)
         {
@@ -245,8 +456,58 @@ namespace Lumina
         if (NavMesh) dtFreeNavMesh(NavMesh);
 #endif
         QueryPool.clear();
+        Clusters.Reset(0);
         NavMesh = nullptr;
         bReady = false;
+    }
+
+    void FNavMesh::WaitForSwaps() const
+    {
+        const volatile uint32* Word = reinterpret_cast<const volatile uint32*>(&PendingSwaps);
+        for (uint32 Pending = PendingSwaps.load(std::memory_order_acquire); Pending != 0; Pending = PendingSwaps.load(std::memory_order_acquire))
+        {
+            Threading::WaitOnAddress32(Word, Pending, 1);
+        }
+    }
+
+    FNavMesh::FQueryScope::FQueryScope(const FNavMesh& InMesh)
+        : Mesh(InMesh)
+    {
+        Mesh.WaitForSwaps();
+        Mesh.TopologyLock.LockShared();
+    }
+
+    FNavMesh::FQueryScope::~FQueryScope()
+    {
+        Mesh.TopologyLock.UnlockShared();
+    }
+
+    bool FNavMesh::FQueryScope::YieldToSwap(uint64 Epoch) const
+    {
+        if (Mesh.PendingSwaps.load(std::memory_order_acquire) == 0)
+        {
+            return false;
+        }
+        Mesh.TopologyLock.UnlockShared();
+        Mesh.WaitForSwaps();
+        Mesh.TopologyLock.LockShared();
+        return Mesh.TopologyEpoch.load(std::memory_order_acquire) != Epoch;
+    }
+
+    FNavMesh::FSwapScope::FSwapScope(FNavMesh& InMesh)
+        : Mesh(InMesh)
+    {
+        Mesh.PendingSwaps.fetch_add(1, std::memory_order_acq_rel);
+        Mesh.TopologyLock.Lock();
+    }
+
+    FNavMesh::FSwapScope::~FSwapScope()
+    {
+        Mesh.TopologyLock.Unlock();
+        if (Mesh.PendingSwaps.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        {
+            Threading::WakeAllOnAddress32(reinterpret_cast<const volatile uint32*>(&Mesh.PendingSwaps));
+        }
     }
 
     FNavMesh::FAcquiredQuery FNavMesh::AcquireQuery() const
@@ -274,7 +535,7 @@ namespace Lumina
     bool FNavMesh::ProjectPoint(const FVector3& World, const FVector3& Extents, const FNavQueryFilter& Filter, FVector3& Out) const
     {
 #if defined(LUMINA_HAS_RECAST)
-        FReadScopeLock Topology(TopologyLock);
+        FQueryScope Topology(*this);
         FAcquiredQuery Q = AcquireQuery();
         if (!Q) return false;
 
@@ -300,7 +561,7 @@ namespace Lumina
         Out = {};
 
 #if defined(LUMINA_HAS_RECAST)
-        FReadScopeLock Topology(TopologyLock);
+        FQueryScope Topology(*this);
         FAcquiredQuery Q = AcquireQuery();
         if (!Q)
         {
@@ -309,37 +570,60 @@ namespace Lumina
             return false;
         }
 
-        Out.Epoch = TopologyEpoch.load(std::memory_order_relaxed);
-
         dtQueryFilter F; ApplyFilter(Filter, F);
 
         float SP[3]; Pack(Start, SP);
         float EP[3]; Pack(End,   EP);
         float Extents[3]; Pack(Filter.QueryExtents, Extents);
 
-        dtPolyRef SRef = 0, ERef = 0;
-        float SNear[3], ENear[3];
-        if (dtStatusFailed(Q.Get()->findNearestPoly(SP, Extents, &F, &SRef, SNear)) || SRef == 0)
-        {
-            Out.Result = ENavPathResult::StartOffNavMesh;
-            return false;
-        }
-        if (dtStatusFailed(Q.Get()->findNearestPoly(EP, Extents, &F, &ERef, ENear)) || ERef == 0)
-        {
-            Out.Result = ENavPathResult::EndOffNavMesh;
-            return false;
-        }
-
         // Both buffers live on a half-megabyte fiber stack, so the corridor can afford to be generous.
         // The settings are clamped to these ceilings rather than sized dynamically, keeping the query heap free.
-        constexpr int32 MaxPolysCeiling = 1024;
+        constexpr int32 MaxPolysCeiling = 4096;
         constexpr int32 MaxStraightCeiling = 512;
+        constexpr float kSegmentTiles = 1.5f;
+        constexpr int32 kMaxRestarts = 3;
         const CNavigationSettings& NavSettings = *GetDefault<CNavigationSettings>();
         const int32 MaxPolys = Math::Clamp(NavSettings.MaxPathPolys, 16, MaxPolysCeiling);
 
+        dtPolyRef SRef = 0, ERef = 0;
+        float SNear[3], ENear[3];
         dtPolyRef Path[MaxPolysCeiling];
         int32 PathLen = 0;
-        const dtStatus PathStatus = Q.Get()->findPath(SRef, ERef, SNear, ENear, &F, Path, &PathLen, MaxPolys);
+        dtStatus PathStatus = 0;
+        const std::atomic<uint32> NeverAbandon{ 0 };
+        for (int32 Attempt = 0; ; ++Attempt)
+        {
+            Out.Epoch = TopologyEpoch.load(std::memory_order_acquire);
+            if (dtStatusFailed(Q.Get()->findNearestPoly(SP, Extents, &F, &SRef, SNear)) || SRef == 0)
+            {
+                Out.Result = ENavPathResult::StartOffNavMesh;
+                return false;
+            }
+            if (dtStatusFailed(Q.Get()->findNearestPoly(EP, Extents, &F, &ERef, ENear)) || ERef == 0)
+            {
+                Out.Result = ENavPathResult::EndOffNavMesh;
+                return false;
+            }
+
+            // A swap landing while a long query stands aside invalidates its refs, so it starts over, a few times at most.
+            ECorridor Long = ECorridor::Fallback;
+            if (NavSettings.HierarchicalPathDistance > 0.0f && dtVdist2D(SNear, ENear) >= NavSettings.HierarchicalPathDistance)
+            {
+                Long = FindLongCorridor(*NavMesh, Clusters, *Q.Get(), F, SRef, ERef, SNear, ENear, TileWorldSize * kSegmentTiles, Path, PathLen, MaxPolys, PathStatus,
+                    Attempt < kMaxRestarts ? PendingSwaps : NeverAbandon, [&] { return Attempt < kMaxRestarts && Topology.YieldToSwap(Out.Epoch); });
+            }
+            if (Long == ECorridor::Restart)
+            {
+                Topology.YieldToSwap(Out.Epoch);
+                continue;
+            }
+            if (Long == ECorridor::Fallback)
+            {
+                PathStatus = Q.Get()->findPath(SRef, ERef, SNear, ENear, &F, Path, &PathLen, MaxPolys);
+            }
+            break;
+        }
+
         if (dtStatusFailed(PathStatus) || PathLen == 0)
         {
             Out.Result = ENavPathResult::NoRoute;
@@ -415,7 +699,7 @@ namespace Lumina
             return;
         }
 
-        FReadScopeLock Topology(TopologyLock);
+        FQueryScope Topology(*this);
         bDebugCacheDirty.store(false, std::memory_order_release);
 
         CachedTriVerts.clear();
@@ -567,31 +851,19 @@ namespace Lumina
         });
     }
 
-    bool FNavMesh::AddTileLocked(int32 TileX, int32 TileY, const TVector<uint8>& Blob)
+    bool FNavMesh::AddTileLocked(uint8* Owned, int32 Size)
     {
 #if defined(LUMINA_HAS_RECAST)
-        if (!NavMesh || Blob.empty() || !ValidateTileBlob(Blob, TileX, TileY))
-        {
-            return false;
-        }
-
-        const size_t Size = Blob.size();
-        uint8* Owned = (uint8*)dtAlloc((int)Size, DT_ALLOC_PERM);
-        if (!Owned)
-        {
-            return false;
-        }
-        memcpy(Owned, Blob.data(), Size);
-
         dtTileRef NewRef = 0;
-        if (dtStatusFailed(NavMesh->addTile(Owned, (int)Size, DT_TILE_FREE_DATA, 0, &NewRef)))
+        if (dtStatusFailed(NavMesh->addTile(Owned, Size, DT_TILE_FREE_DATA, 0, &NewRef)))
         {
             dtFree(Owned);
             return false;
         }
+        Clusters.AddTile(*NavMesh, *NavMesh->getTileByRef(NewRef));
         return true;
 #else
-        (void)TileX; (void)TileY; (void)Blob;
+        (void)Owned; (void)Size;
         return false;
 #endif
     }
@@ -607,6 +879,7 @@ namespace Lumina
         if (OldRef != 0)
         {
             NavMesh->removeTile(OldRef, nullptr, nullptr);
+            Clusters.RemoveTile(*NavMesh, NavMesh->decodePolyIdTile(OldRef), TileX, TileY);
         }
         return true;
 #else
@@ -626,7 +899,7 @@ namespace Lumina
 
     bool FNavMesh::HasTileChangedSince(uint64 SinceEpoch, const FVector3& Min, const FVector3& Max) const
     {
-        FReadScopeLock Topology(TopologyLock);
+        FQueryScope Topology(*this);
 
         const uint64 Current = TopologyEpoch.load(std::memory_order_acquire);
         if (SinceEpoch >= Current)
@@ -659,36 +932,53 @@ namespace Lumina
 
     bool FNavMesh::RebuildTile(int32 TileX, int32 TileY, TVector<uint8>&& NewBlob)
     {
+        return RebuildTiles({ FTileSwap{ TileX, TileY, &NewBlob } }) == 1;
+    }
+
+    int32 FNavMesh::RebuildTiles(const TVector<FTileSwap>& Swaps)
+    {
         LUMINA_PROFILE_SCOPE();
 
 #if defined(LUMINA_HAS_RECAST)
-        if (!NavMesh)
+        if (!NavMesh || Swaps.empty())
         {
-            return false;
+            return 0;
         }
 
-        // Validated before the removal, so a rejected blob leaves the existing tile in place.
-        if (!NewBlob.empty() && !ValidateTileBlob(NewBlob, TileX, TileY))
+        // Copied into Detour's allocator before the hold, so readers wait only for the relinking, and a rejected blob keeps its old tile.
+        TVector<uint8*> Owned(Swaps.size(), nullptr);
+        TVector<uint8> Accepted(Swaps.size(), 1);
+        for (size_t i = 0; i < Swaps.size(); ++i)
         {
-            return false;
-        }
-
-        bool bAdded = true;
-        {
-            TScopeLock<FSharedMutex> Topology(TopologyLock);
-            RemoveTileLocked(TileX, TileY);
-            if (!NewBlob.empty())
+            const TVector<uint8>* Blob = Swaps[i].Blob;
+            if (Blob == nullptr || Blob->empty())
             {
-                bAdded = AddTileLocked(TileX, TileY, NewBlob);
+                continue;
             }
-            RecordTileChangeLocked(TileX, TileY);
+            Owned[i] = ValidateTileBlob(*Blob, Swaps[i].X, Swaps[i].Y) ? CopyForDetour(*Blob) : nullptr;
+            Accepted[i] = Owned[i] != nullptr;
+        }
+
+        int32 Landed = 0;
+        {
+            FSwapScope Topology(*this);
+            for (size_t i = 0; i < Swaps.size(); ++i)
+            {
+                if (!Accepted[i])
+                {
+                    continue;
+                }
+                RemoveTileLocked(Swaps[i].X, Swaps[i].Y);
+                Landed += Owned[i] == nullptr || AddTileLocked(Owned[i], (int32)Swaps[i].Blob->size()) ? 1 : 0;
+                RecordTileChangeLocked(Swaps[i].X, Swaps[i].Y);
+            }
         }
 
         InvalidateDebugCache();
-        return bAdded;
+        return Landed;
 #else
-        (void)TileX; (void)TileY; (void)NewBlob;
-        return false;
+        (void)Swaps;
+        return 0;
 #endif
     }
 
@@ -696,10 +986,24 @@ namespace Lumina
     {
         LUMINA_PROFILE_SCOPE();
 
+#if defined(LUMINA_HAS_RECAST)
+        if (!NavMesh || Blob.empty() || !ValidateTileBlob(Blob, TileX, TileY))
+        {
+            return false;
+        }
+        uint8* Owned = CopyForDetour(Blob);
+        if (Owned == nullptr)
+        {
+            return false;
+        }
+#else
+        uint8* Owned = nullptr;
+#endif
+
         bool bResult = false;
         {
-            TScopeLock<FSharedMutex> Topology(TopologyLock);
-            bResult = AddTileLocked(TileX, TileY, Blob);
+            FSwapScope Topology(*this);
+            bResult = AddTileLocked(Owned, (int32)Blob.size());
             if (bResult)
             {
                 RecordTileChangeLocked(TileX, TileY);
@@ -719,7 +1023,7 @@ namespace Lumina
 
         bool bResult = false;
         {
-            TScopeLock<FSharedMutex> Topology(TopologyLock);
+            FSwapScope Topology(*this);
             bResult = RemoveTileLocked(TileX, TileY);
             RecordTileChangeLocked(TileX, TileY);
         }
@@ -731,7 +1035,7 @@ namespace Lumina
     bool FNavMesh::HasTile(int32 TileX, int32 TileY) const
     {
 #if defined(LUMINA_HAS_RECAST)
-        FReadScopeLock Topology(TopologyLock);
+        FQueryScope Topology(*this);
         return NavMesh && NavMesh->getTileRefAt(TileX, TileY, 0) != 0;
 #else
         (void)TileX; (void)TileY;
@@ -742,7 +1046,7 @@ namespace Lumina
     int32 FNavMesh::GetResidentTileCount() const
     {
 #if defined(LUMINA_HAS_RECAST)
-        FReadScopeLock Topology(TopologyLock);
+        FQueryScope Topology(*this);
         if (!NavMesh)
         {
             return 0;
@@ -766,7 +1070,7 @@ namespace Lumina
     bool FNavMesh::FindRandomPoint(const FVector3& Center, float Radius, const FNavQueryFilter& Filter, FVector3& Out) const
     {
 #if defined(LUMINA_HAS_RECAST)
-        FReadScopeLock Topology(TopologyLock);
+        FQueryScope Topology(*this);
         FAcquiredQuery Q = AcquireQuery();
         if (!Q) return false;
 
@@ -806,13 +1110,13 @@ namespace Lumina
 #endif
     }
 
-    bool FNavMesh::Raycast(const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavRaycastResult& Out) const
+    bool FNavMesh::Raycast(const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, SNavRaycastResult& Out) const
     {
         Out = {};
         Out.Point = End;
 
 #if defined(LUMINA_HAS_RECAST)
-        FReadScopeLock Topology(TopologyLock);
+        FQueryScope Topology(*this);
         FAcquiredQuery Q = AcquireQuery();
         if (!Q) return false;
 

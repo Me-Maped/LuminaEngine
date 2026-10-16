@@ -4,7 +4,7 @@ using System.Reflection;
 namespace LuminaSharp;
 
 /// <summary>Carries a native reflected type's simple name so the mirror can be classified and resolved.</summary>
-[AttributeUsage(AttributeTargets.Struct | AttributeTargets.Class, Inherited = false)]
+[AttributeUsage(AttributeTargets.Struct | AttributeTargets.Class | AttributeTargets.Enum, Inherited = false)]
 public sealed class NativeTypeAttribute : Attribute
 {
     public string Name { get; }
@@ -15,14 +15,27 @@ public sealed class NativeTypeAttribute : Attribute
     }
 }
 
-/// The native CStruct/CClass name a wrapper stands for, cached per type; falls back to the C# type name.
+// The one rule for the native name of any C# type, so minting, lookups and accessors can never disagree.
 internal static class NativeTypeName
 {
     public static string Of<T>() => Cache<T>.Name;
 
+    // A wrapper names its native type, a reflected struct or enum keeps the short name assets store, and a script class its full name.
+    public static string Of(Type Type)
+    {
+        if (Type.GetCustomAttribute<NativeTypeAttribute>(inherit: false) is { } Native)
+        {
+            return Native.Name;
+        }
+        if ((Type.IsValueType || Type.IsEnum) && Type.IsDefined(typeof(ReflectAttribute), inherit: false))
+        {
+            return Type.Name;
+        }
+        return Type.FullName ?? Type.Name;
+    }
+
     private static class Cache<T>
     {
-        public static readonly string Name =
-            typeof(T).GetCustomAttribute<NativeTypeAttribute>(inherit: false)?.Name ?? typeof(T).Name;
+        public static readonly string Name = Of(typeof(T));
     }
 }

@@ -41,15 +41,6 @@ namespace Lumina::MCP
         }
 
         // A class is creatable when a factory claims it or an ancestor of it; there is no abstract flag to ask.
-        bool IsCreatableClass(CClass* Class)
-        {
-            return Algo::AnyOf(CFactoryRegistry::Get().GetFactories(), [Class](CFactory* Factory)
-            {
-                return Factory != nullptr && Factory->GetAssetClass() != nullptr
-                    && Class->IsChildOf(Factory->GetAssetClass());
-            });
-        }
-
         void RegisterListClasses(FStringView Owner)
         {
             Agent::FToolRegistry::Get().Register<SListAssetClassesParams, SListAssetClassesResult>(
@@ -104,7 +95,8 @@ namespace Lumina::MCP
                         return Agent::FToolResult::Error(Error + " Call assets.list_classes.");
                     }
 
-                    if (!IsCreatableClass(Class))
+                    CFactory* Factory = CFactoryRegistry::Get().FindFactory(Class);
+                    if (Factory == nullptr)
                     {
                         return Agent::FToolResult::Error(Lumina::Format(
                             "{} is not a creatable asset class. Call assets.list_classes.", In.ClassName));
@@ -130,18 +122,12 @@ namespace Lumina::MCP
                         return Agent::FToolResult::Error(Lumina::Format("{} already exists.", Path));
                     }
 
-                    CObject* Asset = CFactory::CreateNewOf(Class, FStringView(Path.c_str(), Path.size()));
-                    if (Asset == nullptr)
+                    FString CreateError;
+                    const TStrongObjectPtr<CObject> Asset = CFactory::CreateAsset(Factory, Class, FStringView(Path.c_str(), Path.size()), CreateError);
+                    if (!Asset)
                     {
-                        return Agent::FToolResult::Error(Lumina::Format("Could not create a {} at {}.", In.ClassName, Path));
+                        return Agent::FToolResult::Error(Lumina::Format("{} at {}: {}.", In.ClassName, Path, CreateError));
                     }
-
-                    if (!CPackage::SavePackage(Asset->GetPackage(), Path))
-                    {
-                        return Agent::FToolResult::Error(Lumina::Format("Could not save {}.", Path));
-                    }
-
-                    FAssetRegistry::Get().AssetCreated(Asset);
 
                     Out.Name       = FString(Asset->GetName().ToString().c_str());
                     Out.Path       = FString(Path.c_str());

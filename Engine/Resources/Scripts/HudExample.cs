@@ -4,23 +4,23 @@ using Lumina;
 
 namespace Lumina.Examples;
 
-// One model drives four composed <template> widgets, and as a UIScript the script itself is that model, so nothing here sets the UI up.
-[UIDocument("/Engine/Resources/Content/UI/Examples/Composition/HudComposed.rml"), DataModel("hud")]
-public sealed class HudExample : UIScript
+// One model drives four composed <template> widgets, and as a CUIScript the script itself is that model, so nothing here sets the UI up.
+[Reflect(UIDocument = "/Engine/Resources/Content/UI/Examples/Composition/HudComposed.rml", DataModel = "hud")]
+public sealed class HudExample : CUIScript
 {
     // StatBar reads this and flips its own .low class below 25, with no help from here.
-    [Bind] public int Health = 100;
+    [Property(Hidden, Bind, NoSerialize)] public int Health = 100;
 
-    [Bind] public int Speed;
+    [Property(Hidden, Bind, NoSerialize)] public int Speed;
 
     // Gauge feeds this straight into data-style-transform as a rotate().
-    [Bind] public float SpeedAngle = -120.0f;
+    [Property(Hidden, Bind, NoSerialize)] public float SpeedAngle = -120.0f;
 
-    [Bind] public float SweepAngle;
-    [Bind] public int BlipX = 70;
-    [Bind] public int BlipY = 40;
-    [Bind] public string Objective = "Reach the relay tower";
-    [Bind] public bool Urgent;
+    [Property(Hidden, Bind, NoSerialize)] public float SweepAngle;
+    [Property(Hidden, Bind, NoSerialize)] public int BlipX = 70;
+    [Property(Hidden, Bind, NoSerialize)] public int BlipY = 40;
+    [Property(Hidden, Bind, NoSerialize)] public string Objective = "Reach the relay tower";
+    [Property(Hidden, Bind, NoSerialize)] public bool Urgent;
 
     public override void OnUpdate(float DeltaTime)
     {

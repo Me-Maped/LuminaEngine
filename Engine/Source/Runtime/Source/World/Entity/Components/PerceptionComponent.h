@@ -78,7 +78,7 @@ namespace Lumina
 
         /** Only sources whose AffiliationTags match any of these are sensed. Empty = sense everyone. */
         PROPERTY(Editable, Category = "AI|Perception")
-        FGameplayTagContainer DetectableTags;
+        SGameplayTagContainer DetectableTags;
 
         //~ Sight
         PROPERTY(Editable, Category = "AI|Perception|Sight")
@@ -129,11 +129,11 @@ namespace Lumina
         PROPERTY(Editable, Category = "AI|Perception|Debug")
         bool bDrawDebug = false;
 
-        PROPERTY()
+        PROPERTY(Hidden)
         TScriptDelegate<SPerceptionEvent> OnTargetPerceived;
 
         // Location is the last known position.
-        PROPERTY()
+        PROPERTY(Hidden)
         TScriptDelegate<SPerceptionEvent> OnTargetLost;
 
         //~ Runtime state (NOT reflected): recomputed every tick, never serialized, must stay trivially copyable.

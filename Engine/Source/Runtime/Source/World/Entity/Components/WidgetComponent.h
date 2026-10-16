@@ -6,6 +6,7 @@
 #include "Core/Templates/LuminaTemplate.h"
 #include "UI/UIDocumentRef.h"
 #include "Renderer/RHITexture.h"
+#include "Renderer/RenderLayers.h"
 #include "WidgetComponent.generated.h"
 
 namespace Rml
@@ -65,7 +66,7 @@ namespace Lumina
 
         /** RML document to display, e.g. "/Game/UI/MyWidget.rml". Empty = nothing drawn. Rename-safe. */
         PROPERTY(Editable, Category = "Widget")
-        FUIDocumentRef DocumentPath;
+        SUIDocumentRef DocumentPath;
 
         /** Offscreen render-target resolution the document is laid out at (pixels). */
         PROPERTY(Editable, Category = "Widget")
@@ -85,6 +86,10 @@ namespace Lumina
         /** RGBA tint multiplied with the widget color. */
         PROPERTY(Editable, Color, Category = "Widget")
         FVector4 Tint = FVector4(1.0f);
+
+        // Drawn by any camera whose CullMask shares one of these layers.
+        PROPERTY(Editable, Category = "Rendering")
+        SRenderLayerMask RenderLayers;
 
         FWidgetRuntime Runtime;
     };

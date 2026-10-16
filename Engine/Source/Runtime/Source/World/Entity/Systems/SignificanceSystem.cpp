@@ -104,14 +104,7 @@ namespace Lumina
                 continue;
             }
             bAnyConsumer = true;
-            const ECS::FEntity* Dense = Pool->GetDenseData();
-            for (size_t i = 0, Num = Pool->GetDenseSize(); i < Num; ++i)
-            {
-                if (!Dense[i].IsTombstone())
-                {
-                    MaxIndex = Math::Max(MaxIndex, Dense[i].GetIndex());
-                }
-            }
+            MaxIndex = Math::Max(MaxIndex, Pool->MaxLiveIndex());
         }
 
         const FVector3 ViewOrigin = Resolved->ViewVolume.GetViewPosition();
@@ -183,21 +176,9 @@ namespace Lumina
 
             const ECS::FEntity* Dense = Pool->GetDenseData();
             const uint32 Num = (uint32)Pool->GetDenseSize();
-            if (Num < kSignificanceParallelGrain || GTaskSystem == nullptr)
+            Task::ParallelForOrSerial(Num, kSignificanceParallelGrain, [&](uint32 Index)
             {
-                for (uint32 i = 0; i < Num; ++i)
-                {
-                    Score(Dense[i]);
-                }
-                continue;
-            }
-
-            Task::ParallelFor(Num, [&](const Task::FParallelRange& Range)
-            {
-                for (uint32 i = Range.Start; i < Range.End; ++i)
-                {
-                    Score(Dense[i]);
-                }
+                Score(Dense[Index]);
             }, 256);
         }
     }

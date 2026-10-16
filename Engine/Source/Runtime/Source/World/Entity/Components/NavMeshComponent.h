@@ -11,14 +11,14 @@
 namespace Lumina
 {
 
-    /** Cached collider AABB for change detection; key = (entity << 8 | colliderType). */
-    struct FNavSourceEntity
+    // The footprint of a nav source that moved, appeared, vanished or changed shape.
+    struct FNavSourceBounds
     {
-        FVector3   AABBMin = FVector3( FLT_MAX);
-        FVector3   AABBMax = FVector3(-FLT_MAX);
+        FVector3 Min = FVector3( FLT_MAX);
+        FVector3 Max = FVector3(-FLT_MAX);
 
-        // Fingerprints the geometry itself, so a swapped, re-imported or sculpted mesh still dirties its tiles.
-        uint64     ContentId = 0;
+        // False for area volumes and links, which leave the voxelized geometry and so a cached heightfield untouched.
+        bool     bGeometry = true;
     };
 
     /** Per-tile rebake task in flight. */
@@ -26,6 +26,8 @@ namespace Lumina
     {
         int32                       TileX = 0;
         int32                       TileY = 0;
+        uint32                      CacheGeneration = 0;
+        bool                        bCachePinned = false;
         TVector<uint8>              ResultBlob;
         std::atomic<bool>           bDone{ false };
         std::atomic<bool>           bConsumed{ false };
@@ -38,11 +40,12 @@ namespace Lumina
         std::atomic<bool>           bDone{ false };
     };
 
-    struct FNavFoliageCache;
-
     struct FNavMeshRuntime
     {
         TUniquePtr<FNavMesh>            Mesh;
+
+        // The highest topology epoch any mesh this runtime dropped reached, which its next mesh continues from.
+        uint64                          RetiredEpoch = 0;
 
         /** Shared with the bake worker, so dropping this mid-bake leaves the worker a live handle. */
         TSharedPtr<FNavBakeHandle>      ActiveBake;
@@ -54,14 +57,8 @@ namespace Lumina
 
         bool                            bRuntimeDirty = true;   // Tiles changed; rebuild next tick.
 
-        /** Cached per-collider AABBs from previous tick. */
-        THashMap<uint64, FNavSourceEntity>      EntityAABBs;
-
-        // Foliage is tracked per entity with cached instance bounds, since walking every instance each scan stalled the frame.
-        TSharedPtr<FNavFoliageCache>            FoliageCache;
-
-        // Until set, a scan adopts what it finds, because a hydrated bake already holds the world it was loaded with.
-        bool                                    bSourcesSeeded = false;
+        // Changed source footprints inside the volume, turned into dirty tiles at the next scan.
+        TVector<FNavSourceBounds>               PendingSourceChanges;
 
         /** Tile coords waiting to be rebuilt. */
         THashSet<uint64>                        DirtyTiles;
@@ -75,6 +72,9 @@ namespace Lumina
         /** Layout fed to BakeSingleTile so coords align with live mesh. */
         FNavBuildOutput                         LiveLayout;
 
+        // Shared with rebakes in flight, and dropped with every full bake since its heightfields assume the old layout.
+        TSharedPtr<FNavTileCache>               TileCache;
+
         /** Decides which baked tiles are resident in Mesh. Inert while StreamLoadRadius is 0. */
         FNavTileStreamer                        Streamer;
 
@@ -87,15 +87,18 @@ namespace Lumina
         /** Auto-bake debounce: bake once bounds/settings settle and differ from what's baked. */
         FVector3                                AutoPrevCenter   = FVector3(FLT_MAX);
         FVector3                                AutoPrevExtents  = FVector3(FLT_MAX);
-        FNavBuildSettings                       AutoPrevSettings;
+        SNavBuildSettings                       AutoPrevSettings;
         FVector3                                AutoBuiltCenter  = FVector3(FLT_MAX);
         FVector3                                AutoBuiltExtents = FVector3(FLT_MAX);
-        FNavBuildSettings                       AutoBuiltSettings;
+        SNavBuildSettings                       AutoBuiltSettings;
         float                                   AutoSettleTimer  = 0.0f;
         bool                                    bAutoBuiltValid  = false;
 
         // Throttles the geometry change scan to DynamicRebuildInterval.
         float                                   DynamicScanTimer = 0.0f;
+
+        // Ticks since the exact island labels were last asked for, so a mesh that keeps changing relabels at a measured pace.
+        uint32                                  TicksSinceRelabel = 0;
 
         /** The debug surface is hundreds of thousands of vertices, so it is rebuilt only when the mesh
          *  topology or its coloring changes rather than once per frame. */
@@ -114,6 +117,7 @@ namespace Lumina
 
         SNavMeshComponent() = default;
 
+        ~SNavMeshComponent() = default;
         SNavMeshComponent(const SNavMeshComponent& Other)
             : Settings(Other.Settings)
             , bAutoBake(Other.bAutoBake)
@@ -160,7 +164,7 @@ namespace Lumina
 
         /** Voxelization, agent, and tiling parameters fed to Recast. */
         PROPERTY(Editable, Category = "NavMesh|Build")
-        FNavBuildSettings Settings;
+        SNavBuildSettings Settings;
 
         /** Re-bake automatically when the bounds/settings change (e.g. placed or moved in the editor). */
         PROPERTY(Editable, Category = "NavMesh|Build")
@@ -186,27 +190,27 @@ namespace Lumina
         bool bBakeRequested = false;
 
         /** Baked tile blobs (empty = non-walkable tile). Serialized. */
-        PROPERTY(Category = "NavMesh|Baked")
-        TVector<FNavTileData> Tiles;
+        PROPERTY(Hidden, Category = "NavMesh|Baked")
+        TVector<SNavTileData> Tiles;
 
         /** Bake origin (= bounds min). */
-        PROPERTY(Category = "NavMesh|Baked")
+        PROPERTY(Hidden, Category = "NavMesh|Baked")
         FVector3 Origin = FVector3(0.0f);
 
         /** Tile size in world units. */
-        PROPERTY(Category = "NavMesh|Baked")
+        PROPERTY(Hidden, Category = "NavMesh|Baked")
         float TileWorldSize = 0.0f;
 
         /** Grid the baked tile coords index into. Serialized so a hot rebake still lines up after the
          *  volume is moved or rescaled without a full re-bake. */
-        PROPERTY(Category = "NavMesh|Baked")
+        PROPERTY(Hidden, Category = "NavMesh|Baked")
         int32 TilesX = 0;
 
-        PROPERTY(Category = "NavMesh|Baked")
+        PROPERTY(Hidden, Category = "NavMesh|Baked")
         int32 TilesY = 0;
 
         /** Cap fed to dtNavMeshParams. */
-        PROPERTY(Category = "NavMesh|Baked")
+        PROPERTY(Hidden, Category = "NavMesh|Baked")
         int32 MaxPolysPerTile = 0;
 
         /** Transient; not serialized. */

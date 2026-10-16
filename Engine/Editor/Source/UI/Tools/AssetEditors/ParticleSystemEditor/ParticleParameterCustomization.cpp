@@ -1,12 +1,13 @@
 ﻿#include "ParticleParameterCustomization.h"
 #include "imgui.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
+#include "Tools/UI/ImGui/ImGuiXNumeric.h"
 
 namespace Lumina
 {
     static const char* ParameterTypeNames[] = { "Float", "Int", "Bool", "Vec2", "Vec3", "Vec4", "Color" };
 
-    static void ResetValueStorage(FParticleParameter& Param)
+    static void ResetValueStorage(SParticleParameter& Param)
     {
         Param.Scalar  = 0.0f;
         Param.Integer = 0;
@@ -59,7 +60,7 @@ namespace Lumina
         {
         case EParticleParameterType::Float:
         {
-            if (ImGui::DragFloat("##Value", &Value.Scalar, 0.01f))
+            if (ImGuiX::DragFloat("##Value", &Value.Scalar, 0.01f))
             {
                 bChanged = true;
             }
@@ -67,7 +68,7 @@ namespace Lumina
         }
         case EParticleParameterType::Int:
         {
-            if (ImGui::DragInt("##Value", &Value.Integer))
+            if (ImGuiX::DragInt("##Value", &Value.Integer))
             {
                 bChanged = true;
             }
@@ -83,7 +84,7 @@ namespace Lumina
         }
         case EParticleParameterType::Vec2:
         {
-            if (ImGui::DragFloat2("##Value", &Value.Vector.x, 0.01f))
+            if (ImGuiX::DragFloat2("##Value", &Value.Vector.x, 0.01f))
             {
                 bChanged = true;
             }
@@ -91,7 +92,7 @@ namespace Lumina
         }
         case EParticleParameterType::Vec3:
         {
-            if (ImGui::DragFloat3("##Value", &Value.Vector.x, 0.01f))
+            if (ImGuiX::DragFloat3("##Value", &Value.Vector.x, 0.01f))
             {
                 bChanged = true;
             }
@@ -99,7 +100,7 @@ namespace Lumina
         }
         case EParticleParameterType::Vec4:
         {
-            if (ImGui::DragFloat4("##Value", &Value.Vector.x, 0.01f))
+            if (ImGuiX::DragFloat4("##Value", &Value.Vector.x, 0.01f))
             {
                 bChanged = true;
             }

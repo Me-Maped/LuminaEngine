@@ -26,6 +26,8 @@ namespace Lumina
 
         FPackageFileBytes(const FPackageFileBytes&) = delete;
         FPackageFileBytes& operator=(const FPackageFileBytes&) = delete;
+        FPackageFileBytes(FPackageFileBytes&&) = delete;
+        FPackageFileBytes& operator=(FPackageFileBytes&&) = delete;
 
         void* Data = nullptr;
         int64 Size = 0;
@@ -54,7 +56,8 @@ namespace Lumina
         // held, not borrowed, so a concurrent save cannot replace it under a read in flight
         void SetNameTable(TSharedPtr<const FPackageNameTable> InNames) { Names = Move(InNames); }
 
-        FDeferredReaderFactory GetDeferredReaderFactory() const override;
+        // Every four-byte window is a candidate, so the tables come out a superset of what the bytes refer to.
+        bool DescribeCutBytes(FPortableBytes& Cut) const override;
 
         // Mirrors FPackageSaver, since FTextureSourceFile picks its inline or bulk layout from this answer on read too.
         bool SupportsBulkData() const override { return true; }

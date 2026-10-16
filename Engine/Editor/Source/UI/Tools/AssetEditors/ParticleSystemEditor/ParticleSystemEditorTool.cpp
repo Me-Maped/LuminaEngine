@@ -1,5 +1,6 @@
 #include "ParticleSystemEditorTool.h"
 #include "ParticleParamCustomization.h"
+#include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Assets/AssetTypes/ParticleSystem/ParticleSystem.h"
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
@@ -11,7 +12,10 @@
 #include "Particles/ParticleStockModules.h"
 #include "UI/Tools/NodeGraph/Particle/ParticleCompiler.h"
 #include "UI/Tools/Transactions/ObjectSnapshotCommand.h"
+#include "FileSystem/FileSystem.h"
 #include "Paths/Paths.h"
+#include "UI/Tools/EditorAssetActions.h"
+#include "UI/Tools/EditorToolContext.h"
 #include "Renderer/RenderResource.h"
 #include "Renderer/ShaderCompiler.h"
 #include "Renderer/ShaderLibrary.h"
@@ -22,11 +26,21 @@
 #include "World/Entity/Components/TransformComponent.h"
 #include "Containers/StringFormat.h"
 #include "Localization/Localization.h"
+#include "Tools/UI/ImGui/ImGuiDragDrop.h"
 
 namespace Lumina
 {
     static const char* EmitterWindowName    = "Emitter";
     static const char* SelectionWindowName  = "Details";
+
+    // A module or stack lives in its emitter's package, and a shared emitter asset in its own rather than the system's.
+    static void MarkEdited(const CObject* Object)
+    {
+        if (CPackage* Package = Object != nullptr ? Object->GetPackage() : nullptr)
+        {
+            Package->MarkDirty();
+        }
+    }
 
     // Built lazily so reflected classes are registered by the time it runs. Add new stock modules here.
 
@@ -34,7 +48,13 @@ namespace Lumina
         : FAssetEditorTool(Context, InAsset->GetName().c_str(), InAsset, NewObject<CWorld>())
         , ParticleEntity()
         , DirectionalLightEntity()
+        , System(Cast<CParticleEmitter>(InAsset) != nullptr ? ParticleOps::WrapEmitter(Cast<CParticleEmitter>(InAsset)) : TStrongObjectPtr<CParticleSystem>(Cast<CParticleSystem>(InAsset)))
     {
+    }
+
+    bool FParticleSystemEditorTool::IsEmitterAsset() const
+    {
+        return Asset.Get() != (CObject*)System.Get();
     }
 
     // Idle time between a one-shot's last particle dying and the looped preview firing it again.
@@ -51,7 +71,7 @@ namespace Lumina
 
         ParticleEntity = World->ConstructEntity("Particle System");
         SParticleSystemComponent& ParticleComponent = World->EmplaceComponent<SParticleSystemComponent>(ParticleEntity);
-        ParticleComponent.ParticleSystem = Cast<CParticleSystem>(Asset.Get());
+        ParticleComponent.ParticleSystem = GetSystem();
 
         STransformComponent& ParticleTransform = World->GetComponent<STransformComponent>(ParticleEntity);
         STransformComponent& EditorTransform   = World->GetComponent<STransformComponent>(EditorEntity);
@@ -71,11 +91,16 @@ namespace Lumina
         CreateToolWindow(SelectionWindowName, [&](bool bFocused)
         {
             // A property handle carries no owner, so the system is announced around the draw instead.
-            ParticleParamContext::FScope ParamScope(Cast<CParticleSystem>(Asset.Get()));
+            ParticleParamContext::FScope ParamScope(GetSystem());
             GetPropertyTable()->DrawTree();
         });
 
         SyncEmitterStacks();
+        // Nothing queues an emitter asset that no system has loaded, so it compiles when opened.
+        if (IsEmitterAsset() && !GetSystem()->Emitters[0]->UsesCustomShader())
+        {
+            Compile();
+        }
 
         // The base pair snapshots Asset while this panel points at the selected module, so both are replaced.
         GetPropertyTable()->SetStartEditCallback([this](const FPropertyChangedEvent& Event)
@@ -122,7 +147,7 @@ namespace Lumina
         }
         if (bLoopPreview)
         {
-            const CParticleSystem* PS = Cast<CParticleSystem>(Asset.Get());
+            const CParticleSystem* PS = GetSystem();
             const float OneShotLength = PS != nullptr ? PS->GetOneShotLength() : 0.0f;
             if (OneShotLength > 0.0f && PreviewAge >= OneShotLength + PreviewReplayPause)
             {
@@ -146,7 +171,7 @@ namespace Lumina
 
     void FParticleSystemEditorTool::SyncEmitterStacks()
     {
-        CParticleSystem* PS = Cast<CParticleSystem>(Asset.Get());
+        CParticleSystem* PS = GetSystem();
         if (PS == nullptr)
         {
             return;
@@ -188,6 +213,10 @@ namespace Lumina
             LOC("A system is a list of emitters shown side by side, each simulating and drawing on its own. "
             "An explosion is typically a flash, smoke, sparks and debris as four emitters. Use the "
             "checkbox to mute one while tuning the others."));
+        DrawHelpTextRow(LOC("Emitter Assets"),
+            LOC("Add Emitter Asset, or dropping one from the content browser onto the emitter list, shares a Particle "
+            "Emitter asset, marked with a link, so edits to it reach every system using it. Right-click an emitter's header to save it as an asset, make a shared one local, "
+            "or open the asset on its own."));
         DrawHelpTextRow(LOC("Stack"),
             LOC("Each emitter is built from a Spawn stack (runs once per particle) and an Update stack "
             "(runs every frame). Add modules with the + buttons and reorder them, order matters."));
@@ -224,7 +253,7 @@ namespace Lumina
 
     void FParticleSystemEditorTool::DrawEmitterGizmos()
     {
-        const CParticleSystem* PS = Cast<CParticleSystem>(Asset.Get());
+        const CParticleSystem* PS = GetSystem();
         if (PS == nullptr || !World.IsValid() || !World->IsValidEntity(ParticleEntity)
             || SelectedEmitter < 0 || SelectedEmitter >= (int32)PS->Emitters.size() || PS->Emitters[SelectedEmitter] == nullptr)
         {
@@ -238,7 +267,7 @@ namespace Lumina
 
         if (Emitter->VisibilityRadius > 0.0f)
         {
-            World->DrawSphere(Origin, Emitter->VisibilityRadius, BoundsColor, {}, {}, {});
+            World->GetDebugInterface()->DrawSphere(Origin, Emitter->VisibilityRadius, BoundsColor, {}, {}, {});
         }
 
         const CParticleEmitterStack* Stack = GetStackFor(SelectedEmitter);
@@ -260,13 +289,13 @@ namespace Lumina
             {
             case EParticleEmitterShape::Sphere:
             case EParticleEmitterShape::Hemisphere:
-                World->DrawSphere(Origin, Size.x, ShapeColor, {}, {}, {});
+                World->GetDebugInterface()->DrawSphere(Origin, Size.x, ShapeColor, {}, {}, {});
                 break;
             case EParticleEmitterShape::Box:
-                World->DrawBox(Origin, Size, FQuat::Identity(), ShapeColor, {}, {}, {});
+                World->GetDebugInterface()->DrawBox(Origin, Size, FQuat::Identity(), ShapeColor, {}, {}, {});
                 break;
             case EParticleEmitterShape::Cone:
-                World->DrawCone(Origin, FVector3(0.0f, 1.0f, 0.0f), Math::Atan2(Size.x, Math::Max(Size.y, 1e-4f)), Size.y, ShapeColor, {}, {}, {});
+                World->GetDebugInterface()->DrawCone(Origin, FVector3(0.0f, 1.0f, 0.0f), Math::Atan2(Size.x, Math::Max(Size.y, 1e-4f)), Size.y, ShapeColor, {}, {}, {});
                 break;
             case EParticleEmitterShape::Ring:
             case EParticleEmitterShape::Disk:
@@ -278,7 +307,7 @@ namespace Lumina
                     {
                         const float A = Math::TwoPi<float>() * (float)Index / (float)Segments;
                         const float B = Math::TwoPi<float>() * (float)(Index + 1) / (float)Segments;
-                        World->DrawLine(Origin + FVector3(Math::Cos(A), 0.0f, Math::Sin(A)) * Radius,
+                        World->GetDebugInterface()->DrawLine(Origin + FVector3(Math::Cos(A), 0.0f, Math::Sin(A)) * Radius,
                                         Origin + FVector3(Math::Cos(B), 0.0f, Math::Sin(B)) * Radius, ShapeColor, {}, {}, {});
                     }
                 }
@@ -312,7 +341,7 @@ namespace Lumina
 
     void FParticleSystemEditorTool::DrawStack()
     {
-        CParticleSystem* PS = Cast<CParticleSystem>(Asset.Get());
+        CParticleSystem* PS = GetSystem();
         if (PS == nullptr)
         {
             return;
@@ -336,12 +365,15 @@ namespace Lumina
         }
 
         // System header selects the asset so its user parameters show in Details.
-        const bool bSystemSelected = (SelectedObject == nullptr);
-        if (ImGui::Selectable(LOC_ICON(LE_ICON_COG, "System Settings"), bSystemSelected))
+        if (!IsEmitterAsset())
         {
-            SelectObject(nullptr);
+            const bool bSystemSelected = (SelectedObject == nullptr);
+            if (ImGui::Selectable(LOC_ICON(LE_ICON_COG, "System Settings"), bSystemSelected))
+            {
+                SelectObject(nullptr);
+            }
+            ImGui::Spacing();
         }
-        ImGui::Spacing();
 
         // This panel docks tall and narrow, so fixed-width columns truncated every module name.
         ImGui::BeginChild("##emitters", ImVec2(0.0f, 0.0f));
@@ -354,19 +386,18 @@ namespace Lumina
             ImGui::Spacing();
         }
 
-        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Add Emitter"), ImVec2(-FLT_MIN, 0.0f)))
+        if (!IsEmitterAsset())
         {
-            if (CParticleEmitter* Added = PS->AddEmitter())
-            {
-                SyncEmitterStacks();
-                SelectedEmitter = (int32)PS->Emitters.size() - 1;
-                SelectObject(Added);
-                Asset->GetPackage()->MarkDirty();
-                DirtyEmitter = SelectedEmitter;
-            }
+            DrawAddEmitterButtons();
         }
 
         ImGui::EndChild();
+
+        if (!IsEmitterAsset() && ImGui::BeginDragDropTarget())
+        {
+            AddSharedEmitter(DragDrop::AcceptAsset<CParticleEmitter>());
+            ImGui::EndDragDropTarget();
+        }
 
         if (PendingRemoveEmitter != nullptr)
         {
@@ -378,7 +409,7 @@ namespace Lumina
             PS->RemoveEmitter(PendingRemoveEmitter);
             PendingRemoveEmitter = nullptr;
             SyncEmitterStacks();
-            Asset->GetPackage()->MarkDirty();
+            MarkEdited(PS);
         }
 
         ImGui::PopStyleVar(2);
@@ -390,13 +421,111 @@ namespace Lumina
             DirtyEmitter = Constants::kIndexNone;
             CompilationResult = FCompilationResultInfo();
             CompileEmitter(Target);
-            Asset->GetPackage()->MarkDirty();
+            MarkEdited(PS->Emitters[Target].Get());
+        }
+    }
+
+    void FParticleSystemEditorTool::DrawAddEmitterButtons()
+    {
+        CParticleSystem* PS = GetSystem();
+        const float Width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Add Emitter"), ImVec2(Width, 0.0f)))
+        {
+            if (CParticleEmitter* Added = PS->AddEmitter())
+            {
+                SyncEmitterStacks();
+                SelectedEmitter = (int32)PS->Emitters.size() - 1;
+                SelectObject(Added);
+                MarkEdited(PS);
+                DirtyEmitter = SelectedEmitter;
+            }
+        }
+        ImGui::SameLine();
+
+        EmitterAssetPicker.SearchHint = LOC("Search emitter assets...");
+        EmitterAssetPicker.ItemNoun   = LOC("emitters");
+        const FPickerItem* Picked = EmitterAssetPicker.DrawButton("##AddEmitterAsset", LOC_ICON(LE_ICON_PLUS, "Add Emitter Asset"), [](TVector<FPickerItem>& Items)
+        {
+            const FName EmitterClass = CParticleEmitter::StaticClass()->GetName();
+            for (const FAssetData* Data : FAssetRegistry::Get().FindByPredicate([&](const FAssetData& Asset) { return Asset.AssetClass == EmitterClass; }))
+            {
+                const FStringView Path(Data->Path.c_str(), Data->Path.size());
+                FPickerItem& Item = Items.emplace_back();
+                Item.Name     = Data->AssetName.c_str();
+                Item.Key      = Data->AssetGUID.ToString();
+                const FStringView Folder = VFS::Parent(Path, true);
+                Item.Category = FString(Folder.data(), Folder.size());
+                Item.Tooltip  = FString(Path.data(), Path.size());
+                Item.Icon     = LE_ICON_SHIMMER;
+            }
+        }, Width);
+
+        if (Picked != nullptr)
+        {
+            AddSharedEmitter(Cast<CParticleEmitter>(LoadObject<CObject>(FGuid::FromString(FStringView(Picked->Key.c_str(), Picked->Key.size())))));
+        }
+    }
+
+    void FParticleSystemEditorTool::AddSharedEmitter(CParticleEmitter* Shared)
+    {
+        CParticleSystem* PS = GetSystem();
+        if (Shared != nullptr)
+        {
+            PS->Emitters.push_back(Shared);
+            SyncEmitterStacks();
+            SelectedEmitter = (int32)PS->Emitters.size() - 1;
+            SelectObject(Shared);
+            MarkEdited(PS);
+            DirtyEmitter = Shared->UsesCustomShader() ? Constants::kIndexNone : SelectedEmitter;
+        }
+    }
+
+    void FParticleSystemEditorTool::DrawEmitterAssetMenu(int32 EmitterIndex, CParticleEmitter* Emitter)
+    {
+        CParticleSystem* PS = GetSystem();
+        CParticleEmitter* Replacement = nullptr;
+        if (Emitter->GetPackage() != PS->GetPackage())
+        {
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_OPEN_IN_NEW, "Open Emitter Asset")))
+            {
+                ToolContext->OpenAssetEditor(Emitter->GetGUID());
+            }
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_COPY, "Make Local")))
+            {
+                Replacement = ParticleOps::MakeEmitterLocal(PS, EmitterIndex);
+            }
+        }
+        else if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_SAVE, "Save as Emitter Asset")))
+        {
+            FString Suffix = "_" + Emitter->EmitterName;
+            for (char& Char : Suffix)
+            {
+                Char = std::isalnum((unsigned char)Char) ? Char : '_';
+            }
+            const FFixedString SystemPath = PS->GetPackage()->GetPackagePath();
+            const FFixedString Path = MakeSiblingAssetPath(FStringView(SystemPath.c_str(), SystemPath.size()), Suffix.c_str());
+            Replacement = ParticleOps::SaveEmitterAsAsset(PS, EmitterIndex, FStringView(Path.c_str(), Path.size()));
+            if (Replacement != nullptr)
+            {
+                ImGuiX::Notifications::NotifySuccess(LOCF("Saved '{0}' as '{1}'."), Emitter->EmitterName.c_str(), Path.c_str());
+            }
+            else
+            {
+                ImGuiX::Notifications::NotifyError(LOCF("Could not save '{0}' as an emitter asset."), Emitter->EmitterName.c_str());
+            }
+        }
+
+        if (Replacement != nullptr)
+        {
+            SyncEmitterStacks();
+            SelectObject(Replacement);
+            MarkEdited(PS);
         }
     }
 
     void FParticleSystemEditorTool::DrawEmitterSection(int32 EmitterIndex)
     {
-        CParticleSystem* PS = Cast<CParticleSystem>(Asset.Get());
+        CParticleSystem* PS = GetSystem();
         CParticleEmitter* Emitter = (PS != nullptr && EmitterIndex < (int32)PS->Emitters.size())
                                   ? PS->Emitters[EmitterIndex].Get() : nullptr;
         if (Emitter == nullptr)
@@ -404,16 +533,7 @@ namespace Lumina
             return;
         }
 
-        const float Spacing = ImGui::GetStyle().ItemSpacing.x;
-        const float Pad     = ImGui::GetStyle().FramePadding.x;
-        const float BtnW    = ImGui::CalcTextSize(LE_ICON_DELETE).x + Pad * 2.0f;
-        const float CheckW  = ImGui::GetFrameHeight();
-        const float Cluster = CheckW + BtnW * 3.0f + Spacing * 4.0f;
-
         const bool bSelected = (SelectedObject == (CObject*)Emitter);
-
-        // Captured before the header consumes the line, since SameLine's offset is window-local.
-        const float HeaderRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
 
         // OpenOnArrow splits the jobs, or selecting an emitter also collapses the stack being read.
         ImGuiTreeNodeFlags Flags = ImGuiTreeNodeFlags_CollapsingHeader
@@ -427,11 +547,28 @@ namespace Lumina
         }
 
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 6));
+        const float Spacing = ImGui::GetStyle().ItemSpacing.x;
+        const float Pad = ImGui::GetStyle().FramePadding.x;
+        const float BtnW = ImGui::CalcTextSize(LE_ICON_DELETE).x + Pad * 2.0f;
+        const float CheckW = ImGui::GetFrameHeight();
+        const float Cluster = CheckW + BtnW * 3.0f + Spacing * 4.0f;
+        const ImVec2 HeaderPos = ImGui::GetCursorScreenPos();
+        const float HeaderRight = HeaderPos.x + ImGui::GetContentRegionAvail().x;
+
         ImGui::PushStyleColor(ImGuiCol_Text, Emitter->bEnabled ? IM_COL32(235, 220, 160, 255)
                                                                : IM_COL32(125, 125, 130, 255));
-        const bool bOpen = ImGui::TreeNodeEx("##emhdr", Flags, "%s", Emitter->EmitterName.c_str());
+        const bool bShared = !IsEmitterAsset() && Emitter->GetPackage() != PS->GetPackage();
+        const bool bOpen = ImGui::TreeNodeEx("##emhdr", Flags, bShared ? LE_ICON_LINK" %s" : "%s", Emitter->EmitterName.c_str());
         ImGui::PopStyleColor();
-        ImGui::PopStyleVar();
+        if (bShared && ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(LOC("Shared emitter asset %s. Edits here change every system that uses it."), Emitter->GetPackage()->GetPackagePath().c_str());
+        }
+        if (!IsEmitterAsset() && ImGui::BeginPopupContextItem("##emasset"))
+        {
+            DrawEmitterAssetMenu(EmitterIndex, Emitter);
+            ImGui::EndPopup();
+        }
 
         if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
         {
@@ -439,14 +576,13 @@ namespace Lumina
             SelectObject(Emitter);
         }
 
-        // Controls overlaid on the header bar, right-aligned, so they stay reachable when collapsed.
-        ImGui::SameLine(HeaderRight - Cluster);
+        ImGui::SetCursorScreenPos(ImVec2(HeaderRight - Cluster, HeaderPos.y));
 
         bool bEnabled = Emitter->bEnabled;
         if (ImGui::Checkbox("##emen", &bEnabled))
         {
             Emitter->bEnabled = bEnabled;
-            Asset->GetPackage()->MarkDirty();
+            MarkEdited(Emitter);
         }
         if (ImGui::IsItemHovered())
         {
@@ -459,7 +595,7 @@ namespace Lumina
         {
             PS->MoveEmitter(Emitter, -1);
             SyncEmitterStacks();
-            Asset->GetPackage()->MarkDirty();
+            MarkEdited(PS);
         }
         ImGui::EndDisabled();
 
@@ -469,7 +605,7 @@ namespace Lumina
         {
             PS->MoveEmitter(Emitter, 1);
             SyncEmitterStacks();
-            Asset->GetPackage()->MarkDirty();
+            MarkEdited(PS);
         }
         ImGui::EndDisabled();
 
@@ -481,6 +617,7 @@ namespace Lumina
             PendingRemoveEmitter = Emitter;
         }
         ImGui::EndDisabled();
+        ImGui::PopStyleVar();
 
         if (bOpen)
         {
@@ -511,14 +648,15 @@ namespace Lumina
         const float Spacing = ImGui::GetStyle().ItemSpacing.x;
         const float Pad     = ImGui::GetStyle().FramePadding.x;
         const float BtnW    = ImGui::CalcTextSize(LE_ICON_DELETE).x + Pad * 2.0f;
-        const float Cluster = BtnW * 3.0f + Spacing * 3.0f; // up + down + delete, plus the gaps
+        const float ActionsWidth = BtnW * 3.0f + Spacing * 2.0f;
 
-        // Section header with a right-aligned + add button.
-        const float HeaderWidth = ImGui::GetContentRegionAvail().x;
+        const ImVec2 SectionPos = ImGui::GetCursorScreenPos();
+        const float SectionRight = SectionPos.x + ImGui::GetContentRegionAvail().x;
         ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(120, 200, 130, 255));
+        ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(Label);
         ImGui::PopStyleColor();
-        ImGui::SameLine(HeaderWidth - BtnW);
+        ImGui::SetCursorScreenPos(ImVec2(SectionRight - BtnW, SectionPos.y));
         if (ImGui::Button(LE_ICON_PLUS"##add", ImVec2(BtnW, 0)))
         {
             PendingAddStage   = Stage;
@@ -539,11 +677,14 @@ namespace Lumina
 
             ImGui::PushID(i);
 
+            const ImVec2 RowPos = ImGui::GetCursorScreenPos();
+            const float RowRight = RowPos.x + ImGui::GetContentRegionAvail().x;
+            const float RowHeight = ImGui::GetFrameHeight();
             bool bEnabled = Module->bEnabled;
             if (ImGui::Checkbox("##en", &bEnabled))
             {
                 Module->bEnabled = bEnabled;
-                Asset->GetPackage()->MarkDirty();
+                MarkEdited(Module);
                 DirtyEmitter = EmitterIndex;
             }
             ImGui::SameLine();
@@ -551,14 +692,13 @@ namespace Lumina
             const uint32 Accent = Module->GetAccentColor();
             ImGui::PushStyleColor(ImGuiCol_Text, bEnabled ? Accent : IM_COL32(120, 120, 125, 255));
             const bool bSelected = (SelectedModule == Module);
-            const float Remaining = ImGui::GetContentRegionAvail().x - Cluster;
-            const float RowWidth = Remaining > 40.0f ? Remaining : 40.0f;
+            const float RowWidth = Math::Max(40.0f, RowRight - ActionsWidth - Spacing - ImGui::GetCursorScreenPos().x);
             // The English display name doubles as the row's ImGui id, so the visible text is
             // translated around it rather than replacing it.
             const FString ModuleDisplayName = Module->GetDisplayName();
             const FFixedString ModuleRowLabel = FormatAs<FFixedString>("{}###{}",
                 LOC(ModuleDisplayName.c_str()), ModuleDisplayName.c_str());
-            if (ImGui::Selectable(ModuleRowLabel.c_str(), bSelected, 0, ImVec2(RowWidth, 0)))
+            if (ImGui::Selectable(ModuleRowLabel.c_str(), bSelected, 0, ImVec2(RowWidth, RowHeight)))
             {
                 SelectedEmitter = EmitterIndex;
                 SelectModule(Module);
@@ -569,14 +709,14 @@ namespace Lumina
                 ImGui::SetTooltip("%s", LOC(Module->GetTooltip().c_str()));
             }
 
-            ImGui::SameLine();
+            ImGui::SetCursorScreenPos(ImVec2(RowRight - ActionsWidth, RowPos.y));
             ImGui::BeginDisabled(i == 0);
-            if (ImGui::Button(LE_ICON_ARROW_UP"##up", ImVec2(BtnW, 0))) { EmitterStack->MoveModule(Module, -1); Asset->GetPackage()->MarkDirty(); DirtyEmitter = EmitterIndex; }
+            if (ImGui::Button(LE_ICON_ARROW_UP"##up", ImVec2(BtnW, 0))) { EmitterStack->MoveModule(Module, -1); MarkEdited(EmitterStack); DirtyEmitter = EmitterIndex; }
             ImGui::EndDisabled();
 
             ImGui::SameLine();
             ImGui::BeginDisabled(i == (int32)Stack.size() - 1);
-            if (ImGui::Button(LE_ICON_ARROW_DOWN"##down", ImVec2(BtnW, 0))) { EmitterStack->MoveModule(Module, 1); Asset->GetPackage()->MarkDirty(); DirtyEmitter = EmitterIndex; }
+            if (ImGui::Button(LE_ICON_ARROW_DOWN"##down", ImVec2(BtnW, 0))) { EmitterStack->MoveModule(Module, 1); MarkEdited(EmitterStack); DirtyEmitter = EmitterIndex; }
             ImGui::EndDisabled();
 
             ImGui::SameLine();
@@ -595,7 +735,7 @@ namespace Lumina
                 SelectObject(nullptr);
             }
             EmitterStack->RemoveModule(PendingRemove);
-            Asset->GetPackage()->MarkDirty();
+            MarkEdited(EmitterStack);
             DirtyEmitter = EmitterIndex;
         }
 
@@ -684,7 +824,7 @@ namespace Lumina
                     {
                         SelectedEmitter = EmitterIndex;
                         SelectModule(Added);
-                        Asset->GetPackage()->MarkDirty();
+                        MarkEdited(Added);
                         DirtyEmitter = EmitterIndex;
                     }
                 }
@@ -703,7 +843,7 @@ namespace Lumina
     {
         CompilationResult = FCompilationResultInfo();
 
-        CParticleSystem* PS = Cast<CParticleSystem>(Asset.Get());
+        CParticleSystem* PS = GetSystem();
         if (PS == nullptr)
         {
             return;
@@ -715,14 +855,13 @@ namespace Lumina
         for (int32 i = 0; i < (int32)PS->Emitters.size(); ++i)
         {
             CompileEmitter(i);
+            MarkEdited(PS->Emitters[i].Get());
         }
-
-        PS->GetPackage()->MarkDirty();
     }
 
     bool FParticleSystemEditorTool::CompileEmitter(int32 EmitterIndex)
     {
-        CParticleSystem* PS = Cast<CParticleSystem>(Asset.Get());
+        CParticleSystem* PS = GetSystem();
         if (PS == nullptr || EmitterIndex < 0 || EmitterIndex >= (int32)PS->Emitters.size() || PS->Emitters[EmitterIndex] == nullptr)
         {
             return false;
@@ -749,13 +888,13 @@ namespace Lumina
 
     bool FParticleSystemEditorTool::RefreshModuleParams()
     {
-        CParticleSystem* PS = Cast<CParticleSystem>(Asset.Get());
+        CParticleSystem* PS = GetSystem();
         if (!ParticleOps::RefreshModuleParams(PS, SelectedEmitter))
         {
             return false;
         }
 
-        PS->GetPackage()->MarkDirty();
+        MarkEdited(PS->Emitters[SelectedEmitter].Get());
         return true;
     }
 
@@ -763,6 +902,16 @@ namespace Lumina
     {
         Compile();
         FAssetEditorTool::OnSave();
+
+        // A shared emitter edited from this system is saved with it, since it has no tab of its own here.
+        for (const TStrongObjectPtr<CParticleEmitter>& Emitter : GetSystem()->Emitters)
+        {
+            CPackage* Package = Emitter->GetPackage();
+            if (Package != Asset->GetPackage() && Package->IsDirty() && !CPackage::SavePackage(Package, Package->GetPackagePath()))
+            {
+                ImGuiX::Notifications::NotifyError(LOCF("Failed to save emitter asset '{0}'."), Emitter->GetName().c_str());
+            }
+        }
     }
 
     void FParticleSystemEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const

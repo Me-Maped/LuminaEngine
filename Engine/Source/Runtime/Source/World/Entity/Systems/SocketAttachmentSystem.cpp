@@ -6,7 +6,6 @@
 #include "Assets/AssetTypes/Mesh/StaticMesh/StaticMesh.h"
 #include "TaskSystem/TaskSystem.h"
 #include "World/Entity/Components/EntityTags.h"
-#include "World/Entity/Components/RelationshipComponent.h"
 #include "World/Entity/Components/SkeletalMeshComponent.h"
 #include "World/Entity/Components/SocketAttachmentComponent.h"
 #include "World/Entity/Components/StaticMeshComponent.h"
@@ -58,7 +57,7 @@ namespace Lumina
         RequireUpdate(EUpdateStage::PrePhysics, EUpdatePriority::Low);
         RequireUpdate(EUpdateStage::Paused, EUpdatePriority::Low);
         Writes<STransformComponent>();
-        Reads<SSocketAttachmentComponent, SSkeletalMeshComponent, SStaticMeshComponent, FRelationshipComponent>();
+        Reads<SSocketAttachmentComponent, SSkeletalMeshComponent, SStaticMeshComponent, SystemResource::Hierarchy>();
     }
 
     void SSocketAttachmentSystem::OnUpdate()
@@ -69,12 +68,9 @@ namespace Lumina
 
         auto View = SystemContext.CreateView<SSocketAttachmentComponent, STransformComponent>(ECS::TExclude<SDisabledTag>{});
 
-        // Sized before the fan-out so every worker writes only its own entities' slots.
-        uint32 MaxIndex = 0;
-        for (ECS::FEntity Entity : View)
-        {
-            MaxIndex = Math::Max(MaxIndex, Entity.GetIndex());
-        }
+        // Sized before the fan-out so every worker writes only its own entities' slots; any included pool bounds the view.
+        const ECS::FSparseSet* Driver = View.GetDriver();
+        const uint32 MaxIndex = Driver != nullptr ? Driver->MaxLiveIndex() : 0u;
         if (Cache.size() <= MaxIndex)
         {
             Cache.resize(MaxIndex + 1);
@@ -85,12 +81,11 @@ namespace Lumina
 
         const auto Attach = [&](ECS::FEntity Entity, const SSocketAttachmentComponent& Attachment, STransformComponent& Transform)
         {
-            const FRelationshipComponent* Relationship = SystemContext.TryGet<FRelationshipComponent>(Entity);
-            if (Relationship == nullptr || Relationship->Parent == ECS::NullEntity) 
+            const ECS::FEntity Parent = SystemContext.GetHierarchy().GetParent(Entity);
+            if (Parent == ECS::NullEntity)
             {
                 return;
             }
-            const ECS::FEntity Parent = Relationship->Parent;
 
             FSocketAttachmentCache& Entry = Cache[Entity.GetIndex()];
             if (Entry.Entity != Entity)
@@ -168,17 +163,7 @@ namespace Lumina
             Entry.bWritten  = true;
         };
 
-        const uint32 Num = (uint32)View.NumDenseSlots();
-        if (Num < kSocketParallelGrain * 2 || GTaskSystem == nullptr)
-        {
-            View.ForEach(Attach);
-            return;
-        }
-
         // Each attachment writes only its own transform and cache slot, and SetLocalTransform is safe from any thread for disjoint entities.
-        Task::ParallelFor(Num, [&](const Task::FParallelRange& Range)
-        {
-            View.ForEachInRange(Range.Start, Range.End, Attach);
-        }, kSocketParallelGrain);
+        SystemContext.ParallelForEachView(View, Attach, kSocketParallelGrain, kSocketParallelGrain * 2);
     }
 }

@@ -90,6 +90,8 @@ namespace Lumina::ClangUtils
 
         FScopedCXString(const FScopedCXString&) = delete;
         FScopedCXString& operator=(const FScopedCXString&) = delete;
+        FScopedCXString(FScopedCXString&&) = delete;
+        FScopedCXString& operator=(FScopedCXString&&) = delete;
 
         const char* Get() const
         {
@@ -115,6 +117,33 @@ namespace Lumina::ClangUtils
         std::string str = Text != nullptr ? std::string(Text) : std::string();
         clang_disposeString(string);
         return str;
+    }
+
+    // The comment attached to a declaration as plain text, ignoring //~ section banners.
+    inline std::string GetBriefComment(const CXCursor& Cursor)
+    {
+        const FScopedCXString Raw(clang_Cursor_getRawCommentText(Cursor));
+        if (Raw.View().starts_with("//~"))
+        {
+            return {};
+        }
+        const FScopedCXString Brief(clang_Cursor_getBriefCommentText(Cursor));
+        return std::string(Brief.View());
+    }
+
+    inline std::string EscapeStringLiteral(std::string_view Text)
+    {
+        std::string Result;
+        Result.reserve(Text.size());
+        for (const char Char : Text)
+        {
+            if (Char == '\\' || Char == '"')
+            {
+                Result += '\\';
+            }
+            Result += Char;
+        }
+        return Result;
     }
 
     inline uint32_t GetCursorLineNumber(const CXCursor& Cr)
@@ -159,6 +188,39 @@ namespace Lumina::ClangUtils
         std::string Result = clang_getCString(Spelling);
         clang_disposeString(Spelling);
         return Result;
+    }
+
+    // The specifier text a reflection macro attached to this declaration as an annotation, false when it has none.
+    inline bool TryGetAnnotation(const CXCursor& Cursor, std::string_view Prefix, std::string& OutSpecifiers)
+    {
+        struct FSearch
+        {
+            std::string_view Prefix;
+            std::string*     Out;
+            bool             bFound = false;
+        };
+
+        FSearch Search{ Prefix, &OutSpecifiers };
+        clang_visitChildren(Cursor, [](CXCursor Child, CXCursor, CXClientData Data) -> CXChildVisitResult
+        {
+            FSearch& State = *static_cast<FSearch*>(Data);
+            if (clang_getCursorKind(Child) != CXCursor_AnnotateAttr)
+            {
+                return CXChildVisit_Continue;
+            }
+
+            const std::string Annotation = GetCursorSpelling(Child);
+            if (!Annotation.starts_with(State.Prefix))
+            {
+                return CXChildVisit_Continue;
+            }
+
+            *State.Out = Annotation.substr(State.Prefix.size());
+            State.bFound = true;
+            return CXChildVisit_Break;
+        }, &Search);
+
+        return Search.bFound;
     }
 
     // True when libclang fell back to its location-derived placeholder (e.g. "(unnamed struct at ...)"),
@@ -367,8 +429,6 @@ namespace Lumina::ClangUtils
                 { "FString",                           "Lumina::FString"     },
                 { "FName",                             "Lumina::FName"       },
                 { "TStrongObjectPtr",                  "Lumina::TStrongObjectPtr" },
-                { "TObjectPtr",                        "Lumina::TStrongObjectPtr" },
-                { "Lumina::TObjectPtr",                "Lumina::TStrongObjectPtr" },
                 { "CObject",                           "Lumina::CObject"     },
                 { "CClass",                            "Lumina::CClass"      },
             });

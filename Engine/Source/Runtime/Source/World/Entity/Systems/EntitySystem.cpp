@@ -3,7 +3,7 @@
 #include "EntitySystem.h"
 
 #include "Core/Object/Class.h"
-#include "Core/Object/ObjectArray.h"
+#include "Core/Object/ObjectIteration.h"
 #include "Core/Object/ObjectCore.h"
 #include "Core/Object/ScriptClass.h"
 #include "Log/Log.h"
@@ -31,7 +31,7 @@ namespace Lumina
         if (const FComponentOps* Ops = FindComponentOps(Component.ToString().View()))
         {
             Access.Writes.push_back((uint32)Ops->TypeId);
-            Access.PoolAssurers.push_back(Ops->Assure);
+            Access.Pools.push_back(Ops->GetTypeID());
         }
         else
         {
@@ -44,7 +44,7 @@ namespace Lumina
         if (const FComponentOps* Ops = FindComponentOps(Component.ToString().View()))
         {
             Access.Reads.push_back((uint32)Ops->TypeId);
-            Access.PoolAssurers.push_back(Ops->Assure);
+            Access.Pools.push_back(Ops->GetTypeID());
         }
         else
         {
@@ -74,7 +74,7 @@ namespace Lumina
 
             // Collected before anything is visited, because creating a CDO mutates the object array.
             TVector<CClass*> Classes;
-            GObjectArray.ForEachObject([&](CObjectBase* Object, int32)
+            ForEachObject([&](CObjectBase* Object, int32)
             {
                 if (Object == nullptr || !Object->IsA<CClass>())
                 {
@@ -82,7 +82,7 @@ namespace Lumina
                 }
 
                 CClass* Class = static_cast<CClass*>(Object);
-                if (Class != BaseClass && Class->IsChildOf(BaseClass))
+                if (Class != BaseClass && Class->IsChildOf(BaseClass) && !Class->IsAbstract() && !Class->IsSuperseded())
                 {
                     Classes.push_back(Class);
                 }

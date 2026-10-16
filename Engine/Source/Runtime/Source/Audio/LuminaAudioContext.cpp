@@ -123,6 +123,7 @@ namespace Lumina
 		{
 			SlotState[Slot].store((uint8)EAudioVoiceState::Free, Atomic::MemoryOrderRelaxed);
 			SlotGeneration[Slot].store(0, Atomic::MemoryOrderRelaxed);
+			SlotSourceGeneration[Slot] = 0;
 			SlotPriority[Slot].store(0, Atomic::MemoryOrderRelaxed);
 			SlotCanceled[Slot].store(false, Atomic::MemoryOrderRelaxed);
 			FreeSlots.Enqueue(Slot);
@@ -131,7 +132,7 @@ namespace Lumina
 		ActiveVoices.store(0, Atomic::MemoryOrderRelease);
 	}
 
-	bool FLuminaAudioContext::AcquireVoiceSlot(uint8 Priority, FAudioHandle& OutHandle)
+	bool FLuminaAudioContext::AcquireVoiceSlot(uint8 Priority, SAudioHandle& OutHandle)
 	{
 		uint32 Slot = 0;
 		bool bTookFreeSlot = false;
@@ -224,6 +225,8 @@ namespace Lumina
 		FRetiredSource Retired;
 		Retired.Source = Move(SlotSources[Slot]);
 		Retired.RenderCountAtRetire = Mixer.GetRenderCount();
+		Retired.Slot = Slot;
+		Retired.Generation = SlotSourceGeneration[Slot];
 
 		SlotSources[Slot].reset();
 		RetiredSources.push_back(Move(Retired));
@@ -243,7 +246,10 @@ namespace Lumina
 		for (size_t i = RetiredSources.size(); i > 0; --i)
 		{
 			const size_t Index = i - 1;
-			if (bForce || bDeviceIdle || Now > RetiredSources[Index].RenderCountAtRetire + kRetireRenderDelay)
+			// A takeover that fails after retiring leaves the old voice playing, so its source also waits for that voice to end.
+			const FRetiredSource& Retired = RetiredSources[Index];
+			const bool bReleased = Now > Retired.RenderCountAtRetire + kRetireRenderDelay && !Mixer.IsVoiceLive(Retired.Slot, Retired.Generation);
+			if (bForce || bDeviceIdle || bReleased)
 			{
 				RetiredSources.erase(RetiredSources.begin() + (ptrdiff_t)Index);
 			}
@@ -437,7 +443,7 @@ namespace Lumina
 
 		// Published before the start is queued, so the device thread never sees a slot without its source.
 		SlotSources[Slot] = Move(Source);
-		SlotStartRenderCount[Slot] = Mixer.GetRenderCount();
+		SlotSourceGeneration[Slot] = Play.Handle.Generation;
 
 		if (!Mixer.StartVoice(Desc))
 		{
@@ -459,7 +465,6 @@ namespace Lumina
 	{
 		// With no device nothing will ever drain the start queue, so a queued voice is collected at once, but a suspended device drains it on resume.
 		const bool bDeviceIdle = !Device;
-		const uint64 Now = Mixer.GetRenderCount();
 
 		for (uint32 Slot = 0; Slot < MaxVoiceSlots; ++Slot)
 		{
@@ -468,8 +473,8 @@ namespace Lumina
 				continue;
 			}
 
-			// A slot reads Free until the device thread drains the start queue, which is one render away.
-			if (!bDeviceIdle && Now <= SlotStartRenderCount[Slot])
+			// The slot still shows the previous voice's Free until the device thread starts this one, however many renders that takes.
+			if (!bDeviceIdle && Mixer.GetSlotGeneration(Slot) != SlotSourceGeneration[Slot])
 			{
 				continue;
 			}
@@ -484,7 +489,7 @@ namespace Lumina
 			const uint32 Generation = SlotGeneration[Slot].load(Atomic::MemoryOrderRelaxed);
 
 			RetireSlotSource(Slot);
-			ForgetGraphInstance(FAudioHandle{ Generation, Slot });
+			ForgetGraphInstance(SAudioHandle{ Generation, Slot });
 			ReleaseVoiceSlot(Slot, Generation);
 		}
 	}
@@ -530,17 +535,17 @@ namespace Lumina
 		}
 	}
 
-	FAudioHandle FLuminaAudioContext::PlayAudio(const TSharedPtr<FAudioData>& Data, const FAudioPlayParams& Params)
+	SAudioHandle FLuminaAudioContext::PlayAudio(const TSharedPtr<FAudioData>& Data, const SAudioPlayParams& Params)
 	{
 		if (!Data || Data->Bytes.empty())
 		{
-			return FAudioHandle::Invalid();
+			return SAudioHandle::Invalid();
 		}
 
-		FAudioHandle Handle;
+		SAudioHandle Handle;
 		if (!AcquireVoiceSlot(Params.Priority, Handle))
 		{
-			return FAudioHandle::Invalid();
+			return SAudioHandle::Invalid();
 		}
 
 		FPendingPlay Play;
@@ -554,23 +559,23 @@ namespace Lumina
 			LOG_WARN_ONCE("Audio: the pending play queue is full; dropping a voice");
 			ReleaseVoiceSlot(Handle.Index, Handle.Generation);
 			DroppedVoices.fetch_add(1, Atomic::MemoryOrderRelaxed);
-			return FAudioHandle::Invalid();
+			return SAudioHandle::Invalid();
 		}
 
 		return Handle;
 	}
 
-	FAudioHandle FLuminaAudioContext::PlayFile(FStringView File, const FAudioPlayParams& Params)
+	SAudioHandle FLuminaAudioContext::PlayFile(FStringView File, const SAudioPlayParams& Params)
 	{
 		if (File.empty())
 		{
-			return FAudioHandle::Invalid();
+			return SAudioHandle::Invalid();
 		}
 
-		FAudioHandle Handle;
+		SAudioHandle Handle;
 		if (!AcquireVoiceSlot(Params.Priority, Handle))
 		{
-			return FAudioHandle::Invalid();
+			return SAudioHandle::Invalid();
 		}
 
 		FPendingPlay Play;
@@ -584,23 +589,23 @@ namespace Lumina
 			LOG_WARN_ONCE("Audio: the pending play queue is full; dropping a voice");
 			ReleaseVoiceSlot(Handle.Index, Handle.Generation);
 			DroppedVoices.fetch_add(1, Atomic::MemoryOrderRelaxed);
-			return FAudioHandle::Invalid();
+			return SAudioHandle::Invalid();
 		}
 
 		return Handle;
 	}
 
-	FAudioHandle FLuminaAudioContext::PlayProceduralStream(TSharedPtr<FProceduralAudioStream> Stream, const FAudioPlayParams& Params)
+	SAudioHandle FLuminaAudioContext::PlayProceduralStream(TSharedPtr<FProceduralAudioStream> Stream, const SAudioPlayParams& Params)
 	{
 		if (!Stream || !Stream->IsValid())
 		{
-			return FAudioHandle::Invalid();
+			return SAudioHandle::Invalid();
 		}
 
-		FAudioHandle Handle;
+		SAudioHandle Handle;
 		if (!AcquireVoiceSlot(Params.Priority, Handle))
 		{
-			return FAudioHandle::Invalid();
+			return SAudioHandle::Invalid();
 		}
 
 		FPendingPlay Play;
@@ -614,23 +619,23 @@ namespace Lumina
 			LOG_WARN_ONCE("Audio: the pending play queue is full; dropping a voice");
 			ReleaseVoiceSlot(Handle.Index, Handle.Generation);
 			DroppedVoices.fetch_add(1, Atomic::MemoryOrderRelaxed);
-			return FAudioHandle::Invalid();
+			return SAudioHandle::Invalid();
 		}
 
 		return Handle;
 	}
 
-	FAudioHandle FLuminaAudioContext::PlayAudioGraph(TSharedPtr<FAudioGraphInstance> Instance, const FAudioPlayParams& Params)
+	SAudioHandle FLuminaAudioContext::PlayAudioGraph(TSharedPtr<FAudioGraphInstance> Instance, const SAudioPlayParams& Params)
 	{
 		if (!Instance || !Instance->IsInitialized())
 		{
-			return FAudioHandle::Invalid();
+			return SAudioHandle::Invalid();
 		}
 
-		FAudioHandle Handle;
+		SAudioHandle Handle;
 		if (!AcquireVoiceSlot(Params.Priority, Handle))
 		{
-			return FAudioHandle::Invalid();
+			return SAudioHandle::Invalid();
 		}
 
 		{
@@ -649,20 +654,20 @@ namespace Lumina
 			LOG_WARN_ONCE("Audio: the pending play queue is full; dropping a voice");
 			ReleaseVoiceSlot(Handle.Index, Handle.Generation);
 			DroppedVoices.fetch_add(1, Atomic::MemoryOrderRelaxed);
-			return FAudioHandle::Invalid();
+			return SAudioHandle::Invalid();
 		}
 
 		return Handle;
 	}
 
-	TSharedPtr<FAudioGraphInstance> FLuminaAudioContext::FindGraphInstance(FAudioHandle Handle) const
+	TSharedPtr<FAudioGraphInstance> FLuminaAudioContext::FindGraphInstance(SAudioHandle Handle) const
 	{
 		FScopeLock Lock(GraphInstanceLock);
 		const auto It = GraphInstances.find(MakeGraphKey(Handle));
 		return It != GraphInstances.end() ? It->second : nullptr;
 	}
 
-	void FLuminaAudioContext::ForgetGraphInstance(FAudioHandle Handle)
+	void FLuminaAudioContext::ForgetGraphInstance(SAudioHandle Handle)
 	{
 		FScopeLock Lock(GraphInstanceLock);
 		GraphInstances.erase(MakeGraphKey(Handle));
@@ -688,43 +693,43 @@ namespace Lumina
 		}
 	}
 
-	bool FLuminaAudioContext::SetGraphFloatParameter(FAudioHandle Handle, const FName& Name, float Value)
+	bool FLuminaAudioContext::SetGraphFloatParameter(SAudioHandle Handle, const FName& Name, float Value)
 	{
 		const TSharedPtr<FAudioGraphInstance> Instance = FindGraphInstance(Handle);
 		return Instance && Instance->SetFloatParameter(Name, Value);
 	}
 
-	bool FLuminaAudioContext::SetGraphIntParameter(FAudioHandle Handle, const FName& Name, int32 Value)
+	bool FLuminaAudioContext::SetGraphIntParameter(SAudioHandle Handle, const FName& Name, int32 Value)
 	{
 		const TSharedPtr<FAudioGraphInstance> Instance = FindGraphInstance(Handle);
 		return Instance && Instance->SetIntParameter(Name, Value);
 	}
 
-	bool FLuminaAudioContext::SetGraphBoolParameter(FAudioHandle Handle, const FName& Name, bool Value)
+	bool FLuminaAudioContext::SetGraphBoolParameter(SAudioHandle Handle, const FName& Name, bool Value)
 	{
 		const TSharedPtr<FAudioGraphInstance> Instance = FindGraphInstance(Handle);
 		return Instance && Instance->SetBoolParameter(Name, Value);
 	}
 
-	bool FLuminaAudioContext::TriggerGraphParameter(FAudioHandle Handle, const FName& Name)
+	bool FLuminaAudioContext::TriggerGraphParameter(SAudioHandle Handle, const FName& Name)
 	{
 		const TSharedPtr<FAudioGraphInstance> Instance = FindGraphInstance(Handle);
 		return Instance && Instance->TriggerParameter(Name);
 	}
 
-	float FLuminaAudioContext::GetGraphFloatOutput(FAudioHandle Handle, const FName& Name) const
+	float FLuminaAudioContext::GetGraphFloatOutput(SAudioHandle Handle, const FName& Name) const
 	{
 		const TSharedPtr<FAudioGraphInstance> Instance = FindGraphInstance(Handle);
 		return Instance ? Instance->GetFloatOutput(Name) : 0.0f;
 	}
 
-	uint32 FLuminaAudioContext::GetGraphTriggerOutputCount(FAudioHandle Handle, const FName& Name) const
+	uint32 FLuminaAudioContext::GetGraphTriggerOutputCount(SAudioHandle Handle, const FName& Name) const
 	{
 		const TSharedPtr<FAudioGraphInstance> Instance = FindGraphInstance(Handle);
 		return Instance ? Instance->GetTriggerOutputCount(Name) : 0;
 	}
 
-	void FLuminaAudioContext::StopSound(FAudioHandle Handle, EAudioStopMode Mode, float FadeSeconds)
+	void FLuminaAudioContext::StopSound(SAudioHandle Handle, EAudioStopMode Mode, float FadeSeconds)
 	{
 		if (Handle.IsValid())
 		{
@@ -738,67 +743,67 @@ namespace Lumina
 		PostToMixer(FAudioCommand::MakeStopAll(Mode, FadeSeconds));
 	}
 
-	void FLuminaAudioContext::SetVolume(FAudioHandle Handle, float Volume)
+	void FLuminaAudioContext::SetVolume(SAudioHandle Handle, float Volume)
 	{
 		PostToMixer(FAudioCommand::MakeFloat(EAudioCommandType::SetVolume, Handle, Volume));
 	}
 
-	void FLuminaAudioContext::SetPitch(FAudioHandle Handle, float Pitch)
+	void FLuminaAudioContext::SetPitch(SAudioHandle Handle, float Pitch)
 	{
 		PostToMixer(FAudioCommand::MakeFloat(EAudioCommandType::SetPitch, Handle, Pitch));
 	}
 
-	void FLuminaAudioContext::SetLooping(FAudioHandle Handle, bool bLooping)
+	void FLuminaAudioContext::SetLooping(SAudioHandle Handle, bool bLooping)
 	{
 		PostToMixer(FAudioCommand::MakeBool(EAudioCommandType::SetLooping, Handle, bLooping));
 	}
 
-	void FLuminaAudioContext::SetPosition(FAudioHandle Handle, FVector3 Position)
+	void FLuminaAudioContext::SetPosition(SAudioHandle Handle, FVector3 Position)
 	{
 		PostToMixer(FAudioCommand::MakeVector(EAudioCommandType::SetPosition, Handle, Position));
 	}
 
-	void FLuminaAudioContext::SetVelocity(FAudioHandle Handle, FVector3 Velocity)
+	void FLuminaAudioContext::SetVelocity(SAudioHandle Handle, FVector3 Velocity)
 	{
 		PostToMixer(FAudioCommand::MakeVector(EAudioCommandType::SetVelocity, Handle, Velocity));
 	}
 
-	void FLuminaAudioContext::SetDirection(FAudioHandle Handle, FVector3 Direction)
+	void FLuminaAudioContext::SetDirection(SAudioHandle Handle, FVector3 Direction)
 	{
 		PostToMixer(FAudioCommand::MakeVector(EAudioCommandType::SetDirection, Handle, Direction));
 	}
 
-	void FLuminaAudioContext::SetAttenuation(FAudioHandle Handle, const SAudioAttenuation& Attenuation)
+	void FLuminaAudioContext::SetAttenuation(SAudioHandle Handle, const SAudioAttenuation& Attenuation)
 	{
 		PostToMixer(FAudioCommand::MakeAttenuation(Handle, Attenuation));
 	}
 
-	void FLuminaAudioContext::SetMinMaxDistance(FAudioHandle Handle, float MinDistance, float MaxDistance)
+	void FLuminaAudioContext::SetMinMaxDistance(SAudioHandle Handle, float MinDistance, float MaxDistance)
 	{
 		PostToMixer(FAudioCommand::MakeFloat2(EAudioCommandType::SetMinMaxDistance, Handle, MinDistance, MaxDistance));
 	}
 
-	void FLuminaAudioContext::SetPan(FAudioHandle Handle, float Pan)
+	void FLuminaAudioContext::SetPan(SAudioHandle Handle, float Pan)
 	{
 		PostToMixer(FAudioCommand::MakeFloat(EAudioCommandType::SetPan, Handle, Pan));
 	}
 
-	void FLuminaAudioContext::SetPaused(FAudioHandle Handle, bool bPaused)
+	void FLuminaAudioContext::SetPaused(SAudioHandle Handle, bool bPaused)
 	{
 		PostToMixer(FAudioCommand::MakeBool(EAudioCommandType::SetPaused, Handle, bPaused));
 	}
 
-	void FLuminaAudioContext::SetBus(FAudioHandle Handle, EAudioBus Bus)
+	void FLuminaAudioContext::SetBus(SAudioHandle Handle, EAudioBus Bus)
 	{
 		PostToMixer(FAudioCommand::MakeSetBus(Handle, Bus));
 	}
 
-	void FLuminaAudioContext::SetPriority(FAudioHandle Handle, uint8 Priority)
+	void FLuminaAudioContext::SetPriority(SAudioHandle Handle, uint8 Priority)
 	{
 		PostToMixer(FAudioCommand::MakeSetPriority(Handle, Priority));
 	}
 
-	void FLuminaAudioContext::SetOcclusion(FAudioHandle Handle, float Amount, float LowPassFrequency, float VolumeAttenuation)
+	void FLuminaAudioContext::SetOcclusion(SAudioHandle Handle, float Amount, float LowPassFrequency, float VolumeAttenuation)
 	{
 		FAudioCommand Cmd = FAudioCommand::Make(EAudioCommandType::SetOcclusion, Handle);
 		Cmd.ValueA = Amount;
@@ -807,22 +812,22 @@ namespace Lumina
 		PostToMixer(Cmd);
 	}
 
-	void FLuminaAudioContext::SetLowPassCutoff(FAudioHandle Handle, float CutoffHz)
+	void FLuminaAudioContext::SetLowPassCutoff(SAudioHandle Handle, float CutoffHz)
 	{
 		PostToMixer(FAudioCommand::MakeFloat(EAudioCommandType::SetLowPassCutoff, Handle, CutoffHz));
 	}
 
-	void FLuminaAudioContext::FadeTo(FAudioHandle Handle, float Volume, float Seconds)
+	void FLuminaAudioContext::FadeTo(SAudioHandle Handle, float Volume, float Seconds)
 	{
 		PostToMixer(FAudioCommand::MakeFloat2(EAudioCommandType::FadeTo, Handle, Volume, Seconds));
 	}
 
-	void FLuminaAudioContext::SeekToFrame(FAudioHandle Handle, uint64 Frame)
+	void FLuminaAudioContext::SeekToFrame(SAudioHandle Handle, uint64 Frame)
 	{
 		PostToMixer(FAudioCommand::MakeSeekToFrame(Handle, Frame));
 	}
 
-	EAudioVoiceState FLuminaAudioContext::GetVoiceState(FAudioHandle Handle) const
+	EAudioVoiceState FLuminaAudioContext::GetVoiceState(SAudioHandle Handle) const
 	{
 		if (!Handle.IsValid() || Handle.Index >= MaxVoiceSlots)
 		{
@@ -837,7 +842,7 @@ namespace Lumina
 		return (EAudioVoiceState)SlotState[Handle.Index].load(Atomic::MemoryOrderAcquire);
 	}
 
-	uint64 FLuminaAudioContext::GetPlaybackFrame(FAudioHandle Handle) const
+	uint64 FLuminaAudioContext::GetPlaybackFrame(SAudioHandle Handle) const
 	{
 		if (!Handle.IsValid() || Handle.Index >= MaxVoiceSlots)
 		{
