@@ -1,6 +1,7 @@
 #include "CoreTypeCustomization.h"
 #include "imgui.h"
 #include "Containers/StringFormat.h"
+#include "Localization/Localization.h"
 #include "Renderer/RenderLayers.h"
 
 namespace Lumina
@@ -65,12 +66,12 @@ namespace Lumina
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
         if (ImGui::BeginCombo("##layers", MaskPreview(CachedBits).c_str(), ImGuiComboFlags_HeightLarge))
         {
-            if (ImGui::Selectable("Everything", CachedBits == RenderLayers::kAllMask))
+            if (ImGui::Selectable(LOC_ID("Everything"), CachedBits == RenderLayers::kAllMask))
             {
                 CachedBits = RenderLayers::kAllMask;
                 bChanged   = true;
             }
-            if (ImGui::Selectable("Nothing", CachedBits == 0u))
+            if (ImGui::Selectable(LOC_ID("Nothing"), CachedBits == 0u))
             {
                 CachedBits = 0u;
                 bChanged   = true;

@@ -4,6 +4,7 @@
 #include "LuminaEditor.h"
 #include "Assets/AssetManager/AssetManager.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
+#include "Localization/Localization.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiDragDrop.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
@@ -107,7 +108,7 @@ namespace Lumina
             }
             SearchFilter.Draw("##Search", -1.0f);
 
-            if (ImGui::Selectable(LE_ICON_CLOSE " None", !bHasId))
+            if (ImGui::Selectable(LOC_ICON(LE_ICON_CLOSE, "None"), !bHasId))
             {
                 Assign({});
             }

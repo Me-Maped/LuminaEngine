@@ -10,6 +10,7 @@
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiFonts.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
+#include "Localization/Localization.h"
 #include "Core/Object/Package/Package.h"
 #include "UI/Tools/Transactions/EditorTransaction.h"
 #include "UI/Tools/Transactions/ObjectSnapshotCommand.h"
@@ -65,7 +66,7 @@ namespace Lumina
     {
         if (Skeleton == nullptr || Skeleton->GetSkeletonResource() == nullptr)
         {
-            ImGui::TextDisabled("No skeleton.");
+            ImGui::TextDisabled(LOC("No skeleton."));
             return;
         }
 
@@ -73,11 +74,11 @@ namespace Lumina
         {
             ImGui::TextColored(kSkeletonSocketColor, LE_ICON_AXIS_ARROW);
             ImGui::SameLine();
-            ImGui::TextDisabled("Skeleton socket");
+            ImGui::TextDisabled(LOC("Skeleton socket"));
             ImGui::SameLine(0.0f, 16.0f);
             ImGui::TextColored(kMeshSocketColor, LE_ICON_AXIS_ARROW);
             ImGui::SameLine();
-            ImGui::TextDisabled("Mesh socket");
+            ImGui::TextDisabled(LOC("Mesh socket"));
             ImGui::Spacing();
         }
 
@@ -210,30 +211,30 @@ namespace Lumina
 
             if (Mesh == nullptr)
             {
-                if (ImGui::MenuItem(LE_ICON_PLUS " Add Socket"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_PLUS, "Add Socket")))
                 {
                     AddSocket(Skeleton);
                 }
                 return;
             }
 
-            if (ImGui::MenuItem(LE_ICON_PLUS " Add Skeleton Socket"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_PLUS, "Add Skeleton Socket")))
             {
                 AddSocket(Skeleton);
             }
-            ImGuiX::TextTooltip("Shared by every mesh that uses this skeleton.");
+            ImGuiX::TextTooltip("{}", LOC("Shared by every mesh that uses this skeleton."));
 
-            if (ImGui::MenuItem(LE_ICON_PLUS " Add Mesh Socket"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_PLUS, "Add Mesh Socket")))
             {
                 AddSocket(Mesh);
             }
-            ImGuiX::TextTooltip("Only on this mesh.");
+            ImGuiX::TextTooltip("{}", LOC("Only on this mesh."));
             return;
         }
 
         const bool bMeshSocket = (Row.Socket.Owner == (CObject*)Mesh);
 
-        if (Mesh != nullptr && !bMeshSocket && ImGui::MenuItem(LE_ICON_CONTENT_COPY " Copy to Mesh"))
+        if (Mesh != nullptr && !bMeshSocket && ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_COPY, "Copy to Mesh")))
         {
             BeginEdit("Copy Socket to Mesh", Mesh);
             Mesh->Sockets.push_back(*Find(Row.Socket));
@@ -242,7 +243,7 @@ namespace Lumina
             return;
         }
 
-        if (bMeshSocket && ImGui::MenuItem(LE_ICON_ARROW_UP " Promote to Skeleton"))
+        if (bMeshSocket && ImGui::MenuItem(LOC_ICON(LE_ICON_ARROW_UP, "Promote to Skeleton")))
         {
             BeginEdit("Promote Socket to Skeleton", Skeleton, Mesh);
             const SMeshSocket Promoted = *Find(Row.Socket);
@@ -260,7 +261,7 @@ namespace Lumina
             return;
         }
 
-        if (ImGui::MenuItem(LE_ICON_DELETE " Delete Socket"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Delete Socket")))
         {
             BeginEdit("Delete Socket", Row.Socket.Owner);
             TVector<SMeshSocket>& Sockets = SocketsOf(Row.Socket.Owner);

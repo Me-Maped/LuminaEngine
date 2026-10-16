@@ -3,6 +3,7 @@
 #include "EdNodeGraph.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/Package/Package.h"
+#include "Localization/Localization.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 
 namespace Lumina
@@ -57,7 +58,7 @@ namespace Lumina
 
     void CEdNode_Comment::DrawContextMenu()
     {
-        ImGui::TextDisabled(LE_ICON_PALETTE " Color");
+        ImGui::TextDisabled(LOC_ICON(LE_ICON_PALETTE, "Color"));
 
         constexpr float SwatchSize = 18.0f;
         for (int32 Index = 0; Index < (int32)std::size(kCommentSwatches); ++Index)

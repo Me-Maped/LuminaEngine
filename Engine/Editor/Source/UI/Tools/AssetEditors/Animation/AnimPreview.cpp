@@ -10,6 +10,7 @@
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/Package/Package.h"
+#include "Localization/Localization.h"
 #include "Renderer/SkeletonResource.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
@@ -154,14 +155,14 @@ namespace Lumina
 
     bool FPreviewMeshSelection::DrawMenu(CSkeleton* Skeleton)
     {
-        if (!ImGui::BeginMenu(LE_ICON_HUMAN " Preview Mesh"))
+        if (!ImGui::BeginMenu(LOC_ICON(LE_ICON_HUMAN, "Preview Mesh")))
         {
             return false;
         }
 
         if (Skeleton == nullptr)
         {
-            ImGui::TextDisabled("Assign a skeleton to pick a preview mesh.");
+            ImGui::TextDisabled(LOC("Assign a skeleton to pick a preview mesh."));
             ImGui::EndMenu();
             return false;
         }
@@ -182,7 +183,7 @@ namespace Lumina
         const TVector<FCompatibleAssetList::FEntry>& Entries = Meshes.Get(Skeleton);
         if (Entries.empty())
         {
-            ImGui::TextDisabled("No skeletal meshes match this skeleton's bones.");
+            ImGui::TextDisabled(LOC("No skeletal meshes match this skeleton's bones."));
         }
 
         for (const FCompatibleAssetList::FEntry& Entry : Entries)
@@ -200,7 +201,7 @@ namespace Lumina
         ImGui::Separator();
 
         const bool bCanPromote = Override.IsValid() && Override.Get() != SkeletonDefault;
-        if (ImGui::MenuItem(LE_ICON_CONTENT_SAVE " Set as Skeleton Default", nullptr, false, bCanPromote))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_SAVE, "Set as Skeleton Default"), nullptr, false, bCanPromote))
         {
             Skeleton->PreviewMesh = Override.Get();
             if (CPackage* Package = Skeleton->GetPackage())

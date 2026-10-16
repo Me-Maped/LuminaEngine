@@ -4,6 +4,7 @@
 #include "Containers/Algorithm.h"
 #include "Containers/StringFormat.h"
 #include "Core/Math/Math.h"
+#include "Localization/Localization.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "UI/Tools/NodeGraph/GraphActionMenu.h"
 
@@ -193,7 +194,7 @@ namespace Lumina
             if (DrawingOrder.empty())
             {
                 ImGui::Spacing();
-                ImGui::TextDisabled(Items.empty() ? "Nothing to pick from." : "No matches.");
+                ImGui::TextDisabled(Items.empty() ? LOC("Nothing to pick from.") : LOC("No matches."));
             }
         }
         ImGui::EndChild();

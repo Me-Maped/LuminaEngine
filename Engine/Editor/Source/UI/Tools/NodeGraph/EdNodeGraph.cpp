@@ -2004,13 +2004,13 @@ namespace Lumina
 
             Node->DrawContextMenu();
 
-            if (Node->IsCommentNode() && ImGui::MenuItem(LE_ICON_RENAME " Rename", "F2"))
+            if (Node->IsCommentNode() && ImGui::MenuItem(LOC_ICON(LE_ICON_RENAME, "Rename"), "F2"))
             {
                 BeginRenameNode(Node);
             }
         }
 
-        if (ImGui::MenuItem(LE_ICON_COMMENT_TEXT_OUTLINE " Comment Selection", "C"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_COMMENT_TEXT_OUTLINE, "Comment Selection"), "C"))
         {
             WrapSelectionInComment();
         }

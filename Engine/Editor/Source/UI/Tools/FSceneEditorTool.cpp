@@ -16,6 +16,7 @@
 #include "Core/Object/ObjectCore.h"
 #include "Core/Object/Package/Package.h"
 #include "Input/InputViewport.h"
+#include "Localization/Localization.h"
 #include "Renderer/ViewVolume.h"
 #include "World/Entity/Components/CameraComponent.h"
 #include "World/Scene/RenderScene/RenderScene.h"
@@ -2970,7 +2971,7 @@ namespace Lumina
             {
                 World->SetAnimatesWhilePaused(!bAnimates);
             }
-            ImGuiX::TextTooltip("Preview Animation: {}", bAnimates ? "On" : "Off");
+            ImGuiX::TextTooltip(LOCF("Preview Animation: {}"), bAnimates ? LOC("On") : LOC("Off"));
         }
 
         ImGui::SameLine();
@@ -3583,7 +3584,7 @@ namespace Lumina
                 ImGui::SetKeyboardFocusHere();
             }
 
-            ImGui::TextUnformatted("Tag name");
+            ImGui::TextUnformatted(LOC("Tag name"));
             ImGui::Spacing();
 
             ImGui::SetNextItemWidth(-1.0f);
@@ -3593,7 +3594,7 @@ namespace Lumina
             const bool bExists = !Tag.IsNone() && ECS::Utils::EntityHasTag(Tag, Registry, Entity);
             if (bExists)
             {
-                ImGui::TextColored(EditorColors::Warning(), "The entity already carries this tag.");
+                ImGui::TextColored(EditorColors::Warning(), LOC("The entity already carries this tag."));
             }
 
             ImGui::Spacing();
@@ -3605,7 +3606,7 @@ namespace Lumina
             ImGui::SetCursorPosX((AvailWidth - ButtonWidth * 2 - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
 
             ImGui::BeginDisabled(Tag.IsNone() || bExists);
-            const bool bAdd = ImGui::Button("Add", ImVec2(ButtonWidth, 0.0f)) || (bEnter && !Tag.IsNone() && !bExists);
+            const bool bAdd = ImGui::Button(LOC("Add"), ImVec2(ButtonWidth, 0.0f)) || (bEnter && !Tag.IsNone() && !bExists);
             ImGui::EndDisabled();
             if (bAdd)
             {
@@ -3617,7 +3618,7 @@ namespace Lumina
             }
 
             ImGui::SameLine();
-            return ImGui::Button("Cancel", ImVec2(ButtonWidth, 0.0f));
+            return ImGui::Button(LOC("Cancel"), ImVec2(ButtonWidth, 0.0f));
         });
     }
 
@@ -3633,7 +3634,7 @@ namespace Lumina
 
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextDim());
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(LE_ICON_TAG " Tags");
+        ImGui::TextUnformatted(LOC_ICON(LE_ICON_TAG, "Tags"));
         ImGui::PopStyleColor();
 
         ImGui::Spacing();
@@ -3670,7 +3671,7 @@ namespace Lumina
                 Removed = Tag;
             }
             ImGui::PopStyleColor(2);
-            ImGuiX::TextTooltip("Remove {}", Tag.c_str());
+            ImGuiX::TextTooltip(LOCF("Remove {}"), Tag.c_str());
 
             ImGui::PopID();
         }
@@ -3763,7 +3764,7 @@ namespace Lumina
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             {
-                ImGui::SetTooltip("Add Tag");
+                ImGui::SetTooltip(LOC("Add Tag"));
             }
 
             ImGui::PopStyleColor(3);
