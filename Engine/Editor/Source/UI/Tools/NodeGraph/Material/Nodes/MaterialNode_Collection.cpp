@@ -1,4 +1,5 @@
 #include "MaterialNode_Collection.h"
+#include "Localization/Localization.h"
 
 #include "Assets/AssetTypes/Material/MaterialParameterCollection.h"
 #include "Core/Object/Cast.h"
@@ -9,12 +10,12 @@ namespace Lumina
 {
     void CMaterialExpression_CollectionParameter::DrawNodeBody()
     {
-        const char* CollectionName = Collection.IsValid() ? Collection->GetName().c_str() : "<no collection>";
+        const char* CollectionName = Collection.IsValid() ? Collection->GetName().c_str() : LOC("<no collection>");
         ImGui::TextColored(ImVec4(0.35f, 0.80f, 0.75f, 1.0f), "%s", CollectionName);
 
         if (ParameterName.IsNone())
         {
-            ImGui::TextDisabled("<no parameter>");
+            ImGui::TextDisabled(LOC("<no parameter>"));
         }
         else
         {

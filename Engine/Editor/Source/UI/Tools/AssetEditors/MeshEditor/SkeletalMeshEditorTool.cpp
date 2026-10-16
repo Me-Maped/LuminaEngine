@@ -298,7 +298,7 @@ namespace Lumina
         const uint32 BoneCount = (SkeletonResource != nullptr) ? (uint32)SkeletonResource->GetNumBones() : 0u;
 
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-        ImGui::SeparatorText("Binding");
+        ImGui::SeparatorText(LOC("Binding"));
         ImGuiX::Font::PopFont();
 
         ImGui::Spacing();
@@ -306,25 +306,25 @@ namespace Lumina
         if (SkeletonResource == nullptr)
         {
             ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
-                LE_ICON_ALERT_CIRCLE_OUTLINE " No skeleton assigned.");
-            ImGui::TextWrapped("Joint indices address a skeleton's bone array directly, so without one this "
+                LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "No skeleton assigned."));
+            ImGui::TextWrapped(LOC("Joint indices address a skeleton's bone array directly, so without one this "
                                "mesh cannot be posed and the renderer holds it back. Assign one under Asset "
-                               "Details, or reimport with a Target Skeleton set.");
+                               "Details, or reimport with a Target Skeleton set."));
             return;
         }
 
-        ImGui::Text("Skeleton: %s", Skeleton->GetName().c_str());
-        ImGui::Text("Bones: %u", BoneCount);
-        ImGui::Text("Bones this mesh needs: %u", Skinning.RequiredBones);
-        ImGui::Text("Bones per meshlet: %.1f average, %u peak", Skinning.AvgPaletteBones, Skinning.MaxPaletteBones);
-        ImGuiX::TextTooltip("{}", "The skinning dispatch stages one meshlet's bones into groupshared memory and "
+        ImGui::Text(LOC("Skeleton: %s"), Skeleton->GetName().c_str());
+        ImGui::Text(LOC("Bones: %u"), BoneCount);
+        ImGui::Text(LOC("Bones this mesh needs: %u"), Skinning.RequiredBones);
+        ImGui::Text(LOC("Bones per meshlet: %.1f average, %u peak"), Skinning.AvgPaletteBones, Skinning.MaxPaletteBones);
+        ImGuiX::TextTooltip("{}", LOC("The skinning dispatch stages one meshlet's bones into groupshared memory and "
                                   "blends every vertex out of that, so this is what the pass actually reads per "
-                                  "workgroup rather than the skeleton's whole bone count.");
+                                  "workgroup rather than the skeleton's whole bone count."));
 
         if (Skinning.PaletteOverflows > 0)
         {
             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
-                LE_ICON_ALERT_CIRCLE_OUTLINE " %u meshlets exceed %u bones and skin from the bone arena directly.",
+                LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "%u meshlets exceed %u bones and skin from the bone arena directly."),
                 Skinning.PaletteOverflows, (uint32)SKIN_GROUP_PALETTE_BONES);
         }
 
@@ -333,52 +333,52 @@ namespace Lumina
         if (Skinning.RequiredBones > BoneCount)
         {
             ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
-                LE_ICON_ALERT_CIRCLE_OUTLINE " Mesh references %u bones but the skeleton provides %u.",
+                LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "Mesh references %u bones but the skeleton provides %u."),
                 Skinning.RequiredBones, BoneCount);
-            ImGui::TextWrapped("The GPU bone fetch is unbounded, so vertices weighted past the end read whatever "
+            ImGui::TextWrapped(LOC("The GPU bone fetch is unbounded, so vertices weighted past the end read whatever "
                                "follows this instance's bone slice and fly across the level. Reimport the mesh "
-                               "against this skeleton.");
+                               "against this skeleton."));
         }
         else if (Skinning.OutOfRangeVertices > 0)
         {
             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
-                LE_ICON_ALERT_CIRCLE_OUTLINE " %u vertices reference a bone this skeleton does not have.",
+                LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "%u vertices reference a bone this skeleton does not have."),
                 Skinning.OutOfRangeVertices);
         }
         else
         {
             ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.5f, 1.0f),
-                LE_ICON_CHECK_CIRCLE_OUTLINE " Every weighted joint lands inside the skeleton.");
+                LOC_ICON(LE_ICON_CHECK_CIRCLE_OUTLINE, "Every weighted joint lands inside the skeleton."));
         }
 
         if (Skinning.RigidToRootVertices > 0)
         {
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
-                LE_ICON_ALERT_CIRCLE_OUTLINE " %u vertices are rigid to bone 0 (%.1f%%).",
+                LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "%u vertices are rigid to bone 0 (%.1f%%)."),
                 Skinning.RigidToRootVertices,
                 Skinning.LOD0Vertices > 0 ? 100.0f * Skinning.RigidToRootVertices / Skinning.LOD0Vertices : 0.0f);
-            ImGuiX::TextTooltip("{}", "The shape an empty weight set collapses to. A large share means the "
-                                      "source had no usable skin weights and the mesh piles up at the root.");
+            ImGuiX::TextTooltip("{}", LOC("The shape an empty weight set collapses to. A large share means the "
+                                      "source had no usable skin weights and the mesh piles up at the root."));
         }
 
         ImGui::Spacing();
         ImGui::Spacing();
 
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-        ImGui::SeparatorText("Influences");
+        ImGui::SeparatorText(LOC("Influences"));
         ImGuiX::Font::PopFont();
 
         ImGui::Spacing();
-        ImGui::TextDisabled("Counted over %u LOD 0 meshlet vertices.", Skinning.LOD0Vertices);
+        ImGui::TextDisabled(LOC("Counted over %u LOD 0 meshlet vertices."), Skinning.LOD0Vertices);
         ImGui::Spacing();
 
         if (ImGui::BeginTable("##Influences", 3,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
         {
-            ImGui::TableSetupColumn("Bones per vertex", ImGuiTableColumnFlags_WidthFixed, 140.0f);
-            ImGui::TableSetupColumn("Vertices", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-            ImGui::TableSetupColumn("Share", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(LOC_ID("Bones per vertex"), ImGuiTableColumnFlags_WidthFixed, 140.0f);
+            ImGui::TableSetupColumn(LOC_ID("Vertices"), ImGuiTableColumnFlags_WidthFixed, 90.0f);
+            ImGui::TableSetupColumn(LOC_ID("Share"), ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableHeadersRow();
 
             for (uint32 i = 0; i <= 4u; ++i)
@@ -392,7 +392,7 @@ namespace Lumina
                 ImGui::TableSetColumnIndex(0);
                 if (i == 0)
                 {
-                    ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "0 (unweighted)");
+                    ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), LOC("0 (unweighted)"));
                 }
                 else
                 {
@@ -415,35 +415,35 @@ namespace Lumina
         {
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
-                LE_ICON_ALERT_CIRCLE_OUTLINE " %u vertices have weights that do not sum to 1.",
+                LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "%u vertices have weights that do not sum to 1."),
                 Skinning.UnnormalizedVertices);
-            ImGuiX::TextTooltip("{}", "A shortfall drags the vertex toward the mesh origin once posed. "
-                                      "Normalize the weights in the DCC and reimport.");
+            ImGuiX::TextTooltip("{}", LOC("A shortfall drags the vertex toward the mesh origin once posed. "
+                                      "Normalize the weights in the DCC and reimport."));
         }
 
         ImGui::Spacing();
         ImGui::Spacing();
 
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-        ImGui::SeparatorText("Bones");
+        ImGui::SeparatorText(LOC("Bones"));
         ImGuiX::Font::PopFont();
 
         ImGui::Spacing();
 
         if (Skinning.UnusedBones > 0)
         {
-            ImGui::TextDisabled("%u of %u bones drive no vertex of this mesh.", Skinning.UnusedBones, BoneCount);
-            ImGuiX::TextTooltip("{}", "Normal for a shared skeleton: a modular piece only skins to the bones "
-                                      "it covers. Suspicious when the whole mesh should be weighted.");
+            ImGui::TextDisabled(LOC("%u of %u bones drive no vertex of this mesh."), Skinning.UnusedBones, BoneCount);
+            ImGuiX::TextTooltip("{}", LOC("Normal for a shared skeleton: a modular piece only skins to the bones "
+                                      "it covers. Suspicious when the whole mesh should be weighted."));
             ImGui::Spacing();
         }
 
-        if (ImGui::Button("Clear Selection"))
+        if (ImGui::Button(LOC("Clear Selection")))
         {
             SelectedBoneIndex = -1;
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("Select a bone to highlight what it drives.");
+        ImGui::TextDisabled(LOC("Select a bone to highlight what it drives."));
 
         ImGui::Spacing();
 
@@ -452,10 +452,10 @@ namespace Lumina
             ImGuiTableFlags_SizingFixedFit,
             ImVec2(0, 320)))
         {
-            ImGui::TableSetupColumn("Index",    ImGuiTableColumnFlags_WidthFixed, 50.0f);
-            ImGui::TableSetupColumn("Bone",     ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Vertices", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-            ImGui::TableSetupColumn("Max Wt",   ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn(LOC_ID("Index"),    ImGuiTableColumnFlags_WidthFixed, 50.0f);
+            ImGui::TableSetupColumn(LOC_ID("Bone"),     ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(LOC_ID("Vertices"), ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableSetupColumn(LOC_ID("Max Wt"),   ImGuiTableColumnFlags_WidthFixed, 70.0f);
             ImGui::TableHeadersRow();
 
             ImGuiListClipper Clipper;
@@ -508,12 +508,12 @@ namespace Lumina
             RebuildSelectedBonePoints();
 
             ImGui::Spacing();
-            ImGui::Text("'%s' drives %u vertices.",
+            ImGui::Text(LOC("'%s' drives %u vertices."),
                         SkeletonResource->GetBone(SelectedBoneIndex).Name.c_str(), SelectedBoneTotalPoints);
 
             if (SelectedBoneTotalPoints > (uint32)SelectedBonePoints.size())
             {
-                ImGui::TextDisabled("Overlay shows the first %zu.", SelectedBonePoints.size());
+                ImGui::TextDisabled(LOC("Overlay shows the first %zu."), SelectedBonePoints.size());
             }
         }
     }
@@ -543,15 +543,15 @@ namespace Lumina
             const FAABB& BoundingBox = SkeletalMesh->GetAABB();
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Mesh Statistics");
+            ImGui::SeparatorText(LOC("Mesh Statistics"));
             ImGuiX::Font::PopFont();
 
             ImGui::Spacing();
 
             if (ImGui::BeginTable("##MeshStats", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
             {
-                ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 180.0f);
-                ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(LOC_ID("Property"), ImGuiTableColumnFlags_WidthFixed, 180.0f);
+                ImGui::TableSetupColumn(LOC_ID("Value"), ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableHeadersRow();
 
                 auto PropertyRow = [](const char* label, const FString& value, const ImVec4* color = nullptr)
@@ -580,11 +580,11 @@ namespace Lumina
                     LOD0Triangles += SumSkinnedTrianglesInRange(MD.Meshlets, Surface.LODMeshletOffset[0], Surface.LODMeshletCount[0]);
                 }
 
-                PropertyRow("Meshlet Vertices", Format("{}", MD.MeshletSkinnedVertices.size()));
-                PropertyRow("Triangles (LOD 0)", Format("{}", LOD0Triangles));
-                PropertyRow("Meshlets", Format("{}", MD.Meshlets.size()));
-                PropertyRow("Surfaces", Format("{}", Resource.GetNumSurfaces()));
-                PropertyRow("LOD Levels", Format("{}", MaxLODsAcrossSurfaces));
+                PropertyRow(LOC("Meshlet Vertices"), Format("{}", MD.MeshletSkinnedVertices.size()));
+                PropertyRow(LOC("Triangles (LOD 0)"), Format("{}", LOD0Triangles));
+                PropertyRow(LOC("Meshlets"), Format("{}", MD.Meshlets.size()));
+                PropertyRow(LOC("Surfaces"), Format("{}", Resource.GetNumSurfaces()));
+                PropertyRow(LOC("LOD Levels"), Format("{}", MaxLODsAcrossSurfaces));
 
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
@@ -597,21 +597,21 @@ namespace Lumina
                                            + MD.MeshletTriangles.size() * sizeof(uint32)) / 1024.0f;
                 const float totalSizeKB   = vertexSizeKB + meshletSizeKB;
 
-                PropertyRow("Vertex Buffer", Format("{}", static_cast<int>(vertexSizeKB)) + " KB");
-                PropertyRow("Meshlet Data",  Format("{}", static_cast<int>(meshletSizeKB)) + " KB");
+                PropertyRow(LOC("Vertex Buffer"), Format("{}", static_cast<int>(vertexSizeKB)) + " KB");
+                PropertyRow(LOC("Meshlet Data"),  Format("{}", static_cast<int>(meshletSizeKB)) + " KB");
 
                 ImVec4 totalColor = totalSizeKB > 1024 ? ImVec4(1.0f, 0.7f, 0.3f, 1.0f) : ImVec4(0.7f, 1.0f, 0.7f, 1.0f);
-                PropertyRow("Total Memory", Format("{}", static_cast<int>(totalSizeKB)) + " KB", &totalColor);
+                PropertyRow(LOC("Total Memory"), Format("{}", static_cast<int>(totalSizeKB)) + " KB", &totalColor);
 
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 ImGui::Dummy(ImVec2(0, 4));
 
-                PropertyRow("Bounds Min", Math::ToString(BoundingBox.Min).c_str());
-                PropertyRow("Bounds Max", Math::ToString(BoundingBox.Max).c_str());
+                PropertyRow(LOC("Bounds Min"), Math::ToString(BoundingBox.Min).c_str());
+                PropertyRow(LOC("Bounds Max"), Math::ToString(BoundingBox.Max).c_str());
 
                 FVector3 extents = BoundingBox.Max - BoundingBox.Min;
-                PropertyRow("Bounds Extents", Math::ToString(extents).c_str());
+                PropertyRow(LOC("Bounds Extents"), Math::ToString(extents).c_str());
 
                 ImGui::EndTable();
             }
@@ -620,7 +620,7 @@ namespace Lumina
             ImGui::Spacing();
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Levels of Detail");
+            ImGui::SeparatorText(LOC("Levels of Detail"));
             ImGuiX::Font::PopFont();
 
             ImGui::Spacing();
@@ -635,16 +635,16 @@ namespace Lumina
 
                 char        LODNames[MAX_MESH_LODS][24];
                 const char* PreviewItems[MAX_MESH_LODS + 1];
-                PreviewItems[0] = "Automatic (distance)";
+                PreviewItems[0] = LOC("Automatic (distance)");
                 for (uint32 i = 0; i < AvailableLODs; ++i)
                 {
                     if (i == 0)
                     {
-                        snprintf(LODNames[i], sizeof(LODNames[i]), "LOD %u (full detail)", i);
+                        snprintf(LODNames[i], sizeof(LODNames[i]), LOC("LOD %u (full detail)"), i);
                     }
                     else
                     {
-                        snprintf(LODNames[i], sizeof(LODNames[i]), "LOD %u", i);
+                        snprintf(LODNames[i], sizeof(LODNames[i]), LOC("LOD %u"), i);
                     }
                     PreviewItems[i + 1] = LODNames[i];
                 }
@@ -654,15 +654,15 @@ namespace Lumina
 
                 int PreviewItem = (PreviewLODIndex < 0) ? 0 : PreviewLODIndex + 1;
                 ImGui::SetNextItemWidth(220.0f);
-                if (ImGui::Combo("Preview LOD", &PreviewItem, PreviewItems, (int)AvailableLODs + 1))
+                if (ImGui::Combo(LOC("Preview LOD"), &PreviewItem, PreviewItems, (int)AvailableLODs + 1))
                 {
                     PreviewLODIndex = (PreviewItem == 0) ? -1 : PreviewItem - 1;
                 }
-                ImGuiX::TextTooltip("Force the viewport mesh to a specific LOD regardless of camera distance.");
+                ImGuiX::TextTooltip(LOCF("Force the viewport mesh to a specific LOD regardless of camera distance."));
 
                 if (AvailableLODs == 1)
                 {
-                    ImGui::TextDisabled("This mesh has one LOD, so there is nothing to switch between.");
+                    ImGui::TextDisabled(LOC("This mesh has one LOD, so there is nothing to switch between."));
                 }
             }
 
@@ -687,11 +687,11 @@ namespace Lumina
             if (ImGui::BeginTable("##LODSummary", 5,
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
             {
-                ImGui::TableSetupColumn("LOD",       ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                ImGui::TableSetupColumn("Surfaces",  ImGuiTableColumnFlags_WidthFixed, 70.0f);
-                ImGui::TableSetupColumn("Meshlets",  ImGuiTableColumnFlags_WidthFixed, 80.0f);
-                ImGui::TableSetupColumn("Triangles", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-                ImGui::TableSetupColumn("vs LOD 0",  ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(LOC_ID("LOD"),       ImGuiTableColumnFlags_WidthFixed, 50.0f);
+                ImGui::TableSetupColumn(LOC_ID("Surfaces"),  ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableSetupColumn(LOC_ID("Meshlets"),  ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn(LOC_ID("Triangles"), ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                ImGui::TableSetupColumn(LOC_ID("vs LOD 0"),  ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableHeadersRow();
 
                 for (uint32 lod = 0; lod < MAX_MESH_LODS; ++lod)
@@ -723,14 +723,14 @@ namespace Lumina
             ImGui::Spacing();
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Geometry Surfaces");
+            ImGui::SeparatorText(LOC("Geometry Surfaces"));
             ImGuiX::Font::PopFont();
 
             ImGui::Spacing();
 
             if (Resource.GeometrySurfaces.empty())
             {
-                ImGui::TextDisabled("No surfaces defined");
+                ImGui::TextDisabled(LOC("No surfaces defined"));
             }
             else
             {
@@ -741,14 +741,17 @@ namespace Lumina
 
                     const bool bSelected = ((int32)i == SelectedSurfaceIndex);
 
-                    FString headerLabel = "Surface " + Format("{}", i) + ": " + Surface.ID.ToString();
+                    // "###" puts the ID on the surface's own id rather than on the translated prefix, so
+                    // the expanded flag survives a language switch and a reorder (see LOC_ID).
+                    FString headerLabel = LOC("Surface ") + Format("{}", i) + ": " + Surface.ID.ToString()
+                                        + "###" + Surface.ID.ToString();
                     const bool bOpen = ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
 
                     if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
                     {
                         SelectedSurfaceIndex = bSelected ? -1 : (int32)i;
                     }
-                    ImGuiX::TextTooltip("{}", "Right-click to outline this surface in the viewport.");
+                    ImGuiX::TextTooltip("{}", LOC("Right-click to outline this surface in the viewport."));
 
                     if (bOpen)
                     {
@@ -771,14 +774,14 @@ namespace Lumina
                             const uint32 SurfaceTris = SumSkinnedTrianglesInRange(MD.Meshlets, Surface.LODMeshletOffset[0],
                                                                           Surface.LODMeshletCount[0]);
 
-                            DetailRow("Material Index:", Format("{}", Surface.MaterialIndex));
-                            DetailRow("LOD Levels:", Format("{}", Surface.NumLODs));
-                            DetailRow("Meshlets (LOD 0):", Format("{}", Surface.LODMeshletCount[0]));
-                            DetailRow("Triangles (LOD 0):", Format("{}", SurfaceTris));
+                            DetailRow(LOC("Material Index:"), Format("{}", Surface.MaterialIndex));
+                            DetailRow(LOC("LOD Levels:"), Format("{}", Surface.NumLODs));
+                            DetailRow(LOC("Meshlets (LOD 0):"), Format("{}", Surface.LODMeshletCount[0]));
+                            DetailRow(LOC("Triangles (LOD 0):"), Format("{}", SurfaceTris));
 
                             if (CMaterialInterface* Material = SkeletalMesh->GetMaterialAtSlot(Surface.MaterialIndex))
                             {
-                                DetailRow("Material:", FString(Material->GetName().c_str()));
+                                DetailRow(LOC("Material:"), FString(Material->GetName().c_str()));
                             }
 
                             ImGui::EndTable();
@@ -805,7 +808,7 @@ namespace Lumina
             ImGui::Spacing();
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Asset Details");
+            ImGui::SeparatorText(LOC("Asset Details"));
             ImGuiX::Font::PopFont();
 
             ImGui::Spacing();
@@ -1054,23 +1057,23 @@ namespace Lumina
 
     void FSkeletalMeshEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Skinning",
-            "The Skinning panel checks the mesh against its skeleton: whether every weighted joint has a "
+        DrawHelpTextRow(LOC("Skinning"),
+            LOC("The Skinning panel checks the mesh against its skeleton: whether every weighted joint has a "
             "bone, how many bones each vertex blends, and which bones drive nothing. Select a bone to "
-            "highlight the vertices it moves.");
-        DrawHelpTextRow("Skeleton",
-            "Joint indices address the skeleton's bone array by position, so a mesh only works with the "
+            "highlight the vertices it moves."));
+        DrawHelpTextRow(LOC("Skeleton"),
+            LOC("Joint indices address the skeleton's bone array by position, so a mesh only works with the "
             "skeleton it was imported against. To bind it to another, reimport with that Target Skeleton "
-            "set; the importer rewrites the indices by bone name.");
-        DrawHelpTextRow("LODs",
-            "The Preview LOD picker forces a level so you can inspect its geometry; Automatic returns to "
-            "distance-based selection.");
-        DrawHelpTextRow("Visualizers",
-            "Show Bones, Sockets and AABB live in the View menu. Right-click a surface header to outline "
-            "it in the viewport.");
-        DrawHelpTextRow("Reimport",
-            "File > Reimport refreshes from disk, preserving material overrides and rebinding the new "
-            "geometry to this mesh's existing skeleton by bone name.");
+            "set; the importer rewrites the indices by bone name."));
+        DrawHelpTextRow(LOC("LODs"),
+            LOC("The Preview LOD picker forces a level so you can inspect its geometry; Automatic returns to "
+            "distance-based selection."));
+        DrawHelpTextRow(LOC("Visualizers"),
+            LOC("Show Bones, Sockets and AABB live in the View menu. Right-click a surface header to outline "
+            "it in the viewport."));
+        DrawHelpTextRow(LOC("Reimport"),
+            LOC("File > Reimport refreshes from disk, preserving material overrides and rebinding the new "
+            "geometry to this mesh's existing skeleton by bone name."));
     }
 
     void FSkeletalMeshEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)
@@ -1078,9 +1081,9 @@ namespace Lumina
         FAssetEditorTool::DrawToolMenu(UpdateContext);
 
         // Gizmo Control Dropdown
-        if (ImGui::BeginMenu(LE_ICON_MOVE_RESIZE " Gizmo Control"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_MOVE_RESIZE, "Gizmo Control")))
         {
-            const char* operations[] = { "Translate", "Rotate", "Scale" };
+            const char* operations[] = { LOC("Translate"), LOC("Rotate"), LOC("Scale") };
             static int currentOp = 0;
 
             if (ImGui::Combo("##", &currentOp, operations, IM_ARRAYSIZE(operations)))
@@ -1096,7 +1099,7 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(LE_ICON_BONE " Skeleton"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_BONE, "Skeleton")))
         {
             CSkeletalMesh* SkeletalMesh = Cast<CSkeletalMesh>(Asset.Get());
             CSkeleton* Skeleton = (SkeletalMesh != nullptr) ? SkeletalMesh->Skeleton.Get() : nullptr;
@@ -1104,22 +1107,22 @@ namespace Lumina
             if (Skeleton != nullptr && Skeleton->GetSkeletonResource() != nullptr)
             {
                 ImGuiX::Text("{0}", Skeleton->GetName().c_str());
-                ImGuiX::Text("{0} bones, {1} sockets",
+                ImGuiX::Text(LOCF("{0} bones, {1} sockets"),
                              Skeleton->GetSkeletonResource()->GetNumBones(), (int32)Skeleton->Sockets.size());
             }
             else
             {
-                ImGui::TextDisabled("No skeleton assigned.");
+                ImGui::TextDisabled(LOC("No skeleton assigned."));
             }
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem(LE_ICON_REFRESH " Re-analyze Skinning"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_REFRESH, "Re-analyze Skinning")))
             {
                 Skinning = FSkinningAnalysis();
                 PointsCachedForBone = -1;
             }
-            ImGuiX::TextTooltip("{}", "Rebuild the Skinning panel's per-bone counts from the current geometry.");
+            ImGuiX::TextTooltip("{}", LOC("Rebuild the Skinning panel's per-bone counts from the current geometry."));
 
             ImGui::EndMenu();
         }
@@ -1128,11 +1131,11 @@ namespace Lumina
     void FSkeletalMeshEditorTool::DrawViewModeExtraItems()
     {
         ImGui::Separator();
-        ImGui::MenuItem(LE_ICON_CUBE_OUTLINE " Show AABB", nullptr, &bShowAABB);
-        ImGui::MenuItem(LE_ICON_BONE " Show Bones", nullptr, &bShowBones);
-        ImGui::MenuItem(LE_ICON_LINK " Show Sockets", nullptr, &bShowSockets);
+        ImGui::MenuItem(LOC_ICON(LE_ICON_CUBE_OUTLINE, "Show AABB"), nullptr, &bShowAABB);
+        ImGui::MenuItem(LOC_ICON(LE_ICON_BONE, "Show Bones"), nullptr, &bShowBones);
+        ImGui::MenuItem(LOC_ICON(LE_ICON_LINK, "Show Sockets"), nullptr, &bShowSockets);
 
-        if (ImGui::MenuItem(LE_ICON_RELOAD " Reload Mesh Buffers"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_RELOAD, "Reload Mesh Buffers")))
         {
             Asset->PostLoad();
         }

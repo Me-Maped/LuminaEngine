@@ -73,5 +73,41 @@ namespace Lumina::Dialogs
         return ShowInternal(ESeverity::Info, EType::YesNo, Title, Msg.c_str()) == EResult::Yes;
     }
 
-    
+    // Runtime-format counterparts of the five above, for a message that comes out of the localization
+    // table: the format string only exists at runtime, so nothing can be checked at the call site.
+
+    template <typename... TArgs>
+    void Info(const FString& Title, Fmt::FRuntimeFormatString fmt, TArgs&&... Args)
+    {
+        const FString Msg = Format(fmt, std::forward<TArgs>(Args)...);
+        ShowInternal(ESeverity::Info, EType::Ok, Title, Msg.c_str());
+    }
+
+    template <typename... TArgs>
+    void Warning(const FString& Title, Fmt::FRuntimeFormatString fmt, TArgs&&... Args)
+    {
+        const FString Msg = Format(fmt, std::forward<TArgs>(Args)...);
+        ShowInternal(ESeverity::Warning, EType::Ok, Title, Msg.c_str());
+    }
+
+    template <typename... TArgs>
+    void Error(const FString& Title, Fmt::FRuntimeFormatString fmt, TArgs&&... Args)
+    {
+        const FString Msg = Format(fmt, std::forward<TArgs>(Args)...);
+        ShowInternal(ESeverity::Error, EType::Ok, Title, Msg.c_str());
+    }
+
+    template <typename... TArgs>
+    void FatalError(const FString& Title, Fmt::FRuntimeFormatString fmt, TArgs&&... Args)
+    {
+        const FString Msg = Format(fmt, std::forward<TArgs>(Args)...);
+        ShowInternal(ESeverity::FatalError, EType::Ok, Title, Msg.c_str());
+    }
+
+    template <typename... TArgs>
+    bool Confirmation(const FString& Title, Fmt::FRuntimeFormatString fmt, TArgs&&... Args)
+    {
+        const FString Msg = Format(fmt, std::forward<TArgs>(Args)...);
+        return ShowInternal(ESeverity::Info, EType::YesNo, Title, Msg.c_str()) == EResult::Yes;
+    }
 }

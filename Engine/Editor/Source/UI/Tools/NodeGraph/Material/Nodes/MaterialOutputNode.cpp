@@ -18,6 +18,8 @@ namespace Lumina
     
     FStringView CMaterialOutputNode::GetNodeTooltip() const
     {
+        // The English source, like every other tooltip: the action menu is what looks a tooltip up,
+        // and this getter is also read by the MCP tools, which describe the node to a model.
         return "The final output to the shader";
     }
 

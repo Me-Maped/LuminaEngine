@@ -1,5 +1,6 @@
 #include "EditorPCH.h"
 #include "AssetPickerFilter.h"
+#include "Localization/Localization.h"
 
 #include "Tools/UI/ImGui/EditorColors.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
@@ -94,22 +95,22 @@ namespace Lumina::AssetPickerFilter
         }
 
         ImGuiX::TextTooltip("{}", bActive
-            ? "Filter by source. Some assets are hidden."
-            : "Filter by source (engine, plugin, project content).");
+            ? LOC("Filter by source. Some assets are hidden.")
+            : LOC("Filter by source (engine, plugin, project content)."));
 
         if (ImGui::BeginPopup("##AssetSourceFilter"))
         {
-            ImGui::TextColored(EditorColors::TextMuted(), "SOURCES");
+            ImGui::TextColored(EditorColors::TextMuted(), LOC("SOURCES"));
             ImGui::Separator();
 
-            ImGui::Checkbox("Hide Project Content", &State.bHideProjectContent);
-            ImGui::Checkbox("Hide Engine Content",  &State.bHideEngineContent);
-            ImGui::Checkbox("Hide Plugin Content",  &State.bHidePluginContent);
+            ImGui::Checkbox(LOC("Hide Project Content"), &State.bHideProjectContent);
+            ImGui::Checkbox(LOC("Hide Engine Content"),  &State.bHideEngineContent);
+            ImGui::Checkbox(LOC("Hide Plugin Content"),  &State.bHidePluginContent);
 
             ImGui::Separator();
 
             ImGui::BeginDisabled(!State.IsAnyActive());
-            if (ImGui::MenuItem(LE_ICON_CLOSE_CIRCLE " Clear Filters"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_CLOSE_CIRCLE, "Clear Filters")))
             {
                 State = FState();
             }

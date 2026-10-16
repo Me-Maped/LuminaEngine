@@ -15,6 +15,7 @@
 #include "Memory/SmartPtr.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
+#include "Localization/Localization.h"
 #include <imgui.h>
 #include "Containers/StringFormat.h"
 
@@ -26,7 +27,6 @@ namespace Lumina::ReplaceReferences
         constexpr ImVec4 kDangerColor  = ImVec4(0.96f, 0.36f, 0.38f, 1.00f);
         constexpr ImVec4 kDimColor     = ImVec4(0.55f, 0.56f, 0.62f, 1.00f);
 
-        constexpr const char* kClearLabel = "Clear reference (null)";
 
         enum class EPhase : uint8
         {
@@ -71,7 +71,7 @@ namespace Lumina::ReplaceReferences
         void DrawReplacementPicker(FAssetReferenceFixup& Entry, const THashSet<FGuid>& ExcludedGUIDs, ImGuiTextFilter& Filter)
         {
             const FAssetData* Selected = FindAsset(Entry.ReplacementGUID);
-            const char* Preview = Selected != nullptr ? Selected->AssetName.c_str() : kClearLabel;
+            const char* Preview = Selected != nullptr ? Selected->AssetName.c_str() : LOC("Clear reference (null)");
 
             ImGui::SetNextItemWidth(-1.0f);
             if (!ImGui::BeginCombo("##Replacement", Preview))
@@ -86,7 +86,7 @@ namespace Lumina::ReplaceReferences
 
             Filter.Draw("##Search", -1.0f);
 
-            if (ImGui::Selectable(kClearLabel, !Entry.ReplacementGUID.IsValid()))
+            if (ImGui::Selectable(LOC("Clear reference (null)"), !Entry.ReplacementGUID.IsValid()))
             {
                 Entry.ReplacementGUID = FGuid();
             }
@@ -95,7 +95,7 @@ namespace Lumina::ReplaceReferences
 
             if (Entry.AssetClass == nullptr)
             {
-                ImGui::TextColored(kDimColor, "Unknown asset type, no replacement can be offered.");
+                ImGui::TextColored(kDimColor, LOC("Unknown asset type, no replacement can be offered."));
                 ImGui::EndCombo();
                 return;
             }
@@ -149,10 +149,14 @@ namespace Lumina::ReplaceReferences
                 return;
             }
 
-            const char* SubjectColumn = State.Mode == EReferenceFixupMode::BeforeDelete ? "Asset Being Deleted" : "Asset";
+            // LOC_ID, so the column's width and order survive a language switch -- the label is
+            // translated but the ID stays on the English source.
+            const char* SubjectColumn = State.Mode == EReferenceFixupMode::BeforeDelete
+                ? LOC_ID("Asset Being Deleted")
+                : LOC_ID("Asset");
             ImGui::TableSetupColumn(SubjectColumn, ImGuiTableColumnFlags_WidthStretch, 0.45f);
-            ImGui::TableSetupColumn("Used By", ImGuiTableColumnFlags_WidthFixed, 70.0f);
-            ImGui::TableSetupColumn("Replace With", ImGuiTableColumnFlags_WidthStretch, 0.55f);
+            ImGui::TableSetupColumn(LOC_ID("Used By"), ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn(LOC_ID("Replace With"), ImGuiTableColumnFlags_WidthStretch, 0.55f);
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableHeadersRow();
 
@@ -182,7 +186,7 @@ namespace Lumina::ReplaceReferences
                         ImGui::TableNextRow();
                         ImGui::TableSetColumnIndex(0);
                         ImGui::Indent();
-                        ImGui::TextColored(kDimColor, "%s", Referencer != nullptr ? Referencer->Path.c_str() : "<missing>");
+                        ImGui::TextColored(kDimColor, "%s", Referencer != nullptr ? Referencer->Path.c_str() : LOC("<missing>"));
                         ImGui::Unindent();
 
                         ImGui::TableSetColumnIndex(2);
@@ -216,7 +220,7 @@ namespace Lumina::ReplaceReferences
 
                 if (Entry.ReplacementGUID.IsValid() && Replacement == nullptr)
                 {
-                    ImGuiX::Notifications::NotifyError("Could not load replacement '{0}'; those references are cleared instead.", ReplacementName);
+                    ImGuiX::Notifications::NotifyError(LOCF("Could not load replacement '{0}'; those references are cleared instead."), ReplacementName);
                     ReplacementPath.clear();
                 }
 
@@ -335,32 +339,32 @@ namespace Lumina::ReplaceReferences
 
             if (bDeleting)
             {
-                ImGui::TextColored(kWarningColor, LE_ICON_ALERT " %u asset(s) you are deleting are still in use.",
+                ImGui::TextColored(kWarningColor, LOC_ICON(LE_ICON_ALERT, "%u asset(s) you are deleting are still in use."),
                     (uint32)State.Entries.size());
 
                 ImGui::Spacing();
-                ImGui::TextWrapped(
+                ImGui::TextWrapped(LOC(
                     "%u other asset(s) reference them. Pick a replacement for each, or leave it as \"%s\" to null "
-                    "every reference to it. Referencing assets are loaded and saved to disk before anything is deleted.",
-                    ReferencerCount, kClearLabel);
+                    "every reference to it. Referencing assets are loaded and saved to disk before anything is deleted."),
+                    ReferencerCount, LOC("Clear reference (null)"));
             }
             else
             {
-                ImGui::TextColored(kWarningColor, LE_ICON_LINK " %u asset(s) reference the selection.", ReferencerCount);
+                ImGui::TextColored(kWarningColor, LOC_ICON(LE_ICON_LINK, "%u asset(s) reference the selection."), ReferencerCount);
 
                 ImGui::Spacing();
-                ImGui::TextWrapped(
+                ImGui::TextWrapped(LOC(
                     "Pick what those references should point at instead, or leave it as \"%s\" to null them. "
-                    "Referencing assets are loaded and saved to disk. Nothing is deleted.",
-                    kClearLabel);
+                    "Referencing assets are loaded and saved to disk. Nothing is deleted."),
+                    LOC("Clear reference (null)"));
             }
 
             ImGui::Spacing();
-            ImGui::TextColored(kDimColor, "Replacements are limited to the original asset's own type or a subclass of it.");
+            ImGui::TextColored(kDimColor, LOC("Replacements are limited to the original asset's own type or a subclass of it."));
 
             if (State.DirtyReferencerCount > 0)
             {
-                ImGui::TextColored(kWarningColor, LE_ICON_ALERT " %u referencing asset(s) have unsaved changes, which this saves too.",
+                ImGui::TextColored(kWarningColor, LOC_ICON(LE_ICON_ALERT, "%u referencing asset(s) have unsaved changes, which this saves too."),
                     State.DirtyReferencerCount);
             }
 
@@ -372,19 +376,19 @@ namespace Lumina::ReplaceReferences
             ImGui::Separator();
             ImGui::Spacing();
 
-            const bool bCanceled = ImGui::Button("Cancel", ImVec2(140.0f, 0.0f));
+            const bool bCanceled = ImGui::Button(LOC("Cancel"), ImVec2(140.0f, 0.0f));
 
             ImGui::SameLine();
 
             FFixedString ConfirmLabel;
             if (bDeleting)
             {
-                FormatTo(ConfirmLabel, LE_ICON_TRASH_CAN " Delete {} Item(s)", State.TargetCount);
+                ConfirmLabel = FormatAs<FFixedString>(LOCF("{} Delete {} Item(s)"), LE_ICON_TRASH_CAN, State.TargetCount);
                 ImGui::PushStyleColor(ImGuiCol_Text, kDangerColor);
             }
             else
             {
-                FormatTo(ConfirmLabel, LE_ICON_LINK " Update {} Reference(s)", ReferencerCount);
+                ConfirmLabel = FormatAs<FFixedString>(LOCF("{} Update {} Reference(s)"), LE_ICON_LINK, ReferencerCount);
                 ImGui::PushStyleColor(ImGuiCol_Text, kWarningColor);
             }
 
@@ -392,7 +396,7 @@ namespace Lumina::ReplaceReferences
             ImGui::PopStyleColor();
 
             ImGui::SameLine();
-            ImGui::TextColored(kDimColor, "%u replace, %u clear", ReplacedCount, (uint32)State.Entries.size() - ReplacedCount);
+            ImGui::TextColored(kDimColor, LOC("%u replace, %u clear"), ReplacedCount, (uint32)State.Entries.size() - ReplacedCount);
 
             if (bCanceled)
             {
@@ -420,7 +424,7 @@ namespace Lumina::ReplaceReferences
                 ? 1.0f
                 : (float)((double)State.WorkIndex / (double)State.Work.size());
 
-            ImGui::Text("Updating referencing assets... %u / %u", State.WorkIndex, (uint32)State.Work.size());
+            ImGui::Text(LOC("Updating referencing assets... %u / %u"), State.WorkIndex, (uint32)State.Work.size());
             ImGui::Spacing();
             ImGui::ProgressBar(Progress, ImVec2(-1.0f, 0.0f));
             ImGui::Spacing();
@@ -433,15 +437,15 @@ namespace Lumina::ReplaceReferences
         {
             const bool bDeleting = State.Mode == EReferenceFixupMode::BeforeDelete;
 
-            ImGui::Text("Updated and saved %u package(s).", State.Rewritten);
+            ImGui::Text(LOC("Updated and saved %u package(s)."), State.Rewritten);
 
             if (State.Failed > 0)
             {
                 ImGui::Spacing();
-                ImGui::TextColored(kDangerColor, LE_ICON_ALERT " %u reference(s) could not be updated.", State.Failed);
+                ImGui::TextColored(kDangerColor, LOC_ICON(LE_ICON_ALERT, "%u reference(s) could not be updated."), State.Failed);
                 ImGui::TextWrapped(bDeleting
-                    ? "Deleting now leaves them pointing at a missing asset. See the log for which ones failed."
-                    : "Those references still point at the original asset. See the log for which ones failed.");
+                    ? LOC("Deleting now leaves them pointing at a missing asset. See the log for which ones failed.")
+                    : LOC("Those references still point at the original asset. See the log for which ones failed."));
             }
 
             ImGui::Spacing();
@@ -450,7 +454,7 @@ namespace Lumina::ReplaceReferences
 
             if (!bDeleting)
             {
-                if (ImGui::Button("Close", ImVec2(140.0f, 0.0f)))
+                if (ImGui::Button(LOC("Close"), ImVec2(140.0f, 0.0f)))
                 {
                     if (State.OnResolved)
                     {
@@ -463,7 +467,7 @@ namespace Lumina::ReplaceReferences
 
             if (State.Failed > 0)
             {
-                if (ImGui::Button("Cancel Delete", ImVec2(160.0f, 0.0f)))
+                if (ImGui::Button(LOC("Cancel Delete"), ImVec2(160.0f, 0.0f)))
                 {
                     if (State.OnResolved)
                     {
@@ -474,7 +478,7 @@ namespace Lumina::ReplaceReferences
                 ImGui::SameLine();
             }
 
-            const char* ProceedLabel = State.Failed > 0 ? LE_ICON_TRASH_CAN " Delete Anyway" : LE_ICON_TRASH_CAN " Delete";
+            const char* ProceedLabel = State.Failed > 0 ? LOC_ICON(LE_ICON_TRASH_CAN, "Delete Anyway") : LOC_ICON(LE_ICON_TRASH_CAN, "Delete");
             if (ImGui::Button(ProceedLabel, ImVec2(180.0f, 0.0f)))
             {
                 if (State.OnResolved)
@@ -604,7 +608,7 @@ namespace Lumina::ReplaceReferences
             }
         }
 
-        const FString Title = Mode == EReferenceFixupMode::BeforeDelete ? "Delete Assets" : "Replace References";
+        const FString Title = Mode == EReferenceFixupMode::BeforeDelete ? LOC("Delete Assets") : LOC("Replace References");
 
         Context->PushModal(Title, ImVec2(900.0f, 560.0f), [State]() -> bool
         {

@@ -35,9 +35,9 @@ namespace Lumina
             }
 
             ImGui::SetNextItemWidth(240.0f);
-            ImGui::SliderFloat("Size", &PreviewSize, 8.0f, 256.0f, "%.0f px");
+            ImGui::SliderFloat(LOC("Size"), &PreviewSize, 8.0f, 256.0f, LOC("%.0f px"));
             ImGui::Spacing();
-            ImGui::TextUnformatted("Sample Text");
+            ImGui::TextUnformatted(LOC("Sample Text"));
             ImGui::InputTextMultiline("##SampleText", SampleText, IM_ARRAYSIZE(SampleText), ImVec2(-1, 70.0f));
 
             ImGui::Separator();
@@ -45,7 +45,7 @@ namespace Lumina
 
             if (PreviewFont == nullptr)
             {
-                ImGui::TextDisabled("Font face could not be rasterized.");
+                ImGui::TextDisabled(LOC("Font face could not be rasterized."));
                 return;
             }
 
@@ -71,13 +71,13 @@ namespace Lumina
             ImGuiX::Font::PopFont();
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Font Information");
+            ImGui::SeparatorText(LOC("Font Information"));
             ImGui::Spacing();
 
             if (ImGui::BeginTable("##FontInfo", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
             {
-                ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 150.0f);
-                ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(LOC_ID("Property"), ImGuiTableColumnFlags_WidthFixed, 150.0f);
+                ImGui::TableSetupColumn(LOC_ID("Value"), ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableHeadersRow();
 
                 auto Row = [](const char* Label, const FString& Value)
@@ -89,21 +89,21 @@ namespace Lumina
                     ImGui::TextUnformatted(Value.c_str());
                 };
 
-                Row("Family", FontAsset->FamilyName.empty() ? "Unknown" : FontAsset->FamilyName);
-                Row("Style", FontAsset->StyleName.empty() ? "Unknown" : FontAsset->StyleName);
-                Row("Glyphs", Format("{}", FontAsset->NumGlyphs));
-                Row("Scalable", FontAsset->bIsScalable ? "Yes" : "No");
-                Row("Kerning", FontAsset->bHasKerning ? "Yes" : "No");
+                Row(LOC("Family"), FontAsset->FamilyName.empty() ? FString(LOC("Unknown")) : FontAsset->FamilyName);
+                Row(LOC("Style"), FontAsset->StyleName.empty() ? FString(LOC("Unknown")) : FontAsset->StyleName);
+                Row(LOC("Glyphs"), Format("{}", FontAsset->NumGlyphs));
+                Row(LOC("Scalable"), FontAsset->bIsScalable ? FString(LOC("Yes")) : FString(LOC("No")));
+                Row(LOC("Kerning"), FontAsset->bHasKerning ? FString(LOC("Yes")) : FString(LOC("No")));
 
                 const size_t Bytes = FontAsset->GetFontData().size();
                 FString SizeStr = Bytes >= Constants::kMiB
                     ? Format("{}", Bytes / Constants::kMiB) + " MB"
                     : Format("{}", Bytes / Constants::kKiB) + " KB";
-                Row("File Size", SizeStr);
+                Row(LOC("File Size"), SizeStr);
 
                 if (!FontAsset->SourcePath.empty())
                 {
-                    Row("Source", FontAsset->SourcePath);
+                    Row(LOC("Source"), FontAsset->SourcePath);
                 }
 
                 ImGui::EndTable();
@@ -122,12 +122,12 @@ namespace Lumina
 
     void FFontEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Preview",
-            "The Size slider rasterizes the embedded face at any pixel size. Edit the Sample "
-            "Text box to preview arbitrary strings.");
-        DrawHelpTextRow("Details",
-            "Family, style and glyph count are read from the face at import time. The raw font "
-            "bytes are embedded in the asset, so cooked builds need no source file.");
+        DrawHelpTextRow(LOC("Preview"),
+            LOC("The Size slider rasterizes the embedded face at any pixel size. Edit the Sample "
+            "Text box to preview arbitrary strings."));
+        DrawHelpTextRow(LOC("Details"),
+            LOC("Family, style and glyph count are read from the face at import time. The raw font "
+            "bytes are embedded in the asset, so cooked builds need no source file."));
     }
 
     void FFontEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const

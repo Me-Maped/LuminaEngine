@@ -1,4 +1,6 @@
 ﻿#include "Containers/Queue.h"
+#include "Containers/StringFormat.h"
+#include "Localization/Localization.h"
 #include "MaterialNodeGraph.h"
 #include "MaterialCompiler.h"
 #include "MaterialGraphSchema.h"
@@ -282,15 +284,15 @@ namespace Lumina
 
         const FPinSpec Specs[] =
         {
-            { OutputNode->BaseColorPin,           "Base Color",            3, true },
-            { OutputNode->MetallicPin,            "Metallic",              1, false },
-            { OutputNode->RoughnessPin,           "Roughness",             1, false },
-            { OutputNode->SpecularPin,            "Specular",              1, false },
-            { OutputNode->EmissivePin,            "Emissive",              3, true },
-            { OutputNode->AOPin,                  "Ambient Occlusion",     1, false },
-            { OutputNode->NormalPin,              "Normal",                3, false },
-            { OutputNode->OpacityPin,             "Opacity",               1, false },
-            { OutputNode->WorldPositionOffsetPin, "World Position Offset", 3, false },
+            { OutputNode->BaseColorPin,           LOC("Base Color"),            3, true },
+            { OutputNode->MetallicPin,            LOC("Metallic"),              1, false },
+            { OutputNode->RoughnessPin,           LOC("Roughness"),             1, false },
+            { OutputNode->SpecularPin,            LOC("Specular"),              1, false },
+            { OutputNode->EmissivePin,            LOC("Emissive"),              3, true },
+            { OutputNode->AOPin,                  LOC("Ambient Occlusion"),     1, false },
+            { OutputNode->NormalPin,              LOC("Normal"),                3, false },
+            { OutputNode->OpacityPin,             LOC("Opacity"),               1, false },
+            { OutputNode->WorldPositionOffsetPin, LOC("World Position Offset"), 3, false },
         };
 
         for (const FPinSpec& Spec : Specs)
@@ -336,7 +338,7 @@ namespace Lumina
 
             // Truncating wider->1 silently is dangerous; require explicit channel extraction.
             EdNodeGraph::FError Error;
-            Error.Name = "Type Mismatch";
+            Error.Name = LOC("Type Mismatch");
 
             // Named by width, since a texture sample's pin type is Texture yet it hands over a float4.
             const char* SourceTypeName = "float";
@@ -358,9 +360,8 @@ namespace Lumina
                 default: break;
             }
 
-            Error.Description = FString("'") + Spec.AttributeName + "' expects " + TargetTypeName
-                              + " but the connected pin produces " + SourceTypeName
-                              + ". Insert a Mask or Append node to convert the value.";
+            Error.Description = Format(LOCF("'{}' expects {} but the connected pin produces {}. Insert a Mask or Append node to convert the value."),
+                                       Spec.AttributeName, TargetTypeName, SourceTypeName);
             Error.Node        = SourcePin->GetOwningNode();
             Compiler.AddError(Error);
         }
@@ -400,8 +401,8 @@ namespace Lumina
         if (CyclicNode != nullptr)
         {
             EdNodeGraph::FError Error;
-            Error.Name          = "Cyclic";
-            Error.Description   = "Cycle detected in material node graph! Graph must be acyclic!";
+            Error.Name          = LOC("Cyclic");
+            Error.Description   = LOC("Cycle detected in material node graph! Graph must be acyclic!");
             Error.Node          = CyclicNode;
             Compiler.AddError(Error);
 
@@ -536,7 +537,7 @@ namespace Lumina
             const EMaterialInputType Produced = InferOutputPinType(Output);
             ImGui::TextColored(TypeColor, "%s", FMaterialCompiler::GetHLSLTypeName(Produced).c_str());
             ImGui::SameLine();
-            ImGui::TextUnformatted(Output->GetPinName().c_str());
+            ImGui::TextUnformatted(LOC_VIEW(Output->GetPinName()));
             return;
         }
 
@@ -547,11 +548,11 @@ namespace Lumina
             return;
         }
 
-        ImGui::TextUnformatted(Input->GetPinName().c_str());
+        ImGui::TextUnformatted(LOC_VIEW(Input->GetPinName()));
         ImGui::Separator();
 
         const EMaterialInputType Expected = Input->GetInputType();
-        ImGui::TextUnformatted("expects");
+        ImGui::TextUnformatted(LOC("expects"));
         ImGui::SameLine(ValueColumn);
         ImGui::TextColored(TypeColor, "%s", FMaterialCompiler::GetHLSLTypeName(Expected).c_str());
 
@@ -564,7 +565,7 @@ namespace Lumina
         const bool bWidthDiffers = FMaterialCompiler::GetComponentCount(Incoming)
                                 != FMaterialCompiler::GetComponentCount(Expected);
 
-        ImGui::TextUnformatted("receives");
+        ImGui::TextUnformatted(LOC("receives"));
         ImGui::SameLine(ValueColumn);
         ImGui::TextColored(bWidthDiffers ? MismatchColor : TypeColor, "%s",
             FMaterialCompiler::GetHLSLTypeName(Incoming).c_str());
@@ -573,7 +574,7 @@ namespace Lumina
         if (SourcePin != nullptr && SourcePin->GetOwningNode() != nullptr)
         {
             ImGui::SameLine();
-            ImGui::TextDisabled("from %s", SourcePin->GetOwningNode()->GetNodeFullName().c_str());
+            ImGui::TextDisabled(LOC("from %s"), SourcePin->GetOwningNode()->GetNodeFullName().c_str());
         }
     }
 

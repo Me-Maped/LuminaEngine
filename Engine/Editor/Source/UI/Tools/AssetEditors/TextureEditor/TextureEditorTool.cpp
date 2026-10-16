@@ -26,16 +26,16 @@ namespace Lumina
     {
         switch (Sampler)
         {
-        case RHI::EStockSampler::LinearClamp:  return "Linear, Clamp";
-        case RHI::EStockSampler::LinearMirror: return "Linear, Mirror";
-        case RHI::EStockSampler::PointWrap:    return "Nearest, Wrap";
-        case RHI::EStockSampler::PointClamp:   return "Nearest, Clamp";
-        case RHI::EStockSampler::PointMirror:  return "Nearest, Mirror";
-        case RHI::EStockSampler::AnisoWrap:    return "Anisotropic, Wrap";
-        case RHI::EStockSampler::AnisoClamp:   return "Anisotropic, Clamp";
-        case RHI::EStockSampler::AnisoMirror:  return "Anisotropic, Mirror";
+        case RHI::EStockSampler::LinearClamp:  return LOC("Linear, Clamp");
+        case RHI::EStockSampler::LinearMirror: return LOC("Linear, Mirror");
+        case RHI::EStockSampler::PointWrap:    return LOC("Nearest, Wrap");
+        case RHI::EStockSampler::PointClamp:   return LOC("Nearest, Clamp");
+        case RHI::EStockSampler::PointMirror:  return LOC("Nearest, Mirror");
+        case RHI::EStockSampler::AnisoWrap:    return LOC("Anisotropic, Wrap");
+        case RHI::EStockSampler::AnisoClamp:   return LOC("Anisotropic, Clamp");
+        case RHI::EStockSampler::AnisoMirror:  return LOC("Anisotropic, Mirror");
         case RHI::EStockSampler::LinearWrap:
-        default:                               return "Linear, Wrap";
+        default:                               return LOC("Linear, Wrap");
         }
     }
 
@@ -55,12 +55,12 @@ namespace Lumina
 
         if (RecookForPropertyChange(Texture))
         {
-            ImGuiX::Notifications::NotifySuccess("Recooked '{0}' ({1})",
+            ImGuiX::Notifications::NotifySuccess(LOCF("Recooked '{0}' ({1})"),
                 Texture->GetName().c_str(), Event.PropertyName.c_str());
         }
         else
         {
-            ImGuiX::Notifications::NotifyError("Recook failed for '{0}' -- check log",
+            ImGuiX::Notifications::NotifyError(LOCF("Recook failed for '{0}' -- check log"),
                 Texture->GetName().c_str());
         }
     }
@@ -73,7 +73,7 @@ namespace Lumina
         CTexture* Texture = Cast<CTexture>(Asset.Get());
         if (Texture != nullptr && !RecookForPropertyChange(Texture))
         {
-            ImGuiX::Notifications::NotifyError("Recook failed for '{0}', see the log.", Texture->GetName().c_str());
+            ImGuiX::Notifications::NotifyError(LOCF("Recook failed for '{0}', see the log."), Texture->GetName().c_str());
         }
     }
 
@@ -137,8 +137,8 @@ namespace Lumina
                 };
 
                 ImGui::Dummy(ImVec2(0.0f, ImGui::GetContentRegionAvail().y * 0.4f));
-                CenteredText("No layers built yet.");
-                CenteredText("Add sources under Array Layers, then press Build Array.");
+                CenteredText(LOC("No layers built yet."));
+                CenteredText(LOC("Add sources under Array Layers, then press Build Array."));
                 return;
             }
 
@@ -160,7 +160,7 @@ namespace Lumina
                 const uint32 Layers = PreviewArray->GetNumLayers();
                 PreviewSlice = ImMin(PreviewSlice, Layers - 1u);
 
-                ImGui::TextUnformatted("Slice");
+                ImGui::TextUnformatted(LOC("Slice"));
                 ImGui::SameLine(60);
                 ImGui::SetNextItemWidth(-1);
                 if (Layers > 1)
@@ -173,7 +173,7 @@ namespace Lumina
                 }
                 else
                 {
-                    ImGui::TextDisabled("0 (single layer)");
+                    ImGui::TextDisabled(LOC("0 (single layer)"));
                 }
                 ImGui::Separator();
             }
@@ -280,8 +280,8 @@ namespace Lumina
 
                 // Pixel info tooltip
                 ImGui::BeginTooltip();
-                ImGui::Text("Pixel: [%d, %d]", PixelX, PixelY);
-                ImGui::Text("UV: [%.3f, %.3f]", NormX, NormY);
+                ImGui::Text(LOC("Pixel: [%d, %d]"), PixelX, PixelY);
+                ImGui::Text(LOC("UV: [%.3f, %.3f]"), NormX, NormY);
                 ImGui::EndTooltip();
             }
 
@@ -301,15 +301,15 @@ namespace Lumina
                     {
                         ImGui::SameLine(0, 20);
                     }
-                    ImGui::Text("Exposure:");
+                    ImGui::Text(LOC("Exposure:"));
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(140);
-                    ImGui::SliderFloat("##Exposure", &ExposureStops, -8.0f, 4.0f, "%+.1f stops");
-                    ImGuiX::TextTooltip("Exposure bias on the preview, in stops. The image is tone-mapped with the same transform the viewport uses, so 0 stops shows the texture as the scene sees it; dial down to read detail in bright regions.");
+                    ImGui::SliderFloat("##Exposure", &ExposureStops, -8.0f, 4.0f, LOC("%+.1f stops"));
+                    ImGuiX::TextTooltip(LOCF("Exposure bias on the preview, in stops. The image is tone-mapped with the same transform the viewport uses, so 0 stops shows the texture as the scene sees it; dial down to read detail in bright regions."));
 
                     ImGui::SameLine(0, 20);
-                    ImGui::Checkbox("Tone Map", &bToneMapPreview);
-                    ImGuiX::TextTooltip("{}", "Off shows the stored values with only sRGB encoding, so an image cooked from an 8-bit source reads as that source.");
+                    ImGui::Checkbox(LOC("Tone Map"), &bToneMapPreview);
+                    ImGuiX::TextTooltip("{}", LOC("Off shows the stored values with only sRGB encoding, so an image cooked from an 8-bit source reads as that source."));
                 }
             }
             ImGui::EndChild();
@@ -323,7 +323,7 @@ namespace Lumina
 
             if (ImGui::BeginChild("##InfoBar", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding))
             {
-                ImGui::Text("%.0f%% | %dx%d | Pan: [%.0f, %.0f]",
+                ImGui::Text(LOC("%.0f%% | %dx%d | Pan: [%.0f, %.0f]"),
                     ZoomFactor * 100.0f,
                     (int)TextureSize.x,
                     (int)TextureSize.y,
@@ -331,7 +331,7 @@ namespace Lumina
                     PanOffset.y
                 );
                 ImGui::SameLine(0, 20);
-                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "RMB/MMB: Pan | Scroll: Zoom | Ctrl+Scroll: Fine Zoom | Double-Click: Reset");
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), LOC("RMB/MMB: Pan | Scroll: Zoom | Ctrl+Scroll: Fine Zoom | Double-Click: Reset"));
             }
             ImGui::EndChild();
             ImGui::PopStyleVar(2);
@@ -348,7 +348,7 @@ namespace Lumina
             // A texture created empty has no image until one is imported into it.
             if (Texture->TextureResource == nullptr)
             {
-                ImGui::TextDisabled("%s has no image yet. Import one to see its details.", Texture->GetName().c_str());
+                ImGui::TextDisabled(LOC("%s has no image yet. Import one to see its details."), Texture->GetName().c_str());
                 return;
             }
         
@@ -361,15 +361,15 @@ namespace Lumina
             ImGui::Spacing();
         
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Texture Information");
+            ImGui::SeparatorText(LOC("Texture Information"));
             ImGuiX::Font::PopFont();
             
             ImGui::Spacing();
         
             if (ImGui::BeginTable("##TextureInfo", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
             {
-                ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 150.0f);
-                ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(LOC_ID("Property"), ImGuiTableColumnFlags_WidthFixed, 150.0f);
+                ImGui::TableSetupColumn(LOC_ID("Value"), ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableHeadersRow();
             
                 auto PropertyRow = [](const char* label, const FString& value, const ImVec4* color = nullptr)
@@ -390,12 +390,12 @@ namespace Lumina
                 };
             
                 ImVec4 dimensionColor(0.5f, 0.9f, 0.5f, 1.0f);
-                PropertyRow("Type", "2D Texture", &dimensionColor);
-                PropertyRow("Resolution", Format("{}", ImageDesc.Extent.x) + " x " + Format("{}", ImageDesc.Extent.y));
+                PropertyRow(LOC("Type"), FString(LOC("2D Texture")), &dimensionColor);
+                PropertyRow(LOC("Resolution"), Format("{}", ImageDesc.Extent.x) + " x " + Format("{}", ImageDesc.Extent.y));
 
                 // Format
                 const FFormatInfo& FormatInfo = RHI::Format::Info(ImageDesc.Format);
-                PropertyRow("Pixel Format", FString(FormatInfo.Name));
+                PropertyRow(LOC("Pixel Format"), FString(FormatInfo.Name));
                 
                 // Memory
                 size_t MemorySizeBytes = Texture->TextureResource->CalcTotalSizeBytes();
@@ -416,7 +416,7 @@ namespace Lumina
                     memoryStr = Format("{}", MemorySizeKB) + " KB";
                 }
                 
-                PropertyRow("Memory Size", memoryStr, &memoryColor);
+                PropertyRow(LOC("Memory Size"), memoryStr, &memoryColor);
             
                 ImGui::EndTable();
             }
@@ -425,7 +425,7 @@ namespace Lumina
             ImGui::Spacing();
         
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Mipmap Chain");
+            ImGui::SeparatorText(LOC("Mipmap Chain"));
             ImGuiX::Font::PopFont();
             
             ImGui::Spacing();
@@ -448,15 +448,15 @@ namespace Lumina
                 
                 float mipOverhead = baseMipMemory > 0 ? ((float)(totalMipMemory - baseMipMemory) / (float)baseMipMemory * 100.0f) : 0.0f;
                 
-                ImGui::Text("Total Mip Levels: ");
+                ImGui::Text(LOC("Total Mip Levels: "));
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(0.5f, 0.9f, 1.0f, 1.0f), "%u", ImageDesc.NumMips);
                 
-                ImGui::Text("Memory Overhead: ");
+                ImGui::Text(LOC("Memory Overhead: "));
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.4f, 1.0f), "%.1f%%", mipOverhead);
                 ImGui::SameLine();
-                ImGui::TextDisabled("(~33%% is typical)");
+                ImGui::TextDisabled(LOC("(~33%% is typical)"));
         
                 ImGui::Spacing();
         
@@ -469,11 +469,11 @@ namespace Lumina
                     ImVec2(0.0f, Math::Min(300.0f, ImGui::GetContentRegionAvail().y * 0.5f))))
                 {
                     ImGui::TableSetupScrollFreeze(0, 1);
-                    ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                    ImGui::TableSetupColumn("Resolution", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-                    ImGui::TableSetupColumn("Texels", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                    ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-                    ImGui::TableSetupColumn("% of Total", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                    ImGui::TableSetupColumn(LOC_ID("Level"), ImGuiTableColumnFlags_WidthFixed, 50.0f);
+                    ImGui::TableSetupColumn(LOC_ID("Resolution"), ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                    ImGui::TableSetupColumn(LOC_ID("Texels"), ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                    ImGui::TableSetupColumn(LOC_ID("Size"), ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                    ImGui::TableSetupColumn(LOC_ID("% of Total"), ImGuiTableColumnFlags_WidthFixed, 80.0f);
                     ImGui::TableHeadersRow();
         
                     for (uint32 i = 0; i < ImageDesc.NumMips; ++i)
@@ -559,14 +559,14 @@ namespace Lumina
             }
             else
             {
-                ImGui::TextDisabled("No mipmaps generated (single mip level only)");
+                ImGui::TextDisabled(LOC("No mipmaps generated (single mip level only)"));
             }
         
             ImGui::Spacing();
             ImGui::Spacing();
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Statistics");
+            ImGui::SeparatorText(LOC("Statistics"));
             ImGuiX::Font::PopFont();
 
             ImGui::Spacing();
@@ -590,9 +590,9 @@ namespace Lumina
                 
                 char aspectStr[32];
                 snprintf(aspectStr, sizeof(aspectStr), "%.3f:1", aspectRatio);
-                StatRow("Aspect Ratio:", aspectStr);
+                StatRow(LOC("Aspect Ratio:"), aspectStr);
                 
-                StatRow("Base Mip Texels:", Format("{}", baseTexels));
+                StatRow(LOC("Base Mip Texels:"), Format("{}", baseTexels));
                 
                 if (ImageDesc.NumMips > 1)
                 {
@@ -603,12 +603,12 @@ namespace Lumina
                         uint32 mipHeight = std::max<uint32>(1u, ImageDesc.Extent.y >> i);
                         mipChainTexels += mipWidth * mipHeight;
                     }
-                    StatRow("Total Mip Texels:", Format("{}", mipChainTexels));
+                    StatRow(LOC("Total Mip Texels:"), Format("{}", mipChainTexels));
                     
                     float texelIncrease = ((float)mipChainTexels / (float)baseTexels - 1.0f) * 100.0f;
                     char texelIncStr[32];
                     snprintf(texelIncStr, sizeof(texelIncStr), "+%.1f%%", texelIncrease);
-                    StatRow("Texel Increase:", texelIncStr);
+                    StatRow(LOC("Texel Increase:"), texelIncStr);
                 }
         
                 ImGui::EndTable();
@@ -621,12 +621,12 @@ namespace Lumina
             if (CTextureArray* Array = Cast<CTextureArray>(Texture))
             {
                 ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-                ImGui::SeparatorText("Array Layers");
+                ImGui::SeparatorText(LOC("Array Layers"));
                 ImGuiX::Font::PopFont();
 
                 ImGui::Spacing();
-                ImGui::Text("%u layer(s) built", Array->GetNumLayers());
-                ImGuiX::TextTooltip("Sample a layer in a material with TextureSampleArray; Slice 0 is the first entry below.");
+                ImGui::Text(LOC("%u layer(s) built"), Array->GetNumLayers());
+                ImGuiX::TextTooltip(LOCF("Sample a layer in a material with TextureSampleArray; Slice 0 is the first entry below."));
 
                 ImGui::Spacing();
 
@@ -640,7 +640,7 @@ namespace Lumina
                     ImGui::PushID((int)i);
                     ImGui::Text("%2zu", i);
                     ImGui::SameLine(40);
-                    ImGui::TextUnformatted(Layer.IsValid() ? Layer->GetName().c_str() : "<missing>");
+                    ImGui::TextUnformatted(Layer.IsValid() ? Layer->GetName().c_str() : LOC("<missing>"));
 
                     // Slice order is the material's Slice index, so reordering must not need a clear and re-add.
                     ImGui::SameLine(ImGui::GetContentRegionAvail().x - 66.0f);
@@ -672,7 +672,7 @@ namespace Lumina
                 ImGui::Spacing();
 
                 // Layers are texture ASSETS, so they come from the browser and survive the project moving machines.
-                ImGui::Button("Drop textures here to add a layer##TextureArray", ImVec2(-1, 0));
+                ImGui::Button(LOC_ID("Drop textures here to add a layer"), ImVec2(-1, 0));
                 if (ImGui::BeginDragDropTarget())
                 {
                     if (CTexture* Dropped = DragDrop::AcceptAsset<CTexture>())
@@ -680,7 +680,7 @@ namespace Lumina
                         // A nested array would recurse through layer-major mips and build a silently wrong image.
                         if (Dropped->IsA<CTextureArray>())
                         {
-                            ImGuiX::Notifications::NotifyError("'{0}' is a texture array; layers must be plain textures",
+                            ImGuiX::Notifications::NotifyError(LOCF("'{0}' is a texture array; layers must be plain textures"),
                                 Dropped->GetName().c_str());
                         }
                         else
@@ -691,34 +691,34 @@ namespace Lumina
                     }
                     ImGui::EndDragDropTarget();
                 }
-                ImGuiX::TextTooltip("Appended as the next slice. Every layer must match layer 0's size and format, "
-                                    "or enable Resize Layers To First.");
+                ImGuiX::TextTooltip(LOCF("Appended as the next slice. Every layer must match layer 0's size and format, "
+                                    "or enable Resize Layers To First."));
 
                 ImGui::Spacing();
                 const bool bCanBuild = !Array->SourceTextures.empty();
                 ImGui::BeginDisabled(!bCanBuild);
-                if (ImGui::Button("Build Array##TextureArray", ImVec2(-1, 0)))
+                if (ImGui::Button(LOC_ID("Build Array"), ImVec2(-1, 0)))
                 {
                     if (CTextureArrayFactory::Rebuild(Array))
                     {
-                        ImGuiX::Notifications::NotifySuccess("Built '{0}' with {1} layers",
+                        ImGuiX::Notifications::NotifySuccess(LOCF("Built '{0}' with {1} layers"),
                             Array->GetName().c_str(), Array->GetNumLayers());
                     }
                     else
                     {
-                        ImGuiX::Notifications::NotifyError("Build failed for '{0}' -- check log",
+                        ImGuiX::Notifications::NotifyError(LOCF("Build failed for '{0}' -- check log"),
                             Array->GetName().c_str());
                     }
                 }
                 ImGui::EndDisabled();
-                ImGuiX::TextTooltip("Re-cooks every layer from its source file, in list order, into one Texture2DArray.");
+                ImGuiX::TextTooltip(LOCF("Re-cooks every layer from its source file, in list order, into one Texture2DArray."));
 
                 ImGui::Spacing();
                 ImGui::Spacing();
             }
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Settings");
+            ImGui::SeparatorText(LOC("Settings"));
             ImGuiX::Font::PopFont();
 
             ImGui::Spacing();
@@ -741,19 +741,19 @@ namespace Lumina
                 if (bMipsStale || bSizeStale)
                 {
                     ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f),
-                        "Settings changed since the last cook. Recook to apply them.");
+                        LOC("Settings changed since the last cook. Recook to apply them."));
                     ImGui::Spacing();
                 }
 
-                if (ImGui::Button("Recook##Texture", ImVec2(-1, 0)))
+                if (ImGui::Button(LOC_ID("Recook"), ImVec2(-1, 0)))
                 {
                     if (CTextureFactory::Recook(Texture))
                     {
-                        ImGuiX::Notifications::NotifySuccess("Recooked '{0}'", Texture->GetName().c_str());
+                        ImGuiX::Notifications::NotifySuccess(LOCF("Recooked '{0}'"), Texture->GetName().c_str());
                     }
                     else
                     {
-                        ImGuiX::Notifications::NotifyError("Recook failed for '{0}' -- check log",
+                        ImGuiX::Notifications::NotifyError(LOCF("Recook failed for '{0}' -- check log"),
                             Texture->GetName().c_str());
                     }
                 }
@@ -761,62 +761,62 @@ namespace Lumina
                 // A missing source is a quality note, since the cooked mips still decode back to an image.
                 if (Texture->SourcePath.empty())
                 {
-                    ImGuiX::TextTooltip("Re-encodes the pixels already in this asset with the settings above. "
+                    ImGuiX::TextTooltip(LOCF("Re-encodes the pixels already in this asset with the settings above. "
                                         "It has no source file (mesh-embedded, or the file moved), so a "
                                         "block-compressed texture takes a second compression generation and "
-                                        "tonal adjustments stack on the previous pass instead of replacing it.");
+                                        "tonal adjustments stack on the previous pass instead of replacing it."));
                 }
                 else
                 {
-                    ImGuiX::TextTooltip("Re-reads the source file and re-encodes it with the settings above: color space, "
+                    ImGuiX::TextTooltip(LOCF("Re-reads the source file and re-encodes it with the settings above: color space, "
                                         "compression quality, mip policy, size cap and every source adjustment. "
-                                        "Source: %s", Texture->SourcePath.c_str());
+                                        "Source: %s"), Texture->SourcePath.c_str());
                 }
 
                 ImGui::Spacing();
 
                 // The live split, not the setting, since bNeverStream only reaches it on the next save.
-                ImGui::TextUnformatted("Streaming");
+                ImGui::TextUnformatted(LOC("Streaming"));
                 ImGui::SameLine(150);
                 if (Texture->IsStreamable())
                 {
-                    ImGui::TextColored(ImVec4(0.6f, 0.85f, 0.6f, 1.0f), "on (mips 0-%u stream)",
+                    ImGui::TextColored(ImVec4(0.6f, 0.85f, 0.6f, 1.0f), LOC("on (mips 0-%u stream)"),
                         (uint32)CookedDesc.FirstInlineMip - 1u);
                 }
                 else
                 {
-                    ImGui::TextDisabled("off (whole chain resident)");
+                    ImGui::TextDisabled(LOC("off (whole chain resident)"));
                 }
-                ImGuiX::TextTooltip("Never Stream, a group that disables it, or a single-mip texture all turn "
-                                    "streaming off. The split is rebuilt when the package is saved.");
+                ImGuiX::TextTooltip(LOCF("Never Stream, a group that disables it, or a single-mip texture all turn "
+                                    "streaming off. The split is rebuilt when the package is saved."));
 
-                ImGui::TextUnformatted("Sampler");
+                ImGui::TextUnformatted(LOC("Sampler"));
                 ImGui::SameLine(150);
                 ImGui::TextUnformatted(StockSamplerLabel(Texture->GetStockSampler()));
-                ImGuiX::TextTooltip("What a material samples this texture through when its TextureSample node is "
+                ImGuiX::TextTooltip(LOCF("What a material samples this texture through when its TextureSample node is "
                                     "left at FromTexture. Materials bake it at compile time, so they need "
-                                    "recompiling after a change here.");
+                                    "recompiling after a change here."));
             }
 
             ImGui::Spacing();
             ImGui::Spacing();
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Actions");
+            ImGui::SeparatorText(LOC("Actions"));
             ImGuiX::Font::PopFont();
 
             ImGui::Spacing();
-            if (ImGui::Button("Export to File...", ImVec2(-1, 0)))
+            if (ImGui::Button(LOC("Export to File..."), ImVec2(-1, 0)))
             {
                 // TODO Implement export
             }
-            ImGuiX::TextTooltip("Export the texture to disk.");
+            ImGuiX::TextTooltip(LOCF("Export the texture to disk."));
             
-            if (ImGui::Button("Analyze Color Distribution", ImVec2(-1, 0)))
+            if (ImGui::Button(LOC("Analyze Color Distribution"), ImVec2(-1, 0)))
             {
                 // TODO Implement analysis
             }
-            ImGuiX::TextTooltip("Analyze the color distribution across all pixels.");
+            ImGuiX::TextTooltip(LOCF("Analyze the color distribution across all pixels."));
         });
     }
 
@@ -875,23 +875,23 @@ namespace Lumina
 
     void FTextureEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Pan / Zoom",
-            "Middle-mouse drag pans, mouse wheel zooms. Hold Ctrl while scrolling to zoom finer. "
-            "The status bar shows current zoom percentage.");
-        DrawHelpTextRow("Mip Levels",
-            "If the texture has mips, the Mip slider lets you preview each level. The on-disk pixel "
-            "data is unchanged, this only changes which level is sampled for display.");
-        DrawHelpTextRow("HDR / Exposure",
-            "HDR textures (RGBA16F, RGB9E5, etc.) store linear radiance, so they are tone-mapped for "
+        DrawHelpTextRow(LOC("Pan / Zoom"),
+            LOC("Middle-mouse drag pans, mouse wheel zooms. Hold Ctrl while scrolling to zoom finer. "
+            "The status bar shows current zoom percentage."));
+        DrawHelpTextRow(LOC("Mip Levels"),
+            LOC("If the texture has mips, the Mip slider lets you preview each level. The on-disk pixel "
+            "data is unchanged, this only changes which level is sampled for display."));
+        DrawHelpTextRow(LOC("HDR / Exposure"),
+            LOC("HDR textures (RGBA16F, RGB9E5, etc.) store linear radiance, so they are tone-mapped for "
             "display using the same transform the scene viewport applies. At 0 stops the preview shows "
             "the texture as the renderer sees it; the Exposure slider biases that to read into very "
-            "bright or very dark regions.");
-        DrawHelpTextRow("Channels",
-            "Toggle R/G/B/A channels from the View menu to inspect them in isolation. "
-            "Useful for verifying packed maps (e.g. ORM, normal maps with alpha height).");
-        DrawHelpTextRow("Compression / Format",
-            "Format and size are shown in the Details panel. Re-import via Content Browser to change "
-            "compression settings (BC1/BC3/BC5/BC7).");
+            "bright or very dark regions."));
+        DrawHelpTextRow(LOC("Channels"),
+            LOC("Toggle R/G/B/A channels from the View menu to inspect them in isolation. "
+            "Useful for verifying packed maps (e.g. ORM, normal maps with alpha height)."));
+        DrawHelpTextRow(LOC("Compression / Format"),
+            LOC("Format and size are shown in the Details panel. Re-import via Content Browser to change "
+            "compression settings (BC1/BC3/BC5/BC7)."));
     }
 
     void FTextureEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const

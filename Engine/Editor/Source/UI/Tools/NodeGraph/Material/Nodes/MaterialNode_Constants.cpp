@@ -1,4 +1,5 @@
 ﻿#include "MaterialNode_Constants.h"
+#include "Localization/Localization.h"
 
 #include "Core/Object/Cast.h"
 #include "Core/Math/Math.h"
@@ -9,7 +10,7 @@ namespace Lumina
 {
     void CMaterialExpression_Constant::DrawContextMenu()
     {
-        const char* MenuItem = bDynamic ? "Make Constant" : "Make Parameter";
+        const char* MenuItem = bDynamic ? LOC("Make Constant") : LOC("Make Parameter");
         if (ImGui::MenuItem(MenuItem))
         {
             bDynamic = !bDynamic;

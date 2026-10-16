@@ -384,7 +384,7 @@ namespace Lumina
 
     void FBlendSpaceEditorTool::AddSampleAt(const FVector2& AxisPosition)
     {
-        BeginAssetTransaction("Add Blend Sample");
+        BeginAssetTransaction(LOC("Add Blend Sample"));
 
         CBlendSpace* BlendSpace = GetAsset<CBlendSpace>();
 
@@ -405,7 +405,7 @@ namespace Lumina
             return;
         }
 
-        BeginAssetTransaction("Remove Blend Sample");
+        BeginAssetTransaction(LOC("Remove Blend Sample"));
 
         BlendSpace->Samples.erase(BlendSpace->Samples.begin() + SampleIndex);
         SelectedSample = Constants::kIndexNone;
@@ -481,27 +481,27 @@ namespace Lumina
         {
             bPlaying = bPlay;
         }
-        ImGuiX::TextTooltip("Advance the preview clock. Off holds the pose at the current phase.");
+        ImGuiX::TextTooltip(LOCF("Advance the preview clock. Off holds the pose at the current phase."));
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110.0f);
-        ImGui::SliderFloat("Rate", &PlayRate, 0.0f, 2.0f, "%.2fx");
+        ImGui::SliderFloat(LOC("Rate"), &PlayRate, 0.0f, 2.0f, LOC("%.2fx"));
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(140.0f);
-        ImGui::SliderFloat("Phase", &PreviewPhase, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat(LOC("Phase"), &PreviewPhase, 0.0f, 1.0f, "%.2f");
 
         ImGui::SameLine();
         bool bTri = bShowTriangulation;
-        if (ImGui::Checkbox("Mesh", &bTri))
+        if (ImGui::Checkbox(LOC("Mesh"), &bTri))
         {
             bShowTriangulation = bTri;
         }
-        ImGuiX::TextTooltip("Draw the triangulation the 2D weights come from.");
+        ImGuiX::TextTooltip(LOCF("Draw the triangulation the 2D weights come from."));
 
         ImGui::SameLine();
         bool bWeights = bShowWeights;
-        if (ImGui::Checkbox("Weights", &bWeights))
+        if (ImGui::Checkbox(LOC("Weights"), &bWeights))
         {
             bShowWeights = bWeights;
         }
@@ -546,22 +546,22 @@ namespace Lumina
         ImGui::SameLine();
 
         bool bSnap = bSnapEnabled;
-        if (ImGui::Checkbox("Snap", &bSnap))
+        if (ImGui::Checkbox(LOC("Snap"), &bSnap))
         {
             bSnapEnabled = bSnap;
         }
-        ImGuiX::TextTooltip("Snap samples to the gridlines. Hold Ctrl to invert: it snaps while the toggle is off, and frees the drag while it is on.");
+        ImGuiX::TextTooltip(LOCF("Snap samples to the gridlines. Hold Ctrl to invert: it snaps while the toggle is off, and frees the drag while it is on."));
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110.0f);
-        if (ImGui::DragInt("Divisions", &SnapDivisions, 0.2f, 1, 50))
+        if (ImGui::DragInt(LOC("Divisions"), &SnapDivisions, 0.2f, 1, 50))
         {
             SnapDivisions = Math::Clamp(SnapDivisions, 1, 50);
         }
-        ImGuiX::TextTooltip("How many increments each axis is divided into. Drives the gridlines as well as the snap step.");
+        ImGuiX::TextTooltip(LOCF("How many increments each axis is divided into. Drives the gridlines as well as the snap step."));
 
         ImGui::SameLine();
-        ImGui::TextDisabled("%d samples", (int)BlendSpace->Samples.size());
+        ImGui::TextDisabled(LOC("%d samples"), (int)BlendSpace->Samples.size());
 
         ImGui::Separator();
 
@@ -668,7 +668,7 @@ namespace Lumina
             DrawList->AddCircleFilled(Screen, bSelected ? SampleRadius + 1.5f : SampleRadius, Color);
             DrawList->AddCircle(Screen, bSelected ? SampleRadius + 1.5f : SampleRadius, IM_COL32(10, 10, 14, 220), 0, 1.5f);
 
-            const char* Name = Sample.Animation.IsValid() ? Sample.Animation->GetName().c_str() : "(no clip)";
+            const char* Name = Sample.Animation.IsValid() ? Sample.Animation->GetName().c_str() : LOC("(no clip)");
             DrawList->AddText(ImVec2(Screen.x + 11.0f, Screen.y - 7.0f), IM_COL32(225, 228, 235, 220), Name);
 
             if (bShowWeights)
@@ -791,7 +791,7 @@ namespace Lumina
             {
                 SelectedSample = Hit;
                 DraggedSample = Hit;
-                BeginAssetTransaction("Move Blend Sample");
+                BeginAssetTransaction(LOC("Move Blend Sample"));
                 bDragTransactionOpen = true;
             }
             else
@@ -817,7 +817,7 @@ namespace Lumina
 
         if (ImGui::BeginPopup("##SampleContext"))
         {
-            if (ImGui::MenuItem(LE_ICON_DELETE " Remove Sample"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Remove Sample")))
             {
                 RemoveSampleAt(SelectedSample);
             }
@@ -828,7 +828,7 @@ namespace Lumina
     void FBlendSpaceEditorTool::DrawDetailsWindow()
     {
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-        ImGui::SeparatorText("Sample");
+        ImGui::SeparatorText(LOC("Sample"));
         ImGuiX::Font::PopFont();
         ImGui::Spacing();
 
@@ -838,12 +838,12 @@ namespace Lumina
         }
         else
         {
-            ImGui::TextDisabled("Double-click the grid to add a sample, or click one to select it.");
+            ImGui::TextDisabled(LOC("Double-click the grid to add a sample, or click one to select it."));
         }
 
         ImGui::Spacing();
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-        ImGui::SeparatorText("Blend Space");
+        ImGui::SeparatorText(LOC("Blend Space"));
         ImGuiX::Font::PopFont();
         ImGui::Spacing();
 
@@ -854,16 +854,16 @@ namespace Lumina
     {
         FAssetEditorTool::DrawToolMenu(UpdateContext);
 
-        if (ImGui::BeginMenu(LE_ICON_CHART_SCATTER_PLOT " Blend Space"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_CHART_SCATTER_PLOT, "Blend Space")))
         {
             bool bTri = bShowTriangulation;
-            if (ImGui::MenuItem("Show Triangulation", nullptr, &bTri))
+            if (ImGui::MenuItem(LOC("Show Triangulation"), nullptr, &bTri))
             {
                 bShowTriangulation = bTri;
             }
 
             bool bWeights = bShowWeights;
-            if (ImGui::MenuItem("Show Weights", nullptr, &bWeights))
+            if (ImGui::MenuItem(LOC("Show Weights"), nullptr, &bWeights))
             {
                 bShowWeights = bWeights;
             }
@@ -871,20 +871,20 @@ namespace Lumina
             ImGui::Separator();
 
             bool bSnap = bSnapEnabled;
-            if (ImGui::MenuItem("Snap To Grid", "Ctrl inverts", &bSnap))
+            if (ImGui::MenuItem(LOC("Snap To Grid"), LOC("Ctrl inverts"), &bSnap))
             {
                 bSnapEnabled = bSnap;
             }
 
             ImGui::SetNextItemWidth(120.0f);
-            if (ImGui::DragInt("Snap Divisions", &SnapDivisions, 0.2f, 1, 50))
+            if (ImGui::DragInt(LOC("Snap Divisions"), &SnapDivisions, 0.2f, 1, 50))
             {
                 SnapDivisions = Math::Clamp(SnapDivisions, 1, 50);
             }
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem(LE_ICON_REFRESH " Rebuild Triangulation"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_REFRESH, "Rebuild Triangulation")))
             {
                 GetAsset<CBlendSpace>()->RebuildTopology();
             }
@@ -895,22 +895,22 @@ namespace Lumina
 
     void FBlendSpaceEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Samples",
-            "Double-click empty grid space to add a sample, then assign its clip in Details. Drag a sample "
-            "to move it; right-click to remove it.");
-        DrawHelpTextRow("Preview",
-            "Click or drag empty space to move the green cursor. The mesh plays exactly what the runtime "
-            "would produce at that position, including the blend weights shown on each sample.");
-        DrawHelpTextRow("Sync",
-            "Every contributing clip is sampled at the same fraction of its own duration, against a phase "
-            "driven by the weighted blend of their lengths. That is what keeps a walk/run blend on one stride.");
-        DrawHelpTextRow("Snapping",
-            "Samples snap to the gridlines, and the Divisions count drives both. Ctrl inverts the toggle "
+        DrawHelpTextRow(LOC("Samples"),
+            LOC("Double-click empty grid space to add a sample, then assign its clip in Details. Drag a sample "
+            "to move it; right-click to remove it."));
+        DrawHelpTextRow(LOC("Preview"),
+            LOC("Click or drag empty space to move the green cursor. The mesh plays exactly what the runtime "
+            "would produce at that position, including the blend weights shown on each sample."));
+        DrawHelpTextRow(LOC("Sync"),
+            LOC("Every contributing clip is sampled at the same fraction of its own duration, against a phase "
+            "driven by the weighted blend of their lengths. That is what keeps a walk/run blend on one stride."));
+        DrawHelpTextRow(LOC("Snapping"),
+            LOC("Samples snap to the gridlines, and the Divisions count drives both. Ctrl inverts the toggle "
             "rather than forcing it on, so the same key snaps a free drag and frees a snapped one. The "
-            "preview cursor is never snapped, since scrubbing between samples is the point of it.");
-        DrawHelpTextRow("Axes",
-            "Axis names and ranges are on the asset. Positions are stored in axis units, so widening a range "
-            "moves samples on the grid without changing their values.");
+            "preview cursor is never snapped, since scrubbing between samples is the point of it."));
+        DrawHelpTextRow(LOC("Axes"),
+            LOC("Axis names and ranges are on the asset. Positions are stored in axis units, so widening a range "
+            "moves samples on the grid without changing their values."));
     }
 
     void FBlendSpaceEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const

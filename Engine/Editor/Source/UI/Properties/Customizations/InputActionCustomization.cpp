@@ -1,4 +1,5 @@
 ﻿#include "Containers/StringFormat.h"
+#include "Localization/Localization.h"
 #include <iterator>
 #include "InputActionCustomization.h"
 
@@ -16,9 +17,9 @@ namespace Lumina
         {
             switch (Type)
             {
-            case EInputActionType::Axis1D: return "Axis";
-            case EInputActionType::Axis2D: return "Axis 2D";
-            default:                       return "Digital";
+            case EInputActionType::Axis1D: return LOC("Axis");
+            case EInputActionType::Axis2D: return LOC("Axis 2D");
+            default:                       return LOC("Digital");
             }
         }
 
@@ -40,13 +41,13 @@ namespace Lumina
                 FString Token;
                 switch (Binding.Source)
                 {
-                case EInputAxisSource::MouseX:     Token = "Mouse X"; break;
-                case EInputAxisSource::MouseY:     Token = "Mouse Y"; break;
-                case EInputAxisSource::MouseWheel: Token = "Mouse Wheel"; break;
+                case EInputAxisSource::MouseX:     Token = LOC("Mouse X"); break;
+                case EInputAxisSource::MouseY:     Token = LOC("Mouse Y"); break;
+                case EInputAxisSource::MouseWheel: Token = LOC("Mouse Wheel"); break;
                 default:
                     if (Binding.Key.IsMouse())
                     {
-                        Token = "Mouse " + FInputActionMap::MouseButtonToString(Binding.Key.MouseButton);
+                        Token = LOC("Mouse ") + FInputActionMap::MouseButtonToString(Binding.Key.MouseButton);
                     }
                     else if (Binding.Key.IsKeyboard())
                     {
@@ -68,7 +69,7 @@ namespace Lumina
                 }
                 Result += Token;
             }
-            return Result.empty() ? FString("Unbound") : Result;
+            return Result.empty() ? FString(LOC("Unbound")) : Result;
         }
 
         namespace
@@ -108,7 +109,7 @@ namespace Lumina
             FFixedString Preview;
             if (Value.empty())
             {
-                Preview = LE_ICON_CLOSE_CIRCLE_OUTLINE "  None";
+                Preview = LOC_ICON(LE_ICON_CLOSE_CIRCLE_OUTLINE, "None");
             }
             else if (bDangling)
             {
@@ -132,7 +133,7 @@ namespace Lumina
             if (bDangling)
             {
                 ImGui::PopStyleColor();
-                ImGuiX::TextTooltip("No action named '{}' in Settings > Engine > Input", Value.c_str());
+                ImGuiX::TextTooltip(LOCF("No action named '{}' in Settings > Engine > Input"), Value.c_str());
             }
 
             if (!bOpen)
@@ -149,7 +150,7 @@ namespace Lumina
             ImGui::Separator();
 
             bool bPicked = false;
-            if (ImGui::Selectable(LE_ICON_CLOSE_CIRCLE_OUTLINE "  None", Value.empty()))
+            if (ImGui::Selectable(LOC_ICON(LE_ICON_CLOSE_CIRCLE_OUTLINE, "None"), Value.empty()))
             {
                 Value.clear();
                 bPicked = true;
@@ -184,8 +185,8 @@ namespace Lumina
             if (Shown == 0)
             {
                 ImGui::TextDisabled(Actions.empty()
-                    ? "No input actions. Add them in Settings > Engine > Input."
-                    : "No matching actions.");
+                    ? LOC("No input actions. Add them in Settings > Engine > Input.")
+                    : LOC("No matching actions."));
             }
 
             ImGui::EndCombo();

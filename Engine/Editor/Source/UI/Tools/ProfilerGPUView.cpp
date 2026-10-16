@@ -15,22 +15,22 @@ namespace Lumina
 
         if (!RHI::SupportsTimestamps())
         {
-            ImGui::TextDisabled("This device reports no timestamp support, so GPU timings are unavailable.");
+            ImGui::TextDisabled(LOC("This device reports no timestamp support, so GPU timings are unavailable."));
             return;
         }
 
         bool bEnabled = Profiler.IsEnabled();
-        if (ImGui::Checkbox("Collect (r.GPUProfiler.Enabled)", &bEnabled))
+        if (ImGui::Checkbox(LOC("Collect (r.GPUProfiler.Enabled)"), &bEnabled))
         {
             Profiler.SetEnabled(bEnabled);
         }
 
         ImGui::SameLine();
-        ImGui::Checkbox("Freeze", &bFrozen);
+        ImGui::Checkbox(LOC("Freeze"), &bFrozen);
 
         if (!bEnabled)
         {
-            ImGui::TextDisabled("Collection is off. Nothing is recorded and the markers cost nothing.");
+            ImGui::TextDisabled(LOC("Collection is off. Nothing is recorded and the markers cost nothing."));
             return;
         }
 
@@ -43,7 +43,7 @@ namespace Lumina
 
         if (GPUFrame.Scopes.empty())
         {
-            ImGui::TextDisabled("Waiting for a resolved frame.");
+            ImGui::TextDisabled(LOC("Waiting for a resolved frame."));
             return;
         }
 
@@ -84,15 +84,15 @@ namespace Lumina
 
     void FProfilerEditorTool::DrawGPUSummary()
     {
-        ImGui::Text("Frame %llu", (unsigned long long)GPUFrame.FrameNumber);
+        ImGui::Text(LOC("Frame %llu"), (unsigned long long)GPUFrame.FrameNumber);
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::Text("GPU: %.3f ms", GPUFrame.TotalMs);
+        ImGui::Text(LOC("GPU: %.3f ms"), GPUFrame.TotalMs);
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::Text("%d passes", (int)GPUFrame.Scopes.size());
+        ImGui::Text(LOC("%d passes"), (int)GPUFrame.Scopes.size());
 
         if (SelectedScope >= 0 && SelectedScope < (int32)GPUFrame.Scopes.size())
         {
@@ -100,7 +100,7 @@ namespace Lumina
             ImGui::SameLine();
             ImGui::TextDisabled("|");
             ImGui::SameLine();
-            ImGui::Text("Selected: %s (%.3f ms)", Scope.Name.c_str(), Scope.DurationMs());
+            ImGui::Text(LOC("Selected: %s (%.3f ms)"), Scope.Name.c_str(), Scope.DurationMs());
         }
     }
 
@@ -124,7 +124,7 @@ namespace Lumina
         const float Ceiling = Math::Max(HistoryPeak, Peak) * 1.15f;
 
         char Overlay[64];
-        snprintf(Overlay, sizeof(Overlay), "peak %.2f ms", Peak);
+        snprintf(Overlay, sizeof(Overlay), LOC("peak %.2f ms"), Peak);
         ImGui::PlotLines("##gpuhistory", GPUHistory.data(), (int)GPUHistory.size(), 0,
             Overlay, 0.0f, Ceiling, ImVec2(-1.0f, 60.0f));
     }
@@ -134,21 +134,21 @@ namespace Lumina
         const double FrameMs = GPUFrame.TotalMs;
         if (FrameMs <= 0.0)
         {
-            ImGui::TextDisabled("The frame resolved with no measurable GPU work.");
+            ImGui::TextDisabled(LOC("The frame resolved with no measurable GPU work."));
             return;
         }
 
         ImGui::SetNextItemWidth(140.0f);
-        ImGui::SliderFloat("Zoom", &ZoomT, 0.02f, 1.0f, "%.2f");
+        ImGui::SliderFloat(LOC("Zoom"), &ZoomT, 0.02f, 1.0f, "%.2f");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(140.0f);
-        ImGui::SliderFloat("Pan", &PanT, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat(LOC("Pan"), &PanT, 0.0f, 1.0f, "%.2f");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(140.0f);
-        ImGui::SliderFloat("Row height", &GPURowHeight, 18.0f, 56.0f, "%.0f px");
+        ImGui::SliderFloat(LOC("Row height"), &GPURowHeight, 18.0f, 56.0f, LOC("%.0f px"));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(140.0f);
-        ImGui::SliderFloat("Smoothing", &Smoothing, 0.0f, 0.98f, "%.2f");
+        ImGui::SliderFloat(LOC("Smoothing"), &Smoothing, 0.0f, 0.98f, "%.2f");
 
         const double ViewDur = FrameMs * (double)ZoomT;
         const double ViewT0  = (double)PanT * (FrameMs - ViewDur);
@@ -225,10 +225,10 @@ namespace Lumina
             ImGui::BeginTooltip();
             ImGui::TextUnformatted(Hovered->Name.c_str());
             ImGui::Separator();
-            ImGui::Text("Duration  %.3f ms", Hovered->DurationMs());
-            ImGui::Text("Share     %.1f%% of frame", Share);
-            ImGui::Text("Start     %.3f ms", Hovered->StartMs);
-            ImGui::Text("Depth     %d", Hovered->Depth);
+            ImGui::Text(LOC("Duration  %.3f ms"), Hovered->DurationMs());
+            ImGui::Text(LOC("Share     %.1f%% of frame"), Share);
+            ImGui::Text(LOC("Start     %.3f ms"), Hovered->StartMs);
+            ImGui::Text(LOC("Depth     %d"), Hovered->Depth);
             ImGui::EndTooltip();
 
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))

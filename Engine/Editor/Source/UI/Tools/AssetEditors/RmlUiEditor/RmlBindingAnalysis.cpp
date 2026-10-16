@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include "Containers/StringFormat.h"
+#include "Localization/Localization.h"
 
 namespace Lumina::RmlBinding
 {
@@ -670,9 +672,7 @@ namespace Lumina::RmlBinding
             FindModel(Bindings.Models[Index], bDescribed);
             if (!bDescribed)
             {
-                Add(Bindings.ModelLines[Index], "No class registers as '" + Bindings.Models[Index]
-                    + "', so the preview fills in placeholders. Name a class " + Bindings.Models[Index] + ", or give it [DataModel(\""
-                    + Bindings.Models[Index] + "\")] in C# or REFLECT(DataModel = \"" + Bindings.Models[Index] + "\") in C++.", false);
+                Add(Bindings.ModelLines[Index], Format(LOCF("No class registers as '{0}', so the preview fills in placeholders. Name a class {0}, or give it [DataModel(\"{0}\")] in C# or REFLECT(DataModel = \"{0}\") in C++."), Bindings.Models[Index]), false);
             }
         }
 
@@ -680,7 +680,7 @@ namespace Lumina::RmlBinding
         {
             if (Ref.Model.empty())
             {
-                Add(Ref.Line, "'" + Ref.Name + "' is bound outside any element with data-model, so nothing provides it.", true);
+                Add(Ref.Line, Format(LOCF("'{0}' is bound outside any element with data-model, so nothing provides it."), Ref.Name), true);
                 continue;
             }
             bool bDescribed = false;
@@ -696,7 +696,7 @@ namespace Lumina::RmlBinding
             {
                 if (!Model->HasCommand(Name))
                 {
-                    Add(Ref.Line, "'" + Ref.Name + "()' is not a [Bind] method of " + TypeName + ".", true);
+                    Add(Ref.Line, Format(LOCF("'{0}()' is not a [Bind] method of {1}."), Ref.Name, TypeName), true);
                 }
                 continue;
             }
@@ -704,7 +704,7 @@ namespace Lumina::RmlBinding
             {
                 if (!ContainsName(Model->Lists, Name))
                 {
-                    Add(Ref.Line, "'" + Ref.Name + "' is not a bound collection of " + TypeName + ".", true);
+                    Add(Ref.Line, Format(LOCF("'{0}' is not a bound collection of {1}."), Ref.Name, TypeName), true);
                 }
                 continue;
             }
@@ -718,14 +718,14 @@ namespace Lumina::RmlBinding
                 {
                     if (List.Name == Scope->List && std::find(List.Members.begin(), List.Members.end(), Ref.Member) == List.Members.end())
                     {
-                        Add(Ref.Line, "'" + Ref.Name + "." + Ref.Member + "' is not a [Bind] member of the items in " + List.Name + ".", true);
+                        Add(Ref.Line, Format(LOCF("'{0}.{1}' is not a [Bind] member of the items in {2}."), Ref.Name, Ref.Member, List.Name), true);
                     }
                 }
                 continue;
             }
             if (!Model->HasMember(Name))
             {
-                Add(Ref.Line, "'" + Ref.Name + "' is not a [Bind] member of " + TypeName + ".", true);
+                Add(Ref.Line, Format(LOCF("'{0}' is not a [Bind] member of {1}."), Ref.Name, TypeName), true);
                 continue;
             }
             const bool bStruct = !Ref.Member.empty() && Model->FindScalar(Name) == nullptr && !ContainsName(Model->Lists, Name);
@@ -735,7 +735,7 @@ namespace Lumina::RmlBinding
                 const FString Path = Ref.Name + "." + Field;
                 if (Model->FindScalar(FStringView(Path.c_str(), Path.size())) == nullptr)
                 {
-                    Add(Ref.Line, "'" + Path + "' is not a member of " + Ref.Name + ".", true);
+                    Add(Ref.Line, Format(LOCF("'{0}' is not a member of {1}."), Path, Ref.Name), true);
                 }
             }
         }

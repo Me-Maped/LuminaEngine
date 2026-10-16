@@ -1,4 +1,5 @@
 ﻿#include "CoreTypeCustomization.h"
+#include "Localization/Localization.h"
 #include "imgui.h"
 #include "Core/Reflection/Type/Properties/EnumProperty.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
@@ -21,13 +22,13 @@ namespace Lumina
     
             if (PreviewString.empty())
             {
-                PreviewString = "None";
+                PreviewString = LOC("None");
             }
 
             if (ImGui::BeginCombo("##", PreviewString.c_str(), ImGuiComboFlags_HeightLarge))
             {
                 bool bNoneSelected = (CachedValue == 0);
-                if (ImGui::Selectable("None", bNoneSelected))
+                if (ImGui::Selectable(LOC_ID("None"), bNoneSelected))
                 {
                     CachedValue = 0;
                     bWasChanged = true;

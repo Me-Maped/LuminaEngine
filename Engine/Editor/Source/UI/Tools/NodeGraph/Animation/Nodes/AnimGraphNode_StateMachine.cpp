@@ -1,4 +1,5 @@
 ﻿#include "AnimGraphNode_StateMachine.h"
+#include "Localization/Localization.h"
 #include "AnimGraphNode_State.h"
 #include "AnimGraphNode_StateRouting.h"
 #include "Core/Object/Cast.h"
@@ -23,7 +24,7 @@ namespace Lumina
 
     FString CAnimGraphNode_StateMachine::GetNodeTitleText() const
     {
-        return MachineName.IsNone() ? FString(GetNodeDisplayName()) : MachineName.ToString();
+        return MachineName.IsNone() ? FString(LOC_VIEW_CTX(GetNodeDisplayName(), "node")) : MachineName.ToString();
     }
 
     bool CAnimGraphNode_StateMachine::GetRenameText(FString& OutText) const
@@ -98,8 +99,8 @@ namespace Lumina
         if (!StateMachineGraph.IsValid())
         {
             EdNodeGraph::FError NodeError;
-            NodeError.Name        = "Empty State Machine";
-            NodeError.Description = "State Machine has no states; double-click it to add some.";
+            NodeError.Name        = LOC("Empty State Machine");
+            NodeError.Description = LOC("State Machine has no states; double-click it to add some.");
             NodeError.Node        = this;
             Compiler.AddError(NodeError);
 
@@ -192,8 +193,8 @@ namespace Lumina
         if (StateMachine.StatePoseRegisters.empty())
         {
             EdNodeGraph::FError NodeError;
-            NodeError.Name        = "Empty State Machine";
-            NodeError.Description = "State Machine has no State nodes; it will evaluate to the bind pose.";
+            NodeError.Name        = LOC("Empty State Machine");
+            NodeError.Description = LOC("State Machine has no State nodes; it will evaluate to the bind pose.");
             NodeError.Node        = this;
             Compiler.AddError(NodeError);
         }
@@ -225,8 +226,8 @@ namespace Lumina
             else if (!StateMachine.StatePoseRegisters.empty())
             {
                 EdNodeGraph::FError NodeError;
-                NodeError.Name        = "No Entry State";
-                NodeError.Description = "State Machine's Entry node is not wired to a State; defaulting to the first state.";
+                NodeError.Name        = LOC("No Entry State");
+                NodeError.Description = LOC("State Machine's Entry node is not wired to a State; defaulting to the first state.");
                 NodeError.Node        = this;
                 Compiler.AddError(NodeError);
             }
@@ -303,8 +304,8 @@ namespace Lumina
                 if (Alias->SourceStates.empty())
                 {
                     EdNodeGraph::FError NodeWarning;
-                    NodeWarning.Name        = "Empty State Alias";
-                    NodeWarning.Description = "State Alias names no states, so the transitions drawn out of it compile to nothing.";
+                    NodeWarning.Name        = LOC("Empty State Alias");
+                    NodeWarning.Description = LOC("State Alias names no states, so the transitions drawn out of it compile to nothing.");
                     NodeWarning.Node        = Alias;
                     Compiler.AddWarning(NodeWarning);
                 }
@@ -315,9 +316,9 @@ namespace Lumina
                     if (NameIt == StateNameToNodeID.end())
                     {
                         EdNodeGraph::FError NodeWarning;
-                        NodeWarning.Name        = "Unknown Aliased State";
-                        NodeWarning.Description = FString("State Alias names ") + StateName.ToString() +
-                            ", which is not a state on this machine (renamed or removed?). That edge is skipped.";
+                        NodeWarning.Name        = LOC("Unknown Aliased State");
+                        NodeWarning.Description = FString(LOC("State Alias names ")) + StateName.ToString() +
+                            LOC(", which is not a state on this machine (renamed or removed?). That edge is skipped.");
                         NodeWarning.Node        = Alias;
                         Compiler.AddWarning(NodeWarning);
                         continue;
@@ -345,8 +346,8 @@ namespace Lumina
                     if (ConduitNodeIDs.find(Exit->ToStateNodeID) != ConduitNodeIDs.end())
                     {
                         EdNodeGraph::FError CompileError;
-                        CompileError.Name        = "Chained Conduits";
-                        CompileError.Description = "A conduit wired into another conduit is not supported; wire it to a State.";
+                        CompileError.Name        = LOC("Chained Conduits");
+                        CompileError.Description = LOC("A conduit wired into another conduit is not supported; wire it to a State.");
                         CompileError.Node        = this;
                         Compiler.AddError(CompileError);
                         continue;
@@ -357,8 +358,8 @@ namespace Lumina
                 if (Exits.empty())
                 {
                     EdNodeGraph::FError NodeWarning;
-                    NodeWarning.Name        = "Conduit Routes Nowhere";
-                    NodeWarning.Description = "A conduit with no outgoing transition swallows the edges drawn into it.";
+                    NodeWarning.Name        = LOC("Conduit Routes Nowhere");
+                    NodeWarning.Description = LOC("A conduit with no outgoing transition swallows the edges drawn into it.");
                     NodeWarning.Node        = this;
                     Compiler.AddWarning(NodeWarning);
                 }
@@ -375,9 +376,9 @@ namespace Lumina
                     if (Exit != nullptr && (!CanCombine(Transition) || !CanCombine(Exit)))
                     {
                         EdNodeGraph::FError CompileError;
-                        CompileError.Name        = "Conduit Rule Cannot Be Combined";
-                        CompileError.Description = "An edge through a conduit ANDs the two rules, so neither side may be an "
-                            "any-of rule with more than one condition. Split it into separate transitions.";
+                        CompileError.Name        = LOC("Conduit Rule Cannot Be Combined");
+                        CompileError.Description = LOC("An edge through a conduit ANDs the two rules, so neither side may be an "
+                            "any-of rule with more than one condition. Split it into separate transitions.");
                         CompileError.Node        = this;
                         Compiler.AddError(CompileError);
                         continue;

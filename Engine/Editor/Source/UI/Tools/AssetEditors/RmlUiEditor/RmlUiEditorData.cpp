@@ -281,7 +281,7 @@ namespace Lumina
         RmlUi::ConsumeEditorDesignCommands(PreviewContext, Fired);
         for (FString& Call : Fired)
         {
-            ImGuiX::Notifications::NotifyInfo("Preview ran {}", Call.c_str());
+            ImGuiX::Notifications::NotifyInfo(LOCF("Preview ran {}"), Call.c_str());
             FiredCommands.push_back(Move(Call));
         }
         if ((int32)FiredCommands.size() > kMaxPreviewCommands)
@@ -381,7 +381,7 @@ namespace Lumina
                     const std::string Full(Name);
                     const std::string Shown = bAfterDash ? Full.substr(5) : Full;
                     const bool bOpenEnded = Full.back() == '-';
-                    Add(Shown, 'a', Description, bOpenEnded ? Shown : Shown + "=\"\v\"");
+                    Add(Shown, 'a', LOC(Description), bOpenEnded ? Shown : Shown + "=\"\v\"");
                 }
                 break;
             }
@@ -467,37 +467,37 @@ namespace Lumina
     {
         if (bIsStylesheet)
         {
-            ImGui::TextWrapped(LE_ICON_INFORMATION_OUTLINE " Stylesheets bind no data. Open the .rml that links this sheet.");
+            ImGui::TextWrapped(LOC_ICON(LE_ICON_INFORMATION_OUTLINE, "Stylesheets bind no data. Open the .rml that links this sheet."));
             return;
         }
 
-        if (ImGui::SmallButton(LE_ICON_REFRESH " Refresh"))
+        if (ImGui::SmallButton(LOC_ICON(LE_ICON_REFRESH, "Refresh")))
         {
             ReloadDocument(/*bAlwaysReport*/ true);
         }
-        ImGuiX::TextTooltip("Describe the models again, after editing their C# without a script reload.");
+        ImGuiX::TextTooltip(LOCF("Describe the models again, after editing their C# without a script reload."));
         ImGui::SameLine();
         ImGui::BeginDisabled(DesignOverrides.empty() && DesignRowCounts.empty());
-        if (ImGui::SmallButton(LE_ICON_RESTORE " Defaults"))
+        if (ImGui::SmallButton(LOC_ICON(LE_ICON_RESTORE, "Defaults")))
         {
             DesignOverrides.clear();
             DesignRowCounts.clear();
             ReloadDocument();
         }
         ImGui::EndDisabled();
-        ImGuiX::TextTooltip("Forget the preview values typed here and go back to the C# defaults.");
+        ImGuiX::TextTooltip(LOCF("Forget the preview values typed here and go back to the C# defaults."));
         ImGui::Separator();
 
         if (!BindingProblems.empty())
         {
-            DataSectionHeader(LE_ICON_ALERT_CIRCLE_OUTLINE, "Problems");
+            DataSectionHeader(LE_ICON_ALERT_CIRCLE_OUTLINE, LOC("Problems"));
             for (size_t Index = 0; Index < BindingProblems.size(); ++Index)
             {
                 const RmlBinding::FProblem& Problem = BindingProblems[Index];
                 ImGui::PushID((int)Index);
                 ImGui::PushStyleColor(ImGuiCol_Text, Problem.bError ? kDesignErrorColor : kDesignInfoColor);
                 char Label[48];
-                std::snprintf(Label, sizeof(Label), "%s Line %d", Problem.bError ? LE_ICON_CLOSE_CIRCLE : LE_ICON_INFORMATION, Problem.Line);
+                std::snprintf(Label, sizeof(Label), LOC("%s Line %d"), Problem.bError ? LE_ICON_CLOSE_CIRCLE : LE_ICON_INFORMATION, Problem.Line);
                 if (ImGui::Selectable(Label, false, ImGuiSelectableFlags_AllowOverlap))
                 {
                     JumpToLine(Problem.Line);
@@ -512,13 +512,13 @@ namespace Lumina
 
         if (DesignModels.empty())
         {
-            DataSectionHeader(LE_ICON_DATABASE_OUTLINE, "No data model");
-            ImGui::TextWrapped("This document binds no data. Put data-model=\"Name\" on its body, where Name is a class with Bind members, "
-                "a UIScript or CUIScript for instance, or the name its DataModel gives. Then use {{ Member }} and the data-* attributes inside it.");
+            DataSectionHeader(LE_ICON_DATABASE_OUTLINE, LOC("No data model"));
+            ImGui::TextWrapped(LOC("This document binds no data. Put data-model=\"Name\" on its body, where Name is a class with Bind members, "
+                "a UIScript or CUIScript for instance, or the name its DataModel gives. Then use {{ Member }} and the data-* attributes inside it."));
             if (!AvailableModels.empty())
             {
                 ImGui::Spacing();
-                ImGui::TextDisabled("Models in your scripts");
+                ImGui::TextDisabled(LOC("Models in your scripts"));
                 for (size_t Index = 0; Index < AvailableModels.size(); ++Index)
                 {
                     const FUIModelInfo& Info = AvailableModels[Index];
@@ -528,11 +528,11 @@ namespace Lumina
                         const std::string Attribute = "data-model=\"" + std::string(Info.Name.c_str()) + "\"";
                         ImGui::SetClipboardText(Attribute.c_str());
                     }
-                    ImGuiX::TextTooltip("Copy data-model=\"{}\"", Info.Name.c_str());
+                    ImGuiX::TextTooltip(LOCF("Copy data-model=\"{}\""), Info.Name.c_str());
                     ImGui::SameLine();
                     ImGui::Text("%s", Info.Name.c_str());
                     ImGui::SameLine();
-                    ImGui::TextColored(kDesignDimColor, "%s %s", Info.bScript ? "UI script" : "Bound class", Info.TypeName.c_str());
+                    ImGui::TextColored(kDesignDimColor, "%s %s", Info.bScript ? LOC("UI script") : LOC("Bound class"), Info.TypeName.c_str());
                     ImGui::PopID();
                 }
             }
@@ -551,12 +551,12 @@ namespace Lumina
         if (!FiredCommands.empty())
         {
             ImGui::Spacing();
-            DataSectionHeader(LE_ICON_GESTURE_TAP, "Commands the preview ran");
+            DataSectionHeader(LE_ICON_GESTURE_TAP, LOC("Commands the preview ran"));
             for (size_t Index = FiredCommands.size(); Index > 0; --Index)
             {
                 ImGui::TextColored(Index == FiredCommands.size() ? ImVec4(0.55f, 0.90f, 0.60f, 1.0f) : kDesignDimColor, "%s", FiredCommands[Index - 1].c_str());
             }
-            if (ImGui::SmallButton("Clear"))
+            if (ImGui::SmallButton(LOC("Clear")))
             {
                 FiredCommands.clear();
             }
@@ -579,19 +579,19 @@ namespace Lumina
 
         if (bDescribed)
         {
-            ImGui::TextColored(kDesignDimColor, "%s %s", Model.bFromScript ? "UI script" : "Bound class", Model.SourceType.c_str());
+            ImGui::TextColored(kDesignDimColor, "%s %s", Model.bFromScript ? LOC("UI script") : LOC("Bound class"), Model.SourceType.c_str());
         }
         else
         {
-            ImGui::TextColored(kDesignInfoColor, "Inferred from this document. No class registers '%s' yet.", Model.Name.c_str());
+            ImGui::TextColored(kDesignInfoColor, LOC("Inferred from this document. No class registers '%s' yet."), Model.Name.c_str());
         }
-        ImGui::TextColored(kDesignDimColor, "Values here only feed the preview. Insert puts the binding at the code cursor.");
+        ImGui::TextColored(kDesignDimColor, LOC("Values here only feed the preview. Insert puts the binding at the code cursor."));
 
         const FStringView ModelName(Model.Name.c_str(), Model.Name.size());
         if (!Model.Scalars.empty() && ImGui::BeginTable("##scalars", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
         {
-            ImGui::TableSetupColumn("Member", ImGuiTableColumnFlags_WidthStretch, 0.9f);
-            ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthStretch, 1.1f);
+            ImGui::TableSetupColumn(LOC_ID("Member"), ImGuiTableColumnFlags_WidthStretch, 0.9f);
+            ImGui::TableSetupColumn(LOC_ID("Preview"), ImGuiTableColumnFlags_WidthStretch, 1.1f);
             ImGui::TableSetupColumn("##insert", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
             for (size_t Index = 0; Index < Model.Scalars.size(); ++Index)
             {
@@ -602,7 +602,7 @@ namespace Lumina
                 ImGui::TableNextColumn();
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextUnformatted(Scalar.Name.c_str());
-                ImGuiX::TextTooltip("{} {}{}", DesignTypeLabel(Scalar.Type), Scalar.Name.c_str(), Scalar.bWritable ? ", two-way" : ", display only");
+                ImGuiX::TextTooltip("{} {}{}", DesignTypeLabel(Scalar.Type), Scalar.Name.c_str(), Scalar.bWritable ? LOC(", two-way") : LOC(", display only"));
 
                 // Read back each frame, since a two-way control in the preview can change it.
                 const FStringView Member(Scalar.Name.c_str(), Scalar.Name.size());
@@ -682,7 +682,7 @@ namespace Lumina
                     const std::string Snippet = "{{ " + std::string(Scalar.Name.c_str()) + " }}";
                     InsertSnippet(Snippet.c_str());
                 }
-                ImGuiX::TextTooltip("Insert {{ {} }} at the code cursor", Scalar.Name.c_str());
+                ImGuiX::TextTooltip(LOCF("Insert {{ {} }} at the code cursor"), Scalar.Name.c_str());
                 ImGui::PopID();
             }
             ImGui::EndTable();
@@ -698,7 +698,7 @@ namespace Lumina
             int Rows = (int)List.Rows.size();
             ImGui::SetNextItemWidth(90.0f);
             const bool bClassBacked = ModelIndex < (int32)DesignObjectModels.size() && DesignObjectModels[ModelIndex] != nullptr;
-            if (ImGui::InputInt("rows", &Rows))
+            if (ImGui::InputInt(LOC("rows"), &Rows))
             {
                 Rows = std::clamp(Rows, 0, 64);
                 DesignRowCounts[DesignMemberKey(Model.Name, List.Name)] = Rows;
@@ -716,13 +716,13 @@ namespace Lumina
                     }
                 }
             }
-            ImGuiX::TextTooltip("How many items the preview repeats the data-for element for.");
+            ImGuiX::TextTooltip(LOCF("How many items the preview repeats the data-for element for."));
             ImGui::SameLine();
             if (ImGui::SmallButton(LE_ICON_ARROW_LEFT_BOTTOM))
             {
                 InsertSnippet(DesignListSnippet(List).c_str());
             }
-            ImGuiX::TextTooltip("Insert a data-for element showing every member at the code cursor");
+            ImGuiX::TextTooltip(LOCF("Insert a data-for element showing every member at the code cursor"));
 
             std::string Members;
             for (const FString& Member : List.Members)
@@ -731,7 +731,7 @@ namespace Lumina
             }
             if (Members.empty())
             {
-                ImGui::TextColored(kDesignDimColor, "    each item is the value itself");
+                ImGui::TextColored(kDesignDimColor, LOC("    each item is the value itself"));
             }
             else
             {
@@ -758,7 +758,7 @@ namespace Lumina
             {
                 InsertSnippet(DesignCommandSnippet(Command).c_str());
             }
-            ImGuiX::TextTooltip("Insert data-event-click=\"{}(...)\" at the code cursor", Command.Name.c_str());
+            ImGuiX::TextTooltip(LOCF("Insert data-event-click=\"{}(...)\" at the code cursor"), Command.Name.c_str());
             ImGui::PopID();
         }
 
@@ -780,7 +780,7 @@ namespace Lumina
         }
 
         ImGui::Spacing();
-        ImGui::TextDisabled(LE_ICON_LINK_VARIANT " Bindings");
+        ImGui::TextDisabled(LOC_ICON(LE_ICON_LINK_VARIANT, "Bindings"));
         const FUIDesignModel* Model = DesignModels.empty() ? nullptr : &DesignModels.front();
         for (const RmlBinding::FAttribute& Attribute : Attributes)
         {

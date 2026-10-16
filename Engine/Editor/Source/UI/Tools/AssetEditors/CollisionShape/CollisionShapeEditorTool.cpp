@@ -40,10 +40,10 @@ namespace Lumina
     {
         switch (Type)
         {
-        case ECollisionPrimitiveType::Sphere:  return "Sphere";
-        case ECollisionPrimitiveType::Capsule: return "Capsule";
-        case ECollisionPrimitiveType::ConvexHull: return "Convex Hull";
-        default: return "Box";
+        case ECollisionPrimitiveType::Sphere:  return LOC("Sphere");
+        case ECollisionPrimitiveType::Capsule: return LOC("Capsule");
+        case ECollisionPrimitiveType::ConvexHull: return LOC("Convex Hull");
+        default: return LOC("Box");
         }
     }
 
@@ -295,7 +295,7 @@ namespace Lumina
 
     int32 FCollisionShapeEditorTool::AddPrimitive(ECollisionPrimitiveType Type)
     {
-        BeginAssetTransaction("Add Collision Shape");
+        BeginAssetTransaction(LOC("Add Collision Shape"));
 
         CCollisionShape* Shape = GetAsset<CCollisionShape>();
 
@@ -322,7 +322,7 @@ namespace Lumina
             return;
         }
 
-        BeginAssetTransaction("Remove Collision Shape");
+        BeginAssetTransaction(LOC("Remove Collision Shape"));
 
         Shape->Primitives.erase(Shape->Primitives.begin() + Index);
         SelectedPrimitive = Constants::kIndexNone;
@@ -339,14 +339,14 @@ namespace Lumina
 
         if (Mesh == nullptr)
         {
-            ImGuiX::Notifications::NotifyWarning("This collision shape has no source mesh to generate from.");
+            ImGuiX::Notifications::NotifyWarning(LOCF("This collision shape has no source mesh to generate from."));
             return;
         }
 
         static const char* Names[] = { "Generate Single Hull", "Generate Per-Surface Hulls",
                                        "Bake Triangle Mesh", "Fit Box", "Fit Sphere" };
 
-        BeginAssetTransaction(Names[GeneratorIndex]);
+        BeginAssetTransaction(LOC(Names[GeneratorIndex]));
 
         bool bSuccess = false;
         switch (GeneratorIndex)
@@ -365,7 +365,7 @@ namespace Lumina
 
         if (!bSuccess)
         {
-            ImGuiX::Notifications::NotifyWarning("'{0}' produced no collision; the mesh may be skinned or have no LOD 0 geometry.",
+            ImGuiX::Notifications::NotifyWarning(LOCF("'{0}' produced no collision; the mesh may be skinned or have no LOD 0 geometry."),
                                                  Mesh->GetName());
         }
     }
@@ -425,46 +425,46 @@ namespace Lumina
 
         if (Shape->SourceMesh.IsValid())
         {
-            if (ImGui::Button(LE_ICON_AUTO_FIX " Single Hull"))   { RunGenerator(0); }
-            ImGuiX::TextTooltip("One hull around the whole mesh. Always dynamic-safe, but fills in concavities.");
+            if (ImGui::Button(LOC_ICON(LE_ICON_AUTO_FIX, "Single Hull")))   { RunGenerator(0); }
+            ImGuiX::TextTooltip(LOCF("One hull around the whole mesh. Always dynamic-safe, but fills in concavities."));
 
             ImGui::SameLine();
-            if (ImGui::Button("Per-Surface Hulls"))               { RunGenerator(1); }
-            ImGuiX::TextTooltip("One hull per geometry surface. Uses the split already authored in the mesh.");
+            if (ImGui::Button(LOC("Per-Surface Hulls")))               { RunGenerator(1); }
+            ImGuiX::TextTooltip(LOCF("One hull per geometry surface. Uses the split already authored in the mesh."));
 
             ImGui::SameLine();
-            if (ImGui::Button("Triangle Mesh"))                   { RunGenerator(2); }
-            ImGuiX::TextTooltip("Exact concave geometry. Static and kinematic bodies only.");
+            if (ImGui::Button(LOC("Triangle Mesh")))                   { RunGenerator(2); }
+            ImGuiX::TextTooltip(LOCF("Exact concave geometry. Static and kinematic bodies only."));
 
-            if (ImGui::Button("Fit Box"))                         { RunGenerator(3); }
+            if (ImGui::Button(LOC("Fit Box")))                         { RunGenerator(3); }
             ImGui::SameLine();
-            if (ImGui::Button("Fit Sphere"))                      { RunGenerator(4); }
+            if (ImGui::Button(LOC("Fit Sphere")))                      { RunGenerator(4); }
         }
         else
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), LE_ICON_ALERT " No source mesh.");
-            ImGui::TextWrapped("Create collision shapes from a mesh's right-click menu so they are bound to it.");
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), LOC_ICON(LE_ICON_ALERT, "No source mesh."));
+            ImGui::TextWrapped(LOC("Create collision shapes from a mesh's right-click menu so they are bound to it."));
         }
 
         ImGui::Separator();
 
-        if (ImGui::Button(LE_ICON_PLUS " Box"))     { AddPrimitive(ECollisionPrimitiveType::Box); }
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Box")))     { AddPrimitive(ECollisionPrimitiveType::Box); }
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_PLUS " Sphere"))  { AddPrimitive(ECollisionPrimitiveType::Sphere); }
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Sphere")))  { AddPrimitive(ECollisionPrimitiveType::Sphere); }
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_PLUS " Capsule")) { AddPrimitive(ECollisionPrimitiveType::Capsule); }
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Capsule"))) { AddPrimitive(ECollisionPrimitiveType::Capsule); }
 
         ImGui::Separator();
 
         if (Shape->IsConcave())
         {
-            ImGui::TextColored(ImVec4(0.55f, 1.0f, 0.6f, 1.0f), LE_ICON_VECTOR_POLYLINE " Triangle Mesh");
-            ImGui::TextDisabled("%d triangles", Shape->NumTriangles());
-            ImGui::TextWrapped("Static and kinematic bodies only. Adding a primitive replaces it.");
+            ImGui::TextColored(ImVec4(0.55f, 1.0f, 0.6f, 1.0f), LOC_ICON(LE_ICON_VECTOR_POLYLINE, "Triangle Mesh"));
+            ImGui::TextDisabled(LOC("%d triangles"), Shape->NumTriangles());
+            ImGui::TextWrapped(LOC("Static and kinematic bodies only. Adding a primitive replaces it."));
             return;
         }
 
-        ImGui::TextDisabled("%d shapes, %d hull points", (int)Shape->Primitives.size(), Shape->NumHullPoints());
+        ImGui::TextDisabled(LOC("%d shapes, %d hull points"), (int)Shape->Primitives.size(), Shape->NumHullPoints());
         ImGui::Spacing();
 
         int32 PendingRemoval = Constants::kIndexNone;
@@ -493,7 +493,7 @@ namespace Lumina
 
             if (ImGui::BeginPopupContextItem("##ShapeContext"))
             {
-                if (ImGui::MenuItem(LE_ICON_DELETE " Remove"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Remove")))
                 {
                     PendingRemoval = i;
                 }
@@ -513,7 +513,7 @@ namespace Lumina
     void FCollisionShapeEditorTool::DrawDetailsWindow()
     {
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-        ImGui::SeparatorText("Shape");
+        ImGui::SeparatorText(LOC("Shape"));
         ImGuiX::Font::PopFont();
         ImGui::Spacing();
 
@@ -523,12 +523,12 @@ namespace Lumina
         }
         else
         {
-            ImGui::TextDisabled("Select a shape in the list or the viewport.");
+            ImGui::TextDisabled(LOC("Select a shape in the list or the viewport."));
         }
 
         ImGui::Spacing();
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-        ImGui::SeparatorText("Collision Shape");
+        ImGui::SeparatorText(LOC("Collision Shape"));
         ImGuiX::Font::PopFont();
         ImGui::Spacing();
 
@@ -736,28 +736,28 @@ namespace Lumina
     {
         FAssetEditorTool::DrawToolMenu(UpdateContext);
 
-        if (ImGui::BeginMenu(LE_ICON_CUBE_OUTLINE " Collision"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_CUBE_OUTLINE, "Collision")))
         {
             bool bShapes = bDrawShapes;
-            if (ImGui::MenuItem("Draw Shapes", nullptr, &bShapes))
+            if (ImGui::MenuItem(LOC("Draw Shapes"), nullptr, &bShapes))
             {
                 bDrawShapes = bShapes;
             }
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem("Move Shape", "Space", GizmoOp == ImGuizmo::TRANSLATE))
+            if (ImGui::MenuItem(LOC("Move Shape"), "Space", GizmoOp == ImGuizmo::TRANSLATE))
             {
                 GizmoOp = ImGuizmo::TRANSLATE;
             }
-            if (ImGui::MenuItem("Rotate Shape", "Space", GizmoOp == ImGuizmo::ROTATE))
+            if (ImGui::MenuItem(LOC("Rotate Shape"), "Space", GizmoOp == ImGuizmo::ROTATE))
             {
                 GizmoOp = ImGuizmo::ROTATE;
             }
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem(LE_ICON_REFRESH " Rebuild Hull Wireframes"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_REFRESH, "Rebuild Hull Wireframes")))
             {
                 RebuildHullWireframes();
             }
@@ -768,18 +768,18 @@ namespace Lumina
 
     void FCollisionShapeEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Shapes",
-            "Collision is a set of primitives and convex hulls drawn over the source mesh. Click one in the "
-            "viewport or the list to select it; the dots resize it and the gizmo moves its frame.");
-        DrawHelpTextRow("Generating",
-            "Single Hull is the safe default: always convex, so it works on dynamic bodies, but it fills in "
-            "concavities. Per-Surface Hulls splits on the mesh's own surfaces, which handles a table's legs.");
-        DrawHelpTextRow("Triangle Mesh",
-            "Exact concave collision, restricted by the physics engine to static and kinematic bodies. It "
-            "replaces the primitives rather than adding to them, so adding a primitive clears it.");
-        DrawHelpTextRow("Source Mesh",
-            "Fixed when the asset is created from a mesh's right-click menu. Hulls baked against one mesh "
-            "are meaningless on another, so make a new asset rather than repointing this one.");
+        DrawHelpTextRow(LOC("Shapes"),
+            LOC("Collision is a set of primitives and convex hulls drawn over the source mesh. Click one in the "
+            "viewport or the list to select it; the dots resize it and the gizmo moves its frame."));
+        DrawHelpTextRow(LOC("Generating"),
+            LOC("Single Hull is the safe default: always convex, so it works on dynamic bodies, but it fills in "
+            "concavities. Per-Surface Hulls splits on the mesh's own surfaces, which handles a table's legs."));
+        DrawHelpTextRow(LOC("Triangle Mesh"),
+            LOC("Exact concave collision, restricted by the physics engine to static and kinematic bodies. It "
+            "replaces the primitives rather than adding to them, so adding a primitive clears it."));
+        DrawHelpTextRow(LOC("Source Mesh"),
+            LOC("Fixed when the asset is created from a mesh's right-click menu. Hulls baked against one mesh "
+            "are meaningless on another, so make a new asset rather than repointing this one."));
     }
 
     void FCollisionShapeEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const

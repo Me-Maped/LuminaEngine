@@ -1,4 +1,5 @@
 #include "MaterialNodeExpression.h"
+#include "Localization/Localization.h"
 
 #include "imgui-node-editor/imgui_node_editor.h"
 #include "Core/Object/Cast.h"
@@ -36,14 +37,16 @@ namespace Lumina
 
         if (!bDynamic)
         {
-            ImGui::TextUnformatted(GetNodeDisplayName().data());
+            ImGui::TextUnformatted(LOC_VIEW_CTX(GetNodeDisplayName(), "node"));
             return;
         }
 
-        // A graph of nodes all titled Float says nothing about which one drives EmissivePower.
+        // A graph of nodes all titled Float says nothing about which one drives EmissivePower. A
+        // named parameter draws its own name, which is user data and is never translated.
         const bool bNamed = ParameterName != nullptr && !ParameterName->IsNone();
-        const FString Label = bNamed ? ParameterName->ToString() : FString(GetNodeDisplayName());
-        ImGui::Text(LE_ICON_MATERIAL_DESIGN " %s", Label.c_str());
+        const FString Name = bNamed ? ParameterName->ToString() : FString(GetNodeDisplayName());
+        const char* Label = bNamed ? Name.c_str() : LOC_VIEW_CTX(GetNodeDisplayName(), "node");
+        ImGui::Text(LE_ICON_MATERIAL_DESIGN " %s", Label);
 
         ImGuiX::TextTooltip("{}", ParameterName != nullptr
             ? "Material parameter. F2 renames it here; its value lives in the \"Material Properties\" window."

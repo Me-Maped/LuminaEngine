@@ -1,4 +1,5 @@
 ﻿#include "AnimationGraphNodeGraph.h"
+#include "Localization/Localization.h"
 #include "AnimGraphSchema.h"
 #include "AnimationGraphCompiler.h"
 #include "AnimGraphNode.h"
@@ -105,8 +106,8 @@ namespace Lumina
         if (Nodes.empty())
         {
             EdNodeGraph::FError Error;
-            Error.Name        = "No Output";
-            Error.Description = "Animation graph has no Output Pose node to compile from.";
+            Error.Name        = LOC("No Output");
+            Error.Description = LOC("Animation graph has no Output Pose node to compile from.");
             Error.Node        = nullptr;
             Compiler.AddError(Error);
             return false;
@@ -121,8 +122,8 @@ namespace Lumina
         if (CyclicNode != nullptr)
         {
             EdNodeGraph::FError Error;
-            Error.Name        = "Cyclic";
-            Error.Description = "Cycle detected in animation node graph! Graph must be acyclic.";
+            Error.Name        = LOC("Cyclic");
+            Error.Description = LOC("Cycle detected in animation node graph! Graph must be acyclic.");
             Error.Node        = CyclicNode;
             Compiler.AddError(Error);
             return false;
@@ -131,8 +132,8 @@ namespace Lumina
         if (SortedNodes.empty())
         {
             EdNodeGraph::FError Error;
-            Error.Name        = "No Output";
-            Error.Description = "Animation graph has no Output Pose node to compile from.";
+            Error.Name        = LOC("No Output");
+            Error.Description = LOC("Animation graph has no Output Pose node to compile from.");
             Error.Node        = nullptr;
             Compiler.AddError(Error);
             return false;
@@ -210,8 +211,8 @@ namespace Lumina
             if (CyclicCachedPoseNode != nullptr)
             {
                 EdNodeGraph::FError Error;
-                Error.Name        = "Cyclic";
-                Error.Description = "Cycle detected feeding a Save Cached Pose node! Graph must be acyclic.";
+                Error.Name        = LOC("Cyclic");
+                Error.Description = LOC("Cycle detected feeding a Save Cached Pose node! Graph must be acyclic.");
                 Error.Node        = CyclicCachedPoseNode;
                 Compiler.AddError(Error);
                 return false;

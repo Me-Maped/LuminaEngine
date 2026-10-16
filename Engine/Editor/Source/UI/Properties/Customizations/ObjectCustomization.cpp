@@ -1,4 +1,5 @@
 ﻿#include "CoreTypeCustomization.h"
+#include "Localization/Localization.h"
 #include "imgui.h"
 #include "Core/Engine/Engine.h"
 #include "Core/Object/Class.h"
@@ -43,7 +44,7 @@ namespace Lumina
 
             TStrongObjectPtr<CObject> HardObject = Object.Lock();
 
-            const char* Label = HardObject.IsValid() ? Object.Get()->GetName().c_str() : "<None>";
+            const char* Label = HardObject.IsValid() ? Object.Get()->GetName().c_str() : LOC("<None>");
             ImGui::BeginDisabled(Object == nullptr);
 
             TOptional<ImTextureRef> ButtonTexture;
@@ -94,7 +95,7 @@ namespace Lumina
             
             const bool bHasObject = Object != nullptr;
 
-            FFixedString PathString = bHasObject ? Object.Get()->GetName().c_str() : "<None>";
+            FFixedString PathString = bHasObject ? Object.Get()->GetName().c_str() : LOC("<None>");
         
             ImGui::PushStyleColor(ImGuiCol_Text, bHasObject ? ImVec4(0.6f, 0.6f, 0.6f, 1.0f) : ImVec4(1.0f, 0.19f, 0.19f, 1.0f));
         
@@ -125,7 +126,7 @@ namespace Lumina
                     ImVec2 TextPos = ImGui::GetItemRectMin();
                     TextPos.x += Style.FramePadding.x + 2.0f;
                     TextPos.y += Style.FramePadding.y;
-                    DrawList->AddText(TextPos, IM_COL32(100, 100, 110, 255), LE_ICON_FILE_SEARCH " Search Assets...");
+                    DrawList->AddText(TextPos, IM_COL32(100, 100, 110, 255), LOC_ICON(LE_ICON_FILE_SEARCH, "Search Assets..."));
                 }
                 
                 ImGui::SameLine();
@@ -225,8 +226,8 @@ namespace Lumina
             ImGui::EndDisabled();
 
             ImGuiX::TextTooltip("{}", bSelectionFits
-                ? "Use the asset selected in the Content Browser."
-                : "Select a compatible asset in the Content Browser to use it here.");
+                ? LOC("Use the asset selected in the Content Browser.")
+                : LOC("Select a compatible asset in the Content Browser to use it here."));
 
             ImGui::SameLine();
 
@@ -241,7 +242,7 @@ namespace Lumina
                     EditorUI->BrowseToAsset(FStringView(PackageName.c_str(), PackageName.size()));
                 }
             }
-            ImGuiX::TextTooltip("{}", "Show this asset in the Content Browser.");
+            ImGuiX::TextTooltip("{}", LOC("Show this asset in the Content Browser."));
 
             ImGui::SameLine();
 

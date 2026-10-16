@@ -1,4 +1,5 @@
 #include "AnimGraphNode_FootPlacement.h"
+#include "Localization/Localization.h"
 #include "UI/Tools/NodeGraph/Animation/AnimationGraphCompiler.h"
 #include "Renderer/SkeletonResource.h"
 
@@ -47,16 +48,16 @@ namespace Lumina
         const int32 PelvisIndex = Compiler.ResolveBoneIndex(PelvisBone);
         if (PelvisIndex == Constants::kIndexNone)
         {
-            ReportPlacementError(Compiler, this, "Unknown Pelvis Bone",
-                        FString("Foot Placement references '") + PelvisBone.ToString() +
-                        "', which is not a bone on the graph's skeleton.");
+            ReportPlacementError(Compiler, this, LOC("Unknown Pelvis Bone"),
+                        FString(LOC("Foot Placement references '")) + PelvisBone.ToString() +
+                        LOC("', which is not a bone on the graph's skeleton."));
             return;
         }
 
         if (Legs.empty())
         {
-            ReportPlacementError(Compiler, this, "No Legs",
-                        "Foot Placement has no legs, so it would trace nothing. Add one leg per foot.");
+            ReportPlacementError(Compiler, this, LOC("No Legs"),
+                        LOC("Foot Placement has no legs, so it would trace nothing. Add one leg per foot."));
             return;
         }
 
@@ -76,9 +77,9 @@ namespace Lumina
                 const FName& Missing = ThighIndex == Constants::kIndexNone ? Leg.ThighBone
                                      : CalfIndex == Constants::kIndexNone  ? Leg.CalfBone
                                                                 : Leg.FootBone;
-                ReportPlacementError(Compiler, this, "Unknown Leg Bone",
-                            FString("Foot Placement references '") + Missing.ToString() +
-                            "', which is not a bone on the graph's skeleton.");
+                ReportPlacementError(Compiler, this, LOC("Unknown Leg Bone"),
+                            FString(LOC("Foot Placement references '")) + Missing.ToString() +
+                            LOC("', which is not a bone on the graph's skeleton."));
                 return;
             }
 
@@ -87,9 +88,9 @@ namespace Lumina
                 (Skeleton->GetBone(CalfIndex).ParentIndex != ThighIndex ||
                  Skeleton->GetBone(FootIndex).ParentIndex != CalfIndex))
             {
-                ReportPlacementError(Compiler, this, "Bad Leg Chain",
-                            FString("'") + Leg.ThighBone.ToString() + "' -> '" + Leg.CalfBone.ToString() +
-                            "' -> '" + Leg.FootBone.ToString() + "' is not a parent chain on the skeleton.");
+                ReportPlacementError(Compiler, this, LOC("Bad Leg Chain"),
+                            FString(LOC("'")) + Leg.ThighBone.ToString() + LOC("' -> '") + Leg.CalfBone.ToString() +
+                            LOC("' -> '") + Leg.FootBone.ToString() + LOC("' is not a parent chain on the skeleton."));
                 return;
             }
 

@@ -1,4 +1,5 @@
 #include "AnimGraphNode_TwoBoneIK.h"
+#include "Localization/Localization.h"
 #include "UI/Tools/NodeGraph/Animation/AnimationGraphCompiler.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/SkeletonResource.h"
@@ -35,8 +36,8 @@ namespace Lumina
                 Skeleton->GetBone(EndIdx).ParentIndex != MidIdx)
             {
                 EdNodeGraph::FError NodeError;
-                NodeError.Name        = "Bad IK Chain";
-                NodeError.Description = FString("Two-Bone IK chain is not parented as Root -> Mid -> End on the skeleton.");
+                NodeError.Name        = LOC("Bad IK Chain");
+                NodeError.Description = FString(LOC("Two-Bone IK chain is not parented as Root -> Mid -> End on the skeleton."));
                 NodeError.Node        = this;
                 Compiler.AddError(NodeError);
                 bChainOk = false;
@@ -45,8 +46,8 @@ namespace Lumina
         else
         {
             EdNodeGraph::FError NodeError;
-            NodeError.Name        = "Unknown IK Bone";
-            NodeError.Description = FString("Two-Bone IK references a bone that doesn't exist on the graph's skeleton.");
+            NodeError.Name        = LOC("Unknown IK Bone");
+            NodeError.Description = FString(LOC("Two-Bone IK references a bone that doesn't exist on the graph's skeleton."));
             NodeError.Node        = this;
             Compiler.AddError(NodeError);
         }

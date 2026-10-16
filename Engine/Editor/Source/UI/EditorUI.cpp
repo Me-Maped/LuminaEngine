@@ -137,6 +137,8 @@
 #include "Tools/Debug/SettingsEditorTool.h"
 #include "Settings/EditorSettings.h"
 #include "Config/EngineSettings.h"
+#include "Localization/Localization.h"
+#include "Localization/LocalizationSettings.h"
 #include "Tools/AssetEditors/Animation/AnimationEditorTool.h"
 #include "Tools/AssetEditors/AnimationGraph/AnimationGraphEditorTool.h"
 #include "Tools/AssetEditors/CurveEditor/CurveAssetEditorTool.h"
@@ -501,7 +503,7 @@ namespace Lumina
             {
                 if (Tool->AsSceneEditor() != nullptr && Tool->GetWorld() == World)
                 {
-                    bBegin ? Tool->BeginOutsideChange() : Tool->EndOutsideChange("Update Prefab Instances");
+                    bBegin ? Tool->BeginOutsideChange() : Tool->EndOutsideChange(LOC("Update Prefab Instances"));
                 }
             }
         });
@@ -812,7 +814,7 @@ namespace Lumina
             bStartupNoticesShown = true;
 #if defined(LE_DEBUG)
             LOG_WARN("Running a DEBUG build. Performance is greatly reduced; use Development for normal work.");
-            ImGuiX::Notifications::NotifyWarning("Debug build: performance is greatly reduced. Build in Development for normal editing and play.");
+            ImGuiX::Notifications::NotifyWarning(LOCF("Debug build: performance is greatly reduced. Build in Development for normal editing and play."));
 #endif
         }
 
@@ -1697,8 +1699,8 @@ namespace Lumina
         }
 
         OutError = PartialCount == 0
-            ? Lumina::Format("No tab is named '{}'.", Name)
-            : Lumina::Format("'{}' matches {} tabs; use the id from the tab list.", Name, PartialCount);
+            ? Lumina::Format(LOCF("No tab is named '{}'."), Name)
+            : Lumina::Format(LOCF("'{}' matches {} tabs; use the id from the tab list."), Name, PartialCount);
         return nullptr;
     }
 
@@ -1736,13 +1738,13 @@ namespace Lumina
 
         if (!CanCloseTool(Tool))
         {
-            OutError = Lumina::Format("'{}' cannot be closed.", Name);
+            OutError = Lumina::Format(LOCF("'{}' cannot be closed."), Name);
             return false;
         }
 
         if (Tool->IsUnsavedDocument() && !bDiscardUnsaved)
         {
-            OutError = Lumina::Format("'{}' has unsaved changes. Save it, or pass bDiscardUnsaved.", Name);
+            OutError = Lumina::Format(LOCF("'{}' has unsaved changes. Save it, or pass bDiscardUnsaved."), Name);
             return false;
         }
 
@@ -1812,14 +1814,14 @@ namespace Lumina
             && SourceWorld->GetPackage() != nullptr
             && SourceWorld->GetPackage()->IsDirty();
 
-        const FString CurrentName = (SourceWorld != nullptr) ? SourceWorld->GetName().ToString() : FString("the current world");
+        const FString CurrentName = (SourceWorld != nullptr) ? SourceWorld->GetName().ToString() : FString(LOC("the current world"));
 
-        ModalManager.CreateDialogue("Stop Play In Editor?", ImVec2(560, 280),
+        ModalManager.CreateDialogue(LOC("Stop Play In Editor?"), ImVec2(560, 280),
             [this, AssetGUID, WorldName, CurrentName, bSourceDirty]() -> bool
         {
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
             ImGui::PushStyleColor(ImGuiCol_Text, kProjDialogAccentGold);
-            ImGui::TextUnformatted(LE_ICON_ALERT_CIRCLE_OUTLINE "  Stop Play In Editor?");
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "Stop Play In Editor?"));
             ImGui::PopStyleColor();
             ImGuiX::Font::PopFont();
 
@@ -1828,7 +1830,7 @@ namespace Lumina
             ImGui::Spacing();
 
             ImGui::PushStyleColor(ImGuiCol_Text, kProjDialogTextDim);
-            ImGui::TextWrapped("A play session is running in '%s'. Opening '%s' will stop it.",
+            ImGui::TextWrapped(LOC("A play session is running in '%s'. Opening '%s' will stop it."),
                 CurrentName.c_str(), WorldName.c_str());
             ImGui::PopStyleColor();
 
@@ -1836,7 +1838,7 @@ namespace Lumina
             {
                 ImGui::Spacing();
                 ImGui::PushStyleColor(ImGuiCol_Text, kProjDialogDanger);
-                ImGui::TextWrapped(LE_ICON_ALERT "  '%s' has unsaved changes. Cancel and save it first if you want to keep them.",
+                ImGui::TextWrapped(LOC_ICON(LE_ICON_ALERT, "'%s' has unsaved changes. Cancel and save it first if you want to keep them."),
                     CurrentName.c_str());
                 ImGui::PopStyleColor();
             }
@@ -1855,14 +1857,14 @@ namespace Lumina
 
             bool bShouldClose = false;
 
-            if (SchemeButton("Cancel", ImVec2(BtnW, BtnH), kButtonNeutral))
+            if (SchemeButton(LOC("Cancel"), ImVec2(BtnW, BtnH), kButtonNeutral))
             {
                 bShouldClose = true;
             }
 
             ImGui::SameLine(0.0f, Gap);
 
-            if (SchemeButton(LE_ICON_STOP "  Stop && Open", ImVec2(BtnW, BtnH), kButtonDanger))
+            if (SchemeButton(LOC_ICON(LE_ICON_STOP, "Stop && Open"), ImVec2(BtnW, BtnH), kButtonDanger))
             {
                 // Stopping play can destroy tools, and tearing them down inside BeginPopupModal frees live windows.
                 MainThread::Enqueue([this, AssetGUID]()
@@ -1870,7 +1872,7 @@ namespace Lumina
                     CWorld* NewWorld = Cast<CWorld>(CPackage::LoadAssetGraph(AssetGUID));
                     if (NewWorld == nullptr)
                     {
-                        ImGuiX::Notifications::NotifyError("Failed to load world.");
+                        ImGuiX::Notifications::NotifyError(LOCF("Failed to load world."));
                         return;
                     }
 
@@ -1983,7 +1985,7 @@ namespace Lumina
             }
             if (bCleared)
             {
-                ImGuiX::Notifications::NotifyInfo("Undo history was cleared, since it could restore instances of the deleted prefab.");
+                ImGuiX::Notifications::NotifyInfo(LOCF("Undo history was cleared, since it could restore instances of the deleted prefab."));
             }
         }
 
@@ -2135,7 +2137,7 @@ namespace Lumina
                     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
                 }
 
-                const FFixedString Label = FormatAs<FFixedString>("{}  {}", Drawer.Icon, Drawer.Label);
+                const FFixedString Label = FormatAs<FFixedString>("{}  {}", Drawer.Icon, LOC(Drawer.Label));
                 // The drawer auto-dismisses on mouse-down, so a release toggle would re-open what the press closed.
                 if (ImGui::ButtonEx(Label.c_str(), ImVec2(0, 0), ImGuiButtonFlags_PressedOnClick))
                 {
@@ -2149,7 +2151,7 @@ namespace Lumina
 
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("%s%s", Drawer.bDocked ? "Focus " : "Toggle ", Drawer.Label);
+                    ImGui::SetTooltip("%s%s", Drawer.bDocked ? LOC("Focus ") : LOC("Toggle "), LOC(Drawer.Label));
                 }
 
                 ImGui::SameLine();
@@ -2301,7 +2303,7 @@ namespace Lumina
         const ImGuiStyle& Style = ImGui::GetStyle();
         const float ToolbarHeight = ImGui::GetFrameHeight() + Style.FramePadding.y * 2.0f;
 
-        const char* DockLabel = LE_ICON_DOCK_BOTTOM " Dock";
+        const char* DockLabel = LOC_ICON(LE_ICON_DOCK_BOTTOM, "Dock");
         const float DockWidth    = ImGui::CalcTextSize(DockLabel).x + Style.FramePadding.x * 2.0f;
         const float CloseWidth   = ImGui::CalcTextSize(LE_ICON_CLOSE).x + Style.FramePadding.x * 2.0f;
         const float ButtonsWidth = DockWidth + CloseWidth + Style.ItemSpacing.x * 3.0f;
@@ -2344,14 +2346,14 @@ namespace Lumina
                 FocusTargetWindowName = Drawer->Tool->GetToolName().c_str();
                 OpenDrawer = nullptr;
             }
-            ImGuiX::TextTooltip("Dock this panel to the bottom of the main layout");
+            ImGuiX::TextTooltip(LOCF("Dock this panel to the bottom of the main layout"));
 
             ImGui::SameLine();
             if (ImGui::Button(LE_ICON_CLOSE))
             {
                 OpenDrawer = nullptr;
             }
-            ImGuiX::TextTooltip("Close the drawer");
+            ImGuiX::TextTooltip(LOCF("Close the drawer"));
 
             ImGui::PopStyleColor();
         }
@@ -2608,24 +2610,24 @@ namespace Lumina
             }
         };
 
-        if (ImGui::MenuItem(LE_ICON_CLOSE " Close", nullptr, false, CanCloseTool(EditorTool)))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_CLOSE, "Close"), nullptr, false, CanCloseTool(EditorTool)))
         {
             RequestCloseTool(EditorTool);
         }
 
-        if (ImGui::MenuItem("Close Others", nullptr, false, SelfIndex >= 0 && AnyClosableIn(0, Count - 1, SelfIndex)))
+        if (ImGui::MenuItem(LOC("Close Others"), nullptr, false, SelfIndex >= 0 && AnyClosableIn(0, Count - 1, SelfIndex)))
         {
             CloseRange(0, Count - 1, SelfIndex);
         }
 
-        if (ImGui::MenuItem("Close to the Right", nullptr, false, SelfIndex >= 0 && AnyClosableIn(SelfIndex + 1, Count - 1, -1)))
+        if (ImGui::MenuItem(LOC("Close to the Right"), nullptr, false, SelfIndex >= 0 && AnyClosableIn(SelfIndex + 1, Count - 1, -1)))
         {
             CloseRange(SelfIndex + 1, Count - 1, -1);
         }
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem("Close All", nullptr, false, AnyClosableIn(0, Count - 1, -1)))
+        if (ImGui::MenuItem(LOC("Close All"), nullptr, false, AnyClosableIn(0, Count - 1, -1)))
         {
             CloseRange(0, Count - 1, -1);
         }
@@ -3020,7 +3022,7 @@ namespace Lumina
 
         if (Entries.empty())
         {
-            ImGuiX::Notifications::NotifyWarning("No assets to open.");
+            ImGuiX::Notifications::NotifyWarning(LOCF("No assets to open."));
             return;
         }
 
@@ -3029,7 +3031,7 @@ namespace Lumina
             return strcmp(A.Name.c_str(), B.Name.c_str()) < 0;
         });
 
-        PushModal("Open Asset", ImVec2(720.0f, 520.0f),
+        PushModal(LOC("Open Asset"), ImVec2(720.0f, 520.0f),
             [this, Entries = Move(Entries), Filter = ImGuiTextFilter(), Selected = 0, bFocusPending = true]() mutable -> bool
         {
             // Focus the box on the first frame so the modal is type-to-search with no click.
@@ -3045,7 +3047,7 @@ namespace Lumina
             {
                 const ImVec2 TextPos = ImGui::GetItemRectMin() + ImGui::GetStyle().FramePadding + ImVec2(2.0f, 0.0f);
                 ImGui::GetWindowDrawList()->AddText(TextPos, EditorColors::U32(EditorColors::TextMuted()),
-                    LE_ICON_FILE_SEARCH " Search assets...");
+                    LOC_ICON(LE_ICON_FILE_SEARCH, "Search assets..."));
             }
 
             // Rebuilt each frame, since the filter changes per keystroke over a few thousand short strings.
@@ -3156,9 +3158,9 @@ namespace Lumina
             }
             ImGui::EndChild();
 
-            ImGuiX::Text("{} asset(s)", (uint32)Matches.size());
+            ImGuiX::Text(LOCF("{} asset(s)"), (uint32)Matches.size());
             ImGui::SameLine();
-            ImGui::TextColored(EditorColors::TextMuted(), "  Enter to open, Esc to cancel");
+            ImGui::TextColored(EditorColors::TextMuted(), "  %s", LOC("Enter to open, Esc to cancel"));
 
             if (bChosen)
             {
@@ -3175,7 +3177,7 @@ namespace Lumina
         const FString& EngineRoot = Paths::GetEngineInstallDirectory();
         if (EngineRoot.empty())
         {
-            ImGuiX::Notifications::NotifyError("Cannot locate Tracy: the engine install directory is unresolved.");
+            ImGuiX::Notifications::NotifyError(LOCF("Cannot locate Tracy: the engine install directory is unresolved."));
             return;
         }
 
@@ -3185,7 +3187,7 @@ namespace Lumina
         if (!Filesystem::Exists(FullPath))
         {
             LOG_ERROR("Tracy profiler not found at '{}'.", FullPath.c_str());
-            ImGuiX::Notifications::NotifyError("Tracy not found at {0}", FullPath);
+            ImGuiX::Notifications::NotifyError(LOCF("Tracy not found at {0}"), FullPath);
             return;
         }
 
@@ -3194,18 +3196,18 @@ namespace Lumina
         if (Result != 0)
         {
             LOG_ERROR("Failed to launch Tracy at '{}' (system error {}).", FullPath.c_str(), Result);
-            ImGuiX::Notifications::NotifyError("Failed to launch Tracy (system error {0}).", Result);
+            ImGuiX::Notifications::NotifyError(LOCF("Failed to launch Tracy (system error {0})."), Result);
             return;
         }
 
-        ImGuiX::Notifications::NotifySuccess("Tracy profiler launched.");
+        ImGuiX::Notifications::NotifySuccess(LOCF("Tracy profiler launched."));
     }
 
     void FEditorUI::SaveActiveTool()
     {
         if (LastActiveTool == nullptr)
         {
-            ImGuiX::Notifications::NotifyWarning("Nothing to save: no editor is focused.");
+            ImGuiX::Notifications::NotifyWarning(LOCF("Nothing to save: no editor is focused."));
             return;
         }
 
@@ -3273,7 +3275,7 @@ namespace Lumina
 
         if (DirtyPackages.empty())
         {
-            ImGuiX::Notifications::NotifySuccess("Nothing to save; everything is up to date.");
+            ImGuiX::Notifications::NotifySuccess(LOCF("Nothing to save; everything is up to date."));
             return;
         }
 
@@ -3315,11 +3317,11 @@ namespace Lumina
 
         if (Failed > 0)
         {
-            ImGuiX::Notifications::NotifyError("Save All: {0} package(s) saved, {1} failed.", Saved, Failed);
+            ImGuiX::Notifications::NotifyError(LOCF("Save All: {0} package(s) saved, {1} failed."), Saved, Failed);
         }
         else if (Saved > 0)
         {
-            ImGuiX::Notifications::NotifySuccess("Save All: {0} package(s) saved.", Saved);
+            ImGuiX::Notifications::NotifySuccess(LOCF("Save All: {0} package(s) saved."), Saved);
         }
         // Zero saved with no failures means every dirty package belonged to a tool that reported itself.
     }
@@ -3357,7 +3359,7 @@ namespace Lumina
         TVector<bool>       Selection(Packages.size(), true);
         TVector<ESaveState> States(Packages.size(), ESaveState::Pending);
 
-        ModalManager.CreateDialogue("Unsaved Changes", ImVec2(560, 380),
+        ModalManager.CreateDialogue(LOC("Unsaved Changes"), ImVec2(560, 380),
             [this, Packages = Move(Packages), Selection = Move(Selection), States = Move(States)]() mutable -> bool
         {
             const uint32 NumPackages = (uint32)Packages.size();
@@ -3369,14 +3371,14 @@ namespace Lumina
 
             if (NumPackages == 1)
             {
-                ImGui::TextUnformatted("1 package has unsaved changes.");
+                ImGui::TextUnformatted(LOC("1 package has unsaved changes."));
             }
             else
             {
-                ImGuiX::Text("{} packages have unsaved changes.", NumPackages);
+                ImGuiX::Text(LOCF("{} packages have unsaved changes."), NumPackages);
             }
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextDim());
-            ImGui::TextUnformatted("Save them before the editor closes?");
+            ImGui::TextUnformatted(LOC("Save them before the editor closes?"));
             ImGui::PopStyleColor();
             ImGui::Spacing();
 
@@ -3388,8 +3390,8 @@ namespace Lumina
             {
                 ImGui::TableSetupScrollFreeze(0, 1);
                 ImGui::TableSetupColumn("##Select", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, ImGui::GetFrameHeight());
-                ImGui::TableSetupColumn("Package",  ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableSetupColumn("Status",   ImGuiTableColumnFlags_WidthFixed, ImGuiX::ButtonWidth(LE_ICON_CHECK " Modified"));
+                ImGui::TableSetupColumn(LOC_ID("Package"),  ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(LOC_ID("Status"),   ImGuiTableColumnFlags_WidthFixed, ImGuiX::ButtonWidth(LOC_ICON(LE_ICON_CHECK, "Modified")));
 
                 ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
                 ImGui::TableSetColumnIndex(0);
@@ -3405,9 +3407,9 @@ namespace Lumina
                     }
                 }
                 ImGui::TableSetColumnIndex(1);
-                ImGui::TableHeader("Package");
+                ImGui::TableHeader(LOC("Package"));
                 ImGui::TableSetColumnIndex(2);
-                ImGui::TableHeader("Status");
+                ImGui::TableHeader(LOC("Status"));
 
                 for (uint32 Index = 0; Index < NumPackages; ++Index)
                 {
@@ -3439,13 +3441,13 @@ namespace Lumina
                     switch (States[Index])
                     {
                     case ESaveState::Saved:
-                        ImGui::TextColored(EditorColors::Success(), LE_ICON_CHECK " Saved");
+                        ImGui::TextColored(EditorColors::Success(), LOC_ICON(LE_ICON_CHECK, "Saved"));
                         break;
                     case ESaveState::Failed:
-                        ImGui::TextColored(EditorColors::Danger(), LE_ICON_ALERT_CIRCLE_OUTLINE " Failed");
+                        ImGui::TextColored(EditorColors::Danger(), LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "Failed"));
                         break;
                     default:
-                        ImGui::TextColored(EditorColors::TextMuted(), "Modified");
+                        ImGui::TextColored(EditorColors::TextMuted(), LOC("Modified"));
                         break;
                     }
 
@@ -3456,12 +3458,12 @@ namespace Lumina
 
             ImGui::Spacing();
             ImGui::AlignTextToFramePadding();
-            ImGui::TextDisabled("%u of %u selected", NumSelected, NumPackages);
+            ImGui::TextDisabled(LOC("%u of %u selected"), NumSelected, NumPackages);
 
             // ImGui has no mnemonic escaping, so a doubled ampersand reached the screen literally.
-            const char* SaveLabel    = "Save & Exit";
-            const char* DiscardLabel = "Don't Save";
-            const char* CancelLabel  = "Cancel";
+            const char* SaveLabel    = LOC("Save & Exit");
+            const char* DiscardLabel = LOC("Don't Save");
+            const char* CancelLabel  = LOC("Cancel");
 
             constexpr float MinButtonWidth = 96.0f;
             const float Gap      = ImGui::GetStyle().ItemSpacing.x;
@@ -3584,9 +3586,9 @@ namespace Lumina
             if (DirtyPackageCount > 0)
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::Warning());
-                ImGui::TextUnformatted(LE_ICON_CONTENT_SAVE_ALERT " Unsaved Changes");
+                ImGui::TextUnformatted(LOC_ICON(LE_ICON_CONTENT_SAVE_ALERT, "Unsaved Changes"));
                 ImGui::PopStyleColor();
-                ImGuiX::TextTooltip("{} package(s) with unsaved changes. Ctrl+Shift+S saves all of them.", DirtyPackageCount);
+                ImGuiX::TextTooltip(LOCF("{} package(s) with unsaved changes. Ctrl+Shift+S saves all of them."), DirtyPackageCount);
             }
         }
     }
@@ -3671,37 +3673,37 @@ namespace Lumina
     {
         // Icons rather than labels, since the section competes with the menus and each stat has a tooltip.
         ImGui::TextUnformatted(Stats.Perf.c_str());
-        ImGuiX::TextTooltip("{}", "Frame rate and frame time, smoothed.");
+        ImGuiX::TextTooltip("{}", LOC("Frame rate and frame time, smoothed."));
 
         ImGui::SameLine();
         ImGui::TextUnformatted(Stats.Objects.c_str());
-        ImGuiX::TextTooltip("{}", "Live CObjects.");
+        ImGuiX::TextTooltip("{}", LOC("Live CObjects."));
 
         ImGui::SameLine();
         ImGui::TextUnformatted(Stats.Memory.c_str());
-        ImGuiX::TextTooltip("{}", "Process working set (matches Task Manager), smoothed.");
+        ImGuiX::TextTooltip("{}", LOC("Process working set (matches Task Manager), smoothed."));
 
         ImGui::SameLine();
         ImGui::TextUnformatted(Stats.GPUMemory.c_str());
-        ImGuiX::TextTooltip("{}", "Device-local GPU memory in use against the driver's budget for this "
-                                  "process, smoothed. Includes memory other processes forced us to share.");
+        ImGuiX::TextTooltip("{}", LOC("Device-local GPU memory in use against the driver's budget for this "
+                                      "process, smoothed. Includes memory other processes forced us to share."));
     }
 
     void FEditorUI::DrawFileMenu()
     {
-        if (!ImGui::BeginMenu(LE_ICON_FILE " File"))
+        if (!ImGui::BeginMenu(LOC_ICON(LE_ICON_FILE, "File")))
         {
             return;
         }
         // Mirrors the Ctrl+S the focused tool handles, so the menu and shortcut do the same thing.
         ImGui::BeginDisabled(LastActiveTool == nullptr);
-        if (ImGui::MenuItem(LE_ICON_ZIP_DISK " Save", "Ctrl+S"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_ZIP_DISK, "Save"), "Ctrl+S"))
         {
             SaveActiveTool();
         }
         ImGui::EndDisabled();
 
-        if (ImGui::MenuItem(LE_ICON_ZIP_DISK " Save All", "Ctrl+Shift+S"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_ZIP_DISK, "Save All"), "Ctrl+Shift+S"))
         {
             SaveAllDirtyPackages();
         }
@@ -3710,16 +3712,16 @@ namespace Lumina
 
         // Read from the binding rather than written out, so rebinding the chord relabels the menu with it.
         const FString ReloadChord = GetDefault<CEditorSettings>()->ReloadScriptsHotkey.GetDisplayName();
-        if (ImGui::MenuItem(LE_ICON_LANGUAGE_CSHARP " Recompile C# Assemblies", ReloadChord.c_str()))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_LANGUAGE_CSHARP, "Recompile C# Assemblies"), ReloadChord.c_str()))
         {
             DotNet::RequestScriptReload();
         }
 
         ImGui::Separator();
 
-        DrawToolMenuItem<FSettingsEditorTool>(LE_ICON_COG " Settings", this);
+        DrawToolMenuItem<FSettingsEditorTool>(LOC_ICON(LE_ICON_COG, "Settings"), this);
 
-        if (ImGui::BeginMenu(LE_ICON_ROTATE_LEFT " Recent"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_ROTATE_LEFT, "Recent")))
         {
             auto Recents = PruneMissingRecents();
             bool bAny = false;
@@ -3738,7 +3740,7 @@ namespace Lumina
             if (!bAny)
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.62f, 1.0f));
-                ImGui::TextUnformatted("(none)");
+                ImGui::TextUnformatted(LOC("(none)"));
                 ImGui::PopStyleColor();
             }
 
@@ -3749,15 +3751,15 @@ namespace Lumina
         
 
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.6f, 0.4f, 1.0f));
-        if (ImGui::BeginMenu(LE_ICON_HAMMER " Shaders"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_HAMMER, "Shaders")))
         {
             
-            if (ImGui::MenuItem(LE_ICON_MATERIAL_DESIGN " Recompile Default Material"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_MATERIAL_DESIGN, "Recompile Default Material")))
             {
                 CMaterial::CreateDefaultMaterial();
             }
 
-            if (ImGui::MenuItem(LE_ICON_FOLDER " Open Shaders Directory", "F6"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_FOLDER, "Open Shaders Directory"), "F6"))
             {
                 Platform::LaunchURL(UTF8_TO_TCHAR(Paths::GetEngineShadersDirectory().c_str()));
             }
@@ -3769,7 +3771,7 @@ namespace Lumina
         ImGui::Separator();
 
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.4f, 0.4f, 1.0f));
-        if (ImGui::MenuItem(LE_ICON_DOOR_OPEN " Exit", "Alt+F4"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_DOOR_OPEN, "Exit"), "Alt+F4"))
         {
 			FApplication::RequestExit();
         }
@@ -3780,12 +3782,12 @@ namespace Lumina
 
     void FEditorUI::DrawProjectMenu()
     {
-        if (!ImGui::BeginMenu(LE_ICON_FOLDER " Project"))
+        if (!ImGui::BeginMenu(LOC_ICON(LE_ICON_FOLDER, "Project")))
         {
             return;
         }
         
-        if (ImGui::MenuItem(LE_ICON_FOLDER_PLUS " New Project...", "Ctrl+N"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_FOLDER_PLUS, "New Project..."), "Ctrl+N"))
         {
             NewProjectDialog();
         }
@@ -3796,13 +3798,13 @@ namespace Lumina
         if (Paths::IsInstalledBuild())
         {
             ImGui::BeginDisabled();
-            ImGui::MenuItem(LE_ICON_PACKAGE_VARIANT " Package Project...");
+            ImGui::MenuItem(LOC_ICON(LE_ICON_PACKAGE_VARIANT, "Package Project..."));
             ImGui::EndDisabled();
-            ImGui::SetItemTooltip("Packaging a game needs a source build of the engine.");
+            ImGui::SetItemTooltip("%s", LOC("Packaging a game needs a source build of the engine."));
         }
         else
         {
-            DrawToolMenuItem<FProjectPackagerEditorTool>(LE_ICON_PACKAGE_VARIANT " Package Project...", this);
+            DrawToolMenuItem<FProjectPackagerEditorTool>(LOC_ICON(LE_ICON_PACKAGE_VARIANT, "Package Project..."), this);
         }
 
         ImGui::EndMenu();
@@ -3810,37 +3812,37 @@ namespace Lumina
 
     void FEditorUI::DrawToolsMenu()
     {
-        if (!ImGui::BeginMenu(LE_ICON_WRENCH " Tools"))
+        if (!ImGui::BeginMenu(LOC_ICON(LE_ICON_WRENCH, "Tools")))
         {
             return;
         }
 
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.62f, 1.0f), "Workspace");
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.62f, 1.0f), "%s", LOC("Workspace"));
         ImGui::Separator();
 
-        DrawToolMenuItem<FTerminalEditorTool>(LE_ICON_CONSOLE_LINE " Terminal", this);
+        DrawToolMenuItem<FTerminalEditorTool>(LOC_ICON(LE_ICON_CONSOLE_LINE, "Terminal"), this);
 
         ImGui::Spacing();
 
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.62f, 1.0f), "Debug Windows");
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.62f, 1.0f), "%s", LOC("Debug Windows"));
         ImGui::Separator();
 
-        DrawToolMenuItem<FAssetRegistryEditorTool>(LE_ICON_DATABASE " Asset Registry", this);
-        DrawToolMenuItem<FProfilerEditorTool>(LE_ICON_CHART_BAR " Profiler", this);
-        DrawToolMenuItem<FShadowAtlasEditorTool>(LE_ICON_GRID " Shadow Atlas", this);
-        DrawToolMenuItem<FTextureHeapEditorTool>(LE_ICON_IMAGE_ALBUM " Texture Heap", this);
-        DrawToolMenuItem<FTextureStreamingEditorTool>(LE_ICON_SWAP_VERTICAL " Texture Streaming", this);
-        DrawToolMenuItem<FMemoryProfilerEditorTool>(LE_ICON_MEMORY " Memory", this);
-        DrawToolMenuItem<FScriptDiagnosticsEditorTool>(LE_ICON_LANGUAGE_CSHARP " C# Diagnostics", this);
-        DrawToolMenuItem<FObjectBrowserEditorTool>(LE_ICON_LIST_BOX " Object Browser", this);
-        DrawToolMenuItem<FConsoleVariableEditorTool>(LE_ICON_TUNE " Console Variables", this);
-        DrawToolMenuItem<FPluginBrowserEditorTool>(LE_ICON_PUZZLE " Plugin Browser", this);
+        DrawToolMenuItem<FAssetRegistryEditorTool>(LOC_ICON(LE_ICON_DATABASE, "Asset Registry"), this);
+        DrawToolMenuItem<FProfilerEditorTool>(LOC_ICON(LE_ICON_CHART_BAR, "Profiler"), this);
+        DrawToolMenuItem<FShadowAtlasEditorTool>(LOC_ICON(LE_ICON_GRID, "Shadow Atlas"), this);
+        DrawToolMenuItem<FTextureHeapEditorTool>(LOC_ICON(LE_ICON_IMAGE_ALBUM, "Texture Heap"), this);
+        DrawToolMenuItem<FTextureStreamingEditorTool>(LOC_ICON(LE_ICON_SWAP_VERTICAL, "Texture Streaming"), this);
+        DrawToolMenuItem<FMemoryProfilerEditorTool>(LOC_ICON(LE_ICON_MEMORY, "Memory"), this);
+        DrawToolMenuItem<FScriptDiagnosticsEditorTool>(LOC_ICON(LE_ICON_LANGUAGE_CSHARP, "C# Diagnostics"), this);
+        DrawToolMenuItem<FObjectBrowserEditorTool>(LOC_ICON(LE_ICON_LIST_BOX, "Object Browser"), this);
+        DrawToolMenuItem<FConsoleVariableEditorTool>(LOC_ICON(LE_ICON_TUNE, "Console Variables"), this);
+        DrawToolMenuItem<FPluginBrowserEditorTool>(LOC_ICON(LE_ICON_PUZZLE, "Plugin Browser"), this);
 
         // Plugin-contributed standalone tools (see FToolsMenuRegistry). Section is hidden when empty.
         if (!FToolsMenuRegistry::Get().IsEmpty())
         {
             ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.62f, 1.0f), "Plugins");
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.62f, 1.0f), "%s", LOC("Plugins"));
             ImGui::Separator();
 
             for (const FToolsMenuEntry& Entry : FToolsMenuRegistry::Get().GetEntries())
@@ -3855,40 +3857,40 @@ namespace Lumina
 
         ImGui::Spacing();
 
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.62f, 1.0f), "ImGui Tools");
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.62f, 1.0f), "%s", LOC("ImGui Tools"));
         ImGui::Separator();
         
-        ImGui::MenuItem(LE_ICON_WINDOW_OPEN " ImGui Style Editor", nullptr, &bShowImGuiStyleEditor);
-        ImGui::MenuItem(LE_ICON_WINDOW_OPEN " ImGui Demo", nullptr, &bShowDearImGuiDemoWindow);
-        ImGui::MenuItem(LE_ICON_CHART_BAR " ImPlot Demo", nullptr, &bShowImPlotDemoWindow);
+        ImGui::MenuItem(LOC_ICON(LE_ICON_WINDOW_OPEN, "ImGui Style Editor"), nullptr, &bShowImGuiStyleEditor);
+        ImGui::MenuItem(LOC_ICON(LE_ICON_WINDOW_OPEN, "ImGui Demo"), nullptr, &bShowDearImGuiDemoWindow);
+        ImGui::MenuItem(LOC_ICON(LE_ICON_CHART_BAR, "ImPlot Demo"), nullptr, &bShowImPlotDemoWindow);
         
         ImGui::Spacing();
         
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.62f, 1.0f), "External Tools");
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.62f, 1.0f), "%s", LOC("External Tools"));
         ImGui::Separator();
         
-        if (ImGui::MenuItem(LE_ICON_WATCH " Tracy Profiler", "F7"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_WATCH, "Tracy Profiler"), "F7"))
         {
             LaunchTracyProfiler();
         }
         
-        if (ImGui::MenuItem(LE_ICON_CAMERA " RenderDoc Capture", "F11"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_CAMERA, "RenderDoc Capture"), "F11"))
         {
             FRenderDoc::Get().TriggerCapture();
         }
 
-        if (ImGui::BeginMenu(LE_ICON_CAMERA " Screenshot"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_CAMERA, "Screenshot")))
         {
-            if (ImGui::MenuItem("Save PNG (Tonemapped)", "F9"))
+            if (ImGui::MenuItem(LOC("Save PNG (Tonemapped)"), "F9"))
             {
                 Screenshot::CaptureActiveWorld(Screenshot::ECaptureSource::FinalLDR);
             }
-            if (ImGui::MenuItem("Save HDR (Linear)", "Shift+F9"))
+            if (ImGui::MenuItem(LOC("Save HDR (Linear)"), "Shift+F9"))
             {
                 Screenshot::CaptureActiveWorld(Screenshot::ECaptureSource::SceneHDR);
             }
             ImGui::Separator();
-            if (ImGui::MenuItem(LE_ICON_FOLDER " Open Screenshots Folder"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_FOLDER, "Open Screenshots Folder")))
             {
                 FString Folder = Screenshot::GetScreenshotDirectory();
                 Paths::CreateDirectories(FStringView(Folder.c_str(), Folder.size()));
@@ -3899,22 +3901,22 @@ namespace Lumina
 
         ImGui::Spacing();
         
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.62f, 1.0f), "Settings");
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.62f, 1.0f), "%s", LOC("Settings"));
         ImGui::Separator();
         
-        if (ImGui::BeginMenu(LE_ICON_PALETTE " Theme"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_PALETTE, "Theme")))
         {
-            if (ImGui::MenuItem("Dark", nullptr, true))  // Currently selected
+            if (ImGui::MenuItem(LOC("Dark"), nullptr, true))  // Currently selected
             {
                 // Apply dark theme
             }
             
-            if (ImGui::MenuItem("Light", nullptr, false))
+            if (ImGui::MenuItem(LOC("Light"), nullptr, false))
             {
                 // Apply light theme
             }
             
-            if (ImGui::MenuItem("Custom...", nullptr, false))
+            if (ImGui::MenuItem(LOC("Custom..."), nullptr, false))
             {
                 // Open theme editor
             }
@@ -3925,21 +3927,53 @@ namespace Lumina
         ImGui::EndMenu();
     }
 
+    // Persists the language choice and swaps the live string table. The Settings tool edits the same
+    // object, so a switch made here survives a restart and stays in sync with that panel.
+    static void ApplyEditorLanguage(ELanguage NewLanguage)
+    {
+        if (CLocalizationSettings* LocalizationSettings = GetMutableDefault<CLocalizationSettings>())
+        {
+            LocalizationSettings->Language = NewLanguage;
+            GConfig->SaveSettings(CLocalizationSettings::StaticClass());
+        }
+
+        // OnSettingsSaved reloads both the language and the table directory, just like Settings edits.
+    }
+
     void FEditorUI::DrawHelpMenu()
     {
-        if (!ImGui::BeginMenu(LE_ICON_HELP " Help"))
+        if (!ImGui::BeginMenu(LOC_ICON(LE_ICON_HELP, "Help")))
         {
             return;
         }
 
-        if (ImGui::MenuItem(LE_ICON_GROUP " Discord"))
+        // Quick language switch, so the setting does not have to be hunted down in the Settings panel.
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_EARTH, "Language")))
+        {
+            const ELanguage ActiveLanguage = FLocalization::Get().GetLanguage();
+            const size_t LanguageCount = FLocalization::GetLanguageCount();
+            for (size_t Index = 0; Index < LanguageCount; ++Index)
+            {
+                const ELanguage Language = FLocalization::GetLanguageByIndex(Index);
+                if (ImGui::MenuItem(FLocalization::GetLanguageDisplayName(Language), nullptr, Language == ActiveLanguage))
+                {
+                    ApplyEditorLanguage(Language);
+                }
+            }
+
+            ImGui::EndMenu();
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_GROUP, "Discord")))
         {
             Platform::LaunchURL(TEXT("https://discord.gg/UhTmzB8UdY"));
         }
 
-        if (ImGui::BeginMenu(LE_ICON_BOOK " Documentation"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_BOOK, "Documentation")))
         {
-            if (ImGui::MenuItem(LE_ICON_GROUP " Lumina"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_GROUP, "Lumina")))
             {
                 Platform::LaunchURL(TEXT("https://luminagameengine.com/"));
             }
@@ -3947,26 +3981,26 @@ namespace Lumina
             ImGui::EndMenu();
         }
     
-        if (ImGui::MenuItem(LE_ICON_ACCOUNT_QUESTION " Tutorials"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_ACCOUNT_QUESTION, "Tutorials")))
         {
             Platform::LaunchURL(TEXT("https://luminagameengine.com"));
         }
     
         ImGui::Separator();
 
-        if (ImGui::MenuItem(LE_ICON_GITHUB " GitHub Repository"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_GITHUB, "GitHub Repository")))
         {
             Platform::LaunchURL(TEXT("https://github.com/MrDrElliot/LuminaEngine"));
         }
     
-        if (ImGui::MenuItem(LE_ICON_BUG " Report Issue"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_BUG, "Report Issue")))
         {
             Platform::LaunchURL(TEXT("https://github.com/MrDrElliot/LuminaEngine/issues"));
         }
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem(LE_ICON_PATREON " Support Lumina on Patreon"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_PATREON, "Support Lumina on Patreon")))
         {
             Platform::LaunchURL(TEXT("https://www.patreon.com/c/DrElliot"));
         }
@@ -3974,20 +4008,20 @@ namespace Lumina
         ImGui::Separator();
         
         // About + Contributors are now tabs of the same tool, so a single menu entry covers both.
-        DrawToolMenuItem<FAboutEditorTool>(LE_ICON_CIRCLE " About Lumina", this);
+        DrawToolMenuItem<FAboutEditorTool>(LOC_ICON(LE_ICON_CIRCLE, "About Lumina"), this);
 
         ImGui::EndMenu();
     }
 
     void FEditorUI::OpenProjectDialog()
     {
-        ModalManager.CreateDialogue("Open Project", ImVec2(720, 560), [this] () -> bool
+        ModalManager.CreateDialogue(LOC("Open Project"), ImVec2(720, 560), [this] () -> bool
         {
             bool bShouldClose = false;
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
             ImGui::PushStyleColor(ImGuiCol_Text, kProjDialogTextPrimary);
-            ImGui::TextUnformatted(LE_ICON_FOLDER_OPEN " Open Project");
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_FOLDER_OPEN, "Open Project"));
             ImGui::PopStyleColor();
             ImGuiX::Font::PopFont();
             ImGui::Spacing();
@@ -3997,7 +4031,7 @@ namespace Lumina
             // The primary action, Create New Project.
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14, 12));
-            if (SchemeButton(LE_ICON_FOLDER_PLUS "  Create New Project", ImVec2(-1, 0), kButtonPrimary))
+            if (SchemeButton(LOC_ICON(LE_ICON_FOLDER_PLUS, "Create New Project"), ImVec2(-1, 0), kButtonPrimary))
             {
                 DeferShowDialog([this] { NewProjectDialog(); });
                 bShouldClose = true;
@@ -4008,7 +4042,7 @@ namespace Lumina
             ImGui::BeginChild("##ProjectListBody", ImVec2(0, -52), false);
             {
                 // Recent projects.
-                DrawSectionHeader("RECENT PROJECTS");
+                DrawSectionHeader(LOC("RECENT PROJECTS"));
 
                 // Prunes a deleted project folder and a legacy name-only entry in one pass.
                 auto Recents = PruneMissingRecents();
@@ -4049,7 +4083,7 @@ namespace Lumina
                 {
                     ImGui::PushStyleColor(ImGuiCol_Text, kProjDialogTextMuted);
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.0f);
-                    ImGui::TextUnformatted("No recent projects yet.");
+                    ImGui::TextUnformatted(LOC("No recent projects yet."));
                     ImGui::PopStyleColor();
                 }
 
@@ -4073,12 +4107,12 @@ namespace Lumina
 
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
 
-            if (ImGui::Button(LE_ICON_FOLDER_OPEN "  Browse for project file...", ImVec2(260, 30)))
+            if (ImGui::Button(LOC_ICON(LE_ICON_FOLDER_OPEN, "Browse for project file..."), ImVec2(260, 30)))
             {
                 FFixedString Project;
                 if (Platform::OpenFileDialogue(
                         Project,
-                        "Open Project",
+                        LOC("Open Project"),
                         "Lumina Project (*.lproject)\0*.lproject\0All Files (*.*)\0*.*\0",
                         nullptr))
                 {
@@ -4090,7 +4124,7 @@ namespace Lumina
 
             ImGui::SameLine(ImGui::GetContentRegionAvail().x - 116);
 
-            if (SchemeButton("Cancel", ImVec2(120, 30), kButtonNeutralDim))
+            if (SchemeButton(LOC("Cancel"), ImVec2(120, 30), kButtonNeutralDim))
             {
                 bShouldClose = true;
             }
@@ -4103,7 +4137,7 @@ namespace Lumina
 
     void FEditorUI::NewProjectDialog()
     {
-        ModalManager.CreateDialogue("New Project", ImVec2(720, 600), [this] () -> bool
+        ModalManager.CreateDialogue(LOC("New Project"), ImVec2(720, 600), [this] () -> bool
         {
             static char NewProjectName[256] = "MyProject";
             static char NewProjectPath[512] = "";
@@ -4111,7 +4145,7 @@ namespace Lumina
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
             ImGui::PushStyleColor(ImGuiCol_Text, kProjDialogTextPrimary);
-            ImGui::TextUnformatted(LE_ICON_FOLDER_PLUS " Create New Project");
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_FOLDER_PLUS, "Create New Project"));
             ImGui::PopStyleColor();
             ImGuiX::Font::PopFont();
             ImGui::Spacing();
@@ -4120,13 +4154,13 @@ namespace Lumina
             // Scrollable body so the footer stays pinned.
             ImGui::BeginChild("##NewProjBody", ImVec2(0, -52), false);
 
-            DrawSectionHeader("TEMPLATE");
+            DrawSectionHeader(LOC("TEMPLATE"));
             if (Paths::IsInstalledBuild())
             {
                 DrawProjectRow(
                     LE_ICON_CUBE,
-                    "Blank Project",
-                    "C# scripts and content. Opens straight away, with nothing to build.",
+                    LOC("Blank Project"),
+                    LOC("C# scripts and content. Opens straight away, with nothing to build."),
                     kProjDialogAccentBlue,
                     /*bCompact=*/false);
             }
@@ -4134,13 +4168,13 @@ namespace Lumina
             {
                 DrawProjectRow(
                     LE_ICON_CUBE,
-                    "Blank Project (C++)",
-                    "Empty C++ module + C# scripting. F5 in the generated .slnx launches the editor with the project loaded.",
+                    LOC("Blank Project (C++)"),
+                    LOC("Empty C++ module + C# scripting. F5 in the generated .slnx launches the editor with the project loaded."),
                     kProjDialogAccentBlue,
                     /*bCompact=*/false);
             }
 
-            DrawSectionHeader("PROJECT NAME");
+            DrawSectionHeader(LOC("PROJECT NAME"));
             ImGui::PushStyleColor(ImGuiCol_FrameBg,        ImVec4(0.15f, 0.15f, 0.18f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  ImVec4(0.25f, 0.25f, 0.30f, 1.0f));
@@ -4151,7 +4185,7 @@ namespace Lumina
             ImGui::PopStyleVar(2);
             ImGui::PopStyleColor(3);
 
-            DrawSectionHeader("LOCATION");
+            DrawSectionHeader(LOC("LOCATION"));
             ImGui::PushStyleColor(ImGuiCol_FrameBg,        ImVec4(0.15f, 0.15f, 0.18f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.20f, 0.20f, 0.25f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  ImVec4(0.25f, 0.25f, 0.30f, 1.0f));
@@ -4164,10 +4198,10 @@ namespace Lumina
             ImGui::SameLine();
             // OpenFileDialogue with null filter → folder picker (FOS_PICKFOLDERS).
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-            if (ImGui::Button(LE_ICON_FOLDER " Browse", ImVec2(110, 0)))
+            if (ImGui::Button(LOC_ICON(LE_ICON_FOLDER, "Browse"), ImVec2(110, 0)))
             {
                 FFixedString File;
-                if (Platform::OpenFileDialogue(File, "Select project location"))
+                if (Platform::OpenFileDialogue(File, LOC("Select project location")))
                 {
                     const size_t Count = Math::Min(File.size(), sizeof(NewProjectPath) - 1);
                     memcpy(NewProjectPath, File.c_str(), Count);
@@ -4206,11 +4240,11 @@ namespace Lumina
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
 
             // Deferred so the modal closes cleanly before the next CreateDialogue.
-            const bool bBack = SchemeButton(LE_ICON_ARROW_LEFT "  Back", ImVec2(110, 30), kButtonNeutralDim);
+            const bool bBack = SchemeButton(LOC_ICON(LE_ICON_ARROW_LEFT, "Back"), ImVec2(110, 30), kButtonNeutralDim);
 
             ImGui::SameLine(ImGui::GetContentRegionAvail().x - 156);
 
-            const bool bCreateClicked = SchemeButton(LE_ICON_CHECK "  Create Project", ImVec2(160, 30), kButtonPrimary);
+            const bool bCreateClicked = SchemeButton(LOC_ICON(LE_ICON_CHECK, "Create Project"), ImVec2(160, 30), kButtonPrimary);
 
             ImGui::PopStyleVar();
 
@@ -4271,14 +4305,14 @@ namespace Lumina
             SlnPath.append(".slnx");
         }
 
-        ModalManager.CreateDialogue("Project Created", ImVec2(640, 400), [this, ProjectFileCopy, SlnPath] () -> bool
+        ModalManager.CreateDialogue(LOC("Project Created"), ImVec2(640, 400), [this, ProjectFileCopy, SlnPath] () -> bool
         {
             // Polled each frame; cheap (stat call on local disk).
             const bool bSlnReady = Filesystem::Exists(SlnPath);
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
             ImGui::PushStyleColor(ImGuiCol_Text, kProjDialogTextPrimary);
-            ImGui::TextUnformatted(LE_ICON_CHECK_CIRCLE " Project Created");
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_CHECK_CIRCLE, "Project Created"));
             ImGui::PopStyleColor();
             ImGuiX::Font::PopFont();
             ImGui::Spacing();
@@ -4286,9 +4320,9 @@ namespace Lumina
             ImGui::Spacing();
 
             ImGui::PushStyleColor(ImGuiCol_Text, kProjDialogTextDim);
-            ImGui::TextWrapped(
+            ImGui::TextWrapped(LOC(
                 "Your project was created. premake is generating its Visual Studio "
-                "solution in the background, watch the editor log for output.");
+                "solution in the background, watch the editor log for output."));
             ImGui::PopStyleColor();
 
             ImGui::Spacing();
@@ -4310,7 +4344,7 @@ namespace Lumina
             if (ImGui::SmallButton(LE_ICON_CONTENT_COPY))
             {
                 ImGui::SetClipboardText(ProjectFileCopy.c_str());
-                ImGuiX::Notifications::NotifyInfo("Project path copied.");
+                ImGuiX::Notifications::NotifyInfo(LOCF("Project path copied."));
             }
             ImGui::PopStyleColor(2);
             ImGui::EndChild();
@@ -4322,13 +4356,13 @@ namespace Lumina
             if (bSlnReady)
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.85f, 0.55f, 1.0f));
-                ImGui::TextUnformatted(LE_ICON_CHECK " Solution ready.");
+                ImGui::TextUnformatted(LOC_ICON(LE_ICON_CHECK, "Solution ready."));
                 ImGui::PopStyleColor();
             }
             else
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, kProjDialogTextMuted);
-                ImGui::TextUnformatted(LE_ICON_CLOCK_OUTLINE " Waiting for premake to finish...");
+                ImGui::TextUnformatted(LOC_ICON(LE_ICON_CLOCK_OUTLINE, "Waiting for premake to finish..."));
                 ImGui::PopStyleColor();
             }
 
@@ -4343,7 +4377,7 @@ namespace Lumina
             const float BtnW  = (Avail - Gap * 2.0f) / 3.0f;
 
             // Reveal in Explorer, always available.
-            if (SchemeButton(LE_ICON_FOLDER_OPEN "  Reveal in Explorer", ImVec2(BtnW, BtnH), kButtonNeutral))
+            if (SchemeButton(LOC_ICON(LE_ICON_FOLDER_OPEN, "Reveal in Explorer"), ImVec2(BtnW, BtnH), kButtonNeutral))
             {
                 Platform::ShowFileInExplorer(UTF8_TO_TCHAR(ProjectFileCopy.c_str()));
             }
@@ -4352,7 +4386,7 @@ namespace Lumina
 
             // Close Editor, secondary.
             bool bCloseEditor = false;
-            if (SchemeButton(LE_ICON_POWER "  Close Editor", ImVec2(BtnW, BtnH), kButtonNeutral))
+            if (SchemeButton(LOC_ICON(LE_ICON_POWER, "Close Editor"), ImVec2(BtnW, BtnH), kButtonNeutral))
             {
                 bCloseEditor = true;
             }
@@ -4362,7 +4396,7 @@ namespace Lumina
             // Open Solution, primary blue, disabled until premake finishes.
             ImGui::BeginDisabled(!bSlnReady);
             bool bOpenSln = false;
-            if (SchemeButton(LE_ICON_PLAY "  Open Solution", ImVec2(BtnW, BtnH), kButtonPrimary))
+            if (SchemeButton(LOC_ICON(LE_ICON_PLAY, "Open Solution"), ImVec2(BtnW, BtnH), kButtonPrimary))
             {
                 bOpenSln = true;
             }

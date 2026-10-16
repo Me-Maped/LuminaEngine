@@ -15,6 +15,7 @@
 #include "imgui-node-editor/imgui_node_editor_internal.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
+#include "Localization/Localization.h"
 #include "Containers/StringFormat.h"
 #include "Core/Templates/IntegerCompare.h"
 
@@ -36,6 +37,19 @@ namespace Lumina
         {
             TVector<CEdGraphNode*>& Clipboard = GetNodeClipboard();
             Clipboard.erase(Algo::Remove(Clipboard, Node), Clipboard.end());
+        }
+
+        // A pin name is an identifier as much as a label, so it is translated here at the draw site
+        // rather than at creation. A pin whose domain reads a word differently supplies a context
+        // (see CEdNodeGraphPin::GetPinLocalizationContext), which resolves through "Name|context"
+        // and falls back to the plain entry when that domain has no translation of its own.
+        const char* PinLabel(const CEdNodeGraphPin* Pin)
+        {
+            const char* Context = Pin->GetPinLocalizationContext();
+
+            return Context != nullptr
+                ? LOC_VIEW_CTX(Pin->GetPinName(), Context)
+                : LOC_VIEW(Pin->GetPinName());
         }
     }
 
@@ -622,7 +636,7 @@ namespace Lumina
 
     void CEdNodeGraph::AlignSelectedNodes(ENodeAlignment Alignment)
     {
-        SetPendingEditLabel("Align Nodes");
+        SetPendingEditLabel(FName(LOC("Align Nodes")));
 
         using namespace ax;
 
@@ -790,7 +804,7 @@ namespace Lumina
 
     void CEdNodeGraph::TidyGraph()
     {
-        SetPendingEditLabel("Arrange Nodes");
+        SetPendingEditLabel(FName(LOC("Arrange Nodes")));
 
         using namespace ax;
 
@@ -926,16 +940,16 @@ namespace Lumina
     {
         struct FAlignEntry { ENodeAlignment Mode; const char* Label; const char* Shortcut; };
 
-        static constexpr FAlignEntry Entries[] =
+        const FAlignEntry Entries[] =
         {
-            { ENodeAlignment::Left,        "Align Left",      "Shift+A" },
-            { ENodeAlignment::Right,       "Align Right",     "Shift+D" },
-            { ENodeAlignment::Top,         "Align Top",       "Shift+W" },
-            { ENodeAlignment::Bottom,      "Align Bottom",    "Shift+S" },
-            { ENodeAlignment::CenterX,     "Align Center X",  "Shift+X" },
-            { ENodeAlignment::CenterY,     "Align Center Y",  "Shift+Y" },
-            { ENodeAlignment::DistributeX, "Distribute X",    nullptr   },
-            { ENodeAlignment::DistributeY, "Distribute Y",    nullptr   },
+            { ENodeAlignment::Left,        LOC("Align Left"),      "Shift+A" },
+            { ENodeAlignment::Right,       LOC("Align Right"),     "Shift+D" },
+            { ENodeAlignment::Top,         LOC("Align Top"),       "Shift+W" },
+            { ENodeAlignment::Bottom,      LOC("Align Bottom"),    "Shift+S" },
+            { ENodeAlignment::CenterX,     LOC("Align Center X"),  "Shift+X" },
+            { ENodeAlignment::CenterY,     LOC("Align Center Y"),  "Shift+Y" },
+            { ENodeAlignment::DistributeX, LOC("Distribute X"),    nullptr   },
+            { ENodeAlignment::DistributeY, LOC("Distribute Y"),    nullptr   },
         };
 
         // Graying the whole set out beats offering items that silently do nothing.
@@ -998,7 +1012,7 @@ namespace Lumina
             ImGui::SameLine();
         }
 
-        ImGui::TextUnformatted(Pin->GetPinName().c_str());
+        ImGui::TextUnformatted(PinLabel(Pin));
     }
 
     uint64 CEdNodeGraph::MakeLinkID(const CEdNodeGraphPin* InputPin, const CEdNodeGraphPin* OutputPin)
@@ -1197,7 +1211,7 @@ namespace Lumina
             
             if (bDebug)
             {
-                ImGui::Text("(ID - %lld)", (long long)Node->GetNodeID());
+                ImGui::Text(LOC("(ID - %lld)"), (long long)Node->GetNodeID());
             }
             
             ImGui::Spring(1);
@@ -1235,7 +1249,7 @@ namespace Lumina
                     DrawPinIcon(InputPin->HasConnection(), (int)IconAlpha, PinColor);
                     ImGui::Spring(0);
 
-                    ImGui::TextUnformatted(InputPin->GetPinName().c_str());
+                    ImGui::TextUnformatted(PinLabel(InputPin));
 
                     // Inline editors for unconnected pins, opt-in per graph through ShouldDrawInlinePinEditors().
                     if (ShouldDrawInlinePinEditors() && !InputPin->HasConnection() && InputPin->HasInlineEditor())
@@ -1248,7 +1262,7 @@ namespace Lumina
 
                     if (bDebug)
                     {
-                        ImGui::Text("(ID - %i)", InputPin->GetPinGUID());
+                        ImGui::Text(LOC("(ID - %i)"), InputPin->GetPinGUID());
                     }
 
                     ImGui::Spring(0);
@@ -1283,7 +1297,7 @@ namespace Lumina
 
                     ImGui::Spring(1, 1);
                     DrawPinDebugValue(OutputPin);
-                    ImGui::TextUnformatted(OutputPin->GetPinName().c_str());
+                    ImGui::TextUnformatted(PinLabel(OutputPin));
                     ImGui::Spring(0);
 
                     ImVec4 PinColor = ImGui::ColorConvertU32ToFloat4(OutputPin->GetPinColor());
@@ -1295,7 +1309,7 @@ namespace Lumina
 
                     if (bDebug)
                     {
-                        ImGui::Text("(ID - %i)", OutputPin->GetPinGUID());
+                        ImGui::Text(LOC("(ID - %i)"), OutputPin->GetPinGUID());
                     }
 
                     if (bDisabledOut)
@@ -1488,7 +1502,7 @@ namespace Lumina
 
                     if (Rejected > 0)
                     {
-                        ImGuiX::Notifications::NotifyWarning("Skipped {0} node(s) this graph does not support.", Rejected);
+                        ImGuiX::Notifications::NotifyWarning(LOCF("Skipped {0} node(s) this graph does not support."), Rejected);
                     }
 
                     CloneNodes(Pastable, PasteLocation - GClipboardPivot);
@@ -1668,7 +1682,7 @@ namespace Lumina
                     }
                     else if (NodeEditor::AcceptNewItem(ImColor(128, 255, 128), 2.0f))
                     {
-                        SetPendingEditLabel("Connect Pins");
+                        SetPendingEditLabel(FName(LOC("Connect Pins")));
                         ConnectPins(StartPin, EndPin);
                     }
                 }
@@ -1724,7 +1738,7 @@ namespace Lumina
                     if (FindLinkIndex(DeletedLinkId, LinkIndex))
                     {
                         const TPair<CEdNodeGraphPin*, CEdNodeGraphPin*>& Pair = Links[LinkIndex];
-                        SetPendingEditLabel("Break Link");
+                        SetPendingEditLabel(FName(LOC("Break Link")));
                         BreakLink(Pair.first, Pair.second);
                     }
                 }
@@ -1734,7 +1748,7 @@ namespace Lumina
         // After the link pass, since a deleted node's wires are reported too and their pins must still be alive.
         if (!DeletedNodes.empty())
         {
-            SetPendingEditLabel(DeletedNodes.size() == 1 ? FName("Delete Node") : FName("Delete Nodes"));
+            SetPendingEditLabel(DeletedNodes.size() == 1 ? FName(LOC("Delete Node")) : FName(LOC("Delete Nodes")));
             RemoveNodes(DeletedNodes);
         }
 
@@ -1829,13 +1843,13 @@ namespace Lumina
     {
         if (Node != nullptr)
         {
-            ImGui::TextDisabled("%s", FString(Node->GetNodeDisplayName()).c_str());
+            ImGui::TextDisabled("%s", LOC_VIEW_CTX(Node->GetNodeDisplayName(), "node"));
             ImGui::Separator();
 
             Node->DrawContextMenu();
         }
 
-        if (ImGui::BeginMenu("Alignment"))
+        if (ImGui::BeginMenu(LOC("Alignment")))
         {
             DrawAlignmentMenuItems();
             ImGui::EndMenu();
@@ -1848,12 +1862,12 @@ namespace Lumina
     {
         ImGui::Separator();
 
-        if (ImGui::MenuItem(LE_ICON_AUTO_FIX " Tidy Graph"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_AUTO_FIX, "Tidy Graph")))
         {
             QueueTidyGraph();
         }
-        ImGuiX::TextTooltip("Lay the graph out in columns by distance from the output, ordered to reduce "
-                            "crossing wires. Unused nodes are parked off to the left.");
+        ImGuiX::TextTooltip(LOCF("Lay the graph out in columns by distance from the output, ordered to reduce "
+                            "crossing wires. Unused nodes are parked off to the left."));
 
         TVector<CEdGraphNode*> Dead;
         CollectDeadNodes(Dead);
@@ -1861,20 +1875,22 @@ namespace Lumina
         // A menu whose entries come and go is harder to learn than one that says there is nothing to do.
         ImGui::BeginDisabled(Dead.empty());
         if (ImGui::MenuItem(Dead.empty()
-                ? LE_ICON_SELECTION_OFF " No Unused Nodes"
-                : FormatAs<FFixedString>(LE_ICON_SELECTION " Select {} Unused Node{}",
-                    (int32)Dead.size(), Dead.size() == 1 ? "" : "s").c_str()))
+                ? LOC_ICON(LE_ICON_SELECTION_OFF, "No Unused Nodes")
+                : FormatAs<FFixedString>(Fmt::RuntimeFormat(Dead.size() == 1
+                    ? LOC_ICON(LE_ICON_SELECTION, "Select {} Unused Node")
+                    : LOC_ICON(LE_ICON_SELECTION, "Select {} Unused Nodes")),
+                    (int32)Dead.size()).c_str()))
         {
             SelectDeadNodes();
         }
 
-        if (ImGui::MenuItem(LE_ICON_BROOM " Delete Unused Nodes"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_BROOM, "Delete Unused Nodes")))
         {
             DeleteDeadNodes();
         }
         ImGui::EndDisabled();
-        ImGuiX::TextTooltip("Nodes whose result never reaches the output. The compiler already ignores "
-                            "them; this removes them from the canvas.");
+        ImGuiX::TextTooltip(LOCF("Nodes whose result never reaches the output. The compiler already ignores "
+                            "them; this removes them from the canvas."));
     }
 
     void CEdNodeGraph::DrawPinContextMenu(CEdNodeGraphPin* Pin)
@@ -2144,7 +2160,7 @@ namespace Lumina
             return;
         }
 
-        const FName Name = !Label.IsNone() ? Label : !PendingEditLabel.IsNone() ? PendingEditLabel : FName("Edit Graph");
+        const FName Name = !Label.IsNone() ? Label : !PendingEditLabel.IsNone() ? PendingEditLabel : FName(LOC("Edit Graph"));
         TUniquePtr<IUndoableCommand> Command = MakeUnique<FNodeGraphSnapshotCommand>(this, Move(UndoImage), Current);
 
         // Joins an edit already being recorded, such as a property change spanning the graph and its asset.
@@ -2226,7 +2242,7 @@ namespace Lumina
 
         if (!bContentChanged && PendingEditLabel.IsNone())
         {
-            PendingEditLabel = "Move Nodes";
+            PendingEditLabel = LOC("Move Nodes");
         }
         CommitEdit(FName());
     }
@@ -2258,7 +2274,7 @@ namespace Lumina
             {
                 if (OutError)
                 {
-                    *OutError = "That node is not in this graph.";
+                    *OutError = LOC("That node is not in this graph.");
                 }
                 return false;
             }
@@ -2267,7 +2283,7 @@ namespace Lumina
             {
                 if (OutError)
                 {
-                    *OutError = Format("{} belongs to the graph itself, so it cannot be removed.", Node->GetNodeDisplayName());
+                    *OutError = Format(LOCF("{} belongs to the graph itself, so it cannot be removed."), LOC_VIEW(Node->GetNodeDisplayName()));
                 }
                 return false;
             }
@@ -2316,24 +2332,24 @@ namespace Lumina
 
         if (Output == nullptr || Input == nullptr)
         {
-            return Fail("A connection needs both pins.");
+            return Fail(LOC("A connection needs both pins."));
         }
 
         if (Output->bInputPin || !Input->bInputPin)
         {
-            return Fail("A connection runs from an output pin to an input pin.");
+            return Fail(LOC("A connection runs from an output pin to an input pin."));
         }
 
         if (Output->IsDisabled() || Input->IsDisabled())
         {
-            return Fail("One of those pins is disabled.");
+            return Fail(LOC("One of those pins is disabled."));
         }
 
         const FEdGraphSchema& Schema = GetSchema();
         if (!Schema.CanCreateConnection(Output, Input))
         {
-            return Fail(Format("'{}' and '{}' cannot be connected, since the graph refuses that pairing.",
-                Output->GetPinName(), Input->GetPinName()));
+            return Fail(Format(LOCF("'{}' and '{}' cannot be connected, since the graph refuses that pairing."),
+                PinLabel(Output), PinLabel(Input)));
         }
 
         const TVector<CEdNodeGraphPin*> Existing = Input->GetConnections();

@@ -19,6 +19,7 @@
 #include "Paths/Paths.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -182,7 +183,7 @@ namespace Lumina
             CMaterialInterface* Parent = Cast<CMaterialInterface>(LoadObject<CObject>(Context.Asset->AssetGUID));
             if (Parent == nullptr)
             {
-                ImGuiX::Notifications::NotifyError("Could not load '{0}' to instance it.", Context.Asset->Path);
+                ImGuiX::Notifications::NotifyError(LOCF("Could not load '{0}' to instance it."), Context.Asset->Path);
                 return;
             }
 
@@ -192,14 +193,14 @@ namespace Lumina
             CMaterialInstance* Instance = CFactory::CreateNewOf<CMaterialInstance>(NewPath);
             if (Instance == nullptr)
             {
-                ImGuiX::Notifications::NotifyError("Failed to create a material instance at '{0}'.", NewPath);
+                ImGuiX::Notifications::NotifyError(LOCF("Failed to create a material instance at '{0}'."), NewPath);
                 return;
             }
 
             // Through the setter so instancing at the depth limit is rejected rather than silently allowed.
             if (!Instance->SetParentMaterial(Parent))
             {
-                ImGuiX::Notifications::NotifyError("'{0}' cannot be instanced any deeper.", Context.Asset->AssetName);
+                ImGuiX::Notifications::NotifyError(LOCF("'{0}' cannot be instanced any deeper."), Context.Asset->AssetName);
                 Instance->ConditionalBeginDestroy();
                 return;
             }
@@ -209,14 +210,14 @@ namespace Lumina
 
             if (!CPackage::SavePackage(Instance->GetPackage(), NewPath))
             {
-                ImGuiX::Notifications::NotifyError("Failed to save '{0}'.", NewPath);
+                ImGuiX::Notifications::NotifyError(LOCF("Failed to save '{0}'."), NewPath);
                 return;
             }
 
             // Without this the asset exists on disk but not in the registry, so nothing can find it.
             FAssetRegistry::Get().AssetCreated(Instance);
 
-            ImGuiX::Notifications::NotifySuccess("Created '{0}'.", NewPath);
+            ImGuiX::Notifications::NotifySuccess(LOCF("Created '{0}'."), NewPath);
 
             // Opened, since creating an instance is nearly always a prelude to tweaking its parameters.
             if (Context.ToolContext != nullptr)
@@ -233,7 +234,7 @@ namespace Lumina
             CStaticMesh* Mesh = Cast<CStaticMesh>(LoadObject<CObject>(Context.Asset->AssetGUID));
             if (Mesh == nullptr)
             {
-                ImGuiX::Notifications::NotifyError("Could not load '{0}' to build collision for it.", Context.Asset->Path);
+                ImGuiX::Notifications::NotifyError(LOCF("Could not load '{0}' to build collision for it."), Context.Asset->Path);
                 return;
             }
 
@@ -243,7 +244,7 @@ namespace Lumina
             CCollisionShape* Shape = CFactory::CreateNewOf<CCollisionShape>(NewPath);
             if (Shape == nullptr)
             {
-                ImGuiX::Notifications::NotifyError("Failed to create a collision shape at '{0}'.", NewPath);
+                ImGuiX::Notifications::NotifyError(LOCF("Failed to create a collision shape at '{0}'."), NewPath);
                 return;
             }
 
@@ -253,19 +254,19 @@ namespace Lumina
             // A single hull is the safest default, always convex, so it works on dynamic bodies immediately.
             if (!Physics::CollisionGen::GenerateSingleHull(Mesh, Shape))
             {
-                ImGuiX::Notifications::NotifyWarning("'{0}' produced no hull; the collision shape was created empty.",
+                ImGuiX::Notifications::NotifyWarning(LOCF("'{0}' produced no hull; the collision shape was created empty."),
                                                      Context.Asset->AssetName);
             }
 
             if (!CPackage::SavePackage(Shape->GetPackage(), NewPath))
             {
-                ImGuiX::Notifications::NotifyError("Failed to save '{0}'.", NewPath);
+                ImGuiX::Notifications::NotifyError(LOCF("Failed to save '{0}'."), NewPath);
                 return;
             }
 
             FAssetRegistry::Get().AssetCreated(Shape);
 
-            ImGuiX::Notifications::NotifySuccess("Created '{0}'.", NewPath);
+            ImGuiX::Notifications::NotifySuccess(LOCF("Created '{0}'."), NewPath);
 
             if (Context.ToolContext != nullptr)
             {
@@ -281,7 +282,7 @@ namespace Lumina
             CMaterialInstance* Instance = Cast<CMaterialInstance>(LoadObject<CObject>(Context.Asset->AssetGUID));
             if (Instance == nullptr)
             {
-                ImGuiX::Notifications::NotifyError("Could not load '{0}'.", Context.Asset->Path);
+                ImGuiX::Notifications::NotifyError(LOCF("Could not load '{0}'."), Context.Asset->Path);
                 return;
             }
 
@@ -290,7 +291,7 @@ namespace Lumina
             if (Parent == nullptr || Parent->GetPackage() == nullptr)
             {
                 // Not an error, since an instance with no parent yet is a legitimate if useless state.
-                ImGuiX::Notifications::NotifyWarning("'{0}' has no parent material.", Context.Asset->AssetName);
+                ImGuiX::Notifications::NotifyWarning(LOCF("'{0}' has no parent material."), Context.Asset->AssetName);
                 return;
             }
 
@@ -309,20 +310,20 @@ namespace Lumina
         // On the interface, so an instance can be instanced too and the child simply inherits its values.
         Registry.RegisterAction(CMaterialInterface::StaticClass(), FAssetAction
         {
-            .Label   = LE_ICON_CONTENT_DUPLICATE " Create Material Instance",
+            .Label   = LOC_ICON(LE_ICON_CONTENT_DUPLICATE, "Create Material Instance"),
             .Execute = &CreateMaterialInstanceFrom,
         });
 
         Registry.RegisterAction(CStaticMesh::StaticClass(), FAssetAction
         {
-            .Label   = LE_ICON_CUBE_OUTLINE " Create Collision Shape",
+            .Label   = LOC_ICON(LE_ICON_CUBE_OUTLINE, "Create Collision Shape"),
             .Execute = &CreateCollisionShapeFrom,
         });
 
         // Answering whether it has a parent means loading it, and the menu redraws every frame.
         Registry.RegisterAction(CMaterialInstance::StaticClass(), FAssetAction
         {
-            .Label   = LE_ICON_ARROW_UP_BOLD_BOX " Browse to Parent Material",
+            .Label   = LOC_ICON(LE_ICON_ARROW_UP_BOLD_BOX, "Browse to Parent Material"),
             .Execute = &BrowseToParentMaterial,
         });
     }

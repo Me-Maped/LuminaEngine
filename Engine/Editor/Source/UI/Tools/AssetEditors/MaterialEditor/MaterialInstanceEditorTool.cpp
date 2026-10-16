@@ -122,11 +122,11 @@ namespace Lumina
         const char* PreviewString = Selected != std::end(Entries) ? Selected->Label : "Sphere";
 
         ImGui::PushItemWidth(95.0f);
-        if (ImGui::BeginCombo("##PreviewMesh", PreviewString, ImGuiComboFlags_HeightLarge))
+        if (ImGui::BeginCombo("##PreviewMesh", LOC(PreviewString), ImGuiComboFlags_HeightLarge))
         {
             for (const FPreviewMeshEntry& Entry : Entries)
             {
-                if (ImGui::Selectable(Entry.Label, DebugMesh == Entry.Value))
+                if (ImGui::Selectable(LOC(Entry.Label), DebugMesh == Entry.Value))
                 {
                     DebugMesh = Entry.Value;
                     SetDebugMesh(DebugMesh);
@@ -150,20 +150,20 @@ namespace Lumina
 
     void FMaterialInstanceEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("What this is",
-            "An instance overrides parameters on a parent material, no shader recompile, no graph editing. "
-            "If you need new logic, edit the parent Material; if you only need different values, override here.");
-        DrawHelpTextRow("Parameters",
-            "Each row corresponds to a parameter exposed in the parent material's graph (Constant + ParameterName). "
-            "Toggle the Override checkbox to capture an override; clear it to fall back to the parent's value.");
-        DrawHelpTextRow("Texture Slots",
-            "Drag a texture from the Content Browser onto a slot. The picker filter matches by name, useful for "
-            "very large libraries.");
-        DrawHelpTextRow("Preview Mesh",
-            "Use the Mesh menu to swap between sphere/cube/plane/cylinder/cone for the preview viewport.");
-        DrawHelpTextRow("Inheritance",
-            "Changing the parent re-imports parameter defaults. Existing overrides are preserved when their "
-            "name + type match.");
+        DrawHelpTextRow(LOC("What this is"),
+            LOC("An instance overrides parameters on a parent material, no shader recompile, no graph editing. "
+            "If you need new logic, edit the parent Material; if you only need different values, override here."));
+        DrawHelpTextRow(LOC("Parameters"),
+            LOC("Each row corresponds to a parameter exposed in the parent material's graph (Constant + ParameterName). "
+            "Toggle the Override checkbox to capture an override; clear it to fall back to the parent's value."));
+        DrawHelpTextRow(LOC("Texture Slots"),
+            LOC("Drag a texture from the Content Browser onto a slot. The picker filter matches by name, useful for "
+            "very large libraries."));
+        DrawHelpTextRow(LOC("Preview Mesh"),
+            LOC("Use the Mesh menu to swap between sphere/cube/plane/cylinder/cone for the preview viewport."));
+        DrawHelpTextRow(LOC("Inheritance"),
+            LOC("Changing the parent re-imports parameter defaults. Existing overrides are preserved when their "
+            "name + type match."));
     }
 
     CMaterialInterface* FMaterialInstanceEditorTool::FindOverridingAncestor(CMaterialInstance* Instance, const FMaterialParameter& Param) const
@@ -188,7 +188,7 @@ namespace Lumina
     void FMaterialInstanceEditorTool::DrawInheritanceSection(CMaterialInstance* Instance)
     {
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Parent");
+        ImGui::TextUnformatted(LOC("Parent"));
         ImGui::SameLine(120.0f);
 
         CMaterialInterface* Parent = Instance->Material.Get();
@@ -206,8 +206,8 @@ namespace Lumina
             }
             else
             {
-                ImGuiX::Notifications::NotifyError("'{0}' cannot be the parent of '{1}'.",
-                    NewParent != nullptr ? NewParent->GetName().c_str() : "<none>", Instance->GetName().c_str());
+                ImGuiX::Notifications::NotifyError(LOCF("'{0}' cannot be the parent of '{1}'."),
+                    NewParent != nullptr ? NewParent->GetName().c_str() : LOC("<none>"), Instance->GetName().c_str());
             }
         }
 
@@ -223,7 +223,7 @@ namespace Lumina
         }
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Chain");
+        ImGui::TextUnformatted(LOC("Chain"));
         ImGui::SameLine(120.0f);
 
         // Root first, the order values resolve in, so the chain reads like the override stack.
@@ -257,27 +257,27 @@ namespace Lumina
             ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_NoScrollbar);
 
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.55f, 0.55f, 1.0f));
-        ImGui::TextUnformatted(LE_ICON_ALERT " Parent material is not compiled");
+        ImGui::TextUnformatted(LOC_ICON(LE_ICON_ALERT, "Parent material is not compiled"));
         ImGui::PopStyleColor();
 
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.80f, 0.80f, 1.0f));
         if (Root == nullptr)
         {
-            ImGui::TextWrapped("'%s' does not resolve to a base material, so there is nothing to inherit "
-                               "parameters from. Reassign the parent above.", Instance->GetName().c_str());
+            ImGui::TextWrapped(LOC("'%s' does not resolve to a base material, so there is nothing to inherit "
+                               "parameters from. Reassign the parent above."), Instance->GetName().c_str());
         }
         else
         {
-            ImGui::TextWrapped("'%s' has no usable shaders, so this instance renders nothing and exposes no "
+            ImGui::TextWrapped(LOC("'%s' has no usable shaders, so this instance renders nothing and exposes no "
                                "parameters. Open it and fix the compile errors listed in the console and the "
-                               "Shader Stats tab.", Root->GetName().c_str());
+                               "Shader Stats tab."), Root->GetName().c_str());
         }
         ImGui::PopStyleColor();
 
         if (Root != nullptr && ToolContext != nullptr)
         {
             ImGui::Spacing();
-            if (ImGui::SmallButton("Open Parent Material"))
+            if (ImGui::SmallButton(LOC("Open Parent Material")))
             {
                 ToolContext->OpenAssetEditor(Root->GetGUID());
             }
@@ -292,7 +292,7 @@ namespace Lumina
         CMaterialInstance* Instance = Cast<CMaterialInstance>(Asset.Get());
         if (Instance == nullptr)
         {
-            ImGui::TextUnformatted("Asset is not a material instance.");
+            ImGui::TextUnformatted(LOC("Asset is not a material instance."));
             return;
         }
 
@@ -305,7 +305,7 @@ namespace Lumina
 
         if (!Instance->Material.IsValid())
         {
-            ImGui::TextUnformatted("Assign a parent material to edit parameters.");
+            ImGui::TextUnformatted(LOC("Assign a parent material to edit parameters."));
             return;
         }
 
@@ -325,7 +325,7 @@ namespace Lumina
 
         if (Instance->GetMaterialParams().empty())
         {
-            ImGui::TextUnformatted("Parent material exposes no parameters.");
+            ImGui::TextUnformatted(LOC("Parent material exposes no parameters."));
             return;
         }
 
@@ -333,7 +333,7 @@ namespace Lumina
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, 0);
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, 0);
 
-        if (ImGui::CollapsingHeader("Parameter Overrides", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Parameter Overrides"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             constexpr ImGuiTableFlags TableFlags =
                 ImGuiTableFlags_BordersOuter |
@@ -380,8 +380,8 @@ namespace Lumina
                     if (!bEnabled && ImGui::IsItemHovered())
                     {
                         const CMaterialInterface* Source = FindOverridingAncestor(Instance, Param);
-                        ImGui::SetTooltip("Inherited from %s",
-                            Source != nullptr ? Source->GetName().c_str() : "the base material's default");
+                        ImGui::SetTooltip(LOC("Inherited from %s"),
+                            Source != nullptr ? Source->GetName().c_str() : LOC("the base material's default"));
                     }
 
                     ImGui::TableNextColumn();
@@ -399,7 +399,7 @@ namespace Lumina
                     {
                         if (Param.Index >= MAX_SCALARS)
                         {
-                            ImGui::TextDisabled("Invalid index");
+                            ImGui::TextDisabled(LOC("Invalid index"));
                             break;
                         }
                         float Value = Override ? Override->Scalar : Instance->GetMaterialUniforms()->Scalars[Param.Index];
@@ -415,7 +415,7 @@ namespace Lumina
                     {
                         if (Param.Index >= MAX_VECTORS)
                         {
-                            ImGui::TextDisabled("Invalid index");
+                            ImGui::TextDisabled(LOC("Invalid index"));
                             break;
                         }
                         FVector4 Value = Override ? Override->Vector : Instance->GetMaterialUniforms()->Vectors[Param.Index];
@@ -454,7 +454,7 @@ namespace Lumina
             return;
         }
 
-        if (!ImGui::CollapsingHeader("Static Switches", ImGuiTreeNodeFlags_DefaultOpen))
+        if (!ImGui::CollapsingHeader(LOC_ID("Static Switches"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             return;
         }
@@ -529,7 +529,7 @@ namespace Lumina
         if (!bCompiled)
         {
             ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.25f, 1.0f),
-                "Compiling this switch combination; drawing with the base material's switches for now.");
+                LOC("Compiling this switch combination; drawing with the base material's switches for now."));
         }
 
         ImGui::Spacing();

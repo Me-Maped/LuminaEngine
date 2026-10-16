@@ -104,6 +104,16 @@ namespace Lumina
         return TOut(Buffer.Data(), Buffer.Size());
     }
 
+    /** FormatAs for a format string that only exists at runtime, so nothing is checked at the call site. */
+    template <typename TOut, typename... TArgs>
+    NODISCARD TOut FormatAs(Fmt::FRuntimeFormatString Fmt, TArgs&&... Args)
+    {
+        Fmt::TInlineFormatBuffer<256> Buffer;
+        const Fmt::TFormatArgStore<std::decay_t<TArgs>...> Store(Args...);
+        Fmt::VFormatTo(Buffer, Fmt.Value, Store.View());
+        return TOut(Buffer.Data(), Buffer.Size());
+    }
+
     /** Appends straight into a format buffer, with no staging copy in between. */
     template <typename... TArgs>
     void AppendFormat(Fmt::FFormatBuffer& Out, Fmt::TFormatString<std::decay_t<TArgs>...> Fmt, TArgs&&... Args)

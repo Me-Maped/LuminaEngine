@@ -1,4 +1,5 @@
 #include "ModelingEditMode.h"
+#include "Localization/Localization.h"
 
 #include <cmath>
 
@@ -464,7 +465,7 @@ namespace Lumina
 
     void FModelingEditMode::DrawShapePalette()
     {
-        ImGui::SeparatorText("Shape");
+        ImGui::SeparatorText(LOC("Shape"));
 
         constexpr int32 ButtonsPerRow = 4;
         const float Spacing = ImGui::GetStyle().ItemSpacing.x;
@@ -484,7 +485,7 @@ namespace Lumina
             ImGui::PushStyleColor(ImGuiCol_Button, bSelected ? IM_COL32(60, 110, 160, 255) : ImGui::GetColorU32(ImGuiCol_Button));
 
             char Label[64];
-            ImFormatString(Label, sizeof(Label), "%s %s", GetShapeIcon(Shape), BlockoutMesh::GetShapeName(Shape));
+            ImFormatString(Label, sizeof(Label), "%s %s", GetShapeIcon(Shape), LOC_VIEW(BlockoutMesh::GetShapeName(Shape)));
             if (ImGui::Button(Label, ImVec2(ButtonWidth, 0.0f)))
             {
                 Template.Shape = Shape;
@@ -498,12 +499,12 @@ namespace Lumina
 
     void FModelingEditMode::DrawPlacementSettings()
     {
-        ImGui::SeparatorText("Placement");
+        ImGui::SeparatorText(LOC("Placement"));
 
-        ImGui::Checkbox("Snap to grid", &bSnapEnabled);
+        ImGui::Checkbox(LOC("Snap to grid"), &bSnapEnabled);
         ImGui::SameLine();
-        ImGui::Checkbox("Collision", &bCreateCollision);
-        ImGuiX::TextTooltip("{}", "Gives each new shape a mesh collider, so it blocks the player while you test the layout.");
+        ImGui::Checkbox(LOC("Collision"), &bCreateCollision);
+        ImGuiX::TextTooltip("{}", LOC("Gives each new shape a mesh collider, so it blocks the player while you test the layout."));
 
         static const float GridPresets[] = { 0.1f, 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
 
@@ -535,16 +536,16 @@ namespace Lumina
 
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Button, bPlacementArmed ? IM_COL32(60, 110, 160, 255) : ImGui::GetColorU32(ImGuiCol_Button));
-        if (ImGui::Button(bPlacementArmed ? LE_ICON_SHAPE_PLUS " Place" : LE_ICON_CURSOR_DEFAULT " Select", ImVec2(0, ButtonSize)))
+        if (ImGui::Button(bPlacementArmed ? LOC_ICON(LE_ICON_SHAPE_PLUS, "Place") : LOC_ICON(LE_ICON_CURSOR_DEFAULT, "Select"), ImVec2(0, ButtonSize)))
         {
             bPlacementArmed = !bPlacementArmed;
             bDragging = false;
         }
         ImGui::PopStyleColor();
-        ImGuiX::TextTooltip("{}", "Arm placement, or return to selection and the transform gizmo. Escape disarms.");
+        ImGuiX::TextTooltip("{}", LOC("Arm placement, or return to selection and the transform gizmo. Escape disarms."));
 
         ImGui::SameLine();
-        if (ImGui::Button(bShowPanel ? LE_ICON_SHAPE " Hide Shapes" : LE_ICON_SHAPE " Shapes", ImVec2(0, ButtonSize)))
+        if (ImGui::Button(bShowPanel ? LOC_ICON(LE_ICON_SHAPE, "Hide Shapes") : LOC_ICON(LE_ICON_SHAPE, "Shapes"), ImVec2(0, ButtonSize)))
         {
             bShowPanel = !bShowPanel;
         }
@@ -583,10 +584,10 @@ namespace Lumina
         RebindShapeSettings(World);
 
         const bool bEditingSelection = (BoundShapeData != &Template);
-        ImGui::SeparatorText(bEditingSelection ? "Selected Shape" : "New Shape Defaults");
+        ImGui::SeparatorText(bEditingSelection ? LOC("Selected Shape") : LOC("New Shape Defaults"));
         ShapeSettings.DrawTree();
 
-        ImGui::TextDisabled("Drag to size the footprint, click to place at the default size.");
+        ImGui::TextDisabled(LOC("Drag to size the footprint, click to place at the default size."));
         ImGui::End();
     }
 }

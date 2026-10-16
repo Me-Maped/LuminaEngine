@@ -1,4 +1,5 @@
 #include "AnimGraphNode_State.h"
+#include "Localization/Localization.h"
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/Package/Package.h"
@@ -99,7 +100,7 @@ namespace Lumina
 
     FString CAnimGraphNode_State::GetStateLabel() const
     {
-        return StateName.IsNone() ? FString("Unnamed State") : StateName.ToString();
+        return StateName.IsNone() ? FString(LOC("Unnamed State")) : StateName.ToString();
     }
 
     void CAnimGraphNode_StateEntry::BuildNode()

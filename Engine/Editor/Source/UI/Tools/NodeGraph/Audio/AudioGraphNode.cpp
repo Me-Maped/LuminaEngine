@@ -6,6 +6,7 @@
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
 #include "UI/Tools/NodeGraph/EdNodeGraph.h"
+#include "Localization/Localization.h"
 #include <imgui.h>
 
 namespace Lumina
@@ -86,7 +87,7 @@ namespace Lumina
 
     FString CAudioGraphInputNode::GetNodeTitleText() const
     {
-        return FString(ParameterName.c_str()) + " (" + ToString(Type) + ")";
+        return FString(ParameterName.c_str()) + LOC(" (") + ToString(Type) + LOC(")");
     }
 
     bool CAudioGraphInputNode::GetRenameText(FString& OutText) const
@@ -108,7 +109,7 @@ namespace Lumina
 
     FString CAudioGraphNamedOutputNode::GetNodeTitleText() const
     {
-        return FString(ParameterName.c_str()) + " (Output)";
+        return FString(ParameterName.c_str()) + LOC(" (Output)");
     }
 
     bool CAudioGraphNamedOutputNode::GetRenameText(FString& OutText) const
@@ -130,7 +131,7 @@ namespace Lumina
 
     FString CAudioGraphTriggerOutputNode::GetNodeTitleText() const
     {
-        return FString(ParameterName.c_str()) + " (Trigger Out)";
+        return FString(ParameterName.c_str()) + LOC(" (Trigger Out)");
     }
 
     bool CAudioGraphTriggerOutputNode::GetRenameText(FString& OutText) const

@@ -136,14 +136,14 @@ namespace Lumina
             const ECS::FEntity Root = FindPrefabRoot();
             const bool bIsRoot = (Data.Entity == Root);
 
-            if (ImGui::MenuItem("Copy Entity ID"))
+            if (ImGui::MenuItem(LOC("Copy Entity ID")))
             {
                 ImGui::SetClipboardText(Format("{}", (Data.Entity).Value).c_str());
             }
 
             if (!bIsRoot && ECS::Utils::IsChild(Registry, Data.Entity))
             {
-                if (ImGui::MenuItem("Unparent"))
+                if (ImGui::MenuItem(LOC("Unparent")))
                 {
                     BeginRelationshipTransaction({ Data.Entity });
                     ECS::Utils::RemoveFromParent(Registry, Data.Entity);
@@ -154,7 +154,7 @@ namespace Lumina
 
             if (ECS::Utils::IsParent(Registry, Data.Entity))
             {
-                if (ImGui::MenuItem("Detach Children"))
+                if (ImGui::MenuItem(LOC("Detach Children")))
                 {
                     TVector<ECS::FEntity> Children;
                     ECS::Utils::ForEachChild(Registry, Data.Entity, [&](ECS::FEntity Child) { Children.push_back(Child); });
@@ -165,7 +165,7 @@ namespace Lumina
                 }
             }
 
-            if (!bIsRoot && ImGui::MenuItem(LE_ICON_CONTENT_DUPLICATE " Duplicate"))
+            if (!bIsRoot && ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_DUPLICATE, "Duplicate")))
             {
                 BeginTransaction();
                 ECS::FEntity New = DuplicatePrefabEntity(Data.Entity);
@@ -180,7 +180,7 @@ namespace Lumina
                 }
             }
 
-            if (!bIsRoot && ImGui::MenuItem(LE_ICON_DELETE " Delete"))
+            if (!bIsRoot && ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Delete")))
             {
                 RequestDestroyEntity(Data.Entity);
             }
@@ -274,37 +274,37 @@ namespace Lumina
         // Hotkeys are suppressed while right-mouse flying so W/E/R/Q act as fly keys, not mode switches.
         auto Hovered = [this]() { return bViewportHovered && !CameraState.bWasLooking; };
 
-        RegisterAction({"Translate Mode", "Gizmo", "Switch the gizmo to translate (move) mode",
+        RegisterAction({LOC("Translate Mode"), "Gizmo", LOC("Switch the gizmo to translate (move) mode"),
             FInputChord{ImGuiKey_W}, [this]{ GuizmoOp = ImGuizmo::TRANSLATE; }, Hovered});
 
-        RegisterAction({"Rotate Mode", "Gizmo", "Switch the gizmo to rotate mode",
+        RegisterAction({LOC("Rotate Mode"), "Gizmo", LOC("Switch the gizmo to rotate mode"),
             FInputChord{ImGuiKey_E}, [this]{ GuizmoOp = ImGuizmo::ROTATE; }, Hovered});
 
-        RegisterAction({"Scale Mode", "Gizmo", "Switch the gizmo to scale mode",
+        RegisterAction({LOC("Scale Mode"), "Gizmo", LOC("Switch the gizmo to scale mode"),
             FInputChord{ImGuiKey_R}, [this]{ GuizmoOp = ImGuizmo::SCALE; }, Hovered});
 
-        RegisterAction({"Toggle Local/World", "Gizmo", "Switch the gizmo between world-space and entity-local space",
+        RegisterAction({LOC("Toggle Local/World"), "Gizmo", LOC("Switch the gizmo between world-space and entity-local space"),
             FInputChord{ImGuiKey_X}, [this]{ EditorEntityUtils::ToggleGizmoMode(GuizmoMode); }, Hovered});
 
-        RegisterAction({"Focus Selection", "View", "Frame the camera on the last-selected entity",
+        RegisterAction({LOC("Focus Selection"), "View", LOC("Frame the camera on the last-selected entity"),
             FInputChord{ImGuiKey_F}, [this]{ FocusViewportToEntity(GetLastSelectedEntity()); }});
 
-        RegisterAction({"Frame All", "View", "Frame the camera on every prefab entity",
+        RegisterAction({LOC("Frame All"), "View", LOC("Frame the camera on every prefab entity"),
             FInputChord{ImGuiKey_Home}, [this]{ FrameAllEntities(); }, Hovered});
 
-        RegisterAction({"Reset Transform", "Selection", "Reset the selected entities' local transform to identity",
+        RegisterAction({LOC("Reset Transform"), "Selection", LOC("Reset the selected entities' local transform to identity"),
             FInputChord{ImGuiKey_R, true, true}, [this]{ ResetSelectionTransform(); }, Hovered});
 
         // Advisory entries, inline-handled shortcuts surfaced under Help and Keybinds.
-        RegisterAction({"Duplicate", "Selection", "Duplicate the selection in place",
+        RegisterAction({LOC("Duplicate"), "Selection", LOC("Duplicate the selection in place"),
             FInputChord{ImGuiKey_D, true}, nullptr});
-        RegisterAction({"Copy", "Selection", "Copy the selection to the entity clipboard",
+        RegisterAction({LOC("Copy"), "Selection", LOC("Copy the selection to the entity clipboard"),
             FInputChord{ImGuiKey_C, true}, nullptr});
-        RegisterAction({"Paste", "Selection", "Paste previously-copied entities under the prefab root",
+        RegisterAction({LOC("Paste"), "Selection", LOC("Paste previously-copied entities under the prefab root"),
             FInputChord{ImGuiKey_V, true}, nullptr});
-        RegisterAction({"Delete", "Selection", "Delete the selected entities",
+        RegisterAction({LOC("Delete"), "Selection", LOC("Delete the selected entities"),
             FInputChord{ImGuiKey_Delete}, nullptr});
-        RegisterAction({"Cycle Gizmo", "Gizmo", "Cycle Translate→Rotate→Scale",
+        RegisterAction({LOC("Cycle Gizmo"), "Gizmo", LOC("Cycle Translate→Rotate→Scale"),
             FInputChord{ImGuiKey_Space}, nullptr});
     }
 
@@ -649,7 +649,7 @@ namespace Lumina
             // Don't allow destroying the prefab root; a prefab must have one.
             if (Entity == Root)
             {
-                ImGuiX::Notifications::NotifyError("Cannot delete the prefab root entity.");
+                ImGuiX::Notifications::NotifyError(LOCF("Cannot delete the prefab root entity."));
                 continue;
             }
 
@@ -865,11 +865,11 @@ namespace Lumina
         // A prefab is single-rooted, so its root never moves and nothing else reaches the top level.
         if (Entity == FindPrefabRoot())
         {
-            return "The prefab root stays the root, so it cannot be moved.";
+            return LOC("The prefab root stays the root, so it cannot be moved.");
         }
         if (NewParent == ECS::NullEntity)
         {
-            return "A prefab keeps a single root, so its entities cannot move to the top level.";
+            return LOC("A prefab keeps a single root, so its entities cannot move to the top level.");
         }
 
         return FSceneEditorTool::GetReparentRefusal(Entity, NewParent);
@@ -946,7 +946,7 @@ namespace Lumina
 
             if (bWasInstance)
             {
-                ImGuiX::Notifications::NotifyInfo("Copied the prefab's entities in. A prefab cannot nest, so they are no longer linked to it.");
+                ImGuiX::Notifications::NotifyInfo(LOCF("Copied the prefab's entities in. A prefab cannot nest, so they are no longer linked to it."));
             }
         }
         else if (Spawned == DropTarget && Spawned != ECS::NullEntity)
@@ -1385,30 +1385,30 @@ namespace Lumina
 
     void FPrefabEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Authoring",
-            "Build the prefab in this isolated preview world like you would a normal scene. "
-            "Saving commits the entity hierarchy back to the prefab asset.");
-        DrawHelpTextRow("Selection / Gizmo",
-            "Same controls as the world editor: W/E/R for translate/rotate/scale, X for World/Local, "
-            "Ctrl-click multi-select, F frames the selection.");
-        DrawHelpTextRow("Components",
-            "Add Component on a selected entity to attach. Drag an asset directly onto the entity row "
-            "in the outliner for shortcut adds (e.g. drop a static mesh to add a SStaticMeshComponent).");
-        DrawHelpTextRow("Nested Prefabs",
-            "Drag another prefab asset into the outliner to instance it as a child. Property overrides "
-            "are per-instance; structural changes happen on the source prefab.");
-        DrawHelpTextRow("Save",
-            "Ctrl+S commits all entities, components and overrides to the prefab. Existing instances "
-            "in worlds reload on next open or with Reload Asset.");
+        DrawHelpTextRow(LOC("Authoring"),
+            LOC("Build the prefab in this isolated preview world like you would a normal scene. "
+            "Saving commits the entity hierarchy back to the prefab asset."));
+        DrawHelpTextRow(LOC("Selection / Gizmo"),
+            LOC("Same controls as the world editor: W/E/R for translate/rotate/scale, X for World/Local, "
+            "Ctrl-click multi-select, F frames the selection."));
+        DrawHelpTextRow(LOC("Components"),
+            LOC("Add Component on a selected entity to attach. Drag an asset directly onto the entity row "
+            "in the outliner for shortcut adds (e.g. drop a static mesh to add a SStaticMeshComponent)."));
+        DrawHelpTextRow(LOC("Nested Prefabs"),
+            LOC("Drag another prefab asset into the outliner to instance it as a child. Property overrides "
+            "are per-instance; structural changes happen on the source prefab."));
+        DrawHelpTextRow(LOC("Save"),
+            LOC("Ctrl+S commits all entities, components and overrides to the prefab. Existing instances "
+            "in worlds reload on next open or with Reload Asset."));
     }
 
     void FPrefabEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)
     {
         FAssetEditorTool::DrawToolMenu(UpdateContext);
 
-        if (ImGui::BeginMenu(LE_ICON_MOVE_RESIZE " Gizmo"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_MOVE_RESIZE, "Gizmo")))
         {
-            const char* Ops[] = { "Translate", "Rotate", "Scale" };
+            const char* Ops[] = { LOC("Translate"), LOC("Rotate"), LOC("Scale") };
             int Current = (GuizmoOp == ImGuizmo::TRANSLATE) ? 0 : (GuizmoOp == ImGuizmo::ROTATE ? 1 : 2);
             if (ImGui::Combo("##GizmoOp", &Current, Ops, IM_ARRAYSIZE(Ops)))
             {
@@ -1420,44 +1420,44 @@ namespace Lumina
                 }
             }
 
-            const char* Modes[] = { "World", "Local" };
+            const char* Modes[] = { LOC("World"), LOC("Local") };
             int ModeIdx = (GuizmoMode == ImGuizmo::WORLD) ? 0 : 1;
             if (ImGui::Combo("##GizmoMode", &ModeIdx, Modes, IM_ARRAYSIZE(Modes)))
             {
                 GuizmoMode = (ModeIdx == 0) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
             }
 
-            ImGui::Checkbox("Snap", &bGuizmoSnapEnabled);
-            ImGui::DragFloat("Translate Step", &GuizmoSnapTranslate, 0.01f, 0.001f, 100.0f);
-            ImGui::DragFloat("Rotate Step (deg)", &GuizmoSnapRotate, 0.5f, 0.1f, 90.0f);
-            ImGui::DragFloat("Scale Step", &GuizmoSnapScale, 0.01f, 0.001f, 10.0f);
+            ImGui::Checkbox(LOC("Snap"), &bGuizmoSnapEnabled);
+            ImGui::DragFloat(LOC("Translate Step"), &GuizmoSnapTranslate, 0.01f, 0.001f, 100.0f);
+            ImGui::DragFloat(LOC("Rotate Step (deg)"), &GuizmoSnapRotate, 0.5f, 0.1f, 90.0f);
+            ImGui::DragFloat(LOC("Scale Step"), &GuizmoSnapScale, 0.01f, 0.001f, 10.0f);
 
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(LE_ICON_EYE " View"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_EYE, "View")))
         {
-            ImGui::Checkbox("World Grid", &bWorldGridEnabled);
-            ImGui::Checkbox("Component Visualizers", &bShowComponentVisualizers);
+            ImGui::Checkbox(LOC("World Grid"), &bWorldGridEnabled);
+            ImGui::Checkbox(LOC("Component Visualizers"), &bShowComponentVisualizers);
 
-            if (ImGui::Checkbox("Studio Lighting", &bStudioLighting))
+            if (ImGui::Checkbox(LOC("Studio Lighting"), &bStudioLighting))
             {
                 SyncPreviewLighting(false);
             }
             if (ImGui::IsItemHovered())
             {
                 ImGui::SetTooltip(bPrefabSuppliesLighting
-                    ? "This prefab carries its own lighting, so the studio rig starts off.\n"
-                      "Turning it on stacks a second sun and environment over the authored ones."
-                    : "Preview-only directional light, environment and skylight.\n"
-                      "Not part of the prefab.");
+                    ? LOC("This prefab carries its own lighting, so the studio rig starts off.\n"
+                      "Turning it on stacks a second sun and environment over the authored ones.")
+                    : LOC("Preview-only directional light, environment and skylight.\n"
+                      "Not part of the prefab."));
             }
 
-            if (ImGui::MenuItem(LE_ICON_HOME " Frame All", "Home"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_HOME, "Frame All"), "Home"))
             {
                 FrameAllEntities();
             }
-            if (ImGui::MenuItem(LE_ICON_TARGET " Focus Selection", "F"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_TARGET, "Focus Selection"), "F"))
             {
                 FocusViewportToEntity(GetLastSelectedEntity());
             }

@@ -1,4 +1,5 @@
 #include "UIDocumentPropertyCustomization.h"
+#include "Localization/Localization.h"
 
 #include "LuminaEditor.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
@@ -99,12 +100,12 @@ namespace Lumina
                 }
                 ImGui::EndDragDropTarget();
             }
-            ImGuiX::TextTooltip("{}", bHasDocument ? "Double-click to open in the UI editor, or drop an .rml here." : "Drop an .rml here.");
+            ImGuiX::TextTooltip("{}", bHasDocument ? LOC("Double-click to open in the UI editor, or drop an .rml here.") : LOC("Drop an .rml here."));
 
             ImGui::SameLine();
             ImGui::BeginGroup();
 
-            const FString Preview = !bHasDocument ? FString("<None>")
+            const FString Preview = !bHasDocument ? FString(LOC("<None>"))
                                   : bMissing      ? FString(LE_ICON_ALERT " ") + FString(Name.data(), Name.size())
                                   :                 FString(Name.data(), Name.size());
             const ImVec4 PreviewColor = bHasDocument && !bMissing ? ImVec4(0.6f, 0.6f, 0.6f, 1.0f) : ImVec4(1.0f, 0.19f, 0.19f, 1.0f);
@@ -115,7 +116,7 @@ namespace Lumina
             ImGui::PopStyleColor();
             if (!bOpen)
             {
-                ImGuiX::TextTooltip("{}", bMissing ? FString("Missing ") + Resolved : bHasDocument ? Resolved : FString("No document"));
+                ImGuiX::TextTooltip("{}", bMissing ? FString(LOC("Missing ")) + Resolved : bHasDocument ? Resolved : FString(LOC("No document")));
             }
 
             if (bOpen)
@@ -126,7 +127,7 @@ namespace Lumina
                 }
                 SearchFilter.Draw("##Search", -1.0f);
 
-                if (ImGui::Selectable(LE_ICON_CLOSE " None", !bHasDocument))
+                if (ImGui::Selectable(LOC_ICON(LE_ICON_CLOSE, "None"), !bHasDocument))
                 {
                     Assign([Ref] { Ref->Reset(); });
                 }
@@ -161,7 +162,7 @@ namespace Lumina
 
                 if (Documents.empty())
                 {
-                    ImGui::TextDisabled("No .rml documents in the project.");
+                    ImGui::TextDisabled(LOC("No .rml documents in the project."));
                 }
 
                 ImGui::EndCombo();
@@ -179,8 +180,8 @@ namespace Lumina
             }
             ImGui::EndDisabled();
             ImGuiX::TextTooltip("{}", bSelectionFits
-                ? "Use the document selected in the Content Browser."
-                : "Select an .rml in the Content Browser to use it here.");
+                ? LOC("Use the document selected in the Content Browser.")
+                : LOC("Select an .rml in the Content Browser to use it here."));
 
             ImGui::SameLine();
 
@@ -190,7 +191,7 @@ namespace Lumina
             {
                 EditorUI->BrowseToAsset(ResolvedView);
             }
-            ImGuiX::TextTooltip("{}", "Show this document in the Content Browser.");
+            ImGuiX::TextTooltip("{}", LOC("Show this document in the Content Browser."));
 
             ImGui::SameLine();
 
@@ -198,7 +199,7 @@ namespace Lumina
             {
                 ImGui::SetClipboardText(Resolved.c_str());
             }
-            ImGuiX::TextTooltip("{}", "Copy the path.");
+            ImGuiX::TextTooltip("{}", LOC("Copy the path."));
 
             ImGui::SameLine();
 
@@ -210,7 +211,7 @@ namespace Lumina
                 Assign([Ref] { Ref->Reset(); });
             }
             ImGui::PopStyleColor(3);
-            ImGuiX::TextTooltip("{}", "Clear the document.");
+            ImGuiX::TextTooltip("{}", LOC("Clear the document."));
 
             ImGui::EndDisabled();
             ImGui::EndGroup();

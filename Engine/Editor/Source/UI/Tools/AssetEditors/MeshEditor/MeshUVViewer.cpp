@@ -12,6 +12,7 @@
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "Containers/StringFormat.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -215,17 +216,17 @@ namespace Lumina
             }
             ImGui::EndCombo();
         }
-        ImGuiX::TextTooltip("{}", "Which LOD's unwrap to show. Higher levels are far cheaper to draw on dense meshes.");
+        ImGuiX::TextTooltip("{}", LOC("Which LOD's unwrap to show. Higher levels are far cheaper to draw on dense meshes."));
 
         ImGui::SameLine();
 
         ImGui::SetNextItemWidth(180.0f * Scale);
         const char* SurfaceLabel = (SurfaceFilter < 0)
-            ? "All Surfaces"
+            ? LOC("All Surfaces")
             : Resource.GeometrySurfaces[SurfaceFilter].ID.c_str();
         if (ImGui::BeginCombo("##UVSurface", SurfaceLabel))
         {
-            if (ImGui::Selectable("All Surfaces", SurfaceFilter < 0))
+            if (ImGui::Selectable(LOC("All Surfaces"), SurfaceFilter < 0))
             {
                 SurfaceFilter = -1;
             }
@@ -243,21 +244,21 @@ namespace Lumina
         }
 
         ImGui::SameLine();
-        ImGui::Checkbox("Grid", &bShowGrid);
+        ImGui::Checkbox(LOC("Grid"), &bShowGrid);
 
         ImGui::SameLine();
-        ImGui::Checkbox("Tiles", &bShowTiles);
-        ImGuiX::TextTooltip("{}", "Draw the neighboring 0..1 tiles, so wrapped UVs read as repeats rather than as stray geometry.");
+        ImGui::Checkbox(LOC("Tiles"), &bShowTiles);
+        ImGuiX::TextTooltip("{}", LOC("Draw the neighboring 0..1 tiles, so wrapped UVs read as repeats rather than as stray geometry."));
 
         ImGui::SameLine();
-        ImGui::Checkbox("Points", &bShowVertices);
+        ImGui::Checkbox(LOC("Points"), &bShowVertices);
 
         ImGui::SameLine();
-        ImGui::Checkbox("Overflow", &bHighlightOverflow);
-        ImGuiX::TextTooltip("{}", "Color edges that leave the 0..1 tile. Intentional for tiling materials, a bug for atlased or lightmapped meshes.");
+        ImGui::Checkbox(LOC("Overflow"), &bHighlightOverflow);
+        ImGuiX::TextTooltip("{}", LOC("Color edges that leave the 0..1 tile. Intentional for tiling materials, a bug for atlased or lightmapped meshes."));
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_FIT_TO_PAGE_OUTLINE " Fit"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_FIT_TO_PAGE_OUTLINE, "Fit")))
         {
             Zoom = 0.0f;    // refit against the live canvas size
         }
@@ -404,7 +405,7 @@ namespace Lumina
 
         if (MeshletCount == 0 || VertexCount == 0)
         {
-            ImGui::TextColored(EditorColors::TextMuted(), "This mesh has no meshlet data to unwrap.");
+            ImGui::TextColored(EditorColors::TextMuted(), LOC("This mesh has no meshlet data to unwrap."));
             return;
         }
 
@@ -422,8 +423,7 @@ namespace Lumina
             RebuildEdges(Resource);
         }
 
-        FFixedString Status;
-        FormatTo(Status, "{} tris  |  {} edges  |  {} outside 0..1 ({:.1f}%)",
+        const FFixedString Status = FormatAs<FFixedString>(LOCF("{} tris  |  {} edges  |  {} outside 0..1 ({:.1f}%)"),
             TriangleCount,
             (uint32)Edges.size(),
             OutsideTriangleCount,
@@ -434,9 +434,9 @@ namespace Lumina
         if (bTruncated)
         {
             ImGui::SameLine();
-            ImGui::TextColored(EditorColors::Warning(), LE_ICON_ALERT_CIRCLE_OUTLINE " truncated");
-            ImGuiX::WrappedTooltip("{}", "This LOD has more edges than the viewer draws in one frame, so the "
-                                         "unwrap is incomplete. Pick a higher LOD, or a single surface, to see all of it.");
+            ImGui::TextColored(EditorColors::Warning(), LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "truncated"));
+            ImGuiX::WrappedTooltip("{}", LOC("This LOD has more edges than the viewer draws in one frame, so the "
+                                         "unwrap is incomplete. Pick a higher LOD, or a single surface, to see all of it."));
         }
 
         ImGui::Separator();

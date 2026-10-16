@@ -1,4 +1,5 @@
 ﻿#include "RuntimePCH.h"
+#include "Localization/Localization.h"
 #include "ImGuiNotifications.h"
 #include "imgui.h"
 #include "Containers/Vector.h"
@@ -327,7 +328,7 @@ namespace Lumina::ImGuiX::Notifications
             ImGui::SetNextWindowPos(WorkPos + ImVec2(WorkSize.x - PaddingX, WorkSize.y - PaddingY - GBottomInset - NotificationStartPosY), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
             if (ImGui::Begin("##NotificationOverflow", nullptr, Flags))
             {
-                ImGui::Text("%zu more...", NumHidden);
+                ImGui::Text(LOC("%zu more..."), NumHidden);
             }
 
             ImGui::End();

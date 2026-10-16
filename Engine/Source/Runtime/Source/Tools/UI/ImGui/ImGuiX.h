@@ -50,6 +50,14 @@ namespace Lumina::ImGuiX
         TextTooltip_Internal(Buffer);
     }
 
+    // Localized variants: the format string comes from the string table at runtime, so it cannot go
+    // through the compile-time check. See LOCF.
+    template<typename... TArgs>
+    void TextTooltip(Fmt::FRuntimeFormatString Fmt, TArgs&&... Args)
+    {
+        TextTooltip_Internal(Format(Fmt, std::forward<TArgs>(Args)...));
+    }
+
     // Wrapped tooltip for help text longer than a few words; auto-wraps at ~35em.
     RUNTIME_API void WrappedTooltip_Internal(FStringView String);
 
@@ -94,11 +102,28 @@ namespace Lumina::ImGuiX
         AppendFormat(Buffer, Fmt, std::forward<TArgs>(Args)...);
         ImGui::TextUnformatted(Buffer.c_str());
     }
+
+    // Localized format text: the format string is a translated string that only exists at runtime, so
+    // it cannot go through TFormatString's compile-time check. Call it as Text(LOCF("{} files"), N);
+    // the translation is responsible for keeping the placeholders.
+    template <typename... TArgs>
+    void Text(Fmt::FRuntimeFormatString Fmt, TArgs&&... Args)
+    {
+        ImGui::TextUnformatted(Format(Fmt, std::forward<TArgs>(Args)...).c_str());
+    }
     
     RUNTIME_API void TextUnformatted(FStringView String);
     
     template <typename... TArgs>
     void TextColored(const ImVec4& Color, Fmt::TFormatString<std::decay_t<TArgs>...> fmt, TArgs&&... Args)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, Color);
+        ImGui::TextUnformatted(Format(fmt, std::forward<TArgs>(Args)...).c_str());
+        ImGui::PopStyleColor();
+    }
+
+    template <typename... TArgs>
+    void TextColored(const ImVec4& Color, Fmt::FRuntimeFormatString fmt, TArgs&&... Args)
     {
         ImGui::PushStyleColor(ImGuiCol_Text, Color);
         ImGui::TextUnformatted(Format(fmt, std::forward<TArgs>(Args)...).c_str());
@@ -117,6 +142,24 @@ namespace Lumina::ImGuiX
         
         Text(std::forward<decltype(fmt)>(fmt), std::forward<TArgs>(Args)...);
         
+        if (bNeedBackup)
+        {
+            ImGui::PopTextWrapPos();
+        }
+    }
+
+    template <typename... TArgs>
+    void TextWrapped(Fmt::FRuntimeFormatString fmt, TArgs&&... Args)
+    {
+        ImGuiContext& g = *GImGui;
+        const bool bNeedBackup = (g.CurrentWindow->DC.TextWrapPos < 0.0f);
+        if (bNeedBackup)
+        {
+            ImGui::PushTextWrapPos(0.0f);
+        }
+
+        Text(fmt, std::forward<TArgs>(Args)...);
+
         if (bNeedBackup)
         {
             ImGui::PopTextWrapPos();
@@ -329,6 +372,32 @@ namespace Lumina::ImGuiX
             FFixedString MessageStr;
             AppendFormat(MessageStr, fmt, Forward<TArgs>(Args)...);
             NotifyInternal(EType::Error, MessageStr);
+        }
+
+        // Localized variants: a translated format string only exists at runtime, so it cannot go through
+        // the compile-time check above. Call them as NotifyInfo(LOCF("{} saved"), Count). See LOCF.
+        template <typename... TArgs>
+        void NotifyInfo(Fmt::FRuntimeFormatString fmt, TArgs&&... Args)
+        {
+            NotifyInternal(EType::Info, Format(fmt, Forward<TArgs>(Args)...));
+        }
+
+        template <typename... TArgs>
+        void NotifySuccess(Fmt::FRuntimeFormatString fmt, TArgs&&... Args)
+        {
+            NotifyInternal(EType::Success, Format(fmt, Forward<TArgs>(Args)...));
+        }
+
+        template <typename... TArgs>
+        void NotifyWarning(Fmt::FRuntimeFormatString fmt, TArgs&&... Args)
+        {
+            NotifyInternal(EType::Warning, Format(fmt, Forward<TArgs>(Args)...));
+        }
+
+        template <typename... TArgs>
+        void NotifyError(Fmt::FRuntimeFormatString fmt, TArgs&&... Args)
+        {
+            NotifyInternal(EType::Error, Format(fmt, Forward<TArgs>(Args)...));
         }
     }
     

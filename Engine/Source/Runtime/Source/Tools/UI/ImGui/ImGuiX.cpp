@@ -1,4 +1,5 @@
 ﻿#include "Containers/StringFormat.h"
+#include "Localization/Localization.h"
 #include "RuntimePCH.h"
 #include <iterator>
 #include "ImGuiX.h"
@@ -803,7 +804,7 @@ namespace Lumina::ImGuiX
 
                 if (!bAnyVisible)
                 {
-                    ImGui::TextDisabled("No matches");
+                    ImGui::TextDisabled(LOC("No matches"));
                 }
             }
             ImGui::EndChild();

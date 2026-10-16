@@ -1,4 +1,5 @@
 #include "TerrainEditMode.h"
+#include "Localization/Localization.h"
 #include "World/ECS/Registry.h"
 
 #include <algorithm>
@@ -103,7 +104,7 @@ namespace Lumina
 
         if (FilePath == nullptr || *FilePath == '\0')
         {
-            OutError = "No file selected.";
+            OutError = LOC("No file selected.");
             return false;
         }
 
@@ -111,7 +112,7 @@ namespace Lumina
         TOptional<Import::Textures::FTextureImportResult> Decoded = Import::Textures::ImportTexture(FStringView(FilePath), /*bFlipVertical*/ false);
         if (!Decoded.has_value() || Decoded->Pixels.empty())
         {
-            OutError = "Could not decode image (unsupported, corrupt, or empty file).";
+            OutError = LOC("Could not decode image (unsupported, corrupt, or empty file).");
             return false;
         }
 
@@ -123,7 +124,7 @@ namespace Lumina
 
         if (W < 2 || H < 2)
         {
-            OutError = "Image is too small to be a heightmap (needs at least 2x2).";
+            OutError = LOC("Image is too small to be a heightmap (needs at least 2x2).");
             return false;
         }
 
@@ -144,7 +145,7 @@ namespace Lumina
             case EFormat::RGB32_FLOAT:                       Kind = EKind::F32; Channels = 3; break;
             case EFormat::RGBA32_FLOAT:                      Kind = EKind::F32; Channels = 4; break;
             default:
-                OutError = "Unsupported pixel format for a heightmap.";
+                OutError = LOC("Unsupported pixel format for a heightmap.");
                 return false;
         }
 
@@ -152,7 +153,7 @@ namespace Lumina
         const size_t Stride    = (size_t)W * (size_t)Channels * ElemSize;
         if (Img.Pixels.size() < Stride * (size_t)H)
         {
-            OutError = "Decoded pixel buffer is smaller than its reported dimensions.";
+            OutError = LOC("Decoded pixel buffer is smaller than its reported dimensions.");
             return false;
         }
 
@@ -173,7 +174,7 @@ namespace Lumina
         const int32 Res = Terrain.Resolution;
         if (Res < 2)
         {
-            OutError = "Terrain resolution is invalid.";
+            OutError = LOC("Terrain resolution is invalid.");
             return false;
         }
 
@@ -239,13 +240,13 @@ namespace Lumina
         }
 
         ImGui::SameLine();
-        if (ImGui::Button("+ Terrain", ImVec2(0, ButtonSize)))
+        if (ImGui::Button(LOC("+ Terrain"), ImVec2(0, ButtonSize)))
         {
             CreateDefaultTerrain(World);
         }
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_IMPORT " Heightmap", ImVec2(0, ButtonSize)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_IMPORT, "Heightmap"), ImVec2(0, ButtonSize)))
         {
             // Import a heightmap image onto the active terrain (creating a default one first if none exists).
             ECS::FEntity TerrainEntity = FindPreferredTerrain(World);
@@ -259,7 +260,7 @@ namespace Lumina
                 "Heightmap (*.png;*.tga;*.hdr;*.jpg)\0*.png;*.tga;*.hdr;*.jpg\0"
                 "PNG (*.png)\0*.png\0"
                 "All Files (*.*)\0*.*\0";
-            if (TerrainEntity != ECS::NullEntity && Platform::OpenFileDialogue(File, "Select Heightmap Image", Filter))
+            if (TerrainEntity != ECS::NullEntity && Platform::OpenFileDialogue(File, LOC("Select Heightmap Image"), Filter))
             {
                 STerrainComponent& Terrain = World->GetComponent<STerrainComponent>(TerrainEntity);
 
@@ -282,17 +283,17 @@ namespace Lumina
 
                 if (bOk)
                 {
-                    ImGuiX::Notifications::NotifySuccess("Heightmap imported: {}x{} -> {}^2 grid.", SrcW, SrcH, Terrain.Resolution);
+                    ImGuiX::Notifications::NotifySuccess(LOCF("Heightmap imported: {}x{} -> {}^2 grid."), SrcW, SrcH, Terrain.Resolution);
                 }
                 else
                 {
-                    ImGuiX::Notifications::NotifyError("Heightmap import failed: {}", Error.c_str());
+                    ImGuiX::Notifications::NotifyError(LOCF("Heightmap import failed: {}"), Error.c_str());
                 }
             }
         }
 
         ImGui::SameLine();
-        if (ImGui::Button(bShowSettings ? "Hide Brush" : "Brush", ImVec2(0, ButtonSize)))
+        if (ImGui::Button(bShowSettings ? LOC("Hide Brush") : LOC("Brush"), ImVec2(0, ButtonSize)))
         {
             bShowSettings = !bShowSettings;
         }
@@ -311,10 +312,10 @@ namespace Lumina
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_AlwaysAutoResize);
 
-        const char* ModeNames[] = { "Sculpt", "Flatten", "Smooth", "Noise", "Ramp", "Paint" };
+        const char* ModeNames[] = { LOC("Sculpt"), LOC("Flatten"), LOC("Smooth"), LOC("Noise"), LOC("Ramp"), LOC("Paint") };
         int ModeIndex = (int)Mode;
         ImGui::SetNextItemWidth(140.0f);
-        if (ImGui::Combo("Mode", &ModeIndex, ModeNames, IM_ARRAYSIZE(ModeNames)))
+        if (ImGui::Combo(LOC("Mode"), &ModeIndex, ModeNames, IM_ARRAYSIZE(ModeNames)))
         {
             Mode = (ETerrainBrushMode)ModeIndex;
             bRampStarted  = false;
@@ -322,58 +323,58 @@ namespace Lumina
         }
 
         ImGui::SetNextItemWidth(140.0f);
-        ImGui::SliderFloat("Radius",   &Radius,   8.0f,  4096.0f, "%.0f");
+        ImGui::SliderFloat(LOC("Radius"),   &Radius,   8.0f,  4096.0f, "%.0f");
         ImGui::SetNextItemWidth(140.0f);
-        ImGui::SliderFloat("Strength", &Strength, 0.0f,  1024.0f, "%.0f");
+        ImGui::SliderFloat(LOC("Strength"), &Strength, 0.0f,  1024.0f, "%.0f");
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Height change rate at the brush center, in world units per second.");
+            ImGui::SetTooltip(LOC("Height change rate at the brush center, in world units per second."));
         }
         ImGui::SetNextItemWidth(140.0f);
-        ImGui::SliderFloat("Falloff",  &Falloff,  0.0f,  1.0f,    "%.2f");
+        ImGui::SliderFloat(LOC("Falloff"),  &Falloff,  0.0f,  1.0f,    "%.2f");
 
         if (Mode == ETerrainBrushMode::Sculpt || Mode == ETerrainBrushMode::Noise)
         {
-            ImGui::Checkbox("Invert (LAlt momentary)", &bInvertSculpt);
+            ImGui::Checkbox(LOC("Invert (LAlt momentary)"), &bInvertSculpt);
         }
 
         if (Mode == ETerrainBrushMode::Flatten)
         {
             ImGui::SetNextItemWidth(140.0f);
-            ImGui::SliderFloat("Height", &FlattenHeight, 0.0f, 1024.0f, "%.0f");
-            ImGui::TextDisabled("Ctrl+Click: sample height under cursor");
+            ImGui::SliderFloat(LOC("Height"), &FlattenHeight, 0.0f, 1024.0f, "%.0f");
+            ImGui::TextDisabled(LOC("Ctrl+Click: sample height under cursor"));
         }
 
         if (Mode == ETerrainBrushMode::Noise)
         {
             float FreqDisplay = NoiseFrequency * 1000.0f;
             ImGui::SetNextItemWidth(140.0f);
-            if (ImGui::SliderFloat("Freq (per 1km)", &FreqDisplay, 0.1f, 100.0f, "%.2f"))
+            if (ImGui::SliderFloat(LOC("Freq (per 1km)"), &FreqDisplay, 0.1f, 100.0f, "%.2f"))
             {
                 NoiseFrequency = Math::Max(FreqDisplay * 0.001f, 1e-6f);
             }
             ImGui::SetNextItemWidth(140.0f);
-            ImGui::SliderInt("Octaves", &NoiseOctaves, 1, 8);
+            ImGui::SliderInt(LOC("Octaves"), &NoiseOctaves, 1, 8);
         }
 
         if (Mode == ETerrainBrushMode::Ramp)
         {
             ImGui::SetNextItemWidth(140.0f);
-            ImGui::SliderFloat("Width", &RampHalfWidth, 8.0f, 4096.0f, "%.0f");
+            ImGui::SliderFloat(LOC("Width"), &RampHalfWidth, 8.0f, 4096.0f, "%.0f");
 
-            ImGui::Checkbox("Explicit heights", &bRampExplicitHeights);
+            ImGui::Checkbox(LOC("Explicit heights"), &bRampExplicitHeights);
             if (ImGui::IsItemHovered())
             {
-                ImGui::SetTooltip("Use fixed start/end heights instead of sampling the terrain under A and B.");
+                ImGui::SetTooltip(LOC("Use fixed start/end heights instead of sampling the terrain under A and B."));
             }
             if (bRampExplicitHeights)
             {
                 ImGui::SetNextItemWidth(140.0f);
-                ImGui::SliderFloat("Start H", &RampStartHeight, 0.0f, 1024.0f, "%.0f");
+                ImGui::SliderFloat(LOC("Start H"), &RampStartHeight, 0.0f, 1024.0f, "%.0f");
                 ImGui::SetNextItemWidth(140.0f);
-                ImGui::SliderFloat("End H",   &RampEndHeight,   0.0f, 1024.0f, "%.0f");
+                ImGui::SliderFloat(LOC("End H"),   &RampEndHeight,   0.0f, 1024.0f, "%.0f");
             }
-            ImGui::TextDisabled("Drag from A to B; release to commit.");
+            ImGui::TextDisabled(LOC("Drag from A to B; release to commit."));
         }
 
         if (Mode == ETerrainBrushMode::Paint)
@@ -388,7 +389,7 @@ namespace Lumina
             }
         }
 
-        ImGui::TextDisabled("[ / ] resize brush");
+        ImGui::TextDisabled(LOC("[ / ] resize brush"));
 
         ImGui::End();
     }
@@ -398,7 +399,7 @@ namespace Lumina
         const int32 LayerCount = (int32)Terrain.Layers.size();
 
         ImGui::Separator();
-        ImGui::TextUnformatted("Layers");
+        ImGui::TextUnformatted(LOC("Layers"));
 
         // Capped at the shader's four-layer maximum, so the editor cannot paint a slot nothing reads.
         constexpr ImU32 SwatchColors[GTerrainMaxLayers] = {
@@ -452,7 +453,7 @@ namespace Lumina
         else
         {
             if (LayerCount > 0) ImGui::SameLine();
-            ImGui::TextDisabled("(max %d)", GTerrainMaxLayers);
+            ImGui::TextDisabled(LOC("(max %d)"), GTerrainMaxLayers);
         }
 
         ActiveLayer = Math::Clamp(ActiveLayer, 0, Math::Max(LayerCount - 1, 0));
@@ -467,19 +468,19 @@ namespace Lumina
             std::strncpy(NameBuf, Cur.c_str(), sizeof(NameBuf) - 1);
             NameBuf[sizeof(NameBuf) - 1] = '\0';
             ImGui::SetNextItemWidth(140.0f);
-            if (ImGui::InputText("Name", NameBuf, sizeof(NameBuf), ImGuiInputTextFlags_AutoSelectAll))
+            if (ImGui::InputText(LOC("Name"), NameBuf, sizeof(NameBuf), ImGuiInputTextFlags_AutoSelectAll))
             {
                 L.Name = NameBuf;
             }
 
             ImGui::SetNextItemWidth(140.0f);
-            ImGui::SliderFloat("UV Scale", &L.UVScale, 1.0f / 1024.0f, 1.0f, "%.4f", ImGuiSliderFlags_Logarithmic);
+            ImGui::SliderFloat(LOC("UV Scale"), &L.UVScale, 1.0f / 1024.0f, 1.0f, "%.4f", ImGuiSliderFlags_Logarithmic);
 
             const bool bCanUp   = ActiveLayer > 0;
             const bool bCanDown = ActiveLayer + 1 < LayerCount;
 
             ImGui::BeginDisabled(!bCanUp);
-            if (ImGui::Button("Up"))
+            if (ImGui::Button(LOC("Up")))
             {
                 SwapLayers(Terrain, ActiveLayer, ActiveLayer - 1);
                 --ActiveLayer;
@@ -488,7 +489,7 @@ namespace Lumina
 
             ImGui::SameLine();
             ImGui::BeginDisabled(!bCanDown);
-            if (ImGui::Button("Down"))
+            if (ImGui::Button(LOC("Down")))
             {
                 SwapLayers(Terrain, ActiveLayer, ActiveLayer + 1);
                 ++ActiveLayer;
@@ -497,7 +498,7 @@ namespace Lumina
 
             ImGui::SameLine();
             ImGui::BeginDisabled(LayerCount <= 1);
-            if (ImGui::Button("Remove"))
+            if (ImGui::Button(LOC("Remove")))
             {
                 RemoveLayer(Terrain, ActiveLayer);
                 ActiveLayer = Math::Min(ActiveLayer, (int32)Terrain.Layers.size() - 1);

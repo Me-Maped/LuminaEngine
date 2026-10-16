@@ -22,21 +22,21 @@ namespace Lumina
 
     void FShadowAtlasEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Atlas",
-            "All shadow-casting lights share one big depth atlas. Each light is allocated a tile from a "
-            "quad-tree allocator sized by the light's screen-space importance.");
-        DrawHelpTextRow("Color Coding",
-            "Bigger tiles (more important / closer lights) shade toward red; small tiles toward blue. "
-            "The eye is drawn to the expensive allocations, usually what you care about.");
-        DrawHelpTextRow("Stats",
-            "Utilization % is the fraction of atlas pixels in use. Bucket histogram shows tile-size "
-            "distribution; lots of tiny tiles can mean far-away lights deserve culling.");
-        DrawHelpTextRow("Tile Table",
-            "Per-tile entry: owning light, size, position. Click to highlight on the canvas. Lets you "
-            "diagnose 'why is this light blurry' (= got a small tile).");
-        DrawHelpTextRow("Configuration",
-            "Atlas size + per-light cap come from Project Settings > Renderer > Shadows. "
-            "Increase atlas size if utilization regularly hits 100%.");
+        DrawHelpTextRow(LOC("Atlas"),
+            LOC("All shadow-casting lights share one big depth atlas. Each light is allocated a tile from a "
+            "quad-tree allocator sized by the light's screen-space importance."));
+        DrawHelpTextRow(LOC("Color Coding"),
+            LOC("Bigger tiles (more important / closer lights) shade toward red; small tiles toward blue. "
+            "The eye is drawn to the expensive allocations, usually what you care about."));
+        DrawHelpTextRow(LOC("Stats"),
+            LOC("Utilization % is the fraction of atlas pixels in use. Bucket histogram shows tile-size "
+            "distribution; lots of tiny tiles can mean far-away lights deserve culling."));
+        DrawHelpTextRow(LOC("Tile Table"),
+            LOC("Per-tile entry: owning light, size, position. Click to highlight on the canvas. Lets you "
+            "diagnose 'why is this light blurry' (= got a small tile)."));
+        DrawHelpTextRow(LOC("Configuration"),
+            LOC("Atlas size + per-light cap come from Project Settings > Renderer > Shadows. "
+            "Increase atlas size if utilization regularly hits 100%."));
     }
 
     // A warmer hue for bigger tiles, so expensive allocations stand out under atlas pressure.
@@ -73,32 +73,32 @@ namespace Lumina
 
         if (TargetWorld == nullptr || TargetWorld->GetRenderer() == nullptr)
         {
-            ImGui::TextDisabled("No active world / render scene.");
+            ImGui::TextDisabled(LOC("No active world / render scene."));
             return;
         }
 
         const FShadowAtlas* Atlas = TargetWorld->GetRenderer()->GetShadowAtlas();
         if (Atlas == nullptr)
         {
-            ImGui::TextDisabled("Active render scene has no shadow atlas.");
+            ImGui::TextDisabled(LOC("Active render scene has no shadow atlas."));
             return;
         }
 
         DrawStats(*Atlas);
 
         ImGui::Separator();
-        ImGui::Checkbox("Show Grid", &bShowGrid);
+        ImGui::Checkbox(LOC("Show Grid"), &bShowGrid);
         ImGui::SameLine();
-        ImGui::Checkbox("Show Labels", &bShowLabels);
+        ImGui::Checkbox(LOC("Show Labels"), &bShowLabels);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(140.0f);
-        ImGui::SliderFloat("Canvas Size", &CanvasSize, 256.0f, 1024.0f, "%.0f px");
+        ImGui::SliderFloat("Canvas Size", &CanvasSize, 256.0f, 1024.0f, LOC("%.0f px"));
 
         ImGui::Separator();
         DrawAtlasCanvas(*Atlas);
 
         ImGui::Spacing();
-        if (ImGui::CollapsingHeader("Allocated Tiles", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Allocated Tiles"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             DrawTileTable(*Atlas);
         }
@@ -119,8 +119,8 @@ namespace Lumina
 
         const float UsedPct = AtlasPixels > 0 ? (float)((double)UsedPixels / (double)AtlasPixels * 100.0) : 0.0f;
 
-        ImGui::Text("Atlas: %u x %u", Cfg.AtlasResolution, Cfg.AtlasResolution);
-        ImGui::Text("Tiles allocated: %u   Utilization: %.1f%% (%llu / %llu px)",
+        ImGui::Text(LOC("Atlas: %u x %u"), Cfg.AtlasResolution, Cfg.AtlasResolution);
+        ImGui::Text(LOC("Tiles allocated: %u   Utilization: %.1f%% (%llu / %llu px)"),
             (uint32)Tiles.size(), UsedPct, (unsigned long long)UsedPixels, (unsigned long long)AtlasPixels);
 
         // Counts only power-of-two buckets the allocator can produce, keeping the UI compact.
@@ -128,9 +128,9 @@ namespace Lumina
         if (ImGui::BeginTable("##SizeHistogram", 3,
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
         {
-            ImGui::TableSetupColumn("Tile Size");
-            ImGui::TableSetupColumn("Count");
-            ImGui::TableSetupColumn("Atlas Area");
+            ImGui::TableSetupColumn(LOC_ID("Tile Size"));
+            ImGui::TableSetupColumn(LOC_ID("Count"));
+            ImGui::TableSetupColumn(LOC_ID("Atlas Area"));
             ImGui::TableHeadersRow();
 
             for (uint32 Size = Cfg.MaxTileResolution; Size >= Cfg.MinTileResolution; Size >>= 1)
@@ -242,10 +242,10 @@ namespace Lumina
             const uint32 PxY = (uint32)(Tile.UVOffset.y * (float)Cfg.AtlasResolution + 0.5f);
 
             ImGui::BeginTooltip();
-            ImGui::Text("Tile #%d", HoveredTile);
-            ImGui::Text("Size:  %u x %u", TileSize, TileSize);
-            ImGui::Text("Pixel: (%u, %u)", PxX, PxY);
-            ImGui::Text("UV:    (%.3f, %.3f)  +  (%.3f, %.3f)",
+            ImGui::Text(LOC("Tile #%d"), HoveredTile);
+            ImGui::Text(LOC("Size:  %u x %u"), TileSize, TileSize);
+            ImGui::Text(LOC("Pixel: (%u, %u)"), PxX, PxY);
+            ImGui::Text(LOC("UV:    (%.3f, %.3f)  +  (%.3f, %.3f)"),
                 Tile.UVOffset.x, Tile.UVOffset.y, Tile.UVScale.x, Tile.UVScale.y);
             ImGui::EndTooltip();
         }
@@ -258,7 +258,7 @@ namespace Lumina
 
         if (Tiles.empty())
         {
-            ImGui::TextDisabled("No tiles allocated.");
+            ImGui::TextDisabled(LOC("No tiles allocated."));
             return;
         }
 
@@ -270,11 +270,11 @@ namespace Lumina
             return;
         }
 
-        ImGui::TableSetupColumn("Index",  ImGuiTableColumnFlags_WidthFixed, 60.0f);
-        ImGui::TableSetupColumn("Size",   ImGuiTableColumnFlags_WidthFixed, 100.0f);
-        ImGui::TableSetupColumn("Pixel",  ImGuiTableColumnFlags_WidthFixed, 140.0f);
-        ImGui::TableSetupColumn("UV Offset", ImGuiTableColumnFlags_WidthFixed, 160.0f);
-        ImGui::TableSetupColumn("UV Scale",  ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(LOC_ID("Index"),  ImGuiTableColumnFlags_WidthFixed, 60.0f);
+        ImGui::TableSetupColumn(LOC_ID("Size"),   ImGuiTableColumnFlags_WidthFixed, 100.0f);
+        ImGui::TableSetupColumn(LOC_ID("Pixel"),  ImGuiTableColumnFlags_WidthFixed, 140.0f);
+        ImGui::TableSetupColumn(LOC_ID("UV Offset"), ImGuiTableColumnFlags_WidthFixed, 160.0f);
+        ImGui::TableSetupColumn(LOC_ID("UV Scale"),  ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 

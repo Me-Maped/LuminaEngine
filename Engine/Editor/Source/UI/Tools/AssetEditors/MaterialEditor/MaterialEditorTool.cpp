@@ -282,22 +282,22 @@ namespace Lumina
 
     void FMaterialEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Graph",
-            "Right-click empty space to spawn nodes. Drag from a pin to wire it; types must match. "
-            "Shift-drag from a pin to drop a Reroute. Delete or Backspace removes selection.");
-        DrawHelpTextRow("Compile",
-            "Saving compiles the graph and uploads it to all material instances using this asset. "
-            "Compile errors surface in the log and on the failing node.");
-        DrawHelpTextRow("Preview",
-            "Use the Mesh menu to swap the preview between sphere/cube/plane/cylinder/cone. "
-            "Camera controls match the world editor (RMB + WASD).");
-        DrawHelpTextRow("Instances",
-            "Make derived materials via Content Browser > New > Material Instance. Instances inherit "
-            "the master graph and only override exposed parameters.");
+        DrawHelpTextRow(LOC("Graph"),
+            LOC("Right-click empty space to spawn nodes. Drag from a pin to wire it; types must match. "
+            "Shift-drag from a pin to drop a Reroute. Delete or Backspace removes selection."));
+        DrawHelpTextRow(LOC("Compile"),
+            LOC("Saving compiles the graph and uploads it to all material instances using this asset. "
+            "Compile errors surface in the log and on the failing node."));
+        DrawHelpTextRow(LOC("Preview"),
+            LOC("Use the Mesh menu to swap the preview between sphere/cube/plane/cylinder/cone. "
+            "Camera controls match the world editor (RMB + WASD)."));
+        DrawHelpTextRow(LOC("Instances"),
+            LOC("Make derived materials via Content Browser > New > Material Instance. Instances inherit "
+            "the master graph and only override exposed parameters."));
 
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted("Debug Node IDs");
+        ImGui::TextUnformatted(LOC("Debug Node IDs"));
         ImGui::TableNextColumn();
         ImGui::Checkbox("##DebugID", &NodeGraph->bDebug);
     }
@@ -397,11 +397,11 @@ namespace Lumina
         }
 
         ImGui::PushItemWidth(95.0f);
-        if (ImGui::BeginCombo("##PreviewMesh", PreviewString, ImGuiComboFlags_HeightLarge))
+        if (ImGui::BeginCombo("##PreviewMesh", LOC(PreviewString), ImGuiComboFlags_HeightLarge))
         {
             for (const FPreviewMeshEntry& Entry : Entries)
             {
-                if (ImGui::Selectable(Entry.Label, DebugMesh == Entry.Value))
+                if (ImGui::Selectable(LOC(Entry.Label), DebugMesh == Entry.Value))
                 {
                     DebugMesh = Entry.Value;
                     SetDebugMesh(DebugMesh);
@@ -432,7 +432,7 @@ namespace Lumina
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::Warning());
         }
 
-        if (ImGui::MenuItem(bPending ? LE_ICON_ALERT_CIRCLE " Compile*" : LE_ICON_RECEIPT_TEXT " Compile"))
+        if (ImGui::MenuItem(bPending ? LOC_ICON(LE_ICON_ALERT_CIRCLE, "Compile*") : LOC_ICON(LE_ICON_RECEIPT_TEXT, "Compile")))
         {
             Compile(false);
             OnSave();
@@ -441,7 +441,7 @@ namespace Lumina
         if (bPending)
         {
             ImGui::PopStyleColor();
-            ImGuiX::TextTooltip("{}", "This material has changes that are not in its compiled shader yet.");
+            ImGuiX::TextTooltip("{}", LOC("This material has changes that are not in its compiled shader yet."));
         }
     }
 
@@ -457,7 +457,7 @@ namespace Lumina
         if (EnvironmentEditor && DirectionalEditor)
         {
             ImGui::Spacing();
-            ImGui::SeparatorText("Preview Editor");
+            ImGui::SeparatorText(LOC("Preview Editor"));
             ImGui::Spacing();
 
             DirectionalEditor->DrawTree();
@@ -605,16 +605,16 @@ namespace Lumina
             bCodeEditOpen = false;
             if (NodeGraph != nullptr)
             {
-                NodeGraph->EndLongEdit("Edit Custom Code");
+                NodeGraph->EndLongEdit(LOC("Edit Custom Code"));
             }
         }
 
         if (Node == nullptr)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped("Select a Custom Slang node to edit its code.\n\n"
+            ImGui::TextWrapped(LOC("Select a Custom Slang node to edit its code.\n\n"
                                "Declare the node's inputs and outputs in Material Properties; they become pins "
-                               "and named locals your code can read and assign.");
+                               "and named locals your code can read and assign."));
             ImGui::PopStyleColor();
             CodeEditorBoundNode = nullptr;
             return;
@@ -644,12 +644,12 @@ namespace Lumina
         FFixedString Signature;
         for (const FCustomSlangPin& In : Node->Inputs)
         {
-            Signature += (Signature.empty() ? "in: " : ", ");
+            Signature += (Signature.empty() ? LOC("in: ") : ", ");
             Signature += In.Name.c_str();
         }
         if (!Node->Outputs.empty())
         {
-            Signature += Signature.empty() ? "out: " : "  |  out: ";
+            Signature += Signature.empty() ? LOC("out: ") : LOC("  |  out: ");
             bool bFirst = true;
             for (const FCustomSlangPin& Out : Node->Outputs)
             {
@@ -658,7 +658,7 @@ namespace Lumina
                 bFirst = false;
             }
         }
-        ImGui::TextColored(EditorColors::TextDim(), "%s", Signature.empty() ? "no pins declared" : Signature.c_str());
+        ImGui::TextColored(EditorColors::TextDim(), "%s", Signature.empty() ? LOC("no pins declared") : Signature.c_str());
 
         // Live validation, so a stray brace is caught here rather than as a wall of shader errors.
         TVector<FString> Problems;
@@ -677,36 +677,36 @@ namespace Lumina
         const float ToolbarWidth = ImGui::GetContentRegionAvail().x;
 
         // Find and replace has no discoverable entry point, so it gets a button as well as its shortcut.
-        if (ImGui::SmallButton(LE_ICON_MAGNIFY " Find"))
+        if (ImGui::SmallButton(LOC_ICON(LE_ICON_MAGNIFY, "Find")))
         {
             CodeEditor.OpenFindReplaceWindow();
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Find / replace (Ctrl+F)");
+            ImGui::SetTooltip(LOC("Find / replace (Ctrl+F)"));
         }
 
         ImGui::SameLine();
         bool bShowWhitespace = CodeEditor.IsShowWhitespacesEnabled();
-        if (ImGui::Checkbox("Whitespace", &bShowWhitespace))
+        if (ImGui::Checkbox(LOC("Whitespace"), &bShowWhitespace))
         {
             CodeEditor.SetShowWhitespacesEnabled(bShowWhitespace);
         }
 
         ImGui::SameLine();
-        if (ImGui::SmallButton("Tabs " LE_ICON_ARROW_RIGHT " Spaces"))
+        if (ImGui::SmallButton(LOC_ICON(LE_ICON_ARROW_RIGHT, "Tabs to spaces")))
         {
             CodeEditor.TabsToSpaces();
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Converts leading tabs to spaces at the editor's tab size.");
+            ImGui::SetTooltip(LOC("Converts leading tabs to spaces at the editor's tab size."));
         }
 
         // The language name is worth showing, since the highlight includes THIS node's pin names.
         const TextEditor::CursorPosition Cursor = CodeEditor.GetCursorPosition(0);
         FFixedString Status;
-        FormatTo(Status, "{}  |  Ln {}, Col {}  |  {} lines",
+        Status = FormatAs<FFixedString>(LOCF("{}  |  Ln {}, Col {}  |  {} lines"),
             CodeEditor.GetLanguageName().c_str(), Cursor.line + 1, Cursor.column + 1, CodeEditor.GetLineCount());
 
         const float StatusWidth = ImGui::CalcTextSize(Status.c_str()).x;
@@ -830,13 +830,13 @@ namespace Lumina
         // The deferred permutation shades opaque geometry, so its register count is the one that matters.
         const struct { const char* Label; FShaderH Entry; } Lanes[] =
         {
-            { "Deferred (VisBuffer)", Material->GetDeferredShader() },
-            { "Forward Pixel",        Material->GetPixelShader()    },
+            { LOC("Deferred (VisBuffer)"), Material->GetDeferredShader() },
+            { LOC("Forward Pixel"),        Material->GetPixelShader()    },
         };
 
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, HeaderColor);
-        ImGui::TextUnformatted("GPU (compiled)");
+        ImGui::TextUnformatted(LOC("GPU (compiled)"));
         ImGui::PopStyleColor();
         ImGui::Separator();
         ImGui::Spacing();
@@ -873,17 +873,17 @@ namespace Lumina
             ImGui::Indent(12.0f);
 
             // A function-scope array does not live in registers, so each access stalls on a memory round trip.
-            Row("Local Memory Arrays", "%u", Stats.LocalArrayCount,
+            Row(LOC("Local Memory Arrays"), "%u", Stats.LocalArrayCount,
                 Stats.LocalArrayCount > 0 ? WarnColor : ValueColor);
             if (Stats.LocalArrayCount > 0)
             {
-                Row("  Scalars Spilled", "%u", Stats.LocalArrayScalars, WarnColor);
+                Row(LOC("  Scalars Spilled"), "%u", Stats.LocalArrayScalars, WarnColor);
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("Arrays declared in function scope do not promote to registers.\n"
+                    ImGui::SetTooltip(LOC("Arrays declared in function scope do not promote to registers.\n"
                                       "The driver backs them with local memory, so every indexed read is\n"
                                       "a memory round trip. Rewriting the indexing as constant-foldable\n"
-                                      "selects normally removes them entirely.");
+                                      "selects normally removes them entirely."));
                 }
             }
 
@@ -908,13 +908,13 @@ namespace Lumina
                     {
                         // Under ~4 warps/SM the shader is starved regardless of what else is going on.
                         const ImVec4 OccColor = Step.WarpsPerSM <= 16u ? WarnColor : ValueColor;
-                        Row("    Occupancy (reg-limited)", "%u warps/SM", Step.WarpsPerSM, OccColor);
+                        Row(LOC("    Occupancy (reg-limited)"), LOC("%u warps/SM"), Step.WarpsPerSM, OccColor);
 
                         if (Step.NextStepRegs > 0u)
                         {
                             ImGui::PushStyleColor(ImGuiCol_Text, MutedColor);
-                            ImGui::TextWrapped("      Next step at %u registers (-%u) -> %u warps/SM. "
-                                               "Shedding fewer than that gains nothing.",
+                            ImGui::TextWrapped(LOC("      Next step at %u registers (-%u) -> %u warps/SM. "
+                                               "Shedding fewer than that gains nothing."),
                                                Step.NextStepRegs,
                                                (uint32)Stat.Value - Step.NextStepRegs,
                                                Step.NextStepWarpsPerSM);
@@ -923,11 +923,11 @@ namespace Lumina
 
                         if (ImGui::IsItemHovered())
                         {
-                            ImGui::SetTooltip("Occupancy is a step function of register count: an SM\n"
+                            ImGui::SetTooltip(LOC("Occupancy is a step function of register count: an SM\n"
                                               "partition allocates registers in fixed blocks, so a\n"
                                               "reduction that does not cross a block boundary buys\n"
                                               "nothing. Estimated for NVIDIA (64K registers/SM, 4\n"
-                                              "partitions, 8-register granularity).");
+                                              "partitions, 8-register granularity)."));
                         }
                     }
                 }
@@ -941,9 +941,9 @@ namespace Lumina
         {
             // The pipeline is built lazily on first draw, so an unrendered material has nothing to report.
             ImGui::PushStyleColor(ImGuiCol_Text, MutedColor);
-            ImGui::TextWrapped("Driver pipeline statistics unavailable. They are captured the first time this "
+            ImGui::TextWrapped(LOC("Driver pipeline statistics unavailable. They are captured the first time this "
                                "material is drawn -- open a scene using it, or use the preview viewport. If they "
-                               "never appear, this GPU does not support VK_KHR_pipeline_executable_properties.");
+                               "never appear, this GPU does not support VK_KHR_pipeline_executable_properties."));
             ImGui::PopStyleColor();
         }
     }
@@ -986,13 +986,13 @@ namespace Lumina
             if (Diag.Node != nullptr)
             {
                 ImGui::Spacing();
-                if (ImGui::SmallButton("Focus Node"))
+                if (ImGui::SmallButton(LOC("Focus Node")))
                 {
                     FocusGraphNode(Diag.Node);
                 }
                 ImGui::SameLine();
                 ImGui::PushStyleColor(ImGuiCol_Text, HintColor);
-                ImGui::TextUnformatted("(selects and centers in graph)");
+                ImGui::TextUnformatted(LOC("(selects and centers in graph)"));
                 ImGui::PopStyleColor();
             }
 
@@ -1015,9 +1015,9 @@ namespace Lumina
             ImGui::BeginChild("##stats_error", ImVec2(0, 0), true);
 
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
-            ImGui::Text("Compilation failed (%d error%s)",
-                static_cast<int>(CompilationResult.Errors.size()),
-                CompilationResult.Errors.size() == 1 ? "" : "s");
+            ImGui::Text(CompilationResult.Errors.size() == 1 ? LOC("Compilation failed (%d error)")
+                                                             : LOC("Compilation failed (%d errors)"),
+                static_cast<int>(CompilationResult.Errors.size()));
             ImGui::PopStyleColor();
             ImGui::Separator();
             ImGui::Spacing();
@@ -1029,8 +1029,8 @@ namespace Lumina
             {
                 ImGui::Spacing();
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.72f, 0.30f, 1.0f));
-                ImGui::Text("%d warning%s", static_cast<int>(CompilationResult.Warnings.size()),
-                    CompilationResult.Warnings.size() == 1 ? "" : "s");
+                ImGui::Text(CompilationResult.Warnings.size() == 1 ? LOC("%d warning") : LOC("%d warnings"),
+                    static_cast<int>(CompilationResult.Warnings.size()));
                 ImGui::PopStyleColor();
                 ImGui::Separator();
                 ImGui::Spacing();
@@ -1050,11 +1050,11 @@ namespace Lumina
             ImGui::BeginChild("##stats_empty", ImVec2(0, 0), true);
 
             const ImVec2 Avail = ImGui::GetContentRegionAvail();
-            const ImVec2 Size  = ImGui::CalcTextSize("Compile to see shader stats");
+            const ImVec2 Size  = ImGui::CalcTextSize(LOC("Compile to see shader stats"));
             ImGui::SetCursorPos(ImVec2((Avail.x - Size.x) * 0.5f, (Avail.y - Size.y) * 0.5f));
 
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.65f, 1.0f));
-            ImGui::TextUnformatted("Compile to see shader stats");
+            ImGui::TextUnformatted(LOC("Compile to see shader stats"));
             ImGui::PopStyleColor();
 
             ImGui::EndChild();
@@ -1075,8 +1075,8 @@ namespace Lumina
         if (!CompilationResult.Warnings.empty())
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.72f, 0.30f, 1.0f));
-            ImGui::Text("%d warning%s", static_cast<int>(CompilationResult.Warnings.size()),
-                CompilationResult.Warnings.size() == 1 ? "" : "s");
+            ImGui::Text(CompilationResult.Warnings.size() == 1 ? LOC("%d warning") : LOC("%d warnings"),
+                static_cast<int>(CompilationResult.Warnings.size()));
             ImGui::PopStyleColor();
             ImGui::Separator();
             ImGui::Spacing();
@@ -1095,7 +1095,7 @@ namespace Lumina
         else                  CostColor = ImVec4(1.00f, 0.40f, 0.40f, 1.0f);
 
         ImGui::PushStyleColor(ImGuiCol_Text, HeaderColor);
-        ImGui::TextUnformatted("Shader Complexity");
+        ImGui::TextUnformatted(LOC("Shader Complexity"));
         ImGui::PopStyleColor();
         ImGui::Separator();
         ImGui::Spacing();
@@ -1113,41 +1113,41 @@ namespace Lumina
             ImGui::PopStyleColor();
         };
 
-        Row("Estimated Cost",          "%u", ShaderStats.EstimatedCost,      CostColor);
-        Row("Pixel Instructions",      "%u", ShaderStats.PixelInstructions,  ValueColor);
+        Row(LOC("Estimated Cost"),          "%u", ShaderStats.EstimatedCost,      CostColor);
+        Row(LOC("Pixel Instructions"),      "%u", ShaderStats.PixelInstructions,  ValueColor);
         if (ShaderStats.bUsesVertexStage)
         {
-            Row("Vertex Instructions", "%u", ShaderStats.VertexInstructions, ValueColor);
+            Row(LOC("Vertex Instructions"), "%u", ShaderStats.VertexInstructions, ValueColor);
         }
-        Row("Texture Samples",         "%u", ShaderStats.TextureSamples,     ValueColor);
-        Row("Math Operations",         "%u", ShaderStats.MathOps,            ValueColor);
-        Row("Noise Operations",        "%u", ShaderStats.NoiseOps,           ValueColor);
+        Row(LOC("Texture Samples"),         "%u", ShaderStats.TextureSamples,     ValueColor);
+        Row(LOC("Math Operations"),         "%u", ShaderStats.MathOps,            ValueColor);
+        Row(LOC("Noise Operations"),        "%u", ShaderStats.NoiseOps,           ValueColor);
 
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, HeaderColor);
-        ImGui::TextUnformatted("Resources");
+        ImGui::TextUnformatted(LOC("Resources"));
         ImGui::PopStyleColor();
         ImGui::Separator();
         ImGui::Spacing();
 
-        Row("Bound Textures",          "%u", ShaderStats.BoundTextures,      ValueColor);
-        Row("Texture Parameters",      "%u", ShaderStats.TextureParameters,  ValueColor);
-        Row("Scalar Parameters",       "%u", ShaderStats.ScalarParameters,   ValueColor);
-        Row("Vector Parameters",       "%u", ShaderStats.VectorParameters,   ValueColor);
+        Row(LOC("Bound Textures"),          "%u", ShaderStats.BoundTextures,      ValueColor);
+        Row(LOC("Texture Parameters"),      "%u", ShaderStats.TextureParameters,  ValueColor);
+        Row(LOC("Scalar Parameters"),       "%u", ShaderStats.ScalarParameters,   ValueColor);
+        Row(LOC("Vector Parameters"),       "%u", ShaderStats.VectorParameters,   ValueColor);
 
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, HeaderColor);
-        ImGui::TextUnformatted("Stages");
+        ImGui::TextUnformatted(LOC("Stages"));
         ImGui::PopStyleColor();
         ImGui::Separator();
         ImGui::Spacing();
 
-        Row("Uses Vertex Stage (WPO)", "%s", ShaderStats.bUsesVertexStage ? "Yes" : "No",
+        Row(LOC("Uses Vertex Stage (WPO)"), "%s", ShaderStats.bUsesVertexStage ? LOC("Yes") : LOC("No"),
             ShaderStats.bUsesVertexStage ? ImVec4(0.4f, 1.0f, 0.5f, 1.0f) : ValueColor);
-        Row("Pixel Source Size",       "%u chars", ShaderStats.PixelCharacters, ValueColor);
+        Row(LOC("Pixel Source Size"),       LOC("%u chars"), ShaderStats.PixelCharacters, ValueColor);
         if (ShaderStats.bUsesVertexStage)
         {
-            Row("Vertex Source Size",  "%u chars", ShaderStats.VertexCharacters, ValueColor);
+            Row(LOC("Vertex Source Size"),  LOC("%u chars"), ShaderStats.VertexCharacters, ValueColor);
         }
 
         // Everything above comes from the GENERATED SOURCE, which is blind to what the hardware costs.
@@ -1157,7 +1157,7 @@ namespace Lumina
         ImGui::Spacing();
 
         // Tucked behind a collapsing header, so the user opts in to see the raw HLSL.
-        if (ImGui::CollapsingHeader("Generated Pixel Shader (HLSL)"))
+        if (ImGui::CollapsingHeader(LOC_ID("Generated Pixel Shader (HLSL)")))
         {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.08f, 0.10f, 1.0f));
             ImGui::BeginChild("##hlsl_pixel", ImVec2(0, 320), true, ImGuiWindowFlags_HorizontalScrollbar);
@@ -1170,7 +1170,7 @@ namespace Lumina
 
         if (ShaderStats.bUsesVertexStage && !VertexTree.empty())
         {
-            if (ImGui::CollapsingHeader("Generated Vertex Shader (HLSL)"))
+            if (ImGui::CollapsingHeader(LOC_ID("Generated Vertex Shader (HLSL)")))
             {
                 ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.08f, 0.10f, 1.0f));
                 ImGui::BeginChild("##hlsl_vertex", ImVec2(0, 320), true, ImGuiWindowFlags_HorizontalScrollbar);
@@ -1197,7 +1197,7 @@ namespace Lumina
 
         if (!Call->Function.IsValid())
         {
-            ImGuiX::Notifications::NotifyWarning("This Material Function node has no function assigned.");
+            ImGuiX::Notifications::NotifyWarning(LOCF("This Material Function node has no function assigned."));
             return;
         }
 
@@ -1305,16 +1305,16 @@ namespace Lumina
     {
         if (CompilationResult.bIsError)
         {
-            ImGuiX::Notifications::NotifyError("Material failed to compile: {0} error(s). See the console or the Shader Stats tab.",
+            ImGuiX::Notifications::NotifyError(LOCF("Material failed to compile: {0} error(s). See the console or the Shader Stats tab."),
                 (SIZE_T)CompilationResult.Errors.size());
         }
         else if (CompilationResult.Warnings.empty())
         {
-            ImGuiX::Notifications::NotifySuccess("Material compiled.");
+            ImGuiX::Notifications::NotifySuccess(LOCF("Material compiled."));
         }
         else
         {
-            ImGuiX::Notifications::NotifyWarning("Material compiled with {0} warnings.", (SIZE_T)CompilationResult.Warnings.size());
+            ImGuiX::Notifications::NotifyWarning(LOCF("Material compiled with {0} warnings."), (SIZE_T)CompilationResult.Warnings.size());
         }
     }
 

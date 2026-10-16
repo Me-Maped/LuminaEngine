@@ -1,4 +1,5 @@
 ﻿#include "ParticleParamCustomization.h"
+#include "Localization/Localization.h"
 
 #include <imgui.h>
 #include <string>
@@ -50,15 +51,15 @@ namespace Lumina
         {
             switch (Type)
             {
-            case EParticleParameterType::Float: return "Float";
-            case EParticleParameterType::Int:   return "Int";
-            case EParticleParameterType::Bool:  return "Bool";
-            case EParticleParameterType::Vec2:  return "Vec2";
-            case EParticleParameterType::Vec3:  return "Vec3";
-            case EParticleParameterType::Vec4:  return "Vec4";
-            case EParticleParameterType::Color: return "Color";
+            case EParticleParameterType::Float: return LOC("Float");
+            case EParticleParameterType::Int:   return LOC("Int");
+            case EParticleParameterType::Bool:  return LOC("Bool");
+            case EParticleParameterType::Vec2:  return LOC("Vec2");
+            case EParticleParameterType::Vec3:  return LOC("Vec3");
+            case EParticleParameterType::Vec4:  return LOC("Vec4");
+            case EParticleParameterType::Color: return LOC("Color");
             }
-            return "?";
+            return LOC("?");
         }
 
         // A single scalar broadcasts, and Vec4 and Color differ only in which editor widget is shown.
@@ -132,8 +133,8 @@ namespace Lumina
 
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             {
-                ImGuiX::WrappedTooltip("Driven by the user parameter '{}'. Set it at runtime with the matching ParticleSystemComponent Set call.",
-                    Value.ParameterName.c_str());
+                ImGuiX::WrappedTooltip_Internal(Format(LOCF("Driven by the user parameter '{}'. Set it at runtime with the matching ParticleSystemComponent Set call."),
+                    Value.ParameterName.c_str()));
             }
         }
         else
@@ -198,14 +199,14 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::TextTooltip_Internal("Drive this input from a named parameter");
+            ImGuiX::TextTooltip_Internal(LOC("Drive this input from a named parameter"));
         }
 
         if (ImGui::BeginPopup("##ParamBind"))
         {
             CParticleSystem* System = ParticleParamContext::GetActiveSystem();
 
-            if (ImGui::Selectable("Use Constant", !Value.IsBound()))
+            if (ImGui::Selectable(LOC("Use Constant"), !Value.IsBound()))
             {
                 // Clearing only drops the name, so the input returns to the constant it showed before binding.
                 Value.ParameterName = FName();
@@ -217,11 +218,11 @@ namespace Lumina
 
             if (System == nullptr)
             {
-                ImGui::TextDisabled("No particle system context.");
+                ImGui::TextDisabled(LOC("No particle system context."));
             }
             else if (System->UserParameters.empty())
             {
-                ImGui::TextDisabled("This system declares no parameters.");
+                ImGui::TextDisabled(LOC("This system declares no parameters."));
             }
             else
             {
@@ -255,7 +256,7 @@ namespace Lumina
             if (System != nullptr)
             {
                 ImGui::Separator();
-                if (ImGui::Selectable("New Parameter From Value"))
+                if (ImGui::Selectable(LOC("New Parameter From Value")))
                 {
                     FParticleParameter& New = System->UserParameters.emplace_back();
                     New.Name   = MakeUniqueParameterName(*System, Prop != nullptr ? Prop->GetPropertyName() : FName());
@@ -269,7 +270,7 @@ namespace Lumina
                 }
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 {
-                    ImGuiX::WrappedTooltip_Internal("Declare a parameter on the system seeded with this value, and bind this input to it.");
+                    ImGuiX::WrappedTooltip_Internal(LOC("Declare a parameter on the system seeded with this value, and bind this input to it."));
                 }
             }
 

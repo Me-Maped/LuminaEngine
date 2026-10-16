@@ -1,4 +1,5 @@
 #include "EditorPCH.h"
+#include "Localization/Localization.h"
 #include "BlendSpaceFactory.h"
 
 #include "Assets/AssetTypes/Mesh/Skeleton/Skeleton.h"
@@ -22,7 +23,7 @@ namespace Lumina
             SelectedAxisCount = 2;
         }
 
-        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LE_ICON_BONE " Select Skeleton");
+        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LOC_ICON(LE_ICON_BONE, "Select Skeleton"));
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
@@ -31,10 +32,10 @@ namespace Lumina
         ImGuiX::AssetReferenceCombo("##Skeleton", CSkeleton::StaticClass(), SelectedSkeletonGUID, LE_ICON_BONE);
 
         ImGui::Spacing();
-        ImGui::TextUnformatted("Axes");
-        ImGui::RadioButton("One (speed)", &SelectedAxisCount, 1);
+        ImGui::TextUnformatted(LOC("Axes"));
+        ImGui::RadioButton(LOC_ID("One (speed)"), &SelectedAxisCount, 1);
         ImGui::SameLine();
-        ImGui::RadioButton("Two (speed + direction)", &SelectedAxisCount, 2);
+        ImGui::RadioButton(LOC_ID("Two (speed + direction)"), &SelectedAxisCount, 2);
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -45,14 +46,14 @@ namespace Lumina
 
         bool bConfirm = false;
         ImGui::BeginDisabled(!SelectedSkeletonGUID.IsValid());
-        if (ImGui::Button(LE_ICON_CHECK " Create", ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CHECK, "Create"), ImVec2(ButtonWidth, 0)))
         {
             bConfirm = true;
         }
         ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_CLOSE " Cancel", ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CLOSE, "Cancel"), ImVec2(ButtonWidth, 0)))
         {
             SelectedSkeletonGUID.Invalidate();
             bShouldClose = true;

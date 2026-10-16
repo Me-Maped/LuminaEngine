@@ -1,4 +1,5 @@
 ﻿#include "CustomPrimitiveDataCustomization.h"
+#include "Localization/Localization.h"
 #include "imgui.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
 
@@ -13,7 +14,7 @@ namespace Lumina
     {
         bool bWasChanged = false;
     
-        const char* TypeNames[] = { "Float", "Int", "UInt", "Color", "Bool" };
+        const char* TypeNames[] = { LOC("Float"), LOC("Int"), LOC("UInt"), LOC("Color"), LOC("Bool") };
         int32 CurrentType = (int32)Value.Type;
         
         ImGui::PushItemWidth(100);

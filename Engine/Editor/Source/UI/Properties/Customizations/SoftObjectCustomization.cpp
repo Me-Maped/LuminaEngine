@@ -1,4 +1,5 @@
 ﻿#include "CoreTypeCustomization.h"
+#include "Localization/Localization.h"
 #include "imgui.h"
 #include "Core/Object/Class.h"
 #include "Core/Reflection/Type/Properties/SoftObjectProperty.h"
@@ -26,7 +27,7 @@ namespace Lumina
     {
         if (PathView.empty())
         {
-            return FFixedString("<None>");
+            return FFixedString(LOC("<None>"));
         }
         size_t Slash = PathView.find_last_of('/');
         FStringView Leaf = (Slash == FStringView::npos) ? PathView : PathView.substr(Slash + 1);
@@ -93,7 +94,7 @@ namespace Lumina
 
             ImGui::SetNextItemWidth(TextWidgetWidth);
 
-            FFixedString PathString = bHasPath ? FFixedString(PathView.data(), PathView.size()) : FFixedString("<None>");
+            FFixedString PathString = bHasPath ? FFixedString(PathView.data(), PathView.size()) : FFixedString(LOC("<None>"));
             ImGui::PushStyleColor(ImGuiCol_Text, bHasPath ? ImVec4(0.6f, 0.6f, 0.6f, 1.0f) : ImVec4(1.0f, 0.19f, 0.19f, 1.0f));
             ImGuiX::InputText("##SoftObjectPathText", PathString, ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_ReadOnly);
             ImGuiX::TextTooltip("{}", PathString);
@@ -115,7 +116,7 @@ namespace Lumina
                     ImVec2 TextPos = ImGui::GetItemRectMin();
                     TextPos.x += Style.FramePadding.x + 2.0f;
                     TextPos.y += Style.FramePadding.y;
-                    DrawList->AddText(TextPos, IM_COL32(100, 100, 110, 255), LE_ICON_FILE_SEARCH " Search Assets...");
+                    DrawList->AddText(TextPos, IM_COL32(100, 100, 110, 255), LOC_ICON(LE_ICON_FILE_SEARCH, "Search Assets..."));
                 }
 
                 ImGui::SameLine();

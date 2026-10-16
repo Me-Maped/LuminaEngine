@@ -56,15 +56,15 @@ namespace Lumina
             const FAABB& BoundingBox = StaticMesh->GetAABB();
             
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Mesh Statistics");
+            ImGui::SeparatorText(LOC("Mesh Statistics"));
             ImGuiX::Font::PopFont();
             
             ImGui::Spacing();
             
             if (ImGui::BeginTable("##MeshStats", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
             {
-                ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 180.0f);
-                ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(LOC_ID("Property"), ImGuiTableColumnFlags_WidthFixed, 180.0f);
+                ImGui::TableSetupColumn(LOC_ID("Value"), ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableHeadersRow();
     
                 auto PropertyRow = [](const char* label, const FString& value, const ImVec4* color = nullptr)
@@ -84,9 +84,9 @@ namespace Lumina
                     }
                 };
     
-                PropertyRow("Vertices", Format("{}", Resource.GetNumVertices()));
-                PropertyRow("Meshlets", Format("{}", Resource.MeshletData.Meshlets.size()));
-                PropertyRow("Surfaces", Format("{}", Resource.GetNumSurfaces()));
+                PropertyRow(LOC("Vertices"), Format("{}", Resource.GetNumVertices()));
+                PropertyRow(LOC("Meshlets"), Format("{}", Resource.MeshletData.Meshlets.size()));
+                PropertyRow(LOC("Surfaces"), Format("{}", Resource.GetNumSurfaces()));
 
                 // Maximum LOD count across surfaces.
                 uint32 MaxLODsAcrossSurfaces = 0;
@@ -94,7 +94,7 @@ namespace Lumina
                 {
                     MaxLODsAcrossSurfaces = Math::Max(MaxLODsAcrossSurfaces, Surface.NumLODs);
                 }
-                PropertyRow("LOD Levels", Format("{}", MaxLODsAcrossSurfaces));
+                PropertyRow(LOC("LOD Levels"), Format("{}", MaxLODsAcrossSurfaces));
                 
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
@@ -108,32 +108,32 @@ namespace Lumina
                                               + Resource.MeshletData.MeshletTriangles.size() * sizeof(uint32)) / 1024.0f;
                 const float totalSizeKB      = vertexSizeKB + meshletSizeKB;
 
-                PropertyRow("Vertex Buffer", Format("{}", static_cast<int>(vertexSizeKB)) + " KB");
-                PropertyRow("Meshlet Data",  Format("{}", static_cast<int>(meshletSizeKB)) + " KB");
+                PropertyRow(LOC("Vertex Buffer"), Format("{}", static_cast<int>(vertexSizeKB)) + " KB");
+                PropertyRow(LOC("Meshlet Data"),  Format("{}", static_cast<int>(meshletSizeKB)) + " KB");
 
                 ImVec4 totalColor = totalSizeKB > 1024 ? ImVec4(1.0f, 0.7f, 0.3f, 1.0f) : ImVec4(0.7f, 1.0f, 0.7f, 1.0f);
-                PropertyRow("Total Memory", Format("{}", static_cast<int>(totalSizeKB)) + " KB", &totalColor);
+                PropertyRow(LOC("Total Memory"), Format("{}", static_cast<int>(totalSizeKB)) + " KB", &totalColor);
                 
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 ImGui::Dummy(ImVec2(0, 4));
                 
-                PropertyRow("Bounds Min", Math::ToString(BoundingBox.Min).c_str());
-                PropertyRow("Bounds Max", Math::ToString(BoundingBox.Max).c_str());
+                PropertyRow(LOC("Bounds Min"), Math::ToString(BoundingBox.Min).c_str());
+                PropertyRow(LOC("Bounds Max"), Math::ToString(BoundingBox.Max).c_str());
                 
                 FVector3 extents = BoundingBox.Max - BoundingBox.Min;
-                PropertyRow("Bounds Extents", Math::ToString(extents).c_str());
+                PropertyRow(LOC("Bounds Extents"), Math::ToString(extents).c_str());
     
                 ImGui::EndTable();
             }
     
             ImGui::Spacing();
-            ImGui::SeparatorText("Meshlets");
+            ImGui::SeparatorText(LOC("Meshlets"));
             ImGui::Spacing();
 
             const TVector<FMeshlet>&       Meshlets = Resource.MeshletData.Meshlets;
             const TVector<FMeshletSphere>& Bounds   = Resource.MeshletData.MeshletSpheres;
-            ImGui::Text("Total Meshlets: %zu", Meshlets.size());
+            ImGui::Text(LOC("Total Meshlets: %zu"), Meshlets.size());
             ImGui::Spacing();
 
             if (ImGui::BeginTable("##Meshlets", 4,
@@ -141,10 +141,10 @@ namespace Lumina
                 ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit,
                 ImVec2(0, 300)))
             {
-                ImGui::TableSetupColumn("Index",     ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                ImGui::TableSetupColumn("Verts",     ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                ImGui::TableSetupColumn("Tris",      ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                ImGui::TableSetupColumn("Bounds (center, radius)", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(LOC_ID("Index"),     ImGuiTableColumnFlags_WidthFixed, 50.0f);
+                ImGui::TableSetupColumn(LOC_ID("Verts"),     ImGuiTableColumnFlags_WidthFixed, 50.0f);
+                ImGui::TableSetupColumn(LOC_ID("Tris"),      ImGuiTableColumnFlags_WidthFixed, 50.0f);
+                ImGui::TableSetupColumn(LOC_ID("Bounds (center, radius)"), ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableHeadersRow();
 
                 ImGuiListClipper Clipper;
@@ -174,7 +174,7 @@ namespace Lumina
 
             // LOD override is pushed onto SStaticMeshComponent each frame in Update(); thresholds persist on FGeometrySurface.
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Levels of Detail");
+            ImGui::SeparatorText(LOC("Levels of Detail"));
             ImGuiX::Font::PopFont();
 
             ImGui::Spacing();
@@ -191,16 +191,16 @@ namespace Lumina
                 // Names built at runtime; no parallel string list needed for MAX_MESH_LODS tracking.
                 char        LODNames[MAX_MESH_LODS][24];
                 const char* PreviewItems[MAX_MESH_LODS + 1];
-                PreviewItems[0] = "Automatic (distance)";
+                PreviewItems[0] = LOC("Automatic (distance)");
                 for (uint32 i = 0; i < AvailableLODs; ++i)
                 {
                     if (i == 0)
                     {
-                        snprintf(LODNames[i], sizeof(LODNames[i]), "LOD %u (full detail)", i);
+                        snprintf(LODNames[i], sizeof(LODNames[i]), LOC("LOD %u (full detail)"), i);
                     }
                     else
                     {
-                        snprintf(LODNames[i], sizeof(LODNames[i]), "LOD %u", i);
+                        snprintf(LODNames[i], sizeof(LODNames[i]), LOC("LOD %u"), i);
                     }
                     PreviewItems[i + 1] = LODNames[i];
                 }
@@ -210,15 +210,15 @@ namespace Lumina
 
                 int PreviewItem = (PreviewLODIndex < 0) ? 0 : PreviewLODIndex + 1;
                 ImGui::SetNextItemWidth(220.0f);
-                if (ImGui::Combo("Preview LOD", &PreviewItem, PreviewItems, (int)AvailableLODs + 1))
+                if (ImGui::Combo(LOC("Preview LOD"), &PreviewItem, PreviewItems, (int)AvailableLODs + 1))
                 {
                     PreviewLODIndex = (PreviewItem == 0) ? -1 : PreviewItem - 1;
                 }
-                ImGuiX::TextTooltip("Force the viewport mesh to a specific LOD regardless of camera distance.");
+                ImGuiX::TextTooltip(LOCF("Force the viewport mesh to a specific LOD regardless of camera distance."));
 
                 if (AvailableLODs == 1)
                 {
-                    ImGui::TextDisabled("This mesh has one LOD, so there is nothing to switch between.");
+                    ImGui::TextDisabled(LOC("This mesh has one LOD, so there is nothing to switch between."));
                 }
             }
 
@@ -244,11 +244,11 @@ namespace Lumina
             if (ImGui::BeginTable("##LODSummary", 5,
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
             {
-                ImGui::TableSetupColumn("LOD",       ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                ImGui::TableSetupColumn("Surfaces",  ImGuiTableColumnFlags_WidthFixed, 70.0f);
-                ImGui::TableSetupColumn("Meshlets",  ImGuiTableColumnFlags_WidthFixed, 80.0f);
-                ImGui::TableSetupColumn("Triangles", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-                ImGui::TableSetupColumn("vs LOD 0",  ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(LOC_ID("LOD"),       ImGuiTableColumnFlags_WidthFixed, 50.0f);
+                ImGui::TableSetupColumn(LOC_ID("Surfaces"),  ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableSetupColumn(LOC_ID("Meshlets"),  ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn(LOC_ID("Triangles"), ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                ImGui::TableSetupColumn(LOC_ID("vs LOD 0"),  ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableHeadersRow();
 
                 for (uint32 lod = 0; lod < MAX_MESH_LODS; ++lod)
@@ -278,7 +278,7 @@ namespace Lumina
             }
 
             ImGui::Spacing();
-            ImGui::TextDisabled("Distance thresholds (distance / radius). The renderer picks the highest LOD whose threshold the instance has exceeded.");
+            ImGui::TextDisabled(LOC("Distance thresholds (distance / radius). The renderer picks the highest LOD whose threshold the instance has exceeded."));
             ImGui::Spacing();
 
             // Shared threshold editor writes to every surface in lockstep; per-surface overrides still work below.
@@ -305,8 +305,8 @@ namespace Lumina
                 if (ImGui::BeginTable("##LODThresholds", 3,
                     ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
                 {
-                    ImGui::TableSetupColumn("LOD",       ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                    ImGui::TableSetupColumn("Threshold", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn(LOC_ID("LOD"),       ImGuiTableColumnFlags_WidthFixed, 50.0f);
+                    ImGui::TableSetupColumn(LOC_ID("Threshold"), ImGuiTableColumnFlags_WidthStretch);
                     ImGui::TableSetupColumn("##Reset",   ImGuiTableColumnFlags_WidthFixed, ResetColW);
                     ImGui::TableHeadersRow();
 
@@ -323,7 +323,7 @@ namespace Lumina
 
                         if (lod == 0)
                         {
-                            ImGui::TextDisabled("0  (always active)");
+                            ImGui::TextDisabled(LOC("0  (always active)"));
                             continue;
                         }
 
@@ -351,7 +351,7 @@ namespace Lumina
                         ImGui::EndDisabled();
                         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
                         {
-                            ImGui::SetTooltip("Reset to default (%.2f)", DefaultValue);
+                            ImGui::SetTooltip(LOC("Reset to default (%.2f)"), DefaultValue);
                         }
 
                         ImGui::PopID();
@@ -359,7 +359,7 @@ namespace Lumina
                     ImGui::EndTable();
                 }
 
-                if (ImGui::Button(LE_ICON_REFRESH " Reset All Thresholds"))
+                if (ImGui::Button(LOC_ICON(LE_ICON_REFRESH, "Reset All Thresholds")))
                 {
                     // Ascending walk so each level clamps against the one already restored below it.
                     for (uint32 lod = 1; lod < MAX_MESH_LODS; ++lod)
@@ -369,7 +369,7 @@ namespace Lumina
                     }
                     bThresholdChanged = true;
                 }
-                ImGuiX::TextTooltip("{}", "Restore every level to the ramp the importer bakes, on every surface.");
+                ImGuiX::TextTooltip("{}", LOC("Restore every level to the ramp the importer bakes, on every surface."));
 
                 if (bThresholdChanged)
                 {
@@ -390,18 +390,18 @@ namespace Lumina
             ImGui::Spacing();
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Geometry Surfaces");
+            ImGui::SeparatorText(LOC("Geometry Surfaces"));
             ImGuiX::Font::PopFont();
             
             ImGui::Spacing();
             
             if (Resource.GeometrySurfaces.empty())
             {
-                ImGui::TextDisabled("No surfaces defined");
+                ImGui::TextDisabled(LOC("No surfaces defined"));
             }
             else
             {
-                ImGui::TextDisabled("Click a surface to highlight its bounds in the viewport.");
+                ImGui::TextDisabled(LOC("Click a surface to highlight its bounds in the viewport."));
                 ImGui::Spacing();
 
                 for (size_t i = 0; i < Resource.GeometrySurfaces.size(); ++i)
@@ -410,14 +410,14 @@ namespace Lumina
                     ImGui::PushID((int)i);
 
                     CMaterialInterface* Mat        = StaticMesh->GetMaterialAtSlot((size_t)Surface.MaterialIndex);
-                    const FString       MaterialName = IsValid(Mat) ? Mat->GetName().ToString() : FString("(none)");
+                    const FString       MaterialName = IsValid(Mat) ? Mat->GetName().ToString() : FString(LOC("(none)"));
 
                     const bool   bSelected     = ((int32)i == SelectedSurfaceIndex);
                     const uint32 LOD0Meshlets  = Surface.LODMeshletCount[0];
-                    FString      Label         = "Surface " + Format("{}", i)
+                    FString      Label         = LOC("Surface ") + Format("{}", i)
                                                + "  |  " + MaterialName
-                                               + "  |  " + Format("{}", Surface.IndexCount / 3) + " tris, "
-                                               + Format("{}", LOD0Meshlets) + " meshlets";
+                                               + "  |  " + Format("{}", Surface.IndexCount / 3) + LOC(" tris, ")
+                                               + Format("{}", LOD0Meshlets) + LOC(" meshlets");
 
                     if (ImGui::Selectable(Label.c_str(), bSelected, ImGuiSelectableFlags_SpanAllColumns))
                     {
@@ -444,14 +444,14 @@ namespace Lumina
                             const uint32 LOD0Off = Surface.LODMeshletOffset[0];
                             const uint32 LOD0Cnt = Surface.LODMeshletCount[0];
 
-                            DetailRow("Material:",       MaterialName);
-                            DetailRow("Material Index:", Format("{}", Surface.MaterialIndex));
-                            DetailRow("Start Index:",    Format("{}", Surface.StartIndex));
-                            DetailRow("Index Count:",    Format("{}", Surface.IndexCount));
-                            DetailRow("Triangles:",      Format("{}", Surface.IndexCount / 3));
-                            DetailRow("LOD 0 Range:",    Format("{}", LOD0Off) + " .. " + Format("{}", LOD0Off + LOD0Cnt));
-                            DetailRow("LOD 0 Meshlets:", Format("{}", LOD0Cnt));
-                            DetailRow("LOD Levels:",     Format("{}", Surface.NumLODs));
+                            DetailRow(LOC("Material:"),       MaterialName);
+                            DetailRow(LOC("Material Index:"), Format("{}", Surface.MaterialIndex));
+                            DetailRow(LOC("Start Index:"),    Format("{}", Surface.StartIndex));
+                            DetailRow(LOC("Index Count:"),    Format("{}", Surface.IndexCount));
+                            DetailRow(LOC("Triangles:"),      Format("{}", Surface.IndexCount / 3));
+                            DetailRow(LOC("LOD 0 Range:"),    Format("{}", LOD0Off) + " .. " + Format("{}", LOD0Off + LOD0Cnt));
+                            DetailRow(LOC("LOD 0 Meshlets:"), Format("{}", LOD0Cnt));
+                            DetailRow(LOC("LOD Levels:"),     Format("{}", Surface.NumLODs));
 
                             ImGui::EndTable();
                         }
@@ -461,11 +461,11 @@ namespace Lumina
                         if (ImGui::BeginTable("##SurfaceLODs", 5,
                             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
                         {
-                            ImGui::TableSetupColumn("LOD",       ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                            ImGui::TableSetupColumn("Meshlets",  ImGuiTableColumnFlags_WidthFixed, 80.0f);
-                            ImGui::TableSetupColumn("Triangles", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                            ImGui::TableSetupColumn("Range",     ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableSetupColumn("Threshold", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+                            ImGui::TableSetupColumn(LOC_ID("LOD"),       ImGuiTableColumnFlags_WidthFixed, 50.0f);
+                            ImGui::TableSetupColumn(LOC_ID("Meshlets"),  ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                            ImGui::TableSetupColumn(LOC_ID("Triangles"), ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                            ImGui::TableSetupColumn(LOC_ID("Range"),     ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableSetupColumn(LOC_ID("Threshold"), ImGuiTableColumnFlags_WidthFixed, 120.0f);
                             ImGui::TableHeadersRow();
 
                             FGeometrySurface&        SurfaceRW = Resource.GeometrySurfaces[i];
@@ -516,7 +516,7 @@ namespace Lumina
                                     ImGui::EndDisabled();
                                     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
                                     {
-                                        ImGui::SetTooltip("Reset this surface's LOD %u to default (%.2f)", lod, SurfDefault);
+                                        ImGui::SetTooltip(LOC("Reset this surface's LOD %u to default (%.2f)"), lod, SurfDefault);
                                     }
 
                                     ImGui::PopID();
@@ -542,7 +542,7 @@ namespace Lumina
             ImGui::Spacing();
     
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Asset Details");
+            ImGui::SeparatorText(LOC("Asset Details"));
             ImGuiX::Font::PopFont();
             
             ImGui::Spacing();
@@ -691,29 +691,29 @@ namespace Lumina
 
     void FStaticMeshEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("LODs",
-            "Each LOD is a separate index buffer over the same vertex stream. The Preview LOD picker forces "
-            "a specific level so you can inspect its geometry; -1 returns to automatic distance-based selection.");
-        DrawHelpTextRow("Surfaces",
-            "Surfaces (sub-meshes) are the unit at which materials are assigned. Click a row to highlight "
-            "its AABB in the viewport.");
-        DrawHelpTextRow("Materials",
-            "Material slots come from the source asset. Drag a Material or Material Instance from the "
-            "Content Browser onto a slot to override.");
-        DrawHelpTextRow("Visualizers",
-            "Toggle wireframe, normals, tangents, AABB from the View menu. Useful for verifying imports "
-            "and diagnosing lighting issues.");
-        DrawHelpTextRow("Reimport",
-            "If the source FBX/GLTF on disk changed, use File > Reimport to refresh, preserves material "
-            "overrides where slot names match.");
+        DrawHelpTextRow(LOC("LODs"),
+            LOC("Each LOD is a separate index buffer over the same vertex stream. The Preview LOD picker forces "
+            "a specific level so you can inspect its geometry; -1 returns to automatic distance-based selection."));
+        DrawHelpTextRow(LOC("Surfaces"),
+            LOC("Surfaces (sub-meshes) are the unit at which materials are assigned. Click a row to highlight "
+            "its AABB in the viewport."));
+        DrawHelpTextRow(LOC("Materials"),
+            LOC("Material slots come from the source asset. Drag a Material or Material Instance from the "
+            "Content Browser onto a slot to override."));
+        DrawHelpTextRow(LOC("Visualizers"),
+            LOC("Toggle wireframe, normals, tangents, AABB from the View menu. Useful for verifying imports "
+            "and diagnosing lighting issues."));
+        DrawHelpTextRow(LOC("Reimport"),
+            LOC("If the source FBX/GLTF on disk changed, use File > Reimport to refresh, preserves material "
+            "overrides where slot names match."));
     }
 
     void FStaticMeshEditorTool::DrawViewModeExtraItems()
     {
         ImGui::Separator();
-        ImGui::MenuItem(LE_ICON_CUBE_OUTLINE " Show AABB", nullptr, &bShowAABB);
+        ImGui::MenuItem(LOC_ICON(LE_ICON_CUBE_OUTLINE, "Show AABB"), nullptr, &bShowAABB);
 
-        if (ImGui::MenuItem(LE_ICON_RELOAD " Reload Mesh Buffers"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_RELOAD, "Reload Mesh Buffers")))
         {
             Cast<CStaticMesh>(Asset.Get())->PostLoad();
         }
@@ -724,9 +724,9 @@ namespace Lumina
         FAssetEditorTool::DrawToolMenu(UpdateContext);
         
         // Gizmo Control Dropdown
-        if (ImGui::BeginMenu(LE_ICON_MOVE_RESIZE " Gizmo Control"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_MOVE_RESIZE, "Gizmo Control")))
         {
-            const char* operations[] = { "Translate", "Rotate", "Scale" };
+            const char* operations[] = { LOC("Translate"), LOC("Rotate"), LOC("Scale") };
             static int currentOp = 0;
 
             if (ImGui::Combo("##", &currentOp, operations, IM_ARRAYSIZE(operations)))
@@ -742,7 +742,7 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(LE_ICON_CUBE_OUTLINE " Distance Field"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_CUBE_OUTLINE, "Distance Field")))
         {
             CStaticMesh* Mesh = Cast<CStaticMesh>(Asset.Get());
             const FDistanceFieldVolume& Volume = Mesh->GetMeshResource().DistanceField;
@@ -750,27 +750,27 @@ namespace Lumina
             if (Volume.IsValid())
             {
                 ImGuiX::Text("{0} x {1} x {2}", Volume.Dimensions.x, Volume.Dimensions.y, Volume.Dimensions.z);
-                ImGuiX::Text("{0}{1}", ImGuiX::FormatSize(Volume.GetSizeBytes()), Volume.bTwoSided ? ", two-sided" : "");
-                ImGuiX::Text("Band: {:.3f} units", Volume.MaxDistance);
+                ImGuiX::Text("{0}{1}", ImGuiX::FormatSize(Volume.GetSizeBytes()), Volume.bTwoSided ? LOC(", two-sided") : "");
+                ImGuiX::Text(LOCF("Band: {:.3f} units"), Volume.MaxDistance);
             }
             else
             {
-                ImGui::TextDisabled("No distance field baked.");
+                ImGui::TextDisabled(LOC("No distance field baked."));
             }
             ImGui::Separator();
 
             // Keeping the settings on the property table means undo and the dirty flag already work on them.
-            if (ImGui::MenuItem(LE_ICON_REFRESH " Build Distance Field"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_REFRESH, "Build Distance Field")))
             {
                 // Voxelizes the baked meshlets, so it works with no source file, and a 48 cubed field is sub-second.
                 Mesh->BuildDistanceField();
                 Asset->GetPackage()->MarkDirty();
                 PropertyTable.MarkDirty();
             }
-            ImGuiX::TextTooltip("{}", "Rebuild from the settings in Mesh Properties > Distance Field. "
-                                      "Cost scales with the cube of Resolution.");
+            ImGuiX::TextTooltip("{}", LOC("Rebuild from the settings in Mesh Properties > Distance Field. "
+                                      "Cost scales with the cube of Resolution."));
 
-            if (Volume.IsValid() && ImGui::MenuItem(LE_ICON_DELETE " Clear Distance Field"))
+            if (Volume.IsValid() && ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Clear Distance Field")))
             {
                 Mesh->DistanceFieldSettings.bEnabled = false;
                 Mesh->BuildDistanceField();
@@ -781,9 +781,9 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(LE_ICON_LINK " Sockets"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_LINK, "Sockets")))
         {
-            if (ImGui::MenuItem(LE_ICON_PLUS " Add Socket"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_PLUS, "Add Socket")))
             {
                 CStaticMesh* Mesh = Cast<CStaticMesh>(Asset.Get());
 
@@ -804,7 +804,7 @@ namespace Lumina
                 Asset->GetPackage()->MarkDirty();
                 PropertyTable.MarkDirty();
             }
-            ImGuiX::TextTooltip("{}", "Add a named attach point; edit its name and offset in Mesh Properties");
+            ImGuiX::TextTooltip("{}", LOC("Add a named attach point; edit its name and offset in Mesh Properties"));
 
             ImGui::EndMenu();
         }

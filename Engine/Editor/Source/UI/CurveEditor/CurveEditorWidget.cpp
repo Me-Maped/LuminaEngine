@@ -1,4 +1,5 @@
 #include "CurveEditorWidget.h"
+#include "Localization/Localization.h"
 
 #include "Core/Math/Math.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
@@ -74,12 +75,12 @@ namespace Lumina
         {
             switch (Mode)
             {
-            case ECurveInterpMode::Constant:  return "Constant";
-            case ECurveInterpMode::Linear:    return "Linear";
-            case ECurveInterpMode::Cubic:     return "Cubic (Auto)";
-            case ECurveInterpMode::CubicUser: return "Cubic (User)";
+            case ECurveInterpMode::Constant:  return LOC("Constant");
+            case ECurveInterpMode::Linear:    return LOC("Linear");
+            case ECurveInterpMode::Cubic:     return LOC("Cubic (Auto)");
+            case ECurveInterpMode::CubicUser: return LOC("Cubic (User)");
             }
-            return "Unknown";
+            return LOC("Unknown");
         }
     }
 
@@ -477,7 +478,7 @@ namespace Lumina
     {
         if (Curve == nullptr)
         {
-            ImGui::TextDisabled("No curve bound.");
+            ImGui::TextDisabled(LOC("No curve bound."));
             return;
         }
 
@@ -551,47 +552,47 @@ namespace Lumina
         {
             SetSelectionInterpMode(ECurveInterpMode::Constant, false);
         }
-        ImGuiX::TextTooltip("Constant");
+        ImGuiX::TextTooltip(LOCF("Constant"));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_VECTOR_POLYLINE "##Linear"))
         {
             SetSelectionInterpMode(ECurveInterpMode::Linear, false);
         }
-        ImGuiX::TextTooltip("Linear");
+        ImGuiX::TextTooltip(LOCF("Linear"));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_VECTOR_CURVE "##Cubic"))
         {
             SetSelectionInterpMode(ECurveInterpMode::Cubic, false);
         }
-        ImGuiX::TextTooltip("Cubic (auto tangents)");
+        ImGuiX::TextTooltip(LOCF("Cubic (auto tangents)"));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_VECTOR_RADIUS "##CubicUser"))
         {
             SetSelectionInterpMode(ECurveInterpMode::CubicUser, false);
         }
-        ImGuiX::TextTooltip("Cubic (user tangents)");
+        ImGuiX::TextTooltip(LOCF("Cubic (user tangents)"));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_ARROW_EXPAND_ALL "##Frame"))
         {
             bHasSelection ? FrameSelection() : FrameAll();
         }
-        ImGuiX::TextTooltip("Frame selection or all keys (F)");
+        ImGuiX::TextTooltip(LOCF("Frame selection or all keys (F)"));
 
         ImGui::SameLine();
         ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
         ImGui::SameLine();
 
-        ImGui::Checkbox("Snap T", &bSnapTime);
+        ImGui::Checkbox(LOC("Snap T"), &bSnapTime);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(70.0f);
         ImGui::DragFloat("##TimeSnap", &TimeSnapStep, 0.005f, 0.0001f, 1000.0f, "%.3f");
 
         ImGui::SameLine();
-        ImGui::Checkbox("Snap V", &bSnapValue);
+        ImGui::Checkbox(LOC("Snap V"), &bSnapValue);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(70.0f);
         ImGui::DragFloat("##ValueSnap", &ValueSnapStep, 0.005f, 0.0001f, 1000.0f, "%.3f");
@@ -608,7 +609,7 @@ namespace Lumina
 
             float Time = Key.Time;
             ImGui::SetNextItemWidth(90.0f);
-            if (ImGui::DragFloat("Time", &Time, 0.01f, 0.0f, 0.0f, "%.3f"))
+            if (ImGui::DragFloat(LOC("Time"), &Time, 0.01f, 0.0f, 0.0f, "%.3f"))
             {
                 Key.Time = Time;
                 ResortAndRemapSelection();
@@ -619,7 +620,7 @@ namespace Lumina
             ImGui::SameLine();
             float Value = Key.Value;
             ImGui::SetNextItemWidth(90.0f);
-            if (ImGui::DragFloat("Value", &Value, 0.01f, 0.0f, 0.0f, "%.3f"))
+            if (ImGui::DragFloat(LOC("Value"), &Value, 0.01f, 0.0f, 0.0f, "%.3f"))
             {
                 Curve->Keys[ActiveKey].Value = Value;
                 Curve->ComputeAutoTangents();
@@ -628,7 +629,7 @@ namespace Lumina
         }
         else
         {
-            ImGui::TextDisabled("No key selected");
+            ImGui::TextDisabled(LOC("No key selected"));
         }
     }
 
@@ -805,7 +806,7 @@ namespace Lumina
         }
 
         char Buffer[96];
-        snprintf(Buffer, sizeof(Buffer), "T %.3f   V %.3f   (%d keys, %d selected)",
+        snprintf(Buffer, sizeof(Buffer), LOC("T %.3f   V %.3f   (%d keys, %d selected)"),
             MouseCurvePos.x, MouseCurvePos.y, Curve->NumKeys(), (int32)Selection.size());
 
         const ImVec2 TextSize = ImGui::CalcTextSize(Buffer);
@@ -1138,57 +1139,57 @@ namespace Lumina
         if (ContextKey != Constants::kIndexNone && ContextKey < Curve->NumKeys())
         {
             const SCurveKey& Key = Curve->Keys[ContextKey];
-            ImGui::TextDisabled("Key %d - %s", ContextKey, InterpModeLabel(Key.InterpMode));
+            ImGui::TextDisabled(LOC("Key %d - %s"), ContextKey, InterpModeLabel(Key.InterpMode));
             ImGui::Separator();
 
-            if (ImGui::RadioButton("Constant", Key.InterpMode == ECurveInterpMode::Constant))
+            if (ImGui::RadioButton(LOC("Constant"), Key.InterpMode == ECurveInterpMode::Constant))
             {
                 SetSelectionInterpMode(ECurveInterpMode::Constant, false);
             }
-            if (ImGui::RadioButton("Linear", Key.InterpMode == ECurveInterpMode::Linear))
+            if (ImGui::RadioButton(LOC("Linear"), Key.InterpMode == ECurveInterpMode::Linear))
             {
                 SetSelectionInterpMode(ECurveInterpMode::Linear, false);
             }
-            if (ImGui::RadioButton("Cubic (Auto)", Key.InterpMode == ECurveInterpMode::Cubic))
+            if (ImGui::RadioButton(LOC("Cubic (Auto)"), Key.InterpMode == ECurveInterpMode::Cubic))
             {
                 SetSelectionInterpMode(ECurveInterpMode::Cubic, false);
             }
-            if (ImGui::RadioButton("Cubic (User)", Key.InterpMode == ECurveInterpMode::CubicUser && !Key.bTangentsBroken))
+            if (ImGui::RadioButton(LOC("Cubic (User)"), Key.InterpMode == ECurveInterpMode::CubicUser && !Key.bTangentsBroken))
             {
                 SetSelectionInterpMode(ECurveInterpMode::CubicUser, false);
             }
-            if (ImGui::RadioButton("Cubic (Broken)", Key.InterpMode == ECurveInterpMode::CubicUser && Key.bTangentsBroken))
+            if (ImGui::RadioButton(LOC("Cubic (Broken)"), Key.InterpMode == ECurveInterpMode::CubicUser && Key.bTangentsBroken))
             {
                 SetSelectionInterpMode(ECurveInterpMode::CubicUser, true);
             }
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem("Flatten Tangents"))
+            if (ImGui::MenuItem(LOC("Flatten Tangents")))
             {
                 FlattenSelectedTangents();
             }
-            if (ImGui::MenuItem("Delete Key", "Del"))
+            if (ImGui::MenuItem(LOC("Delete Key"), "Del"))
             {
                 DeleteSelected();
             }
         }
         else
         {
-            if (ImGui::MenuItem("Add Key Here"))
+            if (ImGui::MenuItem(LOC("Add Key Here")))
             {
                 AddKeyAt(MouseCurvePos.x, MouseCurvePos.y);
             }
-            if (ImGui::MenuItem("Frame View", "F"))
+            if (ImGui::MenuItem(LOC("Frame View"), "F"))
             {
                 FrameAll();
             }
 
             ImGui::Separator();
 
-            static const char* ExtrapolationLabels[] = { "Clamp", "Cycle", "Cycle With Offset", "Oscillate", "Linear" };
+            const char* ExtrapolationLabels[] = { LOC("Clamp"), LOC("Cycle"), LOC("Cycle With Offset"), LOC("Oscillate"), LOC("Linear") };
 
-            if (ImGui::BeginMenu("Pre-Extrapolation"))
+            if (ImGui::BeginMenu(LOC("Pre-Extrapolation")))
             {
                 for (int32 Index = 0; Index < IM_ARRAYSIZE(ExtrapolationLabels); ++Index)
                 {
@@ -1201,7 +1202,7 @@ namespace Lumina
                 ImGui::EndMenu();
             }
 
-            if (ImGui::BeginMenu("Post-Extrapolation"))
+            if (ImGui::BeginMenu(LOC("Post-Extrapolation")))
             {
                 for (int32 Index = 0; Index < IM_ARRAYSIZE(ExtrapolationLabels); ++Index)
                 {

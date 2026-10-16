@@ -5,6 +5,7 @@
 #include "Core/Object/Class.h"
 #include "Core/Object/ObjectCore.h"
 #include "FileSystem/FileSystem.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -181,7 +182,9 @@ namespace Lumina
 
         // Win32 filters are a double-null-terminated run of null-separated pairs.
         FFixedString Filter;
-        Filter.append("Supported Files (").append(Patterns).append(")");
+        // Only the label is a table string; the pattern list it embeds is data. The platform
+        // dialog translates this on its way out, so building it translated here is enough.
+        Filter.append(LOC("Supported Files (")).append(Patterns).append(")");
         Filter.push_back('\0');
         Filter.append(Patterns);
         Filter.push_back('\0');

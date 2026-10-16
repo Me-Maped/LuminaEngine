@@ -261,7 +261,7 @@ namespace Lumina
                 }
                 else
                 {
-                    ImGuiX::Notifications::NotifyWarning("'{}' is not a valid value for {}.",
+                    ImGuiX::Notifications::NotifyWarning(LOCF("'{}' is not a valid value for {}."),
                         FString(EditBuffer).c_str(), Property->GetPropertyName().c_str());
                 }
             }
@@ -283,7 +283,7 @@ namespace Lumina
         const int32 Index = Table->AddRow(Table->MakeUniqueRowName("NewRow"));
         if (Index == Constants::kIndexNone)
         {
-            ImGuiX::Notifications::NotifyWarning("Set a row struct before adding rows.");
+            ImGuiX::Notifications::NotifyWarning(LOCF("Set a row struct before adding rows."));
             return;
         }
 
@@ -339,12 +339,12 @@ namespace Lumina
         CDataTable* Table = GetAsset<CDataTable>();
         if (Table == nullptr || Table->GetRowStruct() == nullptr)
         {
-            ImGuiX::Notifications::NotifyWarning("Set a row struct before importing.");
+            ImGuiX::Notifications::NotifyWarning(LOCF("Set a row struct before importing."));
             return;
         }
 
         FFixedString SelectedFile;
-        if (!Platform::OpenFileDialogue(SelectedFile, "Import CSV", "CSV Files\0*.csv\0All Files\0*.*\0"))
+        if (!Platform::OpenFileDialogue(SelectedFile, LOC("Import CSV"), "CSV Files\0*.csv\0All Files\0*.*\0"))
         {
             return;
         }
@@ -352,7 +352,7 @@ namespace Lumina
         FString Text;
         if (!FileHelper::LoadFileIntoString(Text, SelectedFile.c_str()))
         {
-            ImGuiX::Notifications::NotifyError("Could not read '{}'.", SelectedFile.c_str());
+            ImGuiX::Notifications::NotifyError(LOCF("Could not read '{}'."), SelectedFile.c_str());
             return;
         }
 
@@ -362,7 +362,7 @@ namespace Lumina
 
         if (!LastImportResult.bSucceeded)
         {
-            ImGuiX::Notifications::NotifyError("Import failed: {}", LastImportResult.FailureReason.c_str());
+            ImGuiX::Notifications::NotifyError(LOCF("Import failed: {}"), LastImportResult.FailureReason.c_str());
             return;
         }
 
@@ -382,7 +382,7 @@ namespace Lumina
         }
         else
         {
-            ImGuiX::Notifications::NotifySuccess("Imported {} rows.", LastImportResult.RowsImported);
+            ImGuiX::Notifications::NotifySuccess(LOCF("Imported {} rows."), LastImportResult.RowsImported);
         }
     }
 
@@ -396,7 +396,7 @@ namespace Lumina
 
         // A null filter selects a folder, and the file is named after the asset anyway.
         FFixedString Folder;
-        if (!Platform::OpenFileDialogue(Folder, "Choose Export Folder"))
+        if (!Platform::OpenFileDialogue(Folder, LOC("Choose Export Folder")))
         {
             return;
         }
@@ -406,12 +406,12 @@ namespace Lumina
 
         if (FileHelper::SaveStringToFile(Text, FilePath.c_str()))
         {
-            ImGuiX::Notifications::NotifySuccess("Exported {} rows.", Table->GetRowCount());
+            ImGuiX::Notifications::NotifySuccess(LOCF("Exported {} rows."), Table->GetRowCount());
             Platform::ShowFileInExplorer(UTF8_TO_TCHAR(FilePath.c_str()));
         }
         else
         {
-            ImGuiX::Notifications::NotifyError("Could not write '{}'.", FilePath.c_str());
+            ImGuiX::Notifications::NotifyError(LOCF("Could not write '{}'."), FilePath.c_str());
         }
     }
 
@@ -422,7 +422,7 @@ namespace Lumina
         const bool bHasRowStruct = RowStruct != nullptr;
 
         ImGui::BeginDisabled(!bHasRowStruct);
-        if (ImGui::Button(LE_ICON_PLUS " Add Row"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Add Row")))
         {
             AddRow();
         }
@@ -430,12 +430,12 @@ namespace Lumina
 
         ImGui::SameLine();
         ImGui::BeginDisabled(SelectedRow == Constants::kIndexNone);
-        if (ImGui::Button(LE_ICON_CONTENT_COPY " Duplicate"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CONTENT_COPY, "Duplicate")))
         {
             DuplicateSelectedRow();
         }
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_DELETE " Remove"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_DELETE, "Remove")))
         {
             RemoveSelectedRow();
         }
@@ -446,12 +446,12 @@ namespace Lumina
         ImGui::SameLine();
 
         ImGui::BeginDisabled(!bHasRowStruct);
-        if (ImGui::Button(LE_ICON_FILE_IMPORT " Import CSV"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_FILE_IMPORT, "Import CSV")))
         {
             ImportCSV();
         }
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_FILE_EXPORT " Export CSV"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_FILE_EXPORT, "Export CSV")))
         {
             ExportCSV();
         }
@@ -462,14 +462,14 @@ namespace Lumina
         ImGui::SameLine();
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("Row Struct:");
+        ImGui::TextDisabled(LOC("Row Struct:"));
         ImGui::SameLine();
-        if (ImGui::Button(bHasRowStruct ? RowStruct->GetName().c_str() : "<none>"))
+        if (ImGui::Button(bHasRowStruct ? RowStruct->GetName().c_str() : LOC("<none>")))
         {
             PendingRowStruct = RowStruct;
             bShowChangeRowStruct = true;
         }
-        ImGuiX::TextTooltip("Change the struct every row is an instance of.");
+        ImGuiX::TextTooltip(LOCF("Change the struct every row is an instance of."));
 
         // Right-aligned when there is room, otherwise it simply follows the row.
         ImGui::SameLine();
@@ -490,7 +490,7 @@ namespace Lumina
             const ImVec2 Min = ImGui::GetItemRectMin();
             ImGui::GetWindowDrawList()->AddText(
                 ImVec2(Min.x + ImGui::GetStyle().FramePadding.x, Min.y + ImGui::GetStyle().FramePadding.y),
-                ImGui::GetColorU32(ImGuiCol_TextDisabled), LE_ICON_MAGNIFY " Search rows...");
+                ImGui::GetColorU32(ImGuiCol_TextDisabled), LOC_ICON(LE_ICON_MAGNIFY, "Search rows..."));
         }
     }
 
@@ -557,8 +557,8 @@ namespace Lumina
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && EditingRow == Constants::kIndexNone)
         {
             ImGui::SetTooltip(bCanReorder
-                ? "Double-click to rename. Drag to reorder."
-                : "Double-click to rename. Clear the search and sort to reorder by dragging.");
+                ? LOC("Double-click to rename. Drag to reorder.")
+                : LOC("Double-click to rename. Clear the search and sort to reorder by dragging."));
         }
 
         HandleRowDrag(RowIndex);
@@ -699,10 +699,11 @@ namespace Lumina
         }
 
         ImGui::TableSetupScrollFreeze(1, 1);
-        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_NoHide | ImGuiTableColumnFlags_WidthFixed, 180.0f);
+        ImGui::TableSetupColumn(LOC_ID("Name"), ImGuiTableColumnFlags_NoHide | ImGuiTableColumnFlags_WidthFixed, 180.0f);
         for (FProperty* Property : Columns)
         {
-            ImGui::TableSetupColumn(Property->GetPropertyDisplayName().c_str(), ImGuiTableColumnFlags_WidthFixed, 140.0f);
+            const FCStringView ColumnName = Property->GetPropertyDisplayName();
+            ImGui::TableSetupColumn(Localization::LocalizedId(FStringView(ColumnName.c_str(), ColumnName.size())), ImGuiTableColumnFlags_WidthFixed, 140.0f);
         }
         ImGui::TableHeadersRow();
 
@@ -817,7 +818,7 @@ namespace Lumina
         {
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f),
-                "This table has no row struct. Pick one to start adding rows.");
+                LOC("This table has no row struct. Pick one to start adding rows."));
         }
         else
         {
@@ -826,9 +827,9 @@ namespace Lumina
                 RebuildDisplayOrder();
             }
 
-            ImGui::TextDisabled("%d row%s%s", (int32)DisplayOrder.size(),
-                DisplayOrder.size() == 1 ? "" : "s",
-                Filter.IsActive() ? " (filtered)" : "");
+            ImGui::TextDisabled(LOC("%d row%s%s"), (int32)DisplayOrder.size(),
+                DisplayOrder.size() == 1 ? "" : LOC_S,
+                Filter.IsActive() ? LOC(" (filtered)") : "");
 
             DrawGrid();
         }
@@ -847,7 +848,7 @@ namespace Lumina
 
         if (SelectedRow < 0 || SelectedRow >= Table->GetRowCount())
         {
-            ImGui::TextDisabled("Select a row to edit it.");
+            ImGui::TextDisabled(LOC("Select a row to edit it."));
             BoundRowMemory = nullptr;
             return;
         }
@@ -858,13 +859,13 @@ namespace Lumina
 
         if (RowMemory == nullptr || RowStruct == nullptr)
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f), "This row has no value.");
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f), LOC("This row has no value."));
             BoundRowMemory = nullptr;
             return;
         }
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("Row:");
+        ImGui::TextDisabled(LOC("Row:"));
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "%s", Row.Name.c_str());
         ImGui::Separator();
@@ -894,11 +895,11 @@ namespace Lumina
             return;
         }
 
-        ImGui::Text("Imported %d row%s.", LastImportResult.RowsImported, LastImportResult.RowsImported == 1 ? "" : "s");
+        ImGui::Text(LOC("Imported %d row%s."), LastImportResult.RowsImported, LastImportResult.RowsImported == 1 ? "" : LOC_S);
         if (LastImportResult.RowsSkipped > 0)
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.4f, 1.0f), "Skipped %d row%s.",
-                LastImportResult.RowsSkipped, LastImportResult.RowsSkipped == 1 ? "" : "s");
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.4f, 1.0f), LOC("Skipped %d row%s."),
+                LastImportResult.RowsSkipped, LastImportResult.RowsSkipped == 1 ? "" : LOC_S);
         }
 
         ImGui::Spacing();
@@ -907,7 +908,7 @@ namespace Lumina
 
         if (!LastImportResult.UnknownColumns.empty())
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.4f, 1.0f), "Columns with no matching field:");
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.4f, 1.0f), LOC("Columns with no matching field:"));
             for (const FString& Column : LastImportResult.UnknownColumns)
             {
                 ImGui::BulletText("%s", Column.c_str());
@@ -917,7 +918,7 @@ namespace Lumina
 
         if (!LastImportResult.MissingColumns.empty())
         {
-            ImGui::TextDisabled("Fields the file did not supply (left at their defaults):");
+            ImGui::TextDisabled(LOC("Fields the file did not supply (left at their defaults):"));
             for (const FString& Column : LastImportResult.MissingColumns)
             {
                 ImGui::BulletText("%s", Column.c_str());
@@ -927,7 +928,7 @@ namespace Lumina
 
         if (!LastImportResult.Errors.empty())
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f), "Problems:");
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f), LOC("Problems:"));
             if (ImGui::BeginChild("##errors", ImVec2(0.0f, 180.0f), ImGuiChildFlags_Borders))
             {
                 for (const FString& Error : LastImportResult.Errors)
@@ -939,7 +940,7 @@ namespace Lumina
         }
 
         ImGui::Spacing();
-        if (ImGui::Button("Close", ImVec2(120.0f, 0.0f)))
+        if (ImGui::Button(LOC("Close"), ImVec2(120.0f, 0.0f)))
         {
             ImGui::CloseCurrentPopup();
         }
@@ -963,7 +964,7 @@ namespace Lumina
 
         CDataTable* Table = GetAsset<CDataTable>();
 
-        ImGui::TextDisabled("Every row is an instance of this struct.");
+        ImGui::TextDisabled(LOC("Every row is an instance of this struct."));
         ImGui::Spacing();
 
         bool bChanged = false;
@@ -979,8 +980,8 @@ namespace Lumina
         {
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f),
-                "This discards all %d existing rows.", Table->GetRowCount());
-            ImGui::TextDisabled("Their fields belong to the old struct and cannot be carried over.");
+                LOC("This discards all %d existing rows."), Table->GetRowCount());
+            ImGui::TextDisabled(LOC("Their fields belong to the old struct and cannot be carried over."));
         }
 
         ImGui::Spacing();
@@ -990,7 +991,7 @@ namespace Lumina
         const bool bIsChange = Table != nullptr && PendingRowStruct != Table->GetRowStruct();
 
         ImGui::BeginDisabled(!bIsChange);
-        if (ImGui::Button(bWouldDiscard ? "Change and Discard Rows" : "Change", ImVec2(200.0f, 0.0f)))
+        if (ImGui::Button(bWouldDiscard ? LOC("Change and Discard Rows") : LOC("Change"), ImVec2(200.0f, 0.0f)))
         {
             CancelCellEdit();
 
@@ -1009,7 +1010,7 @@ namespace Lumina
         ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f)))
+        if (ImGui::Button(LOC("Cancel"), ImVec2(120.0f, 0.0f)))
         {
             ImGui::CloseCurrentPopup();
         }

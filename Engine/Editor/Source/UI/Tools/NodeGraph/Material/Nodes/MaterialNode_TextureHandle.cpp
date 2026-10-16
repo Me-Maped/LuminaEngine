@@ -1,4 +1,5 @@
 ﻿#include "MaterialNode_TextureHandle.h"
+#include "Localization/Localization.h"
 
 #include "Assets/AssetTypes/Textures/TextureArray.h"
 #include "Core/Object/Cast.h"
@@ -31,10 +32,10 @@ namespace Lumina
 
             EdNodeGraph::FError NodeError;
             NodeError.Node        = this;
-            NodeError.Name        = "Texture Handle";
-            NodeError.Description = "TextureHandle has no texture assigned, so there is no slot to resolve. Assign "
-                                "one in the node's details panel. Unlike a sample, a handle has no neutral "
-                                "fallback -- index 0 is simply whichever texture happens to occupy slot 0.";
+            NodeError.Name        = LOC("Texture Handle");
+            NodeError.Description = LOC("TextureHandle has no texture assigned, so there is no slot to resolve. Assign "
+                                        "one in the node's details panel. Unlike a sample, a handle has no neutral "
+                                        "fallback -- index 0 is simply whichever texture happens to occupy slot 0.");
             Compiler.AddError(NodeError);
             return;
         }
@@ -68,14 +69,14 @@ namespace Lumina
     {
         if (!Texture.IsValid() || Texture->GetResourceID() < 0)
         {
-            ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.0f), "No texture assigned");
+            ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.0f), LOC("No texture assigned"));
             return;
         }
 
         // ImGui draws through the 2D table and would read an array descriptor as 2D, showing an error square.
         if (Texture->IsA<CTextureArray>())
         {
-            ImGui::TextColored(ImVec4(0.55f, 0.58f, 0.64f, 1.0f), "%s (array)", Texture->GetName().c_str());
+            ImGui::TextColored(ImVec4(0.55f, 0.58f, 0.64f, 1.0f), LOC("%s (array)"), Texture->GetName().c_str());
             return;
         }
 
@@ -84,7 +85,7 @@ namespace Lumina
 
     void CMaterialExpression_TextureHandle::DrawContextMenu()
     {
-        const char* MenuItem = bDynamic ? "Make Static Texture" : "Make Texture Parameter";
+        const char* MenuItem = bDynamic ? LOC("Make Static Texture") : LOC("Make Texture Parameter");
         if (ImGui::MenuItem(MenuItem))
         {
             bDynamic = !bDynamic;

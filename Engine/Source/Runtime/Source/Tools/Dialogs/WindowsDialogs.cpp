@@ -2,6 +2,7 @@
 #ifdef LE_PLATFORM_WINDOWS
 #include <windows.h>
 #include "Dialogs.h"
+#include "Containers/String.h"
 #include "Platform/GenericPlatform.h"
 
 namespace Lumina::Dialogs
@@ -52,7 +53,9 @@ namespace Lumina::Dialogs
 
         EResult Result = EResult::Yes;
         MessageBeep(MB_ICONEXCLAMATION);
-        int32 ResultCode = MessageBoxA(nullptr, Message.c_str(), Title.c_str(), Style);
+        const FWString WideMessage = UTF8_TO_TCHAR(Message.c_str());
+        const FWString WideTitle = UTF8_TO_TCHAR(Title.c_str());
+        int32 ResultCode = MessageBoxW(nullptr, WideMessage.c_str(), WideTitle.c_str(), Style);
         switch(ResultCode)
         {
             case IDOK:

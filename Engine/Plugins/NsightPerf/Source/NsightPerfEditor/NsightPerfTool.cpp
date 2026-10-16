@@ -28,7 +28,7 @@ namespace Lumina
     {
         bool        bSamplerInitialized = false;   // Sampler.Initialize succeeded
         bool        bSessionActive      = false;   // BeginSession + HUD ready
-        std::string StatusMessage       = "Initializing...";
+        std::string StatusMessage       = LOC("Initializing...");
         std::string ChipName;
 
         // View state for the detail sections below the HUD.
@@ -126,7 +126,7 @@ namespace Lumina
         const RHI::Native::FNativeDeviceHandles H = RHI::Native::GetNativeDeviceHandles();
         if (H.Backend != RHI::EBackend::Vulkan || H.Device == nullptr)
         {
-            State->StatusMessage = "RHI Vulkan device is not available.";
+            State->StatusMessage = LOC("RHI Vulkan device is not available.");
             return;
         }
 
@@ -143,8 +143,8 @@ namespace Lumina
 
         if (!State->Sampler.Initialize(Instance, PhysicalDevice, Device, GetInstanceProcAddr, GetDeviceProcAddr))
         {
-            State->StatusMessage = "Sampler initialization failed. The GPU may be unsupported, or the "
-                                   "NvPerf device extensions weren't enabled at device creation.";
+            State->StatusMessage = LOC("Sampler initialization failed. The GPU may be unsupported, or the "
+                                   "NvPerf device extensions weren't enabled at device creation.");
             return;
         }
         State->bSamplerInitialized = true;
@@ -159,8 +159,8 @@ namespace Lumina
 
         if (!State->Sampler.BeginSession(GraphicsQueue, H.GraphicsQueueFamily, SamplingIntervalNs, MaxDecodeLatencyNs, MaxFrameLatency))
         {
-            State->StatusMessage = "BeginSession failed (counter access may be restricted; ensure "
-                                   "developer-mode GPU profiling is permitted).";
+            State->StatusMessage = LOC("BeginSession failed (counter access may be restricted; ensure "
+                                   "developer-mode GPU profiling is permitted).");
             return;
         }
 
@@ -200,7 +200,7 @@ namespace Lumina
         State->HudRenderer.Initialize(State->HudDataModel);
 
         State->bSessionActive = true;
-        State->StatusMessage  = "Sampling.";
+        State->StatusMessage  = LOC("Sampling.");
     }
 
     void FNsightPerfTool::OnDeinitialize(const FUpdateContext& /*UpdateContext*/)
@@ -234,14 +234,14 @@ namespace Lumina
 
         if (!State->bSessionActive)
         {
-            ImGui::TextColored(EditorColors::Warning(), "Nsight Perf HUD unavailable");
+            ImGui::TextColored(EditorColors::Warning(), LOC("Nsight Perf HUD unavailable"));
             ImGui::Spacing();
             ImGui::TextWrapped("%s", State->StatusMessage.c_str());
             ImGui::Spacing();
             ImGui::Separator();
-            ImGui::TextWrapped("This tool needs an NVIDIA GPU and the Vulkan device created with NvPerf's "
+            ImGui::TextWrapped(LOC("This tool needs an NVIDIA GPU and the Vulkan device created with NvPerf's "
                                "required extensions (registered by this plugin at the Core loading phase). "
-                               "Disable the plugin per-project in your .lproject if you don't want it.");
+                               "Disable the plugin per-project in your .lproject if you don't want it."));
             return;
         }
         {
@@ -265,22 +265,22 @@ namespace Lumina
 
         if (!State->ChipName.empty())
         {
-            ImGui::TextColored(EditorColors::TextDim(), "GPU: %s", State->ChipName.c_str());
+            ImGui::TextColored(EditorColors::TextDim(), LOC("GPU: %s"), State->ChipName.c_str());
         }
 
-        ImGui::Checkbox("Plots", &State->bShowPlots);
+        ImGui::Checkbox(LOC("Plots"), &State->bShowPlots);
         ImGui::SameLine();
-        ImGui::Checkbox("Metric Values", &State->bShowMetrics);
+        ImGui::Checkbox(LOC("Metric Values"), &State->bShowMetrics);
         ImGui::SameLine();
-        if (ImGui::Button("Export CSV"))
+        if (ImGui::Button(LOC("Export CSV")))
         {
             ExportMetrics();
         }
         ImGui::SameLine();
-        ImGui::Checkbox("Auto", &State->bAutoExport);
+        ImGui::Checkbox(LOC("Auto"), &State->bAutoExport);
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Rewrite the CSV once a second while this window is open.");
+            ImGui::SetTooltip(LOC("Rewrite the CSV once a second while this window is open."));
         }
 
         if (State->bAutoExport && ImGui::GetTime() >= State->NextExportSeconds)
@@ -311,7 +311,7 @@ namespace Lumina
 
     void FNsightPerfTool::DrawSessionInfo()
     {
-        if (!ImGui::CollapsingHeader("Session"))
+        if (!ImGui::CollapsingHeader(LOC_ID("Session")))
         {
             return;
         }
@@ -342,21 +342,21 @@ namespace Lumina
         const double IntervalMs = State->SamplingIntervalSeconds * 1000.0;
 
         ImGui::Indent(12.0f);
-        ImGui::TextColored(EditorColors::TextDim(), "Sample interval");
+        ImGui::TextColored(EditorColors::TextDim(), LOC("Sample interval"));
         ImGui::SameLine(200.0f);
         ImGui::Text("%.2f ms (%.0f Hz)", IntervalMs,
             State->SamplingIntervalSeconds > 0.0 ? 1.0 / State->SamplingIntervalSeconds : 0.0);
 
-        ImGui::TextColored(EditorColors::TextDim(), "Plot window");
+        ImGui::TextColored(EditorColors::TextDim(), LOC("Plot window"));
         ImGui::SameLine(200.0f);
         ImGui::Text("%.1f s", State->PlotTimeWidthSeconds);
 
-        ImGui::TextColored(EditorColors::TextDim(), "Panels / metrics");
+        ImGui::TextColored(EditorColors::TextDim(), LOC("Panels / metrics"));
         ImGui::SameLine(200.0f);
         ImGui::Text("%zu / %zu", PanelCount, SignalCount);
 
         // These are GPU counter samples, so a rate far below the interval means samples are dropped.
-        ImGui::TextColored(EditorColors::TextDim(), "Status");
+        ImGui::TextColored(EditorColors::TextDim(), LOC("Status"));
         ImGui::SameLine(200.0f);
         ImGui::TextUnformatted(State->StatusMessage.c_str());
         ImGui::Unindent(12.0f);
@@ -367,7 +367,7 @@ namespace Lumina
     {
         if (!State->bSessionActive)
         {
-            State->ExportStatus = "No active session, so there are no counters to write.";
+            State->ExportStatus = LOC("No active session, so there are no counters to write.");
             return;
         }
 
@@ -430,11 +430,11 @@ namespace Lumina
         char Status[512];
         if (bWritten)
         {
-            (void)snprintf(Status, sizeof(Status), "Wrote %zu metrics to %s", Rows, Path.c_str());
+            (void)snprintf(Status, sizeof(Status), LOC("Wrote %zu metrics to %s"), Rows, Path.c_str());
         }
         else
         {
-            (void)snprintf(Status, sizeof(Status), "Could not write %s", Path.c_str());
+            (void)snprintf(Status, sizeof(Status), LOC("Could not write %s"), Path.c_str());
         }
 
         State->ExportStatus = Status;
@@ -444,10 +444,10 @@ namespace Lumina
     {
         ImGui::Spacing();
         ImGui::SetNextItemWidth(240.0f);
-        ImGui::InputTextWithHint("##metric_filter", "Filter metrics...",
+        ImGui::InputTextWithHint("##metric_filter", LOC("Filter metrics..."),
             State->MetricFilter, sizeof(State->MetricFilter));
         ImGui::SameLine();
-        if (ImGui::SmallButton("Clear"))
+        if (ImGui::SmallButton(LOC("Clear")))
         {
             State->MetricFilter[0] = '\0';
         }
@@ -526,10 +526,10 @@ namespace Lumina
                     continue;
                 }
 
-                ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch, 0.50f);
-                ImGui::TableSetupColumn("Value",  ImGuiTableColumnFlags_WidthStretch, 0.14f);
-                ImGui::TableSetupColumn("Unit",   ImGuiTableColumnFlags_WidthStretch, 0.10f);
-                ImGui::TableSetupColumn("Min / Avg / Max", ImGuiTableColumnFlags_WidthStretch, 0.26f);
+                ImGui::TableSetupColumn(LOC_ID("Metric"), ImGuiTableColumnFlags_WidthStretch, 0.50f);
+                ImGui::TableSetupColumn(LOC_ID("Value"),  ImGuiTableColumnFlags_WidthStretch, 0.14f);
+                ImGui::TableSetupColumn(LOC_ID("Unit"),   ImGuiTableColumnFlags_WidthStretch, 0.10f);
+                ImGui::TableSetupColumn(LOC_ID("Min / Avg / Max"), ImGuiTableColumnFlags_WidthStretch, 0.26f);
                 ImGui::TableHeadersRow();
 
                 for (const auto& pWidget : Panel.widgets)

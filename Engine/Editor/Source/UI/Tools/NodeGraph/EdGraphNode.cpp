@@ -1,4 +1,5 @@
 ﻿#include "EdGraphNode.h"
+#include "Localization/Localization.h"
 
 #include "EdNodeGraph.h"
 #include "EdNodeGraphPin.h"
@@ -88,18 +89,23 @@ namespace Lumina
 
     void CEdGraphNode::DrawNodeTitleBar()
     {
+        // Translated where it is drawn, not in GetNodeTitleText: the same getter feeds a sub-graph
+        // tab label and a compiler message, and a node's display name is also part of PinHashName,
+        // which is an identity. The "node" context lets a word read differently as a node than as
+        // anything else -- the Add node is 加法 while the Add button stays 添加.
         const FString Title = GetNodeTitleText();
+        const char* Text = LOC_VIEW_CTX(FStringView(Title.c_str(), Title.size()), "node");
         if (HasError())
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.88f, 0.88f, 1.0f), LE_ICON_EXCLAMATION_THICK " %s", Title.c_str());
+            ImGui::TextColored(ImVec4(1.0f, 0.88f, 0.88f, 1.0f), LE_ICON_EXCLAMATION_THICK " %s", Text);
         }
         else if (HasWarning())
         {
-            ImGui::TextColored(ImVec4(0.14f, 0.11f, 0.03f, 1.0f), LE_ICON_ALERT " %s", Title.c_str());
+            ImGui::TextColored(ImVec4(0.14f, 0.11f, 0.03f, 1.0f), LE_ICON_ALERT " %s", Text);
         }
         else
         {
-            ImGui::TextUnformatted(Title.c_str());
+            ImGui::TextUnformatted(Text);
         }
     }
 

@@ -54,7 +54,7 @@ namespace Lumina::NodeGraphOps
     {
         if (Graph != nullptr)
         {
-            Graph->CommitExternalNodeEdit("Set Node Property");
+            Graph->CommitExternalNodeEdit(LOC("Set Node Property"));
         }
     }
 
@@ -112,18 +112,18 @@ namespace Lumina::NodeGraphOps
             Names.append(Pin->GetPinName());
         }
 
-        return Names.empty() ? FString("none") : Names;
+        return Names.empty() ? FString(LOC("none")) : Names;
     }
 
     bool ConnectPins(CEdNodeGraph* Graph, CEdNodeGraphPin* Output, CEdNodeGraphPin* Input, FString& OutError)
     {
         if (Graph == nullptr)
         {
-            OutError = "A connection needs a graph.";
+            OutError = LOC("A connection needs a graph.");
             return false;
         }
 
-        FNodeGraphEditScope Edit(Graph, "Connect Pins");
+        FNodeGraphEditScope Edit(Graph, LOC("Connect Pins"));
         return Graph->ConnectPins(Output, Input, &OutError);
     }
 
@@ -131,17 +131,17 @@ namespace Lumina::NodeGraphOps
     {
         if (Graph == nullptr || Pin == nullptr)
         {
-            OutError = "A disconnect needs a graph and a pin.";
+            OutError = LOC("A disconnect needs a graph and a pin.");
             return false;
         }
 
         if (!Pin->HasConnection())
         {
-            OutError = Lumina::Format("'{}' is not connected to anything.", Pin->GetPinName());
+            OutError = Lumina::Format(LOCF("'{}' is not connected to anything."), LOC_VIEW(Pin->GetPinName()));
             return false;
         }
 
-        FNodeGraphEditScope Edit(Graph, "Break Links");
+        FNodeGraphEditScope Edit(Graph, LOC("Break Links"));
         Graph->BreakPinLinks(Pin);
         return true;
     }
@@ -153,7 +153,7 @@ namespace Lumina::NodeGraphOps
             return nullptr;
         }
 
-        FNodeGraphEditScope Edit(Graph, "Add Node");
+        FNodeGraphEditScope Edit(Graph, LOC("Add Node"));
         return Graph->SpawnNode(NodeClass, X, Y);
     }
 
@@ -161,11 +161,11 @@ namespace Lumina::NodeGraphOps
     {
         if (Graph == nullptr || Node == nullptr)
         {
-            OutError = "A removal needs a graph and a node.";
+            OutError = LOC("A removal needs a graph and a node.");
             return false;
         }
 
-        FNodeGraphEditScope Edit(Graph, "Delete Node");
+        FNodeGraphEditScope Edit(Graph, LOC("Delete Node"));
         return Graph->RemoveNodes({ Node }, &OutError);
     }
 
@@ -176,7 +176,7 @@ namespace Lumina::NodeGraphOps
             return false;
         }
 
-        FNodeGraphEditScope Edit(Graph, "Move Node");
+        FNodeGraphEditScope Edit(Graph, LOC("Move Node"));
         Graph->MoveNode(Node, X, Y);
         return true;
     }
@@ -210,6 +210,6 @@ namespace Lumina::NodeGraphOps
             ++Start;
         }
         const FString Id = Hash == FString::npos ? WindowName : WindowName.substr(Hash + 3);
-        return Lumina::Format("the {} editor (tab {})", Label.substr(Start), Id);
+        return Lumina::Format(LOCF("the {} editor (tab {})"), Label.substr(Start), Id);
     }
 }

@@ -2,6 +2,7 @@
 
 #include "Config/Config.h"
 #include "Core/Object/Class.h"
+#include "Localization/Localization.h"
 #include "Tools/UI/ImGui/EditorColors.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "Tools/UI/ImGui/ImGuiFonts.h"
@@ -154,7 +155,7 @@ namespace Lumina
     {
         if (GConfig == nullptr)
         {
-            ImGui::TextDisabled("Config system not initialized.");
+            ImGui::TextDisabled("%s", LOC("Config system not initialized."));
             return;
         }
 
@@ -167,7 +168,7 @@ namespace Lumina
 
         if (Classes.empty())
         {
-            ImGui::TextDisabled("No settings registered.");
+            ImGui::TextDisabled("%s", LOC("No settings registered."));
             return;
         }
 
@@ -218,19 +219,25 @@ namespace Lumina
                 bool bHeaderDrawn = false;
                 for (CClass* Class : ByCategory[Category])
                 {
-                    const FString Label = DisplayNameOf(Class);
-                    if (!ImGuiX::PassSearchFilter(SettingsFilter, Label.c_str()))
+                    // The reflected display name is the English source; typing either language in the
+                    // search box has to match, so both spellings are tested.
+                    const FString DisplayName = DisplayNameOf(Class);
+                    const char* Label = LOC(DisplayName.c_str());
+                    if (!ImGuiX::PassSearchFilter(SettingsFilter, Label)
+                        && !ImGuiX::PassSearchFilter(SettingsFilter, FStringView(DisplayName.c_str(), DisplayName.size())))
                     {
                         continue;
                     }
                     if (!bHeaderDrawn)
                     {
-                        DrawCategoryHeader(ToUpper(Category).c_str());
+                        // Categories are reflection metadata too, so the header is localized as well.
+                        const FString CategoryName = Category;
+                        DrawCategoryHeader(ToUpper(LOC_VIEW_CTX(CategoryName.c_str(), "category")).c_str());
                         bHeaderDrawn = true;
                     }
 
                     ImGui::PushID(Class);
-                    if (DrawSettingsEntry(Label.c_str(), SelectedClass == Class))
+                    if (DrawSettingsEntry(Label, SelectedClass == Class))
                     {
                         SelectedClass = Class;
                     }
@@ -246,15 +253,18 @@ namespace Lumina
         {
             if (FPropertyTable* Table = GetOrCreateTable(SelectedClass))
             {
+                const FString DisplayName = DisplayNameOf(SelectedClass);
+                const FString CategoryName = CategoryOf(SelectedClass);
+
                 ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
                 ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextPrimary());
-                ImGui::TextUnformatted(DisplayNameOf(SelectedClass).c_str());
+                ImGui::TextUnformatted(LOC(DisplayName.c_str()));
                 ImGui::PopStyleColor();
                 ImGuiX::Font::PopFont();
 
                 ImGui::SameLine();
                 ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-                ImGui::Text("  %s", CategoryOf(SelectedClass).c_str());
+                ImGui::Text("  %s", LOC_VIEW_CTX(CategoryName.c_str(), "category"));
                 ImGui::PopStyleColor();
 
                 ImGui::Separator();

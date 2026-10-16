@@ -1,4 +1,5 @@
 ﻿#include "AnimGraphNode_CachedPose.h"
+#include "Localization/Localization.h"
 #include "UI/Tools/NodeGraph/Animation/AnimationGraphCompiler.h"
 #include "UI/Tools/NodeGraph/EdNodeGraph.h"
 #include "Core/Object/Cast.h"
@@ -18,7 +19,7 @@ namespace Lumina
 
     FString CAnimGraphNode_SaveCachedPose::GetNodeTitleText() const
     {
-        return CacheName.IsNone() ? FString("Save Cached Pose") : Format("Save {}", CacheName.c_str());
+        return CacheName.IsNone() ? FString(LOC("Save Cached Pose")) : Format(LOCF("Save {}"), CacheName.c_str());
     }
 
     void CAnimGraphNode_UseCachedPose::BuildNode()
@@ -53,8 +54,8 @@ namespace Lumina
         if (!Compiler.TryGetCachedPose(CacheName, CachedRegister))
         {
             EdNodeGraph::FError NodeError;
-            NodeError.Name        = "Missing Cached Pose";
-            NodeError.Description = "Use Cached Pose names a cache no Save Cached Pose node writes; it will read the reference pose.";
+            NodeError.Name        = LOC("Missing Cached Pose");
+            NodeError.Description = LOC("Use Cached Pose names a cache no Save Cached Pose node writes; it will read the reference pose.");
             NodeError.Node        = this;
             Compiler.AddError(NodeError);
 
@@ -67,6 +68,6 @@ namespace Lumina
 
     FString CAnimGraphNode_UseCachedPose::GetNodeTitleText() const
     {
-        return CacheName.IsNone() ? FString("Use Cached Pose") : FString(CacheName.c_str());
+        return CacheName.IsNone() ? FString(LOC("Use Cached Pose")) : FString(CacheName.c_str());
     }
 }

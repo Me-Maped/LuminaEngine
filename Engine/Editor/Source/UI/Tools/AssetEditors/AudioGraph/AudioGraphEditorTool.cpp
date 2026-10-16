@@ -115,7 +115,7 @@ namespace Lumina
 
     void FAudioGraphEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)
     {
-        if (ImGui::MenuItem(LE_ICON_RECEIPT_TEXT " Compile"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_RECEIPT_TEXT, "Compile")))
         {
             Compile();
         }
@@ -144,13 +144,13 @@ namespace Lumina
 
         const bool bPlaying = PreviewHandle.IsValid();
 
-        if (ImGui::Button(bPlaying ? LE_ICON_STOP " Stop" : LE_ICON_PLAY " Play", ImVec2(90.0f, 0.0f)))
+        if (ImGui::Button(bPlaying ? LOC_ICON(LE_ICON_STOP, "Stop") : LOC_ICON(LE_ICON_PLAY, "Play"), ImVec2(90.0f, 0.0f)))
         {
             bPlaying ? StopPreview() : StartPreview();
         }
 
         ImGui::SameLine();
-        ImGui::TextDisabled("%u nodes, %u inputs, %u outputs",
+        ImGui::TextDisabled(LOC("%u nodes, %u inputs, %u outputs"),
             (uint32)Graph->GetProgram().Nodes.size(),
             (uint32)Graph->GetInputs().size(),
             (uint32)Graph->GetOutputs().size());
@@ -178,7 +178,7 @@ namespace Lumina
         }
 
         ImGui::Separator();
-        ImGui::TextUnformatted("Parameters");
+        ImGui::TextUnformatted(LOC("Parameters"));
 
         for (FPreviewParameter& Parameter : PreviewParameters)
         {
@@ -229,7 +229,7 @@ namespace Lumina
         if (!PreviewInstance->GetOutputs().empty())
         {
             ImGui::Separator();
-            ImGui::TextUnformatted("Outputs");
+            ImGui::TextUnformatted(LOC("Outputs"));
 
             for (const FAudioGraphParameterDecl& Output : PreviewInstance->GetOutputs())
             {

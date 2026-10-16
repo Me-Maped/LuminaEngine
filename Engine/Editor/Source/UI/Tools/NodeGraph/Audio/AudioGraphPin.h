@@ -24,6 +24,11 @@ namespace Lumina
 
         uint32 GetPinColor() const override { return GetAudioGraphTypeColor(PinType); }
 
+        // Audio pin names are single words borrowed from other domains and read differently there
+        // (the panner's "Pan" is 声像, the envelope's "Level" is 电平), so they resolve against the
+        // audio tags rather than the plain entries.
+        const char* GetPinLocalizationContext() const override { return "audio"; }
+
         void SetPinType(EAudioGraphType InType) { PinType = InType; }
         EAudioGraphType GetPinType() const { return PinType; }
 

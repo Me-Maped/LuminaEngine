@@ -1,4 +1,5 @@
 #include "EditorPCH.h"
+#include "Localization/Localization.h"
 #include "DataAssetFactory.h"
 
 #include "Assets/AssetTypes/DataAsset/DataAsset.h"
@@ -22,7 +23,7 @@ namespace Lumina
             SelectedClass = nullptr;
         }
 
-        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LE_ICON_DATABASE " Select Data Asset Class");
+        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LOC_ICON(LE_ICON_DATABASE, "Select Data Asset Class"));
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
@@ -39,14 +40,14 @@ namespace Lumina
 
         bool bConfirm = false;
         ImGui::BeginDisabled(SelectedClass == nullptr);
-        if (ImGui::Button(LE_ICON_CHECK " Create", ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CHECK, "Create"), ImVec2(ButtonWidth, 0)))
         {
             bConfirm = true;
         }
         ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_CLOSE " Cancel", ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CLOSE, "Cancel"), ImVec2(ButtonWidth, 0)))
         {
             SelectedClass = nullptr;
             bShouldClose = true;

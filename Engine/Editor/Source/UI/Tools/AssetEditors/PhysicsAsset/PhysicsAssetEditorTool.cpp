@@ -368,20 +368,20 @@ namespace Lumina
 
             if (BodyIndex == Constants::kIndexNone)
             {
-                if (ImGui::MenuItem(LE_ICON_PLUS " Add Body"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_PLUS, "Add Body")))
                 {
                     SelectBody(AddBodyForBone(BoneName));
                 }
             }
             else
             {
-                if (ImGui::MenuItem(LE_ICON_LINK " Constrain To Parent Body"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_LINK, "Constrain To Parent Body")))
                 {
                     SelectConstraint(AddConstraintForBone(BoneName));
                 }
 
                 ImGui::Separator();
-                if (ImGui::MenuItem(LE_ICON_DELETE " Remove Body"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Remove Body")))
                 {
                     RemoveBodyAt(BodyIndex);
                 }
@@ -1052,7 +1052,7 @@ namespace Lumina
             return Existing;
         }
 
-        BeginAssetTransaction("Add Body");
+        BeginAssetTransaction(LOC("Add Body"));
 
         SPhysicsBodySetup& Body = PhysicsAsset->Bodies.emplace_back();
         Body.BoneName = BoneName;
@@ -1086,7 +1086,7 @@ namespace Lumina
             return;
         }
 
-        BeginAssetTransaction("Remove Body");
+        BeginAssetTransaction(LOC("Remove Body"));
 
         const FName BoneName = PhysicsAsset->Bodies[BodyIndex].BoneName;
         PhysicsAsset->Bodies.erase(PhysicsAsset->Bodies.begin() + BodyIndex);
@@ -1115,7 +1115,7 @@ namespace Lumina
             return;
         }
 
-        BeginAssetTransaction("Clear Bodies");
+        BeginAssetTransaction(LOC("Clear Bodies"));
 
         PhysicsAsset->Bodies.clear();
         PhysicsAsset->Constraints.clear();
@@ -1156,7 +1156,7 @@ namespace Lumina
             }
         }
 
-        BeginAssetTransaction("Add Constraint");
+        BeginAssetTransaction(LOC("Add Constraint"));
 
         SPhysicsConstraintSetup& Constraint = PhysicsAsset->Constraints.emplace_back();
         Constraint.ChildBone = ChildBone;
@@ -1176,7 +1176,7 @@ namespace Lumina
             return;
         }
 
-        BeginAssetTransaction("Remove Constraint");
+        BeginAssetTransaction(LOC("Remove Constraint"));
 
         PhysicsAsset->Constraints.erase(PhysicsAsset->Constraints.begin() + ConstraintIndex);
 
@@ -1219,7 +1219,7 @@ namespace Lumina
 
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
 
-        BeginAssetTransaction(bReplaceExisting ? "Generate Bodies" : "Fill Body Gaps");
+        BeginAssetTransaction(bReplaceExisting ? LOC("Generate Bodies") : LOC("Fill Body Gaps"));
 
         if (bReplaceExisting)
         {
@@ -1491,25 +1491,25 @@ namespace Lumina
 
         if (GetSkeletonResource() == nullptr)
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), LE_ICON_ALERT " No skeleton assigned.");
-            ImGui::TextWrapped("Assign a Skeleton in the Details panel. Bodies are authored by bone name, so the asset needs one before anything can be added.");
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), LOC_ICON(LE_ICON_ALERT, "No skeleton assigned."));
+            ImGui::TextWrapped(LOC("Assign a Skeleton in the Details panel. Bodies are authored by bone name, so the asset needs one before anything can be added."));
             return;
         }
 
         if (bSimulating)
         {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.20f, 1.0f));
-            if (ImGui::Button(LE_ICON_STOP " Stop"))
+            if (ImGui::Button(LOC_ICON(LE_ICON_STOP, "Stop")))
             {
                 StopSimulation();
             }
             ImGui::PopStyleColor();
-            ImGuiX::TextTooltip("Stop simulating and restore the bind pose. (Esc)");
+            ImGuiX::TextTooltip(LOCF("Stop simulating and restore the bind pose. (Esc)"));
         }
         else
         {
             ImGui::BeginDisabled(PhysicsAsset->Bodies.empty() || MeshEntity == ECS::NullEntity);
-            if (ImGui::Button(LE_ICON_PLAY " Simulate"))
+            if (ImGui::Button(LOC_ICON(LE_ICON_PLAY, "Simulate")))
             {
                 StartSimulation();
             }
@@ -1517,11 +1517,11 @@ namespace Lumina
 
             if (MeshEntity == ECS::NullEntity)
             {
-                ImGuiX::TextTooltip("The Skeleton needs a Preview Mesh before the ragdoll can be simulated.");
+                ImGuiX::TextTooltip(LOCF("The Skeleton needs a Preview Mesh before the ragdoll can be simulated."));
             }
             else
             {
-                ImGuiX::TextTooltip("Drop the ragdoll into the preview world and run physics on it.");
+                ImGuiX::TextTooltip(LOCF("Drop the ragdoll into the preview world and run physics on it."));
             }
         }
 
@@ -1532,39 +1532,39 @@ namespace Lumina
         // Editing the body list under a live ragdoll leaves simulated bodies describing a setup that is gone.
         ImGui::BeginDisabled(bSimulating);
 
-        if (ImGui::Button(LE_ICON_AUTO_FIX " Generate"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_AUTO_FIX, "Generate")))
         {
             GenerateFromSkeleton(true);
         }
-        ImGuiX::TextTooltip("Replace all bodies and constraints with a capsule per bone and a swing-twist joint per pair.");
+        ImGuiX::TextTooltip(LOCF("Replace all bodies and constraints with a capsule per bone and a swing-twist joint per pair."));
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_PLUS " Fill Gaps"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Fill Gaps")))
         {
             GenerateFromSkeleton(false);
         }
-        ImGuiX::TextTooltip("Add bodies for bones that do not have one yet, leaving existing bodies untouched.");
+        ImGuiX::TextTooltip(LOCF("Add bodies for bones that do not have one yet, leaving existing bodies untouched."));
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_DELETE " Clear"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_DELETE, "Clear")))
         {
             ClearAllBodies();
         }
 
         ImGui::SetNextItemWidth(140.0f);
-        ImGui::DragFloat("Min Bone Length", &GenerateMinBoneLength, 0.005f, 0.0f, 1.0f, "%.3f m");
-        ImGuiX::TextTooltip("Bones shorter than this are skipped when generating.");
+        ImGui::DragFloat(LOC("Min Bone Length"), &GenerateMinBoneLength, 0.005f, 0.0f, 1.0f, "%.3f m");
+        ImGuiX::TextTooltip(LOCF("Bones shorter than this are skipped when generating."));
 
         ImGui::EndDisabled();
 
         bool bOnlyBodies = bBodyBonesOnly;
-        if (ImGui::Checkbox("Bodies Only", &bOnlyBodies))
+        if (ImGui::Checkbox(LOC("Bodies Only"), &bOnlyBodies))
         {
             bBodyBonesOnly = bOnlyBodies;
         }
 
         ImGui::SameLine();
-        ImGui::TextDisabled("%d bodies, %d constraints", (int)PhysicsAsset->Bodies.size(), (int)PhysicsAsset->Constraints.size());
+        ImGui::TextDisabled(LOC("%d bodies, %d constraints"), (int)PhysicsAsset->Bodies.size(), (int)PhysicsAsset->Constraints.size());
 
         ImGui::Separator();
         ImGui::Spacing();
@@ -1578,15 +1578,15 @@ namespace Lumina
 
         if (PhysicsAsset->Constraints.empty())
         {
-            ImGui::TextDisabled("No constraints.");
-            ImGui::TextWrapped("Right-click a bone that has a body and choose \"Constrain To Parent Body\".");
+            ImGui::TextDisabled(LOC("No constraints."));
+            ImGui::TextWrapped(LOC("Right-click a bone that has a body and choose \"Constrain To Parent Body\"."));
             return;
         }
 
         if (ImGui::BeginTable("##Constraints", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp))
         {
-            ImGui::TableSetupColumn("Parent", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Child", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(LOC_ID("Parent"), ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(LOC_ID("Child"), ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("##Actions", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight() + ImGui::GetStyle().CellPadding.x * 2.0f);
             ImGui::TableHeadersRow();
 
@@ -1636,7 +1636,7 @@ namespace Lumina
     void FPhysicsAssetEditorTool::DrawDetailsWindow()
     {
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-        ImGui::SeparatorText(SelectionMode == EPhysicsAssetSelection::Constraint ? "Constraint" : "Body");
+        ImGui::SeparatorText(SelectionMode == EPhysicsAssetSelection::Constraint ? LOC("Constraint") : LOC("Body"));
         ImGuiX::Font::PopFont();
         ImGui::Spacing();
 
@@ -1646,12 +1646,12 @@ namespace Lumina
         }
         else
         {
-            ImGui::TextDisabled("Select a bone with a body, or a constraint.");
+            ImGui::TextDisabled(LOC("Select a bone with a body, or a constraint."));
         }
 
         ImGui::Spacing();
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-        ImGui::SeparatorText("Physics Asset");
+        ImGui::SeparatorText(LOC("Physics Asset"));
         ImGuiX::Font::PopFont();
         ImGui::Spacing();
 
@@ -1662,16 +1662,16 @@ namespace Lumina
     {
         FAssetEditorTool::DrawToolMenu(UpdateContext);
 
-        if (ImGui::BeginMenu(LE_ICON_SKULL " Physics"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_SKULL, "Physics")))
         {
             if (bSimulating)
             {
-                if (ImGui::MenuItem(LE_ICON_STOP " Stop Simulating", "Esc"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_STOP, "Stop Simulating"), "Esc"))
                 {
                     StopSimulation();
                 }
             }
-            else if (ImGui::MenuItem(LE_ICON_PLAY " Simulate"))
+            else if (ImGui::MenuItem(LOC_ICON(LE_ICON_PLAY, "Simulate")))
             {
                 StartSimulation();
             }
@@ -1679,19 +1679,19 @@ namespace Lumina
             ImGui::Separator();
 
             bool bBodies = bDrawBodies;
-            if (ImGui::MenuItem("Draw Bodies", nullptr, &bBodies))
+            if (ImGui::MenuItem(LOC("Draw Bodies"), nullptr, &bBodies))
             {
                 bDrawBodies = bBodies;
             }
 
             bool bConstraints = bDrawConstraints;
-            if (ImGui::MenuItem("Draw Constraints", nullptr, &bConstraints))
+            if (ImGui::MenuItem(LOC("Draw Constraints"), nullptr, &bConstraints))
             {
                 bDrawConstraints = bConstraints;
             }
 
             bool bBones = bDrawBoneLines;
-            if (ImGui::MenuItem("Draw Bone Lines", nullptr, &bBones))
+            if (ImGui::MenuItem(LOC("Draw Bone Lines"), nullptr, &bBones))
             {
                 bDrawBoneLines = bBones;
             }
@@ -1699,18 +1699,18 @@ namespace Lumina
             ImGui::Separator();
 
             // Space cycles these in the viewport; scale is deliberately absent, the dots own size.
-            if (ImGui::MenuItem("Move Body Frame", "Space", BodyGizmoOp == ImGuizmo::TRANSLATE))
+            if (ImGui::MenuItem(LOC("Move Body Frame"), "Space", BodyGizmoOp == ImGuizmo::TRANSLATE))
             {
                 BodyGizmoOp = ImGuizmo::TRANSLATE;
             }
-            if (ImGui::MenuItem("Rotate Body Frame", "Space", BodyGizmoOp == ImGuizmo::ROTATE))
+            if (ImGui::MenuItem(LOC("Rotate Body Frame"), "Space", BodyGizmoOp == ImGuizmo::ROTATE))
             {
                 BodyGizmoOp = ImGuizmo::ROTATE;
             }
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem(LE_ICON_AUTO_FIX " Generate From Skeleton"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_AUTO_FIX, "Generate From Skeleton")))
             {
                 GenerateFromSkeleton(true);
             }
@@ -1721,27 +1721,27 @@ namespace Lumina
 
     void FPhysicsAssetEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Bodies",
-            "Each body is a collision primitive bound to a bone. Right-click a bone in the tree to add or "
-            "remove one. The selected body draws its frame axes so offsets can be dialed in.");
-        DrawHelpTextRow("Generate",
-            "Fits a capsule down every bone longer than the minimum length and joins each to its nearest "
-            "ancestor body. Start here, then fix up by hand.");
-        DrawHelpTextRow("Constraints",
-            "A swing-twist joint limiting how far a child body rotates against its parent. The cone in the "
-            "viewport is the first swing limit; the line runs to the parent bone.");
-        DrawHelpTextRow("Preview",
-            "The mesh comes from the Skeleton's Preview Mesh and is drawn in bind pose. Bodies are authored "
-            "against the bind pose, so what you see is what the ragdoll starts from.");
-        DrawHelpTextRow("Viewport Editing",
-            "Click a body in the viewport to select it. The orange dots resize it: one per box extent, or "
-            "radius and half-height on a capsule. Drag a dot along its axis to set that dimension.");
-        DrawHelpTextRow("Body Frame",
-            "The gizmo on the selected body moves and rotates its frame relative to the bone, writing the "
-            "Translation and Rotation offsets. Space swaps between move and rotate.");
-        DrawHelpTextRow("Grabbing",
-            "While simulating, Shift + left-drag pulls the body under the cursor with a spring. Fling it to "
-            "check whether the joint limits hold up under real forces.");
+        DrawHelpTextRow(LOC("Bodies"),
+            LOC("Each body is a collision primitive bound to a bone. Right-click a bone in the tree to add or "
+            "remove one. The selected body draws its frame axes so offsets can be dialed in."));
+        DrawHelpTextRow(LOC("Generate"),
+            LOC("Fits a capsule down every bone longer than the minimum length and joins each to its nearest "
+            "ancestor body. Start here, then fix up by hand."));
+        DrawHelpTextRow(LOC("Constraints"),
+            LOC("A swing-twist joint limiting how far a child body rotates against its parent. The cone in the "
+            "viewport is the first swing limit; the line runs to the parent bone."));
+        DrawHelpTextRow(LOC("Preview"),
+            LOC("The mesh comes from the Skeleton's Preview Mesh and is drawn in bind pose. Bodies are authored "
+            "against the bind pose, so what you see is what the ragdoll starts from."));
+        DrawHelpTextRow(LOC("Viewport Editing"),
+            LOC("Click a body in the viewport to select it. The orange dots resize it: one per box extent, or "
+            "radius and half-height on a capsule. Drag a dot along its axis to set that dimension."));
+        DrawHelpTextRow(LOC("Body Frame"),
+            LOC("The gizmo on the selected body moves and rotates its frame relative to the bone, writing the "
+            "Translation and Rotation offsets. Space swaps between move and rotate."));
+        DrawHelpTextRow(LOC("Grabbing"),
+            LOC("While simulating, Shift + left-drag pulls the body under the cursor with a spring. Fling it to "
+            "check whether the joint limits hold up under real forces."));
     }
 
     void FPhysicsAssetEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const

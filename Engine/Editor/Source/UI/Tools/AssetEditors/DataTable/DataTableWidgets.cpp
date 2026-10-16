@@ -1,4 +1,5 @@
 ﻿#include "DataTableWidgets.h"
+#include "Localization/Localization.h"
 #include "Scripting/ScriptDataStruct.h"
 #include "Scripting/ScriptStruct.h"
 
@@ -36,8 +37,8 @@ namespace Lumina::DataTableUI
         // An empty combo reads as a broken picker, so say what is missing and how to supply it.
         if (Candidates.empty())
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f), "No row structs are defined.");
-            ImGui::TextDisabled("Declare one in your game or plugin module:");
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f), LOC("No row structs are defined."));
+            ImGui::TextDisabled(LOC("Declare one in your game or plugin module:"));
             ImGui::TextDisabled("    REFLECT()");
             ImGui::TextDisabled("    struct SMyRow : public SDataTableRowBase");
             ImGui::TextDisabled("    { GENERATED_BODY() PROPERTY(Editable) float Health; };");
@@ -59,12 +60,12 @@ namespace Lumina::DataTableUI
             }
         }
 
-        const char* Preview = Current != nullptr ? Current->GetName().c_str() : "None";
+        const char* Preview = Current != nullptr ? Current->GetName().c_str() : LOC("None");
 
         const int32 Picked = ImGuiX::SearchableCombo(StrId, Preview, (int32)Candidates.size() + 1, CurrentIndex,
             [&Candidates](int32 Index) -> FFixedString
             {
-                return (Index == 0) ? FFixedString("None") : FFixedString(Candidates[Index - 1]->GetName().c_str());
+                return (Index == 0) ? FFixedString(LOC("None")) : FFixedString(Candidates[Index - 1]->GetName().c_str());
             });
 
         if (Picked != Constants::kIndexNone)

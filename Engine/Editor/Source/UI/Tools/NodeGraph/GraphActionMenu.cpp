@@ -2,6 +2,7 @@
 
 #include "EdGraphNode.h"
 #include "EdNodeGraph.h"
+#include "Localization/Localization.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "Core/Object/Cast.h"
@@ -12,169 +13,34 @@ namespace Lumina
 {
     namespace
     {
-        FORCEINLINE char ToLowerChar(char C)
-        {
-            return static_cast<char>(std::tolower(static_cast<unsigned char>(C)));
-        }
-
-        FORCEINLINE bool IsWordSeparator(char C)
-        {
-            return C == ' ' || C == '_' || C == '-' || C == '.' || C == '/';
-        }
-
-        FORCEINLINE bool IsLower(char C) { return C >= 'a' && C <= 'z'; }
-        FORCEINLINE bool IsUpper(char C) { return C >= 'A' && C <= 'Z'; }
-    }
-
-    bool FuzzyMatch(const char* Query, const char* Target, int32& OutScore, TVector<uint16>& OutMatchIndices)
-    {
-        OutScore = 0;
-        OutMatchIndices.clear();
-
-        if (Query == nullptr || Query[0] == '\0')
-        {
-            return true;
-        }
-        if (Target == nullptr)
-        {
-            return false;
-        }
-
-        const int32 StartBonus        = 50;
-        const int32 PrefixBonus       = 10;
-        const int32 SeparatorBonus    = 30;
-        const int32 CamelCaseBonus    = 30;
-        const int32 ConsecutiveBonus  = 20;
-        const int32 UnmatchedLeading  = -3;
-        const int32 UnmatchedPenalty  = -1;
-
-        int32 Score = 0;
-        uint32 QueryIdx = 0;
-        bool bPrevMatched = false;
-        bool bMatchedAny = false;
-
-        for (uint32 i = 0; Target[i] != '\0' && Query[QueryIdx] != '\0'; ++i)
-        {
-            const char QC = ToLowerChar(Query[QueryIdx]);
-            const char TC = ToLowerChar(Target[i]);
-
-            if (QC == TC)
-            {
-                OutMatchIndices.push_back(static_cast<uint16>(i));
-
-                if (i == 0)
-                {
-                    Score += StartBonus;
-                }
-                else
-                {
-                    const char Prev = Target[i - 1];
-                    if (IsWordSeparator(Prev))
-                    {
-                        Score += SeparatorBonus;
-                    }
-                    else if (IsLower(Prev) && IsUpper(Target[i]))
-                    {
-                        Score += CamelCaseBonus;
-                    }
-                }
-
-                if (bPrevMatched)
-                {
-                    Score += ConsecutiveBonus;
-                }
-                else if (!bMatchedAny && i > 0)
-                {
-                    Score += i * UnmatchedLeading;
-                }
-
-                if (QueryIdx == 0 && i == 0)
-                {
-                    Score += PrefixBonus;
-                }
-
-                QueryIdx++;
-                bPrevMatched = true;
-                bMatchedAny = true;
-            }
-            else
-            {
-                if (bMatchedAny)
-                {
-                    Score += UnmatchedPenalty;
-                }
-                bPrevMatched = false;
-            }
-        }
-
-        if (Query[QueryIdx] != '\0')
-        {
-            OutMatchIndices.clear();
-            OutScore = 0;
-            return false;
-        }
-
-        OutScore = Score;
-        return true;
-    }
-
-    namespace
-    {
-        // Consecutive match indices coalesce into one call to keep the draw-call count low.
         void DrawHighlightedText(const char* Text, const TVector<uint16>& MatchIndices, const ImVec4& MatchColor)
         {
             if (Text == nullptr)
             {
                 return;
             }
-
-            const size_t Length = strlen(Text);
-            if (Length == 0 || MatchIndices.empty())
+            if (Text[0] == '\0' || MatchIndices.empty())
             {
                 ImGui::TextUnformatted(Text);
                 return;
             }
 
-            size_t Cursor = 0;
-            size_t MatchIdx = 0;
-            bool bFirstSpan = true;
-
-            while (Cursor < Length)
+            const FGraphActionTextSpans Spans = BuildGraphActionHighlightSpans(Text, MatchIndices);
+            for (const FGraphActionTextSpan& Span : Spans)
             {
-                if (!bFirstSpan)
+                if (Span.Begin != 0)
                 {
                     ImGui::SameLine(0.0f, 0.0f);
                 }
-                bFirstSpan = false;
-
-                const bool bInMatch = (MatchIdx < MatchIndices.size()) && (MatchIndices[MatchIdx] == Cursor);
-
-                size_t SpanEnd = Cursor + 1;
-                if (bInMatch)
+                if (Span.bMatched)
                 {
-                    while (SpanEnd < Length
-                        && MatchIdx + (SpanEnd - Cursor) < MatchIndices.size()
-                        && MatchIndices[MatchIdx + (SpanEnd - Cursor)] == SpanEnd)
-                    {
-                        ++SpanEnd;
-                    }
-
                     ImGui::PushStyleColor(ImGuiCol_Text, MatchColor);
-                    ImGui::TextUnformatted(Text + Cursor, Text + SpanEnd);
-                    ImGui::PopStyleColor();
-                    MatchIdx += (SpanEnd - Cursor);
                 }
-                else
+                ImGui::TextUnformatted(Text + Span.Begin, Text + Span.End);
+                if (Span.bMatched)
                 {
-                    while (SpanEnd < Length && (MatchIdx >= MatchIndices.size() || MatchIndices[MatchIdx] != SpanEnd))
-                    {
-                        ++SpanEnd;
-                    }
-
-                    ImGui::TextUnformatted(Text + Cursor, Text + SpanEnd);
+                    ImGui::PopStyleColor();
                 }
-
-                Cursor = SpanEnd;
             }
         }
     }
@@ -233,9 +99,13 @@ namespace Lumina
 
             FGraphAction Action;
             Action.NodeClass   = NodeClass;
-            Action.DisplayName = FString(CDO->GetNodeDisplayName());
-            Action.Category    = CDO->GetNodeCategory().c_str();
-            Action.Tooltip     = FString(CDO->GetNodeTooltip());
+            // Read out of the table rather than through the LOC_VIEW family: all three are stored
+            // on the action instead of being drawn on the spot, and a tooltip runs to several
+            // hundred characters, well past the rotating buffer that family writes through.
+            Action.DisplayName = FString(FLocalization::Get().TranslateView(
+                CDO->GetNodeDisplayName(), FStringView("node")));
+            Action.Category    = FString(FLocalization::Get().TranslateView(CDO->GetNodeCategory()));
+            Action.Tooltip     = FString(FLocalization::Get().TranslateView(CDO->GetNodeTooltip()));
             Actions.push_back(Move(Action));
         }
 
@@ -364,7 +234,7 @@ namespace Lumina
 
         const bool bEnterCommitted = ImGui::InputTextWithHint(
             "##GraphActionSearch",
-            "Search nodes...",
+            LOC("Search nodes..."),
             QueryBuffer,
             IM_ARRAYSIZE(QueryBuffer),
             ImGuiInputTextFlags_EnterReturnsTrue);
@@ -509,7 +379,7 @@ namespace Lumina
 
             if (VisibleIndices.empty())
             {
-                const char* NoResults = QueryBuffer[0] == '\0' ? "No nodes registered" : "No nodes found";
+                const char* NoResults = QueryBuffer[0] == '\0' ? LOC("No nodes registered") : LOC("No nodes found");
                 const float TextWidth = ImGui::CalcTextSize(NoResults).x;
                 ImGui::SetCursorPosY(ListSize.y * 0.4f);
                 ImGui::SetCursorPosX((PopupSize.x - TextWidth) * 0.5f);

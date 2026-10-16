@@ -1,4 +1,5 @@
 #include "AnimGraphNode_OrientationWarping.h"
+#include "Localization/Localization.h"
 #include "UI/Tools/NodeGraph/Animation/AnimationGraphCompiler.h"
 #include "Renderer/SkeletonResource.h"
 
@@ -59,9 +60,9 @@ namespace Lumina
         const int32 PelvisIndex = Compiler.ResolveBoneIndex(PelvisBone);
         if (PelvisIndex == Constants::kIndexNone)
         {
-            ReportWarpError(Compiler, this, "Unknown Pelvis Bone",
-                        FString("Orientation Warping references '") + PelvisBone.ToString() +
-                        "', which is not a bone on the graph's skeleton.");
+            ReportWarpError(Compiler, this, LOC("Unknown Pelvis Bone"),
+                        FString(LOC("Orientation Warping references '")) + PelvisBone.ToString() +
+                        LOC("', which is not a bone on the graph's skeleton."));
             return;
         }
 
@@ -76,18 +77,18 @@ namespace Lumina
             const int32 SpineIndex = Compiler.ResolveBoneIndex(Spine.Bone);
             if (SpineIndex == Constants::kIndexNone)
             {
-                ReportWarpError(Compiler, this, "Unknown Spine Bone",
-                            FString("Orientation Warping references '") + Spine.Bone.ToString() +
-                            "', which is not a bone on the graph's skeleton.");
+                ReportWarpError(Compiler, this, LOC("Unknown Spine Bone"),
+                            FString(LOC("Orientation Warping references '")) + Spine.Bone.ToString() +
+                            LOC("', which is not a bone on the graph's skeleton."));
                 return;
             }
 
             // Counter-rotating a bone the pelvis does not carry would twist it away from the torso.
             if (Skeleton != nullptr && !WarpDescendsFrom(*Skeleton, SpineIndex, PelvisIndex))
             {
-                ReportWarpError(Compiler, this, "Spine Bone Outside Chain",
-                            FString("'") + Spine.Bone.ToString() + "' does not descend from '" +
-                            PelvisBone.ToString() + "', so the pelvis turn never reaches it.");
+                ReportWarpError(Compiler, this, LOC("Spine Bone Outside Chain"),
+                            FString(LOC("'")) + Spine.Bone.ToString() + LOC("' does not descend from '") +
+                            PelvisBone.ToString() + LOC("', so the pelvis turn never reaches it."));
                 return;
             }
 

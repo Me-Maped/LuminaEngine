@@ -1,5 +1,6 @@
 ﻿#include <string>
 #include "CoreTypeCustomization.h"
+#include "Localization/Localization.h"
 #include "imgui.h"
 #include "Core/Object/ObjectCore.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
@@ -77,7 +78,7 @@ namespace Lumina
                 ImGui::PopStyleColor(3);
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 {
-                    ImGui::SetTooltip("Reset to: %f", ResetValue);
+                    ImGui::SetTooltip(LOC("Reset to: %f"), ResetValue);
                 }
 
                 ImGui::SameLine(0.0f, 0.0f);
@@ -100,8 +101,8 @@ namespace Lumina
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 {
                     ImGui::SetTooltip("%s", *UniformLock
-                        ? "Uniform: dragging one axis scales the others by the same ratio."
-                        : "Non-uniform: each axis is independent.");
+                        ? LOC("Uniform: dragging one axis scales the others by the same ratio.")
+                        : LOC("Non-uniform: each axis is independent."));
                 }
             }
 
@@ -392,7 +393,7 @@ namespace Lumina
         bool bReset = false;
         // The SIMD transform has no scalar member to point at, so edit scalar buffers and write back.
         FVector3 Translation = DisplayValue.GetLocation();
-        Merge(DrawAxisRow("T", LE_ICON_AXIS_ARROW, ImVec4(0.40f, 0.70f, 1.0f, 1.0f), "Translation (Location)", Math::ValuePtr(Translation), 0.01f * MouseAdaptiveDragScale(), bReset, 0.0f, "%.3f m"));
+        Merge(DrawAxisRow("T", LE_ICON_AXIS_ARROW, ImVec4(0.40f, 0.70f, 1.0f, 1.0f), LOC("Translation (Location)"), Math::ValuePtr(Translation), 0.01f * MouseAdaptiveDragScale(), bReset, 0.0f, "%.3f m"));
         DisplayValue.SetLocation(Translation);
 
         const FQuat CurrentRotation = DisplayValue.GetRotation();
@@ -403,7 +404,7 @@ namespace Lumina
         }
 
         bool bRotationReset = false;
-        const EPropertyChangeOp RotationOp = DrawAxisRow("R", LE_ICON_ROTATE_360, ImVec4(0.40f, 1.0f, 0.70f, 1.0f), "Rotation (Euler Angles)", Math::ValuePtr(EulerDegrees), 0.1f * MouseAdaptiveDragScale(), bRotationReset, 0.0f, "%.3f\xc2\xb0");
+        const EPropertyChangeOp RotationOp = DrawAxisRow("R", LE_ICON_ROTATE_360, ImVec4(0.40f, 1.0f, 0.70f, 1.0f), LOC("Rotation (Euler Angles)"), Math::ValuePtr(EulerDegrees), 0.1f * MouseAdaptiveDragScale(), bRotationReset, 0.0f, "%.3f\xc2\xb0");
         if (RotationOp == EPropertyChangeOp::Updated || bRotationReset)
         {
             DisplayValue.SetRotationFromEuler(EulerDegrees);
@@ -416,7 +417,7 @@ namespace Lumina
         const FVector3 PrevScale = ScaleVec;
         bool bScaleReset = false;
         const EPropertyChangeOp ScaleOp = DrawAxisRow("S", LE_ICON_ARROW_TOP_RIGHT_BOTTOM_LEFT, ImVec4(1.0f, 0.70f, 0.40f, 1.0f),
-            "Scale (multiplier)", Math::ValuePtr(ScaleVec), 0.01f * MouseAdaptiveDragScale(), bScaleReset, 1.0f, "%.3f\xc3\x97", &bUniformScale);
+            LOC("Scale (multiplier)"), Math::ValuePtr(ScaleVec), 0.01f * MouseAdaptiveDragScale(), bScaleReset, 1.0f, "%.3f\xc3\x97", &bUniformScale);
 
         if (bUniformScale && ScaleOp == EPropertyChangeOp::Updated)
         {

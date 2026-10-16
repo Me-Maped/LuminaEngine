@@ -1,4 +1,5 @@
 #include "ConsoleVariableEditorTool.h"
+#include "Localization/Localization.h"
 
 
 #include "Core/Console/ConsoleVariable.h"
@@ -49,16 +50,16 @@ namespace Lumina
 
     void FConsoleVariableEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("What this is",
-            "Browse and edit every registered console variable. Changes fire the variable's OnChange "
-            "callback immediately, same code path as typing the command at the console prompt.");
-        DrawHelpTextRow("Variables vs Commands",
-            "Variables hold a typed value (bool/int/float/string) you can edit inline. Commands are "
-            "zero-argument actions, click Execute to run.");
-        DrawHelpTextRow("Search",
-            "The filter matches against both the variable name and its description, case-insensitive.");
-        DrawHelpTextRow("Reset",
-            "Reset restores the value the cvar was registered with. It also fires OnChange.");
+        DrawHelpTextRow(LOC("What this is"),
+            LOC("Browse and edit every registered console variable. Changes fire the variable's OnChange "
+            "callback immediately, same code path as typing the command at the console prompt."));
+        DrawHelpTextRow(LOC("Variables vs Commands"),
+            LOC("Variables hold a typed value (bool/int/float/string) you can edit inline. Commands are "
+            "zero-argument actions, click Execute to run."));
+        DrawHelpTextRow(LOC("Search"),
+            LOC("The filter matches against both the variable name and its description, case-insensitive."));
+        DrawHelpTextRow(LOC("Reset"),
+            LOC("Reset restores the value the cvar was registered with. It also fires OnChange."));
     }
 
     bool FConsoleVariableEditorTool::PassesFilter(FStringView Name, FStringView Hint) const
@@ -84,13 +85,13 @@ namespace Lumina
         ImGui::BeginChild("##CVarFilterBar", ImVec2(0, 50.0f), true, ImGuiWindowFlags_NoScrollbar);
         {
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 220.0f);
-            if (ImGui::InputTextWithHint("##Search", LE_ICON_MAGNIFY " Filter by name or description...", SearchBuffer, IM_ARRAYSIZE(SearchBuffer)))
+            if (ImGui::InputTextWithHint("##Search", LOC_ICON(LE_ICON_MAGNIFY, "Filter by name or description..."), SearchBuffer, IM_ARRAYSIZE(SearchBuffer)))
             {
                 SearchFilter = SearchBuffer;
             }
 
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%u vars, %u cmds", NumVars, NumCmds);
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), LOC("%u vars, %u cmds"), NumVars, NumCmds);
         }
         ImGui::EndChild();
         ImGui::PopStyleColor();
@@ -99,13 +100,13 @@ namespace Lumina
 
         if (ImGui::BeginTabBar("##CVarTabs", ImGuiTabBarFlags_None))
         {
-            if (ImGui::BeginTabItem(LE_ICON_TUNE " Variables"))
+            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_TUNE, "Variables")))
             {
                 DrawVariablesTab();
                 ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem(LE_ICON_PLAY " Commands"))
+            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_PLAY, "Commands")))
             {
                 DrawCommandsTab();
                 ImGui::EndTabItem();
@@ -150,11 +151,11 @@ namespace Lumina
         }
 
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Name",        ImGuiTableColumnFlags_WidthStretch, 0.30f);
-        ImGui::TableSetupColumn("Type",        ImGuiTableColumnFlags_WidthFixed,   60.0f);
-        ImGui::TableSetupColumn("Value",       ImGuiTableColumnFlags_WidthStretch, 0.25f);
+        ImGui::TableSetupColumn(LOC_ID("Name"),        ImGuiTableColumnFlags_WidthStretch, 0.30f);
+        ImGui::TableSetupColumn(LOC_ID("Type"),        ImGuiTableColumnFlags_WidthFixed,   60.0f);
+        ImGui::TableSetupColumn(LOC_ID("Value"),       ImGuiTableColumnFlags_WidthStretch, 0.25f);
         ImGui::TableSetupColumn("",            ImGuiTableColumnFlags_WidthFixed,   60.0f);
-        ImGui::TableSetupColumn("Description", ImGuiTableColumnFlags_WidthStretch, 0.40f);
+        ImGui::TableSetupColumn(LOC_ID("Description"), ImGuiTableColumnFlags_WidthStretch, 0.40f);
         ImGui::TableHeadersRow();
 
         for (const FConsoleVariable* Var : Visible)
@@ -226,7 +227,7 @@ namespace Lumina
             }, *Var->ValuePtr);
 
             ImGui::TableSetColumnIndex(3);
-            if (ImGui::SmallButton("Reset"))
+            if (ImGui::SmallButton(LOC("Reset")))
             {
                 visit([&]<typename T0>(const T0& DefaultValue)
                 {
@@ -289,9 +290,9 @@ namespace Lumina
         }
 
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Name",        ImGuiTableColumnFlags_WidthStretch, 0.30f);
+        ImGui::TableSetupColumn(LOC_ID("Name"),        ImGuiTableColumnFlags_WidthStretch, 0.30f);
         ImGui::TableSetupColumn("",            ImGuiTableColumnFlags_WidthFixed,   80.0f);
-        ImGui::TableSetupColumn("Description", ImGuiTableColumnFlags_WidthStretch, 0.70f);
+        ImGui::TableSetupColumn(LOC_ID("Description"), ImGuiTableColumnFlags_WidthStretch, 0.70f);
         ImGui::TableHeadersRow();
 
         for (const FConsoleCommand* Cmd : Visible)
@@ -303,7 +304,7 @@ namespace Lumina
             ImGui::TextColored(ImVec4(0.85f, 1.00f, 0.85f, 1.0f), "%.*s", (int)Cmd->Name.size(), Cmd->Name.data());
 
             ImGui::TableSetColumnIndex(1);
-            if (ImGui::SmallButton(LE_ICON_PLAY " Execute"))
+            if (ImGui::SmallButton(LOC_ICON(LE_ICON_PLAY, "Execute")))
             {
                 Registry.ExecuteCommand(Cmd->Name);
             }

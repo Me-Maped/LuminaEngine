@@ -1,4 +1,5 @@
 ﻿#include "EntityPropertyCustomization.h"
+#include "Localization/Localization.h"
 
 #include "imgui.h"
 #include "World/ECS/Registry.h"
@@ -28,7 +29,7 @@ namespace Lumina
             }
             else
             {
-                Label.append("Entity");
+                Label.append(LOC("Entity"));
             }
             AppendFormat(Label, " ({})", Entity.Value);
             return Label;
@@ -94,7 +95,7 @@ namespace Lumina
             Candidates.push_back(Entity);
         }
 
-        const FFixedString Preview = bHasCurrent ? MakeEntityLabel(Registry, CurrentEntity) : FFixedString("None");
+        const FFixedString Preview = bHasCurrent ? MakeEntityLabel(Registry, CurrentEntity) : FFixedString(LOC("None"));
 
         // Leave room on the right for the square eyedropper button.
         const float LineHeight = ImGui::GetFrameHeight();
@@ -106,7 +107,7 @@ namespace Lumina
             {
                 if (Index == 0)
                 {
-                    return FFixedString("None");
+                    return FFixedString(LOC("None"));
                 }
                 return MakeEntityLabel(Registry, Candidates[Index]);
             }, LE_ICON_CUBE);
@@ -139,7 +140,7 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip(bPicking ? "Click an entity in the viewport (Esc to cancel)" : "Pick an entity from the viewport");
+            ImGui::SetTooltip(bPicking ? LOC("Click an entity in the viewport (Esc to cancel)") : LOC("Pick an entity from the viewport"));
         }
 
         // Both a combo pick and a consumed eyedropper result are atomic.

@@ -155,7 +155,7 @@ namespace Lumina
             return;
         }
 
-        ImGui::SeparatorText("Fracture");
+        ImGui::SeparatorText(LOC("Fracture"));
         ImGui::Spacing();
 
         uint32 TotalVerts = 0;
@@ -166,28 +166,28 @@ namespace Lumina
             TotalTris  += (uint32)Collection->GetPiece(i).Indices.size() / 3;
         }
 
-        ImGui::Text("Pieces: %d", Collection->GetNumPieces());
-        ImGui::Text("Vertices: %u   Triangles: %u", TotalVerts, TotalTris);
+        ImGui::Text(LOC("Pieces: %d"), Collection->GetNumPieces());
+        ImGui::Text(LOC("Vertices: %u   Triangles: %u"), TotalVerts, TotalTris);
         ImGui::Spacing();
 
-        if (ImGui::Button("Generate Fracture", ImVec2(-FLT_MIN, 0.0f)))
+        if (ImGui::Button(LOC("Generate Fracture"), ImVec2(-FLT_MIN, 0.0f)))
         {
             Collection->Rebuild();
             Asset->GetPackage()->MarkDirty();
             bPreviewDirty = true;
         }
-        ImGuiX::TextTooltip("Re-bake convex chunks from the source mesh using the settings below.");
+        ImGuiX::TextTooltip(LOCF("Re-bake convex chunks from the source mesh using the settings below."));
 
         ImGui::Spacing();
         ImGui::SetNextItemWidth(-FLT_MIN);
-        if (ImGui::SliderFloat("##Explode", &ExplodeAmount, 0.0f, 3.0f, "Explode: %.2f"))
+        if (ImGui::SliderFloat("##Explode", &ExplodeAmount, 0.0f, 3.0f, LOC("Explode: %.2f")))
         {
             ApplyExplode();
         }
-        ImGuiX::TextTooltip("Preview only: pushes each chunk outward from the center so you can inspect the break.");
+        ImGuiX::TextTooltip(LOCF("Preview only: pushes each chunk outward from the center so you can inspect the break."));
 
         ImGui::Spacing();
-        ImGui::SeparatorText("Settings");
+        ImGui::SeparatorText(LOC("Settings"));
         ImGui::Spacing();
         PropertyTable.DrawTree();
     }

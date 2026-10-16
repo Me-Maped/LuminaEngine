@@ -1,6 +1,7 @@
 ﻿#include "EditorToolModal.h"
 
 #include "Core/Templates/LuminaTemplate.h"
+#include "Localization/Localization.h"
 #include "UI/SlowTaskModal.h"
 
 namespace Lumina
@@ -34,7 +35,9 @@ namespace Lumina
             return;
         }
 
-        ActiveModal = MakeUnique<FEditorToolModal>(Title, Size, bCloseable);
+        // Localized here rather than at every call site: the title is the popup's id as well as its
+        // caption, so translating it in one place keeps the two in step.
+        ActiveModal = MakeUnique<FEditorToolModal>(LOC(Title.c_str()), Size, bCloseable);
         ActiveModal->DrawFunction = Move(DrawFunction);
         ActiveModal->bBlocking = bBlocking;
         ActiveModal->OpenPos = ImGui::GetMousePos();

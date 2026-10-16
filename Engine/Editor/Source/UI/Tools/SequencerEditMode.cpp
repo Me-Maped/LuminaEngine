@@ -1,4 +1,5 @@
 #include "SequencerEditMode.h"
+#include "Localization/Localization.h"
 #include "World/ECS/Registry.h"
 
 #include "Assets/AssetTypes/Prefabs/Prefab.h"
@@ -130,10 +131,10 @@ namespace Lumina
 
         static FString RowLabel(const CSequenceTrack* Track)
         {
-            FString Label(Track->GetTrackDisplayName().data(), Track->GetTrackDisplayName().size());
+            FString Label(LOC_VIEW(Track->GetTrackDisplayName()));
             if (const CSequenceTrack_Property* Property = Cast<CSequenceTrack_Property>(Track))
             {
-                Label = Property->PropertyPath.empty() ? FString("Property (unset)") : Property->PropertyPath;
+                Label = Property->PropertyPath.empty() ? FString(LOC("Property (unset)")) : Property->PropertyPath;
             }
             return Label;
         }
@@ -310,7 +311,7 @@ namespace Lumina
         const ECS::FEntity Selected = FindSelectedEntity(World);
         if (Selected == ECS::NullEntity || !Sequence.IsValid())
         {
-            ImGuiX::Notifications::NotifyWarning("Select an entity in the world to bind it.");
+            ImGuiX::Notifications::NotifyWarning(LOCF("Select an entity in the world to bind it."));
             return Constants::kIndexNone;
         }
 
@@ -375,7 +376,7 @@ namespace Lumina
         const ECS::FEntity Entity = Instance.BoundEntities[BindingIndex];
         if (Entity == ECS::NullEntity || !World->IsValidEntity(Entity))
         {
-            ImGuiX::Notifications::NotifyWarning("That binding did not resolve to an entity in this world.");
+            ImGuiX::Notifications::NotifyWarning(LOCF("That binding did not resolve to an entity in this world."));
             return;
         }
 
@@ -591,7 +592,7 @@ namespace Lumina
     {
         if (!Sequence.IsValid() || SelectedBinding == Constants::kIndexNone)
         {
-            ImGuiX::Notifications::NotifyWarning("Select the binding holding the camera you want to cut to.");
+            ImGuiX::Notifications::NotifyWarning(LOCF("Select the binding holding the camera you want to cut to."));
             return;
         }
 
@@ -602,7 +603,7 @@ namespace Lumina
             if (Entity != ECS::NullEntity && World->IsValidEntity(Entity)
                 && World->TryGetComponent<SCameraComponent>(Entity) == nullptr)
             {
-                ImGuiX::Notifications::NotifyWarning("'{0}' has no camera component.",
+                ImGuiX::Notifications::NotifyWarning(LOCF("'{0}' has no camera component."),
                                                      Sequence->Bindings[SelectedBinding].Name);
                 return;
             }
@@ -636,7 +637,7 @@ namespace Lumina
         DrawList->AddRectFilled(RulerMin, RulerMax, IM_COL32(19, 21, 25, 255));
         DrawList->AddLine(ImVec2(RulerMin.x, RulerMax.y), ImVec2(RulerMax.x, RulerMax.y), SeqGridMajor);
 
-        DrawList->AddText(ImVec2(Origin.x + 10.0f, Origin.y + 4.0f), SeqTextDim, "Tracks");
+        DrawList->AddText(ImVec2(Origin.x + 10.0f, Origin.y + 4.0f), SeqTextDim, LOC("Tracks"));
 
         DrawList->PushClipRect(ImVec2(TrackLeft, RulerMin.y), RulerMax, true);
 
@@ -683,7 +684,7 @@ namespace Lumina
 
         DrawList->AddRectFilled(RowMin, RowMax, IM_COL32(38, 33, 26, 255));
         DrawList->AddLine(ImVec2(TrackLeft, RowY), ImVec2(TrackLeft, RowMax.y), SeqGridMajor);
-        DrawList->AddText(ImVec2(Origin.x + 10.0f, RowY + 5.0f), IM_COL32(255, 205, 130, 235), LE_ICON_MOVIE_OPEN "  Camera Cuts");
+        DrawList->AddText(ImVec2(Origin.x + 10.0f, RowY + 5.0f), IM_COL32(255, 205, 130, 235), LOC_ICON(LE_ICON_MOVIE_OPEN, "Camera Cuts"));
 
         DrawList->PushClipRect(ImVec2(TrackLeft, RowY), RowMax, true);
         struct FCutClipScope { ImDrawList* DL; ~FCutClipScope() { DL->PopClipRect(); } } ClipScope{ DrawList };
@@ -718,7 +719,7 @@ namespace Lumina
             DrawList->AddRect(ClipMin, ClipMax, IM_COL32(20, 16, 10, 220), 2.0f);
 
             const bool bValidBinding = Cut.BindingIndex >= 0 && Cut.BindingIndex < (int32)Sequence->Bindings.size();
-            const char* Label = bValidBinding ? Sequence->Bindings[Cut.BindingIndex].Name.c_str() : "<unbound>";
+            const char* Label = bValidBinding ? Sequence->Bindings[Cut.BindingIndex].Name.c_str() : LOC("<unbound>");
             DrawList->PushClipRect(ClipMin, ClipMax, true);
             DrawList->AddText(ImVec2(ClipMin.x + 4.0f, ClipMin.y + 1.0f), IM_COL32(25, 20, 12, 255), Label);
             DrawList->PopClipRect();
@@ -853,7 +854,7 @@ namespace Lumina
         if (!Sequence.IsValid())
         {
             ImGui::SameLine();
-            ImGui::TextDisabled("Pick or create a Sequence to begin.");
+            ImGui::TextDisabled(LOC("Pick or create a Sequence to begin."));
             return;
         }
 
@@ -871,11 +872,11 @@ namespace Lumina
         }
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_REFRESH " Rebind"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_REFRESH, "Rebind")))
         {
             BindToWorld(World);
         }
-        ImGuiX::TextTooltip("Re-resolve every binding against the world. Use after renaming or adding an entity.");
+        ImGuiX::TextTooltip(LOCF("Re-resolve every binding against the world. Use after renaming or adding an entity."));
 
         DrawSequencerWindow(World);
     }
@@ -883,7 +884,7 @@ namespace Lumina
     void FSequencerEditMode::DrawSequencerWindow(CWorld* World)
     {
         // A timeline needs the full width of the screen, and the user docks it wherever suits.
-        if (!ImGui::Begin(LE_ICON_FILMSTRIP " Sequencer"))
+        if (!ImGui::Begin(LOC_ICON_ID(LE_ICON_FILMSTRIP, "Sequencer")))
         {
             ImGui::End();
             return;
@@ -946,42 +947,42 @@ namespace Lumina
             bPlaying = false;
             EvaluateAt(World, 0.0f, true);
         }
-        ImGuiX::TextTooltip("Jump to the start.");
+        ImGuiX::TextTooltip(LOCF("Jump to the start."));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_CHEVRON_DOUBLE_LEFT "##PrevKey"))
         {
             StepToAdjacentKey(World, -1);
         }
-        ImGuiX::TextTooltip("Jump to the previous key.");
+        ImGuiX::TextTooltip(LOCF("Jump to the previous key."));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_CHEVRON_LEFT "##PrevFrame"))
         {
             StepFrames(World, -1);
         }
-        ImGuiX::TextTooltip("Step back one frame.");
+        ImGuiX::TextTooltip(LOCF("Step back one frame."));
 
         ImGui::SameLine();
         if (ImGui::Button(bPlaying ? LE_ICON_PAUSE "##PlayT" : LE_ICON_PLAY "##PlayT"))
         {
             bPlaying = !bPlaying;
         }
-        ImGuiX::TextTooltip("Play or pause. Space toggles too, and Escape stops.");
+        ImGuiX::TextTooltip(LOCF("Play or pause. Space toggles too, and Escape stops."));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_CHEVRON_RIGHT "##NextFrame"))
         {
             StepFrames(World, 1);
         }
-        ImGuiX::TextTooltip("Step forward one frame.");
+        ImGuiX::TextTooltip(LOCF("Step forward one frame."));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_CHEVRON_DOUBLE_RIGHT "##NextKey"))
         {
             StepToAdjacentKey(World, 1);
         }
-        ImGuiX::TextTooltip("Jump to the next key.");
+        ImGuiX::TextTooltip(LOCF("Jump to the next key."));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_SKIP_NEXT "##End"))
@@ -989,7 +990,7 @@ namespace Lumina
             bPlaying = false;
             EvaluateAt(World, Sequence->Duration, true);
         }
-        ImGuiX::TextTooltip("Jump to the end.");
+        ImGuiX::TextTooltip(LOCF("Jump to the end."));
 
         ImGui::SameLine();
         bool bLoopValue = bLoop;
@@ -997,26 +998,26 @@ namespace Lumina
         {
             bLoop = bLoopValue;
         }
-        ImGuiX::TextTooltip("Loop playback instead of stopping at the end.");
+        ImGuiX::TextTooltip(LOCF("Loop playback instead of stopping at the end."));
 
         // A frame rather than seconds, since it is what a key snaps to and what is worth typing.
         ImGui::SameLine();
         ImGui::SetNextItemWidth(90.0f);
         int32 FrameEntry = CurrentFrame;
-        if (ImGui::DragInt("##Frame", &FrameEntry, 0.25f, 0, Math::Max(FrameCount, 0), "Frame %d"))
+        if (ImGui::DragInt("##Frame", &FrameEntry, 0.25f, 0, Math::Max(FrameCount, 0), LOC("Frame %d")))
         {
             bPlaying = false;
             EvaluateAt(World, Math::Clamp(Sequence->FrameToTime(FrameEntry), 0.0f, Sequence->Duration), true);
         }
-        ImGuiX::TextTooltip("Playhead position. Drag or double-click to type a frame.");
+        ImGuiX::TextTooltip(LOCF("Playhead position. Drag or double-click to type a frame."));
 
         ImGui::SameLine();
-        ImGui::TextDisabled("/ %d  (%.2fs)", FrameCount, PlayTime);
+        ImGui::TextDisabled(LOC("/ %d  (%.2fs)"), FrameCount, PlayTime);
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110.0f);
-        ImGui::DragFloat("##Rate", &PlayRate, 0.01f, 0.05f, 8.0f, "Rate %.2fx");
-        ImGuiX::TextTooltip("Preview playback speed. Does not affect the asset.");
+        ImGui::DragFloat("##Rate", &PlayRate, 0.01f, 0.05f, 8.0f, LOC("Rate %.2fx"));
+        ImGuiX::TextTooltip(LOCF("Preview playback speed. Does not affect the asset."));
 
         // Length and rate are reached for while scrubbing, not hidden away in a details panel.
         ImGui::SameLine();
@@ -1025,7 +1026,7 @@ namespace Lumina
         ImGui::SameLine();
         ImGui::SetNextItemWidth(120.0f);
         float DurationEntry = Sequence->Duration;
-        if (ImGui::DragFloat("##Duration", &DurationEntry, 0.05f, 0.1f, 3600.0f, "Length %.2fs"))
+        if (ImGui::DragFloat("##Duration", &DurationEntry, 0.05f, 0.1f, 3600.0f, LOC("Length %.2fs")))
         {
             Sequence->Duration = Math::Max(DurationEntry, 0.1f);
             Sequence->GetPackage()->MarkDirty();
@@ -1035,44 +1036,44 @@ namespace Lumina
             TimelineScroll = Math::Clamp(TimelineScroll, 0.0f,
                 Math::Max(Sequence->Duration - Sequence->Duration * TimelineZoom, 0.0f));
         }
-        ImGuiX::TextTooltip("Length of the sequence. Keys past the end are kept but never played.");
+        ImGuiX::TextTooltip(LOCF("Length of the sequence. Keys past the end are kept but never played."));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_ARROW_COLLAPSE_HORIZONTAL "##Fit"))
         {
             FitDurationToContent();
         }
-        ImGuiX::TextTooltip("Set the length to end on the last key.");
+        ImGuiX::TextTooltip(LOCF("Set the length to end on the last key."));
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110.0f);
         int32 RateEntry = Sequence->FrameRate;
-        if (ImGui::DragInt("##FrameRate", &RateEntry, 0.2f, 1, 240, "%d fps"))
+        if (ImGui::DragInt("##FrameRate", &RateEntry, 0.2f, 1, 240, LOC("%d fps")))
         {
             Sequence->FrameRate = Math::Clamp(RateEntry, 1, 240);
             Sequence->GetPackage()->MarkDirty();
         }
-        ImGuiX::TextTooltip("Display and snapping rate. Evaluation stays continuous, so this never quantizes playback.");
+        ImGuiX::TextTooltip(LOCF("Display and snapping rate. Evaluation stays continuous, so this never quantizes playback."));
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110.0f);
         float LetterboxEntry = Sequence->LetterboxAspect;
-        const char* LetterboxFormat = LetterboxEntry > 0.0f ? "Bars %.2f" : "No bars";
+        const char* LetterboxFormat = LetterboxEntry > 0.0f ? LOC("Bars %.2f") : LOC("No bars");
         if (ImGui::DragFloat("##Letterbox", &LetterboxEntry, 0.01f, 0.0f, 4.0f, LetterboxFormat))
         {
             Sequence->LetterboxAspect = Math::Clamp(LetterboxEntry, 0.0f, 4.0f);
             Sequence->GetPackage()->MarkDirty();
             EvaluateAt(World, PlayTime, true);
         }
-        ImGuiX::TextTooltip("Black bars at this width over height for the whole sequence, such as 2.39. Zero shows none.");
+        ImGuiX::TextTooltip(LOCF("Black bars at this width over height for the whole sequence, such as 2.39. Zero shows none."));
 
         ImGui::SameLine();
         bool bPreview = bPreviewCameras;
-        if (ImGui::Checkbox(LE_ICON_MOVIE_OPEN " Preview Cuts", &bPreview))
+        if (ImGui::Checkbox(LOC_ICON(LE_ICON_MOVIE_OPEN, "Preview Cuts"), &bPreview))
         {
             SetPreviewCameras(World, bPreview);
         }
-        ImGuiX::TextTooltip("Look through the camera each cut makes live. Off keeps your own camera so you can fly through a shot.");
+        ImGuiX::TextTooltip(LOCF("Look through the camera each cut makes live. Off keeps your own camera so you can fly through a shot."));
 
         if (!LastFiredEvent.empty() && ImGui::GetTime() - LastFiredEventTime < 1.5)
         {
@@ -1286,64 +1287,64 @@ namespace Lumina
 
     void FSequencerEditMode::DrawBindingList(CWorld* World)
     {
-        if (ImGui::Button(LE_ICON_PLUS " Bind Selected"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Bind Selected")))
         {
             SelectedBinding = AddBindingFromSelection(World);
         }
-        ImGuiX::TextTooltip("Add the selected world entity as a possessed binding.");
+        ImGuiX::TextTooltip(LOCF("Add the selected world entity as a possessed binding."));
 
         ImGui::SameLine();
         ImGui::BeginDisabled(SelectedBinding == Constants::kIndexNone);
-        if (ImGui::Button(LE_ICON_KEY " Key Transform"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_KEY, "Key Transform")))
         {
             KeyTransform(World, SelectedBinding);
         }
-        ImGuiX::TextTooltip("Capture the bound entity's current transform as a key at the playhead.");
+        ImGuiX::TextTooltip(LOCF("Capture the bound entity's current transform as a key at the playhead."));
         ImGui::EndDisabled();
 
         ImGui::SameLine();
         ImGui::BeginDisabled(SelectedBinding == Constants::kIndexNone);
-        if (ImGui::Button(LE_ICON_MOVIE_OPEN " Add Camera Cut"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_MOVIE_OPEN, "Add Camera Cut")))
         {
             AddCameraCutAtPlayhead(World);
         }
-        ImGuiX::TextTooltip("Cut to the selected binding's camera at the playhead. Drag the clip's body to move it, its edges to retime it, right-click to remove it.");
+        ImGuiX::TextTooltip(LOCF("Cut to the selected binding's camera at the playhead. Drag the clip's body to move it, its edges to retime it, right-click to remove it."));
         ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_CAMERA " New Camera"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CAMERA, "New Camera")))
         {
             AddCameraFromView(World);
         }
-        ImGuiX::TextTooltip("Add a cinematic camera where the editor camera is, keyed at the playhead and cut to from here.");
+        ImGuiX::TextTooltip(LOCF("Add a cinematic camera where the editor camera is, keyed at the playhead and cut to from here."));
 
         ImGui::SameLine();
         ImGui::BeginDisabled(SelectedBinding == Constants::kIndexNone);
-        if (ImGui::Button(LE_ICON_CAMERA_IRIS " Key From View"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CAMERA_IRIS, "Key From View")))
         {
             KeyFromView(World, SelectedBinding);
         }
-        ImGuiX::TextTooltip("Key the selected binding to where the editor camera is. Turn off Preview Cuts, fly to the next pose, key again.");
+        ImGuiX::TextTooltip(LOCF("Key the selected binding to where the editor camera is. Turn off Preview Cuts, fly to the next pose, key again."));
         ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_PLUS " Track"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Track")))
         {
             ImGui::OpenPopup("##AddTrack");
         }
-        ImGuiX::TextTooltip("Add a track. Tracks that drive something go on the selected binding, the rest on the whole sequence.");
+        ImGuiX::TextTooltip(LOCF("Add a track. Tracks that drive something go on the selected binding, the rest on the whole sequence."));
         DrawAddTrackMenu(World);
 
         ImGui::SameLine();
         bool bAuto = bAutoKey;
-        if (ImGui::Checkbox("Auto Key", &bAuto))
+        if (ImGui::Checkbox(LOC("Auto Key"), &bAuto))
         {
             bAutoKey = bAuto;
         }
-        ImGuiX::TextTooltip("Key a bound entity automatically whenever you move it. Scrub, pose with the gizmo, repeat.");
+        ImGuiX::TextTooltip(LOCF("Key a bound entity automatically whenever you move it. Scrub, pose with the gizmo, repeat."));
 
         ImGui::SameLine();
-        ImGui::TextDisabled("%d bindings, %d tracks",
+        ImGui::TextDisabled(LOC("%d bindings, %d tracks"),
             (int)Sequence->Bindings.size(), (int)Sequence->Tracks.size());
     }
 
@@ -1631,18 +1632,18 @@ namespace Lumina
         {
             ImGui::BeginDisabled(SelectedBinding == Constants::kIndexNone);
 
-            if (ImGui::MenuItem(LE_ICON_KEY " Key Transform"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_KEY, "Key Transform")))
             {
                 KeyTransform(World, SelectedBinding);
             }
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem(LE_ICON_DELETE " Remove Binding"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Remove Binding")))
             {
                 PendingRemoveBinding = SelectedBinding;
             }
-            ImGuiX::TextTooltip("Removes the binding along with its tracks and any cuts pointing at it.");
+            ImGuiX::TextTooltip(LOCF("Removes the binding along with its tracks and any cuts pointing at it."));
 
             ImGui::EndDisabled();
             ImGui::EndPopup();
@@ -1654,14 +1655,14 @@ namespace Lumina
             const ECurveInterpMode CurrentInterp = GetTransformKeyInterp(InterpTrack, SelectedKeyTime);
 
             // The mode belongs to the key it leaves, so this shapes the segment from here to the next key.
-            if (ImGui::BeginMenu(LE_ICON_VECTOR_CURVE " Interpolation"))
+            if (ImGui::BeginMenu(LOC_ICON(LE_ICON_VECTOR_CURVE, "Interpolation")))
             {
                 struct FInterpChoice { const char* Label; ECurveInterpMode Mode; };
                 const FInterpChoice Choices[] =
                 {
-                    { LE_ICON_STAIRS " Constant",           ECurveInterpMode::Constant },
-                    { LE_ICON_VECTOR_LINE " Linear",        ECurveInterpMode::Linear   },
-                    { LE_ICON_CHART_BELL_CURVE " Cubic",    ECurveInterpMode::Cubic    },
+                    { LOC_ICON(LE_ICON_STAIRS, "Constant"),           ECurveInterpMode::Constant },
+                    { LOC_ICON(LE_ICON_VECTOR_LINE, "Linear"),        ECurveInterpMode::Linear   },
+                    { LOC_ICON(LE_ICON_CHART_BELL_CURVE, "Cubic"),    ECurveInterpMode::Cubic    },
                 };
 
                 for (const FInterpChoice& Choice : Choices)
@@ -1679,7 +1680,7 @@ namespace Lumina
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem(LE_ICON_DELETE " Delete Key"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Delete Key")))
             {
                 if (CSequenceTrack_Transform* Track = FindTransformTrack(SelectedKeyBinding))
                 {
@@ -1805,7 +1806,7 @@ namespace Lumina
             else if (const CSequenceTrack_Audio* Audio = Cast<CSequenceTrack_Audio>(Track))
             {
                 const SSequenceAudioClip& Clip = Audio->Clips[KeyIndex];
-                const char* Name = Clip.Sound.IsValid() ? Clip.Sound->GetName().c_str() : "<no sound>";
+                const char* Name = Clip.Sound.IsValid() ? Clip.Sound->GetName().c_str() : LOC("<no sound>");
                 const float Width = Math::Max(ImGui::CalcTextSize(Name).x + 24.0f, 60.0f);
                 DrawList->AddRectFilled(ImVec2(X, RowY + 3.0f), ImVec2(X + Width, RowMax.y - 3.0f), bKeySelected ? Fill : TintFaint, 3.0f);
                 DrawList->AddRect(ImVec2(X, RowY + 3.0f), ImVec2(X + Width, RowMax.y - 3.0f), TintColor, 3.0f);
@@ -1848,19 +1849,19 @@ namespace Lumina
         {
             if (Track != nullptr)
             {
-                if (ImGui::MenuItem(Track->bEnabled ? LE_ICON_EYE_OFF " Disable" : LE_ICON_EYE " Enable"))
+                if (ImGui::MenuItem(Track->bEnabled ? LOC_ICON(LE_ICON_EYE_OFF, "Disable") : LOC_ICON(LE_ICON_EYE, "Enable")))
                 {
                     Track->bEnabled = !Track->bEnabled;
                     Sequence->GetPackage()->MarkDirty();
                     EvaluateAt(World, PlayTime, true);
                 }
 
-                if (SequencerTracks::Curve(Track) != nullptr && ImGui::MenuItem(LE_ICON_KEY_PLUS " Key At Playhead"))
+                if (SequencerTracks::Curve(Track) != nullptr && ImGui::MenuItem(LOC_ICON(LE_ICON_KEY_PLUS, "Key At Playhead")))
                 {
                     KeyTrackAtPlayhead(World, Track);
                 }
 
-                if (CSequenceTrack_Event* Events = Cast<CSequenceTrack_Event>(Track); Events != nullptr && ImGui::MenuItem(LE_ICON_FLAG " Add Event At Playhead"))
+                if (CSequenceTrack_Event* Events = Cast<CSequenceTrack_Event>(Track); Events != nullptr && ImGui::MenuItem(LOC_ICON(LE_ICON_FLAG, "Add Event At Playhead")))
                 {
                     SSequenceEventKey Key;
                     Key.Time = Sequence->SnapToFrame(PlayTime);
@@ -1870,7 +1871,7 @@ namespace Lumina
                     Sequence->GetPackage()->MarkDirty();
                 }
 
-                if (CSequenceTrack_Audio* Audio = Cast<CSequenceTrack_Audio>(Track); Audio != nullptr && ImGui::MenuItem(LE_ICON_MUSIC " Add Clip At Playhead"))
+                if (CSequenceTrack_Audio* Audio = Cast<CSequenceTrack_Audio>(Track); Audio != nullptr && ImGui::MenuItem(LOC_ICON(LE_ICON_MUSIC, "Add Clip At Playhead")))
                 {
                     SSequenceAudioClip& Clip = Audio->Clips.emplace_back();
                     Clip.StartTime = Sequence->SnapToFrame(PlayTime);
@@ -1879,7 +1880,7 @@ namespace Lumina
                 }
 
                 ImGui::Separator();
-                if (ImGui::MenuItem(LE_ICON_DELETE " Delete Track"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Delete Track")))
                 {
                     PendingRemoveTrack = SelectedTrack;
                 }
@@ -1890,14 +1891,14 @@ namespace Lumina
         if (ImGui::BeginPopup("##TrackKeyContext"))
         {
             SKeyedCurve* Keys = Track != nullptr ? SequencerTracks::Curve(Track) : nullptr;
-            if (Keys != nullptr && SelectedTrackKey >= 0 && SelectedTrackKey < Keys->NumKeys() && ImGui::BeginMenu(LE_ICON_VECTOR_CURVE " Interpolation"))
+            if (Keys != nullptr && SelectedTrackKey >= 0 && SelectedTrackKey < Keys->NumKeys() && ImGui::BeginMenu(LOC_ICON(LE_ICON_VECTOR_CURVE, "Interpolation")))
             {
                 struct FInterpChoice { const char* Label; ECurveInterpMode Mode; };
                 const FInterpChoice Choices[] =
                 {
-                    { LE_ICON_STAIRS " Constant",        ECurveInterpMode::Constant },
-                    { LE_ICON_VECTOR_LINE " Linear",     ECurveInterpMode::Linear   },
-                    { LE_ICON_CHART_BELL_CURVE " Cubic", ECurveInterpMode::Cubic    },
+                    { LOC_ICON(LE_ICON_STAIRS, "Constant"),        ECurveInterpMode::Constant },
+                    { LOC_ICON(LE_ICON_VECTOR_LINE, "Linear"),     ECurveInterpMode::Linear   },
+                    { LOC_ICON(LE_ICON_CHART_BELL_CURVE, "Cubic"), ECurveInterpMode::Cubic    },
                 };
                 for (const FInterpChoice& Choice : Choices)
                 {
@@ -1912,7 +1913,7 @@ namespace Lumina
                 ImGui::EndMenu();
             }
 
-            if (ImGui::MenuItem(LE_ICON_DELETE " Delete Key") && Track != nullptr)
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Delete Key")) && Track != nullptr)
             {
                 SequencerTracks::RemoveKey(Track, SelectedTrackKey);
                 SelectedTrackKey = Constants::kIndexNone;
@@ -1952,9 +1953,9 @@ namespace Lumina
         {
             SCurveKey& Key = Keys->Keys[SelectedTrackKey];
             ImGui::SetNextItemWidth(140.0f);
-            bChanged |= ImGui::DragFloat("Value", &Key.Value, 0.01f);
+            bChanged |= ImGui::DragFloat(LOC("Value"), &Key.Value, 0.01f);
             ImGui::SameLine();
-            ImGui::TextDisabled("at %.2fs", Key.Time);
+            ImGui::TextDisabled(LOC("at %.2fs"), Key.Time);
             if (bChanged)
             {
                 Keys->ComputeAutoTangents();
@@ -1966,7 +1967,7 @@ namespace Lumina
             char NameBuffer[128];
             std::snprintf(NameBuffer, sizeof(NameBuffer), "%s", Key.Name.c_str());
             ImGui::SetNextItemWidth(180.0f);
-            if (ImGui::InputText("Name", NameBuffer, sizeof(NameBuffer)))
+            if (ImGui::InputText(LOC("Name"), NameBuffer, sizeof(NameBuffer)))
             {
                 Key.Name = FName(NameBuffer);
                 bChanged = true;
@@ -1975,7 +1976,7 @@ namespace Lumina
             char PayloadBuffer[256];
             std::snprintf(PayloadBuffer, sizeof(PayloadBuffer), "%s", Key.Payload.c_str());
             ImGui::SetNextItemWidth(220.0f);
-            if (ImGui::InputText("Payload", PayloadBuffer, sizeof(PayloadBuffer)))
+            if (ImGui::InputText(LOC("Payload"), PayloadBuffer, sizeof(PayloadBuffer)))
             {
                 Key.Payload = PayloadBuffer;
                 bChanged = true;
@@ -1993,10 +1994,10 @@ namespace Lumina
             }
             ImGui::SameLine();
             ImGui::SetNextItemWidth(110.0f);
-            bChanged |= ImGui::DragFloat("Volume", &Clip.Volume, 0.01f, 0.0f, 4.0f);
+            bChanged |= ImGui::DragFloat(LOC("Volume"), &Clip.Volume, 0.01f, 0.0f, 4.0f);
             ImGui::SameLine();
             ImGui::SetNextItemWidth(110.0f);
-            bChanged |= ImGui::DragFloat("Pitch", &Clip.Pitch, 0.01f, 0.01f, 4.0f);
+            bChanged |= ImGui::DragFloat(LOC("Pitch"), &Clip.Pitch, 0.01f, 0.01f, 4.0f);
         }
 
         if (bChanged)
@@ -2032,14 +2033,14 @@ namespace Lumina
         struct FTrackChoice { const char* Label; CClass* Class; bool bNeedsBinding; const char* Tooltip; };
         const FTrackChoice Choices[] =
         {
-            { LE_ICON_AXIS_ARROW " Transform",        CSequenceTrack_Transform::StaticClass(),    true,  "Keys the binding's location, rotation and scale." },
-            { LE_ICON_TUNE " Property",               CSequenceTrack_Property::StaticClass(),     true,  "A curve on one number of one component, such as a camera's FOV or a light's intensity." },
-            { LE_ICON_EYE " Look At",                 CSequenceTrack_LookAt::StaticClass(),       true,  "Aims the binding at another binding or a fixed point, and can pull focus onto it." },
-            { LE_ICON_FLAG " Events",                 CSequenceTrack_Event::StaticClass(),        false, "Named moments gameplay reacts to." },
-            { LE_ICON_MUSIC " Audio",                 CSequenceTrack_Audio::StaticClass(),        false, "Music and sounds started on cue." },
-            { LE_ICON_CIRCLE_HALF_FULL " Fade",       CSequenceTrack_Fade::StaticClass(),         false, "Fades the whole picture to a color." },
-            { LE_ICON_TIMER " Time Dilation",         CSequenceTrack_TimeDilation::StaticClass(), false, "Slow motion while the edit keeps real time." },
-            { LE_ICON_VIBRATE " Camera Shake",        CSequenceTrack_CameraShake::StaticClass(),  false, "A handheld drift over whichever camera is live." },
+            { LOC_ICON(LE_ICON_AXIS_ARROW, "Transform"),        CSequenceTrack_Transform::StaticClass(),    true,  LOC("Keys the binding's location, rotation and scale.") },
+            { LOC_ICON(LE_ICON_TUNE, "Property"),               CSequenceTrack_Property::StaticClass(),     true,  LOC("A curve on one number of one component, such as a camera's FOV or a light's intensity.") },
+            { LOC_ICON(LE_ICON_EYE, "Look At"),                 CSequenceTrack_LookAt::StaticClass(),       true,  LOC("Aims the binding at another binding or a fixed point, and can pull focus onto it.") },
+            { LOC_ICON(LE_ICON_FLAG, "Events"),                 CSequenceTrack_Event::StaticClass(),        false, LOC("Named moments gameplay reacts to.") },
+            { LOC_ICON(LE_ICON_MUSIC, "Audio"),                 CSequenceTrack_Audio::StaticClass(),        false, LOC("Music and sounds started on cue.") },
+            { LOC_ICON(LE_ICON_CIRCLE_HALF_FULL, "Fade"),       CSequenceTrack_Fade::StaticClass(),         false, LOC("Fades the whole picture to a color.") },
+            { LOC_ICON(LE_ICON_TIMER, "Time Dilation"),         CSequenceTrack_TimeDilation::StaticClass(), false, LOC("Slow motion while the edit keeps real time.") },
+            { LOC_ICON(LE_ICON_VIBRATE, "Camera Shake"),        CSequenceTrack_CameraShake::StaticClass(),  false, LOC("A handheld drift over whichever camera is live.") },
         };
 
         for (const FTrackChoice& Choice : Choices)
@@ -2049,7 +2050,7 @@ namespace Lumina
             {
                 AddTrackOfClass(World, Choice.Class, Choice.bNeedsBinding ? SelectedBinding : Constants::kIndexNone);
             }
-            ImGuiX::TextTooltip("{}", bDisabled ? "Select a binding first." : Choice.Tooltip);
+            ImGuiX::TextTooltip("{}", bDisabled ? LOC("Select a binding first.") : Choice.Tooltip);
         }
         ImGui::EndPopup();
     }

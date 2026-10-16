@@ -1,4 +1,5 @@
 #include "AnimGraphNode_ClipPlayer.h"
+#include "Localization/Localization.h"
 #include "UI/Tools/NodeGraph/Animation/AnimationGraphCompiler.h"
 #include "Assets/AssetTypes/Mesh/Animation/Animation.h"
 
@@ -15,7 +16,7 @@ namespace Lumina
 
         BindFloatPinEditor(SpeedPin);
         BindFloatPinEditor(StartPositionPin);
-        BindEnumPinEditor(LoopModePin, { "Loop", "Play Once" },
+        BindEnumPinEditor(LoopModePin, { LOC("Loop"), LOC("Play Once") },
             [this]() { return (int)LoopMode; },
             [this](int Value) { LoopMode = (EClipLoopMode)Value; });
     }
@@ -29,8 +30,8 @@ namespace Lumina
         if (!bDynamicClip && !Clip.IsValid())
         {
             EdNodeGraph::FError NodeError;
-            NodeError.Name        = "Missing Clip";
-            NodeError.Description = "Play Animation Clip node has no clip assigned and no Animation input; it will evaluate to the bind pose.";
+            NodeError.Name        = LOC("Missing Clip");
+            NodeError.Description = LOC("Play Animation Clip node has no clip assigned and no Animation input; it will evaluate to the bind pose.");
             NodeError.Node        = this;
             Compiler.AddError(NodeError);
         }

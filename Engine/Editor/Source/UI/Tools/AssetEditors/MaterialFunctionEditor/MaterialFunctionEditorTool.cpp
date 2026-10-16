@@ -27,7 +27,7 @@ namespace Lumina
             case EMaterialValueType::Float2: return "float2";
             case EMaterialValueType::Float3: return "float3";
             case EMaterialValueType::Float4: return "float4";
-            case EMaterialValueType::TextureHandle: return "texture handle";
+            case EMaterialValueType::TextureHandle: return LOC("texture handle");
             default:                         return "float";
         }
     }
@@ -75,14 +75,14 @@ namespace Lumina
 
             if (!Call->Function.IsValid())
             {
-                ImGuiX::Notifications::NotifyWarning("This Material Function node has no function assigned.");
+                ImGuiX::Notifications::NotifyWarning(LOCF("This Material Function node has no function assigned."));
                 return;
             }
 
             // A function calling itself would reopen this same tab, which reads as the click doing nothing.
             if (Call->Function.Get() == Asset.Get())
             {
-                ImGuiX::Notifications::NotifyWarning("'{0}' is this function.", Call->Function->GetName().c_str());
+                ImGuiX::Notifications::NotifyWarning(LOCF("'{0}' is this function."), Call->Function->GetName().c_str());
                 return;
             }
 
@@ -109,7 +109,7 @@ namespace Lumina
 
     void FMaterialFunctionEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)
     {
-        if (ImGui::MenuItem(LE_ICON_RECEIPT_TEXT " Compile"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_RECEIPT_TEXT, "Compile")))
         {
             OnSave();
         }
@@ -139,23 +139,23 @@ namespace Lumina
         if (bHasErrors)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
-            ImGui::TextWrapped("Last compile reported errors:\n%s", CompilationLog.c_str());
+            ImGui::TextWrapped(LOC("Last compile reported errors:\n%s"), CompilationLog.c_str());
             ImGui::PopStyleColor();
             ImGui::Separator();
         }
 
-        ImGui::TextDisabled("Add FunctionInput / FunctionOutput nodes in the graph to define the signature, then Compile.");
+        ImGui::TextDisabled(LOC("Add FunctionInput / FunctionOutput nodes in the graph to define the signature, then Compile."));
         ImGui::Spacing();
 
         const ImVec4 Header(0.70f, 0.85f, 1.00f, 1.0f);
 
         ImGui::PushStyleColor(ImGuiCol_Text, Header);
-        ImGui::TextUnformatted("Inputs");
+        ImGui::TextUnformatted(LOC("Inputs"));
         ImGui::PopStyleColor();
         ImGui::Separator();
         if (Fn->GetInputs().empty())
         {
-            ImGui::TextDisabled("  (none)");
+            ImGui::TextDisabled(LOC("  (none)"));
         }
         for (const FMaterialFunctionInput& In : Fn->GetInputs())
         {
@@ -164,12 +164,12 @@ namespace Lumina
 
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, Header);
-        ImGui::TextUnformatted("Outputs");
+        ImGui::TextUnformatted(LOC("Outputs"));
         ImGui::PopStyleColor();
         ImGui::Separator();
         if (Fn->GetOutputs().empty())
         {
-            ImGui::TextDisabled("  (none)");
+            ImGui::TextDisabled(LOC("  (none)"));
         }
         for (const FMaterialFunctionOutput& Out : Fn->GetOutputs())
         {

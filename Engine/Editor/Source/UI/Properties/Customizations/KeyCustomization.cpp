@@ -1,4 +1,5 @@
 ﻿#include "Containers/StringFormat.h"
+#include "Localization/Localization.h"
 #include <iterator>
 #include "CoreTypeCustomization.h"
 
@@ -17,7 +18,7 @@ namespace Lumina
         {
             if (!Key.IsValid())
             {
-                return FString("Unbound");
+                return FString(LOC("Unbound"));
             }
 
             FString Text;
@@ -59,15 +60,15 @@ namespace Lumina
 
         FFixedString Label;
         AppendFormat(Label, "{}##skey",
-            bCapturing ? "Press a key..." : KeyBindingText(DisplayValue).c_str());
+            bCapturing ? LOC("Press a key...") : KeyBindingText(DisplayValue).c_str());
 
         if (ImGui::Button(Label.c_str(), ImVec2(FieldW, Height)) && !bCapturing)
         {
             bCapturing = true;
             bArmed     = false;
         }
-        ImGuiX::TextTooltip("{}", bCapturing ? "Press a key or mouse button. Esc cancels."
-                                             : "Click, then press a key or mouse button to rebind");
+        ImGuiX::TextTooltip("{}", bCapturing ? LOC("Press a key or mouse button. Esc cancels.")
+                                             : LOC("Click, then press a key or mouse button to rebind"));
 
         if (bShowClear)
         {
@@ -78,7 +79,7 @@ namespace Lumina
                 bCapturing = false;
                 bCommitted = true;
             }
-            ImGuiX::TextTooltip("Clear binding");
+            ImGuiX::TextTooltip(LOCF("Clear binding"));
         }
 
         if (bCapturing)

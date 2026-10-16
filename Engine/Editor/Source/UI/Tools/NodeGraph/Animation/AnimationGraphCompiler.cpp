@@ -1,4 +1,5 @@
 #include "AnimationGraphCompiler.h"
+#include "Localization/Localization.h"
 
 #include "Assets/AssetTypes/Animation/BlendSpace/BlendSpace.h"
 #include "Core/Reflection/Type/Properties/ObjectProperty.h"
@@ -93,8 +94,8 @@ namespace Lumina
                 if (Parameters[i].Type != Type)
                 {
                     EdNodeGraph::FError Error;
-                    Error.Name        = "Parameter Type Mismatch";
-                    Error.Description = FString("Parameter '") + Name.ToString() + FString("' is referenced with conflicting types.");
+                    Error.Name        = LOC("Parameter Type Mismatch");
+                    Error.Description = FString(LOC("Parameter '")) + Name.ToString() + FString(LOC("' is referenced with conflicting types."));
                     Error.Node        = nullptr;
                     Errors.push_back(Error);
                 }
@@ -438,9 +439,9 @@ namespace Lumina
         if (DataStruct == nullptr)
         {
             EdNodeGraph::FError Warning;
-            Warning.Name        = "No Parameter Struct";
-            Warning.Description = FString("'") + Name.ToString() + "' cannot be read: this graph has no Parameter "
-                "Struct assigned, so nothing written on the component reaches it and every parameter holds its default.";
+            Warning.Name        = LOC("No Parameter Struct");
+            Warning.Description = FString(LOC("'")) + Name.ToString() + LOC("' cannot be read: this graph has no Parameter ") +
+                LOC("Struct assigned, so nothing written on the component reaches it and every parameter holds its default.");
             Warning.Node        = Node;
             AddWarning(Warning);
             return;
@@ -450,9 +451,9 @@ namespace Lumina
         if (Property == nullptr)
         {
             EdNodeGraph::FError Warning;
-            Warning.Name        = "Unknown Parameter";
-            Warning.Description = FString("'") + Name.ToString() + "' is not a field on " +
-                DataStruct->GetName().c_str() + " (renamed or removed?). It will read the default value.";
+            Warning.Name        = LOC("Unknown Parameter");
+            Warning.Description = FString(LOC("'")) + Name.ToString() + LOC("' is not a field on ") +
+                DataStruct->GetName().c_str() + LOC(" (renamed or removed?). It will read the default value.");
             Warning.Node        = Node;
             AddWarning(Warning);
             return;
@@ -461,9 +462,9 @@ namespace Lumina
         if (Property->HasSetterOrGetter())
         {
             EdNodeGraph::FError Warning;
-            Warning.Name        = "Parameter Has Accessor";
-            Warning.Description = FString("'") + Name.ToString() +
-                "' is behind a getter or setter, so it cannot be read directly. It will read the default value.";
+            Warning.Name        = LOC("Parameter Has Accessor");
+            Warning.Description = FString(LOC("'")) + Name.ToString() +
+                LOC("' is behind a getter or setter, so it cannot be read directly. It will read the default value.");
             Warning.Node        = Node;
             AddWarning(Warning);
             return;
@@ -473,9 +474,9 @@ namespace Lumina
         if (Type == EAnimParamValueType::Unresolved || Type == EAnimParamValueType::Object)
         {
             EdNodeGraph::FError Warning;
-            Warning.Name        = "Parameter Type";
-            Warning.Description = FString("'") + Name.ToString() +
-                "' is not a numeric, bool, or enum field, so it can't drive a value parameter; it will read 0.";
+            Warning.Name        = LOC("Parameter Type");
+            Warning.Description = FString(LOC("'")) + Name.ToString() +
+                LOC("' is not a numeric, bool, or enum field, so it can't drive a value parameter; it will read 0.");
             Warning.Node        = Node;
             AddWarning(Warning);
         }
@@ -491,9 +492,9 @@ namespace Lumina
         if (DataStruct == nullptr)
         {
             EdNodeGraph::FError Warning;
-            Warning.Name        = "No Parameter Struct";
-            Warning.Description = FString("'") + Name.ToString() + "' cannot supply an asset: this graph has no "
-                "Parameter Struct assigned, so the node falls back to its statically assigned asset.";
+            Warning.Name        = LOC("No Parameter Struct");
+            Warning.Description = FString(LOC("'")) + Name.ToString() + LOC("' cannot supply an asset: this graph has no ") +
+                LOC("Parameter Struct assigned, so the node falls back to its statically assigned asset.");
             Warning.Node        = Node;
             AddWarning(Warning);
             return;
@@ -505,9 +506,9 @@ namespace Lumina
         if (Property == nullptr)
         {
             EdNodeGraph::FError Warning;
-            Warning.Name        = "Unknown Parameter";
-            Warning.Description = FString("'") + Name.ToString() + "' is not a field on " +
-                DataStruct->GetName().c_str() + ". It will read the default asset.";
+            Warning.Name        = LOC("Unknown Parameter");
+            Warning.Description = FString(LOC("'")) + Name.ToString() + LOC("' is not a field on ") +
+                DataStruct->GetName().c_str() + LOC(". It will read the default asset.");
             Warning.Node        = Node;
             AddWarning(Warning);
             return;
@@ -516,9 +517,9 @@ namespace Lumina
         if (AnimParamValueTypeFromProperty(Property) != EAnimParamValueType::Object)
         {
             EdNodeGraph::FError Warning;
-            Warning.Name        = "Parameter Type";
-            Warning.Description = FString("'") + Name.ToString() +
-                "' is not an object field, so it cannot supply an asset.";
+            Warning.Name        = LOC("Parameter Type");
+            Warning.Description = FString(LOC("'")) + Name.ToString() +
+                LOC("' is not an object field, so it cannot supply an asset.");
             Warning.Node        = Node;
             AddWarning(Warning);
             return;
@@ -529,9 +530,9 @@ namespace Lumina
         if (Declared != nullptr && Required != nullptr && !Declared->IsChildOf(Required))
         {
             EdNodeGraph::FError Warning;
-            Warning.Name        = "Parameter Class";
-            Warning.Description = FString("'") + Name.ToString() + "' holds a " + Declared->GetName().c_str() +
-                ", which is not a " + ExpectedClassName + ". This node would fall back to the bind pose.";
+            Warning.Name        = LOC("Parameter Class");
+            Warning.Description = FString(LOC("'")) + Name.ToString() + LOC("' holds a ") + Declared->GetName().c_str() +
+                LOC(", which is not a ") + ExpectedClassName + LOC(". This node would fall back to the bind pose.");
             Warning.Node        = Node;
             AddWarning(Warning);
         }

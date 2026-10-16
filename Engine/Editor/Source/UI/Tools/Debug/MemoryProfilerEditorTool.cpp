@@ -249,35 +249,35 @@ namespace Lumina
 
     void FMemoryProfilerEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Overview",
-            "One picture of both memory pools: CPU (process heap, tracked by category) and GPU "
-            "(device memory per heap). Backend-agnostic -- no API specifics.");
-        DrawHelpTextRow("GPU breakdown",
-            "Heap totals are device truth from the allocator (VMA budgets), including driver "
+        DrawHelpTextRow(LOC("Overview"),
+            LOC("One picture of both memory pools: CPU (process heap, tracked by category) and GPU "
+            "(device memory per heap). Backend-agnostic -- no API specifics."));
+        DrawHelpTextRow(LOC("GPU breakdown"),
+            LOC("Heap totals are device truth from the allocator (VMA budgets), including driver "
             "overhead and fragmentation. Memory by purpose is the other half: every live buffer "
             "and texture the RHI owns, grouped by the name its creating site gave it, so VRAM "
             "growth resolves to a subsystem the same way the CPU category table does. It always "
-            "totals less than the heaps -- the difference is memory the engine never allocated.");
-        DrawHelpTextRow("Unnamed GPU memory",
-            "An allocation with no RHI::SetDebugName lands in an angle-bracketed bucket "
+            "totals less than the heaps -- the difference is memory the engine never allocated."));
+        DrawHelpTextRow(LOC("Unnamed GPU memory"),
+            LOC("An allocation with no RHI::SetDebugName lands in an angle-bracketed bucket "
             "(<sampled textures>, <unnamed upload>) and is invisible in a device-lost report too. "
-            "If one of those buckets is large, name the site rather than working around it here.");
-        DrawHelpTextRow("Finding a CPU leak",
-            "On the CPU tab: click Set Baseline at a known-good moment, let the suspect run, then watch "
+            "If one of those buckets is large, name the site rather than working around it here."));
+        DrawHelpTextRow(LOC("Finding a CPU leak"),
+            LOC("On the CPU tab: click Set Baseline at a known-good moment, let the suspect run, then watch "
             "the Delta column. The category that keeps climbing is your leak. Tick Capture call stacks "
-            "and read Top Call Sites for the exact line.");
-        DrawHelpTextRow("Memory the tracker can't see",
-            "The category tracker only sees Memory::Malloc, so anything a foreign DLL allocates from "
+            "and read Top Call Sites for the exact line."));
+        DrawHelpTextRow(LOC("Memory the tracker can't see"),
+            LOC("The category tracker only sees Memory::Malloc, so anything a foreign DLL allocates from "
             "the CRT heap (Slang, the GPU driver, basisu) or the driver takes straight from "
             "VirtualAlloc is invisible to it. Hit Scan under Address Space to split that bucket into "
             "rpmalloc / NT-CRT heap / unattributed, then run BuildScripts/MemoryTrace.ps1 in the mode "
-            "matching whichever is largest to get call stacks.");
-        DrawHelpTextRow("Cost",
-            "CPU category tracking is always on in Debug/Development and compiled out in Shipping. "
+            "matching whichever is largest to get call stacks."));
+        DrawHelpTextRow(LOC("Cost"),
+            LOC("CPU category tracking is always on in Debug/Development and compiled out in Shipping. "
             "Call-stack capture is a heavier, separate toggle, switched off when this window closes. "
             "The address-space scan is on-demand: the heap walk locks every heap process-wide. "
             "The GPU ledger is editor-only (WITH_EDITOR) and is walked only while the GPU tab is "
-            "open -- a game build carries neither the allocation names nor the texture ledger.");
+            "open -- a game build carries neither the allocation names nor the texture ledger."));
     }
 
     void FMemoryProfilerEditorTool::RefreshSnapshot()
@@ -324,27 +324,27 @@ namespace Lumina
         DrawHeaderCards();
         ImGui::Spacing();
 
-        if (ImGui::Button(LE_ICON_CONTENT_COPY " Copy All Stats"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CONTENT_COPY, "Copy All Stats")))
         {
             CopyAllStatsToClipboard();
         }
-        ImGuiX::TextTooltip("Copies a full structured memory report (CPU + GPU heaps + memory-by-purpose + "
-                            "live resources + CPU categories + call sites) to the clipboard");
+        ImGuiX::TextTooltip(LOCF("Copies a full structured memory report (CPU + GPU heaps + memory-by-purpose + "
+                            "live resources + CPU categories + call sites) to the clipboard"));
         ImGui::Spacing();
 
         if (ImGui::BeginTabBar("##MemoryTabs"))
         {
-            if (ImGui::BeginTabItem(LE_ICON_GAUGE " Overview"))
+            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_GAUGE, "Overview")))
             {
                 DrawOverviewTab();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem(LE_ICON_EXPANSION_CARD " GPU"))
+            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_EXPANSION_CARD, "GPU")))
             {
                 DrawGPUTab();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem(LE_ICON_CPU_64_BIT " CPU"))
+            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_CPU_64_BIT, "CPU")))
             {
                 DrawCPUTab();
                 ImGui::EndTabItem();
@@ -378,24 +378,24 @@ namespace Lumina
         // CPU card
         ImGui::BeginChild("##CPUCard", ImVec2(CardW, CardH), true);
         {
-            ImGui::TextColored(ImVec4(0.66f, 0.78f, 0.95f, 1.0f), LE_ICON_CPU_64_BIT " CPU MEMORY");
+            ImGui::TextColored(ImVec4(0.66f, 0.78f, 0.95f, 1.0f), LOC_ICON(LE_ICON_CPU_64_BIT, "CPU MEMORY"));
             ImGui::Separator();
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
             ImGui::TextUnformatted(ImGuiX::FormatSize(Process).c_str());
             ImGuiX::Font::PopFont();
             ImGui::SameLine();
             ImGui::AlignTextToFramePadding();
-            ImGui::TextDisabled("process (RSS)");
+            ImGui::TextDisabled(LOC("process (RSS)"));
 
             ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "%s tracked", ImGuiX::FormatSize(Tracked).c_str());
+            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), LOC("%s tracked"), ImGuiX::FormatSize(Tracked).c_str());
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "  %s retained", ImGuiX::FormatSize(Retained).c_str());
+            ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), LOC("  %s retained"), ImGuiX::FormatSize(Retained).c_str());
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.9f, 0.55f, 0.55f, 1.0f), "  %s external", ImGuiX::FormatSize(External).c_str());
-            ImGuiX::TextTooltip("tracked = ledger live bytes\n"
+            ImGui::TextColored(ImVec4(0.9f, 0.55f, 0.55f, 1.0f), LOC("  %s external"), ImGuiX::FormatSize(External).c_str());
+            ImGuiX::TextTooltip(LOCF("tracked = ledger live bytes\n"
                                 "retained = rpmalloc mapped - tracked (caches + fragmentation; freed, not returned to OS)\n"
-                                "external = RSS - rpmalloc mapped (GPU driver host memory, CRT malloc, code/stacks)");
+                                "external = RSS - rpmalloc mapped (GPU driver host memory, CRT malloc, code/stacks)"));
         }
         ImGui::EndChild();
 
@@ -404,7 +404,7 @@ namespace Lumina
         // GPU card
         ImGui::BeginChild("##GPUCard", ImVec2(CardW, CardH), true);
         {
-            ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.55f, 1.0f), LE_ICON_EXPANSION_CARD " GPU MEMORY");
+            ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.55f, 1.0f), LOC_ICON(LE_ICON_EXPANSION_CARD, "GPU MEMORY"));
             ImGui::SameLine();
             ImGui::TextDisabled("%s", bDeviceInfoValid ? DeviceInfo.Name.c_str() : "");
 
@@ -418,7 +418,7 @@ namespace Lumina
             ImGuiX::Font::PopFont();
             ImGui::SameLine();
             ImGui::AlignTextToFramePadding();
-            ImGui::TextDisabled("/ %s  (%.0f%%)", ImGuiX::FormatSize(GPUStats.TotalBudget).c_str(), Frac * 100.0f);
+            ImGui::TextDisabled(LOC("/ %s  (%.0f%%)"), ImGuiX::FormatSize(GPUStats.TotalBudget).c_str(), Frac * 100.0f);
 
             ImGui::Spacing();
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram, UsageColor(Frac));
@@ -442,14 +442,14 @@ namespace Lumina
         const float HalfW = (ImGui::GetContentRegionAvail().x - Spacing) * 0.5f;
 
         ImGui::BeginChild("##VRAMTL", ImVec2(HalfW, 200), false);
-        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "VRAM usage");
+        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LOC("VRAM usage"));
         DrawTimeline("##VRAMPlot", HistVRAM, ImVec4(0.95f, 0.70f, 0.40f, 1.0f), 160.0f);
         ImGui::EndChild();
 
         ImGui::SameLine();
 
         ImGui::BeginChild("##RSSTL", ImVec2(0, 200), false);
-        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "Process RSS");
+        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LOC("Process RSS"));
         DrawTimeline("##RSSPlot", HistRSS, ImVec4(0.40f, 0.80f, 0.55f, 1.0f), 160.0f);
         ImGui::EndChild();
     }
@@ -458,17 +458,17 @@ namespace Lumina
 
     void FMemoryProfilerEditorTool::DrawGPUHeaps()
     {
-        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "Device heaps");
+        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LOC("Device heaps"));
         ImGui::Spacing();
 
         const ImGuiTableFlags Flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg;
         if (ImGui::BeginTable("##Heaps", 5, Flags))
         {
-            ImGui::TableSetupColumn("Heap",   ImGuiTableColumnFlags_WidthFixed, 150);
-            ImGui::TableSetupColumn("Usage",  ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Used",   ImGuiTableColumnFlags_WidthFixed, 100);
-            ImGui::TableSetupColumn("Budget", ImGuiTableColumnFlags_WidthFixed, 100);
-            ImGui::TableSetupColumn("Allocs", ImGuiTableColumnFlags_WidthFixed, 80);
+            ImGui::TableSetupColumn(LOC_ID("Heap"),   ImGuiTableColumnFlags_WidthFixed, 150);
+            ImGui::TableSetupColumn(LOC_ID("Usage"),  ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(LOC_ID("Used"),   ImGuiTableColumnFlags_WidthFixed, 100);
+            ImGui::TableSetupColumn(LOC_ID("Budget"), ImGuiTableColumnFlags_WidthFixed, 100);
+            ImGui::TableSetupColumn(LOC_ID("Allocs"), ImGuiTableColumnFlags_WidthFixed, 80);
             ImGui::TableHeadersRow();
 
             for (const RHI::FGPUMemoryHeapStats& Heap : GPUStats.Heaps)
@@ -478,15 +478,15 @@ namespace Lumina
                 ImGui::TableSetColumnIndex(0);
                 ImGui::Text("%s %u", Heap.bDeviceLocal ? LE_ICON_EXPANSION_CARD : LE_ICON_MEMORY, Heap.HeapIndex);
                 ImGui::SameLine();
-                const char* Kind = Heap.bReBAR ? "Device (ReBAR)"
-                                 : Heap.bDeviceLocal ? (Heap.bHostVisible ? "Device (BAR)" : "Device")
-                                 : "Host";
+                const char* Kind = Heap.bReBAR ? LOC("Device (ReBAR)")
+                                 : Heap.bDeviceLocal ? (Heap.bHostVisible ? LOC("Device (BAR)") : LOC("Device"))
+                                 : LOC("Host");
                 if (Heap.bReBAR)
                 {
                     ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), "%s", Kind);
                     if (ImGui::IsItemHovered())
                     {
-                        ImGui::SetTooltip("CPU-writable VRAM.");
+                        ImGui::SetTooltip(LOC("CPU-writable VRAM."));
                     }
                 }
                 else
@@ -514,7 +514,7 @@ namespace Lumina
             ImGui::EndTable();
         }
 
-        ImGui::TextDisabled("Allocator: %s in %u allocations across %u blocks.",
+        ImGui::TextDisabled(LOC("Allocator: %s in %u allocations across %u blocks."),
             ImGuiX::FormatSize((size_t)GPUStats.TotalAllocated).c_str(),
             GPUStats.TotalAllocations, GPUStats.TotalBlocks);
     }
@@ -571,23 +571,23 @@ namespace Lumina
     {
         const uint64 Attributed = GPUTextureBytes + GPUBufferBytes;
 
-        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "Memory by purpose  " LE_ICON_INFORMATION);
-        ImGuiX::TextTooltip("Every live buffer and texture the RHI owns, grouped by the name its creating "
+        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "%s" LE_ICON_INFORMATION, LOC("Memory by purpose  "));
+        ImGuiX::TextTooltip(LOCF("Every live buffer and texture the RHI owns, grouped by the name its creating "
                             "site gave it (the part before the first dot). The heap totals above are device "
                             "truth and stay larger: they also carry the driver's own allocations, descriptor "
                             "pools, swapchain images and allocator fragmentation, none of which the engine owns.\n\n"
-                            "Editor only -- game builds keep neither the names nor the texture ledger.");
+                            "Editor only -- game builds keep neither the names nor the texture ledger."));
         ImGui::Spacing();
 
         ImGui::TextColored(ImVec4(0.55f, 0.80f, 0.95f, 1.0f), "%s", ImGuiX::FormatSize(GPUTextureBytes).c_str());
         ImGui::SameLine();
-        ImGui::TextDisabled("textures");
+        ImGui::TextDisabled(LOC("textures"));
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.55f, 1.0f), "  %s", ImGuiX::FormatSize(GPUBufferBytes).c_str());
         ImGui::SameLine();
-        ImGui::TextDisabled("buffers");
+        ImGui::TextDisabled(LOC("buffers"));
         ImGui::SameLine();
-        ImGui::TextDisabled("  =  %s attributed of %s the allocator holds",
+        ImGui::TextDisabled(LOC("  =  %s attributed of %s the allocator holds"),
             ImGuiX::FormatSize(Attributed).c_str(),
             ImGuiX::FormatSize((size_t)GPUStats.TotalAllocated).c_str());
 
@@ -599,11 +599,11 @@ namespace Lumina
         if (ImGui::BeginTable("##GPUPurpose", 5, Flags, ImVec2(0, 220)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("Purpose",  ImGuiTableColumnFlags_WidthFixed, 180);
-            ImGui::TableSetupColumn("Share",    ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Total",    ImGuiTableColumnFlags_WidthFixed, 100);
-            ImGui::TableSetupColumn("Textures", ImGuiTableColumnFlags_WidthFixed, 140);
-            ImGui::TableSetupColumn("Buffers",  ImGuiTableColumnFlags_WidthFixed, 140);
+            ImGui::TableSetupColumn(LOC_ID("Purpose"),  ImGuiTableColumnFlags_WidthFixed, 180);
+            ImGui::TableSetupColumn(LOC_ID("Share"),    ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(LOC_ID("Total"),    ImGuiTableColumnFlags_WidthFixed, 100);
+            ImGui::TableSetupColumn(LOC_ID("Textures"), ImGuiTableColumnFlags_WidthFixed, 140);
+            ImGui::TableSetupColumn(LOC_ID("Buffers"),  ImGuiTableColumnFlags_WidthFixed, 140);
             ImGui::TableHeadersRow();
 
             const uint64 Largest = GPUPurposes.empty() ? 0 : GPUPurposes.front().Total();
@@ -657,17 +657,17 @@ namespace Lumina
 
     void FMemoryProfilerEditorTool::DrawGPUAllocations()
     {
-        if (!ImGui::CollapsingHeader(LE_ICON_LIST_BOX " Allocations", ImGuiTreeNodeFlags_DefaultOpen))
+        if (!ImGui::CollapsingHeader(LOC_ICON_ID(LE_ICON_LIST_BOX, "Allocations"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             return;
         }
 
         ImGui::SetNextItemWidth(240);
-        ImGui::InputTextWithHint("##GPUFilter", LE_ICON_MAGNIFY " Filter by name", GPUFilter, sizeof(GPUFilter));
+        ImGui::InputTextWithHint("##GPUFilter", LOC_ICON(LE_ICON_MAGNIFY, "Filter by name"), GPUFilter, sizeof(GPUFilter));
         ImGui::SameLine();
-        ImGui::Checkbox("Textures", &bShowTextures);
+        ImGui::Checkbox(LOC("Textures"), &bShowTextures);
         ImGui::SameLine();
-        ImGui::Checkbox("Buffers", &bShowBuffers);
+        ImGui::Checkbox(LOC("Buffers"), &bShowBuffers);
 
         // The body runs through a clipper, so re-testing per visible row makes scrolling position-dependent.
         TVector<const RHI::FGPUAllocationInfo*> Visible;
@@ -711,7 +711,7 @@ namespace Lumina
             VisibleBytes += Alloc->Size;
         }
 
-        ImGui::TextDisabled("%zu allocations, %s", Visible.size(), ImGuiX::FormatSize(VisibleBytes).c_str());
+        ImGui::TextDisabled(LOC("%zu allocations, %s"), Visible.size(), ImGuiX::FormatSize(VisibleBytes).c_str());
 
         const ImGuiTableFlags Flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg
                                     | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY;
@@ -719,10 +719,10 @@ namespace Lumina
         if (ImGui::BeginTable("##GPUAllocations", 4, Flags, ImVec2(0, ImGui::GetContentRegionAvail().y)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("Name",  ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Kind",  ImGuiTableColumnFlags_WidthFixed, 70);
-            ImGui::TableSetupColumn("Size",  ImGuiTableColumnFlags_WidthFixed, 100);
-            ImGui::TableSetupColumn("Detail", ImGuiTableColumnFlags_WidthFixed, 280);
+            ImGui::TableSetupColumn(LOC_ID("Name"),  ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(LOC_ID("Kind"),  ImGuiTableColumnFlags_WidthFixed, 70);
+            ImGui::TableSetupColumn(LOC_ID("Size"),  ImGuiTableColumnFlags_WidthFixed, 100);
+            ImGui::TableSetupColumn(LOC_ID("Detail"), ImGuiTableColumnFlags_WidthFixed, 280);
             ImGui::TableHeadersRow();
 
             ImGuiListClipper Clipper;
@@ -743,20 +743,20 @@ namespace Lumina
                     }
                     else
                     {
-                        ImGui::TextDisabled("<unnamed>");
-                        ImGuiX::TextTooltip("Nothing called RHI::SetDebugName on this allocation, so it "
+                        ImGui::TextDisabled(LOC("<unnamed>"));
+                        ImGuiX::TextTooltip(LOCF("Nothing called RHI::SetDebugName on this allocation, so it "
                                             "cannot be attributed to a subsystem here or to a faulting "
-                                            "address in a device-lost report.");
+                                            "address in a device-lost report."));
                     }
 
                     ImGui::TableSetColumnIndex(1);
                     if (bTexture)
                     {
-                        ImGui::TextColored(ImVec4(0.55f, 0.80f, 0.95f, 1.0f), "Texture");
+                        ImGui::TextColored(ImVec4(0.55f, 0.80f, 0.95f, 1.0f), LOC("Texture"));
                     }
                     else
                     {
-                        ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.55f, 1.0f), "Buffer");
+                        ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.55f, 1.0f), LOC("Buffer"));
                     }
 
                     ImGui::TableSetColumnIndex(2);
@@ -778,7 +778,7 @@ namespace Lumina
         {
             ImGui::TextDisabled(LE_ICON_CHIP " %s   %s   %s",
                 DeviceInfo.Name.c_str(), DeviceInfo.APIName.c_str(),
-                DeviceInfo.bDiscrete ? "Discrete" : "Integrated");
+                DeviceInfo.bDiscrete ? LOC("Discrete") : LOC("Integrated"));
         }
         ImGui::Spacing();
 
@@ -816,10 +816,10 @@ namespace Lumina
         const size_t External = (Process > Mapped) ? (Process - Mapped) : 0;
 
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "Composition  " LE_ICON_INFORMATION);
-        ImGuiX::TextTooltip("Where Process RSS lives. If 'retained' climbs, it's allocation churn -- rpmalloc "
+        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "%s" LE_ICON_INFORMATION, LOC("Composition  "));
+        ImGuiX::TextTooltip(LOCF("Where Process RSS lives. If 'retained' climbs, it's allocation churn -- rpmalloc "
                             "holding freed/fragmented spans (rank Top Call Sites by Total Allocs to find it). "
-                            "If 'external' climbs, it's outside rpmalloc: GPU driver host memory or the CRT allocator.");
+                            "If 'external' climbs, it's outside rpmalloc: GPU driver host memory or the CRT allocator."));
         ImGui::Spacing();
 
         auto Row = [](const char* Label, size_t Bytes, const ImVec4& Color, const char* Note)
@@ -834,17 +834,17 @@ namespace Lumina
             }
         };
 
-        Row("Process RSS", Process, ImVec4(0.85f, 0.92f, 1.0f, 1.0f), "total resident");
-        Row("rpmalloc mapped", Mapped, ImVec4(0.66f, 0.78f, 0.95f, 1.0f), "allocator's OS footprint");
-        Row("tracked live", Tracked, ImVec4(0.40f, 1.0f, 0.60f, 1.0f), "category ledger");
-        Row("retained", Retained, ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "caches + fragmentation (freed, not returned)");
-        Row("of which cached", Cached, ImVec4(0.70f, 0.62f, 0.42f, 1.0f), "rpmalloc global span cache");
-        Row("external", External, ImVec4(0.90f, 0.55f, 0.55f, 1.0f), "driver / CRT / code+stacks");
+        Row(LOC("Process RSS"), Process, ImVec4(0.85f, 0.92f, 1.0f, 1.0f), LOC("total resident"));
+        Row(LOC("rpmalloc mapped"), Mapped, ImVec4(0.66f, 0.78f, 0.95f, 1.0f), LOC("allocator's OS footprint"));
+        Row(LOC("tracked live"), Tracked, ImVec4(0.40f, 1.0f, 0.60f, 1.0f), LOC("category ledger"));
+        Row(LOC("retained"), Retained, ImVec4(0.85f, 0.72f, 0.45f, 1.0f), LOC("caches + fragmentation (freed, not returned)"));
+        Row(LOC("of which cached"), Cached, ImVec4(0.70f, 0.62f, 0.42f, 1.0f), LOC("rpmalloc global span cache"));
+        Row(LOC("external"), External, ImVec4(0.90f, 0.55f, 0.55f, 1.0f), LOC("driver / CRT / code+stacks"));
 
         if (Mapped == 0)
         {
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
-                LE_ICON_ALERT " rpmalloc statistics are zero -- build with ENABLE_STATISTICS (Debug/Development).");
+                LOC_ICON(LE_ICON_ALERT, "rpmalloc statistics are zero -- build with ENABLE_STATISTICS (Debug/Development)."));
         }
 
         ImGui::Spacing();
@@ -852,14 +852,14 @@ namespace Lumina
         const float HalfW = (ImGui::GetContentRegionAvail().x - Spacing) * 0.5f;
 
         ImGui::BeginChild("##MappedTL", ImVec2(HalfW, 150), false);
-        ImGui::TextColored(ImVec4(0.66f, 0.78f, 0.95f, 1.0f), "rpmalloc mapped (retained churn)");
+        ImGui::TextColored(ImVec4(0.66f, 0.78f, 0.95f, 1.0f), LOC("rpmalloc mapped (retained churn)"));
         DrawTimeline("##MappedPlot", HistMapped, ImVec4(0.66f, 0.78f, 0.95f, 1.0f), 110.0f);
         ImGui::EndChild();
 
         ImGui::SameLine();
 
         ImGui::BeginChild("##ExternalTL", ImVec2(0, 150), false);
-        ImGui::TextColored(ImVec4(0.90f, 0.55f, 0.55f, 1.0f), "external (driver / CRT)");
+        ImGui::TextColored(ImVec4(0.90f, 0.55f, 0.55f, 1.0f), LOC("external (driver / CRT)"));
         DrawTimeline("##ExternalPlot", HistExternal, ImVec4(0.90f, 0.55f, 0.55f, 1.0f), 110.0f);
         ImGui::EndChild();
 
@@ -880,34 +880,34 @@ namespace Lumina
     void FMemoryProfilerEditorTool::DrawAddressSpace()
     {
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "Address Space  " LE_ICON_INFORMATION);
-        ImGuiX::TextTooltip("Asks the OS what's actually mapped, so it covers memory the category "
+        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "%s" LE_ICON_INFORMATION, LOC("Address Space  "));
+        ImGuiX::TextTooltip(LOCF("Asks the OS what's actually mapped, so it covers memory the category "
                             "tracker structurally cannot see. 'NT / CRT heap' is the bucket for every "
-                            "DLL that doesn't route through Memory::Malloc.");
+                            "DLL that doesn't route through Memory::Malloc."));
         ImGui::Spacing();
 
-        if (ImGui::Button(LE_ICON_MAGNIFY " Scan"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_MAGNIFY, "Scan")))
         {
             RunAddressSpaceScan();
         }
 
         ImGui::SameLine();
-        ImGui::Checkbox("Include heap walk", &bScanHeaps);
-        ImGuiX::TextTooltip("Walks every NT heap to size the CRT bucket. Takes a process-wide heap "
+        ImGui::Checkbox(LOC("Include heap walk"), &bScanHeaps);
+        ImGuiX::TextTooltip(LOCF("Walks every NT heap to size the CRT bucket. Takes a process-wide heap "
                             "lock and is O(live blocks), so a multi-GB heap can stall the process "
-                            "for seconds. Untick for a fast scan of the page tables only.");
+                            "for seconds. Untick for a fast scan of the page tables only."));
 
         if (!bAddressSpaceValid)
         {
             ImGui::Spacing();
-            ImGui::TextDisabled("Not scanned yet.");
+            ImGui::TextDisabled(LOC("Not scanned yet."));
             ImGui::Spacing();
             ImGui::Separator();
             return;
         }
 
         ImGui::SameLine();
-        ImGui::TextDisabled("| %u regions, %.1f ms, %.0fs ago",
+        ImGui::TextDisabled(LOC("| %u regions, %.1f ms, %.0fs ago"),
             AddressSpace.RegionCount, LastScanCostMs, PlatformTime::Seconds() - LastScanTime);
 
         auto Row = [](const char* Label, uint64 Bytes, const ImVec4& Color, const char* Note)
@@ -923,11 +923,11 @@ namespace Lumina
         };
 
         ImGui::Spacing();
-        ImGui::TextDisabled("Committed");
-        Row("private", AddressSpace.PrivateCommitted, ImVec4(0.85f, 0.92f, 1.0f, 1.0f), "this process only");
-        Row("image", AddressSpace.ImageCommitted, ImVec4(0.62f, 0.68f, 0.78f, 1.0f), "code + data of loaded modules");
-        Row("mapped", AddressSpace.MappedCommitted, ImVec4(0.62f, 0.68f, 0.78f, 1.0f), "file mappings and shared sections");
-        Row("reserved", AddressSpace.Reserved, ImVec4(0.55f, 0.58f, 0.62f, 1.0f), "address space only, costs no RAM");
+        ImGui::TextDisabled(LOC("Committed"));
+        Row(LOC("private"), AddressSpace.PrivateCommitted, ImVec4(0.85f, 0.92f, 1.0f, 1.0f), LOC("this process only"));
+        Row(LOC("image"), AddressSpace.ImageCommitted, ImVec4(0.62f, 0.68f, 0.78f, 1.0f), LOC("code + data of loaded modules"));
+        Row(LOC("mapped"), AddressSpace.MappedCommitted, ImVec4(0.62f, 0.68f, 0.78f, 1.0f), LOC("file mappings and shared sections"));
+        Row(LOC("reserved"), AddressSpace.Reserved, ImVec4(0.55f, 0.58f, 0.62f, 1.0f), LOC("address space only, costs no RAM"));
 
         // Whichever is largest tells you which trace to run, see BuildScripts/MemoryTrace.ps1.
         const uint64 Rpmalloc = Memory::GetCurrentMappedMemory();
@@ -937,27 +937,27 @@ namespace Lumina
                                   ? AddressSpace.PrivateCommitted - Accounted : 0;
 
         ImGui::Spacing();
-        ImGui::TextDisabled("Private commit, by owner");
-        Row("rpmalloc", Rpmalloc, ImVec4(0.66f, 0.78f, 0.95f, 1.0f), "engine allocator (the category table below)");
+        ImGui::TextDisabled(LOC("Private commit, by owner"));
+        Row("rpmalloc", Rpmalloc, ImVec4(0.66f, 0.78f, 0.95f, 1.0f), LOC("engine allocator (the category table below)"));
 
         if (AddressSpace.bHeapWalkValid)
         {
-            Row("NT / CRT heap", Heap, ImVec4(0.95f, 0.65f, 0.35f, 1.0f), "foreign DLLs: Slang, GPU driver, basisu, ucrtbase");
-            ImGui::TextDisabled("%14s of that live, %s block overhead",
+            Row(LOC("NT / CRT heap"), Heap, ImVec4(0.95f, 0.65f, 0.35f, 1.0f), LOC("foreign DLLs: Slang, GPU driver, basisu, ucrtbase"));
+            ImGui::TextDisabled(LOC("%14s of that live, %s block overhead"),
                 ImGuiX::FormatSize((size_t)AddressSpace.HeapAllocated).c_str(),
                 ImGuiX::FormatSize((size_t)AddressSpace.HeapOverhead).c_str());
         }
         else if (bScanHeaps)
         {
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
-                LE_ICON_ALERT " Heap walk failed (a heap refused to lock); CRT bytes are folded into unattributed.");
+                LOC_ICON(LE_ICON_ALERT, "Heap walk failed (a heap refused to lock); CRT bytes are folded into unattributed."));
         }
         else
         {
-            ImGui::TextDisabled("%14s NT / CRT heap - not measured (heap walk off)", "?");
+            ImGui::TextDisabled(LOC("%14s NT / CRT heap - not measured (heap walk off)"), "?");
         }
 
-        Row("unattributed", Unattributed, ImVec4(0.90f, 0.55f, 0.55f, 1.0f), "raw VirtualAlloc: GPU driver, thread + fiber stacks");
+        Row(LOC("unattributed"), Unattributed, ImVec4(0.90f, 0.55f, 0.55f, 1.0f), LOC("raw VirtualAlloc: GPU driver, thread + fiber stacks"));
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -971,7 +971,7 @@ namespace Lumina
 #if !LUMINA_MEMORY_TRACKING
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
-            LE_ICON_ALERT " CPU category tracking is compiled out in Shipping builds.");
+            LOC_ICON(LE_ICON_ALERT, "CPU category tracking is compiled out in Shipping builds."));
 #else
         DrawControls();
         ImGui::Separator();
@@ -991,7 +991,7 @@ namespace Lumina
         {
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
-                LE_ICON_ALERT " Enable 'Capture call stacks' to see what allocates inside '%s'.",
+                LOC_ICON(LE_ICON_ALERT, "Enable 'Capture call stacks' to see what allocates inside '%s'."),
                 CallSiteCategory.c_str());
         }
 #endif
@@ -1001,49 +1001,49 @@ namespace Lumina
 
     void FMemoryProfilerEditorTool::DrawControls()
     {
-        if (ImGui::Button(LE_ICON_FLAG " Set Baseline"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_FLAG, "Set Baseline")))
         {
             Baseline = Categories;
             bHasBaseline = true;
         }
-        ImGuiX::TextTooltip("Snapshot current live bytes per category. The Delta column then shows "
-                            "growth since this moment -- the anchor for leak hunting.");
+        ImGuiX::TextTooltip(LOCF("Snapshot current live bytes per category. The Delta column then shows "
+                            "growth since this moment -- the anchor for leak hunting."));
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_FLAG_OUTLINE " Clear Baseline"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_FLAG_OUTLINE, "Clear Baseline")))
         {
             bHasBaseline = false;
         }
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_REFRESH " Reset"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_REFRESH, "Reset")))
         {
             Memory::ResetTracking();
             Baseline.clear();
             bHasBaseline = false;
         }
-        ImGuiX::TextTooltip("Zero all counters and start a fresh capture.");
+        ImGuiX::TextTooltip(LOCF("Zero all counters and start a fresh capture."));
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_MAGNIFY " Analyze Ledger"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_MAGNIFY, "Analyze Ledger")))
         {
             CopyLedgerAnalysisToClipboard();
         }
-        ImGuiX::TextTooltip("Walk every live allocation in the selected category (all categories if none "
+        ImGuiX::TextTooltip(LOCF("Walk every live allocation in the selected category (all categories if none "
                             "is selected) and copy a size histogram plus the largest blocks. Reads the "
-                            "allocation ledger directly, so it works even where no call stack was captured.");
+                            "allocation ledger directly, so it works even where no call stack was captured."));
 
         ImGui::SameLine();
         ImGui::Dummy(ImVec2(16, 0));
         ImGui::SameLine();
 
         bool bCapture = Memory::IsCapturingCallstacks();
-        if (ImGui::Checkbox("Capture call stacks", &bCapture))
+        if (ImGui::Checkbox(LOC("Capture call stacks"), &bCapture))
         {
             Memory::SetCaptureCallstacks(bCapture);
         }
-        ImGuiX::TextTooltip("Record the stack of every allocation so Top Call Sites can name the "
-                            "exact leaking line. Heavier -- turn on once a category is confirmed leaking.");
+        ImGuiX::TextTooltip(LOCF("Record the stack of every allocation so Top Call Sites can name the "
+                            "exact leaking line. Heavier -- turn on once a category is confirmed leaking."));
     }
 
     void FMemoryProfilerEditorTool::CopyLedgerAnalysisToClipboard()
@@ -1165,16 +1165,16 @@ namespace Lumina
         if (bHasBaseline && !Rows.empty() && Rows[0].DeltaBytes > 0)
         {
             ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
-                LE_ICON_ALERT " Growing fastest: %s  (+%s)",
+                LOC_ICON(LE_ICON_ALERT, "Growing fastest: %s  (+%s)"),
                 Rows[0].S->Name, ImGuiX::FormatSize((size_t)Rows[0].DeltaBytes).c_str());
         }
         else if (!bHasBaseline)
         {
-            ImGui::TextDisabled(LE_ICON_INFORMATION " Set a baseline, then watch the Delta column.");
+            ImGui::TextDisabled(LOC_ICON(LE_ICON_INFORMATION, "Set a baseline, then watch the Delta column."));
         }
         else
         {
-            ImGui::TextDisabled(LE_ICON_INFORMATION " No category has grown since the baseline.");
+            ImGui::TextDisabled(LOC_ICON(LE_ICON_INFORMATION, "No category has grown since the baseline."));
         }
         ImGui::Spacing();
 
@@ -1184,12 +1184,12 @@ namespace Lumina
         if (ImGui::BeginTable("Categories", 6, Flags, ImVec2(0, Height)))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("Category",   ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Live",       ImGuiTableColumnFlags_WidthFixed, 110);
-            ImGui::TableSetupColumn("Allocs",     ImGuiTableColumnFlags_WidthFixed, 80);
-            ImGui::TableSetupColumn("Delta",      ImGuiTableColumnFlags_WidthFixed, 120);
-            ImGui::TableSetupColumn("Peak",       ImGuiTableColumnFlags_WidthFixed, 110);
-            ImGui::TableSetupColumn("Alloc/Free", ImGuiTableColumnFlags_WidthFixed, 150);
+            ImGui::TableSetupColumn(LOC_ID("Category"),   ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(LOC_ID("Live"),       ImGuiTableColumnFlags_WidthFixed, 110);
+            ImGui::TableSetupColumn(LOC_ID("Allocs"),     ImGuiTableColumnFlags_WidthFixed, 80);
+            ImGui::TableSetupColumn(LOC_ID("Delta"),      ImGuiTableColumnFlags_WidthFixed, 120);
+            ImGui::TableSetupColumn(LOC_ID("Peak"),       ImGuiTableColumnFlags_WidthFixed, 110);
+            ImGui::TableSetupColumn(LOC_ID("Alloc/Free"), ImGuiTableColumnFlags_WidthFixed, 150);
             ImGui::TableHeadersRow();
 
             for (const FCategoryRow& Row : Rows)
@@ -1204,7 +1204,7 @@ namespace Lumina
                 {
                     CallSiteCategory = bSelected ? FString() : FString(Name);
                 }
-                ImGuiX::TextTooltip("Select to rank Top Call Sites within this category only.");
+                ImGuiX::TextTooltip(LOCF("Select to rank Top Call Sites within this category only."));
 
                 ImGui::TableSetColumnIndex(1);
                 ImGui::TextUnformatted(ImGuiX::FormatSize(S.LiveBytes).c_str());
@@ -1280,17 +1280,17 @@ namespace Lumina
 
     void FMemoryProfilerEditorTool::DrawCallSites()
     {
-        if (!ImGui::CollapsingHeader(LE_ICON_LIST_BOX " Top Call Sites", ImGuiTreeNodeFlags_DefaultOpen))
+        if (!ImGui::CollapsingHeader(LOC_ICON_ID(LE_ICON_LIST_BOX, "Top Call Sites"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             return;
         }
 
         // Live bytes finds leaks while total allocations finds transient churn, which are different sites.
-        ImGui::TextUnformatted("Rank by:");
+        ImGui::TextUnformatted(LOC("Rank by:"));
         ImGui::SameLine();
-        if (ImGui::RadioButton("Live bytes", !bSortCallSitesByAllocs)) { bSortCallSitesByAllocs = false; }
+        if (ImGui::RadioButton(LOC("Live bytes"), !bSortCallSitesByAllocs)) { bSortCallSitesByAllocs = false; }
         ImGui::SameLine();
-        if (ImGui::RadioButton("Total allocs (churn)", bSortCallSitesByAllocs)) { bSortCallSitesByAllocs = true; }
+        if (ImGui::RadioButton(LOC("Total allocs (churn)"), bSortCallSitesByAllocs)) { bSortCallSitesByAllocs = true; }
 
         const Memory::ECallSiteSort Sort = bSortCallSitesByAllocs
             ? Memory::ECallSiteSort::TotalAllocs : Memory::ECallSiteSort::LiveBytes;
@@ -1300,7 +1300,7 @@ namespace Lumina
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.98f, 0.78f, 0.35f, 1.0f), LE_ICON_FILTER " %s", CallSiteCategory.c_str());
             ImGui::SameLine();
-            if (ImGui::SmallButton("Clear filter"))
+            if (ImGui::SmallButton(LOC("Clear filter")))
             {
                 CallSiteCategory.clear();
             }
@@ -1315,11 +1315,11 @@ namespace Lumina
         {
             if (CallSiteCategory.empty())
             {
-                ImGui::TextDisabled("No call sites captured yet -- give it a few frames.");
+                ImGui::TextDisabled(LOC("No call sites captured yet -- give it a few frames."));
             }
             else
             {
-                ImGui::TextDisabled("Nothing captured for '%s' yet -- its allocations predate the capture.",
+                ImGui::TextDisabled(LOC("Nothing captured for '%s' yet -- its allocations predate the capture."),
                     CallSiteCategory.c_str());
             }
             return;
@@ -1328,7 +1328,7 @@ namespace Lumina
         char SymBuf[512];
 
         ImGui::SameLine();
-        if (ImGui::SmallButton(LE_ICON_CONTENT_COPY " Copy all"))
+        if (ImGui::SmallButton(LOC_ICON(LE_ICON_CONTENT_COPY, "Copy all")))
         {
             FString Report;
             char Line[640];
@@ -1363,13 +1363,13 @@ namespace Lumina
             ImGui::SetClipboardText(Report.c_str());
         }
         ImGui::SameLine();
-        ImGui::Checkbox("Trim boilerplate", &bHideNoiseFrames);
+        ImGui::Checkbox(LOC("Trim boilerplate"), &bHideNoiseFrames);
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Hide the CRT/thread-entry frames every stack ends in.");
+            ImGui::SetTooltip(LOC("Hide the CRT/thread-entry frames every stack ends in."));
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("(%u sites)", NumSites);
+        ImGui::TextDisabled(LOC("(%u sites)"), NumSites);
 
         const ImGuiTableFlags Flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg
                                     | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY
@@ -1381,11 +1381,11 @@ namespace Lumina
         }
 
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Call site", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Live",      ImGuiTableColumnFlags_WidthFixed, 90.0f);
-        ImGui::TableSetupColumn("Count",     ImGuiTableColumnFlags_WidthFixed, 70.0f);
-        ImGui::TableSetupColumn("Allocs",    ImGuiTableColumnFlags_WidthFixed, 90.0f);
-        ImGui::TableSetupColumn("Category",  ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn(LOC_ID("Call site"), ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(LOC_ID("Live"),      ImGuiTableColumnFlags_WidthFixed, 90.0f);
+        ImGui::TableSetupColumn(LOC_ID("Count"),     ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn(LOC_ID("Allocs"),    ImGuiTableColumnFlags_WidthFixed, 90.0f);
+        ImGui::TableSetupColumn(LOC_ID("Category"),  ImGuiTableColumnFlags_WidthFixed, 110.0f);
         ImGui::TableHeadersRow();
 
         // The ranking metric is what the eye should land on first; the other column stays plain.
@@ -1421,7 +1421,7 @@ namespace Lumina
             ImGui::PushID((int)i);
 
             ImGui::TableSetColumnIndex(0);
-            const char* RowLabel = Site.FrameCount > 0 ? Headline->RowLabel.c_str() : "(no frames)";
+            const char* RowLabel = Site.FrameCount > 0 ? Headline->RowLabel.c_str() : LOC("(no frames)");
 
             const bool bOpen = ImGui::TreeNodeEx("##site", ImGuiTreeNodeFlags_SpanAllColumns
                 | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick,
@@ -1451,7 +1451,7 @@ namespace Lumina
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
 
-                if (ImGui::SmallButton(LE_ICON_CONTENT_COPY " Copy stack"))
+                if (ImGui::SmallButton(LOC_ICON(LE_ICON_CONTENT_COPY, "Copy stack")))
                 {
                     char Clip[8192];
                     int Off = std::snprintf(Clip, sizeof(Clip), "live %s (%llu live, %llu total allocs) [%s]\n",

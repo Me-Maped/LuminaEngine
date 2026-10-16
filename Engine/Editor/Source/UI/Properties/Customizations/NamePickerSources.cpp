@@ -1,4 +1,5 @@
 ﻿#include "EditorPCH.h"
+#include "Localization/Localization.h"
 #include "InputActionCustomization.h"
 #include "UI/Properties/NamePicker.h"
 #include "UI/Properties/PropertyEditContexts.h"
@@ -62,13 +63,13 @@ namespace Lumina
             {
                 Preview = LE_ICON_ALERT_CIRCLE_OUTLINE "  ";
             }
-            Preview += Current.IsNone() ? "None" : Current.c_str();
+            Preview += Current.IsNone() ? LOC("None") : Current.c_str();
             return Preview;
         }
 
         bool DrawNoneRow(const FName& Current, FNamePickerResult& OutResult)
         {
-            if (ImGui::Selectable("None", Current.IsNone()))
+            if (ImGui::Selectable(LOC("None"), Current.IsNone()))
             {
                 OutResult = { true, FName() };
                 ImGui::CloseCurrentPopup();
@@ -101,7 +102,7 @@ namespace Lumina
                 Args.State->Tree.Draw(TreeContext);
                 if (Args.State->LastBuiltCount == 0)
                 {
-                    ImGui::TextDisabled("No matching bones.");
+                    ImGui::TextDisabled(LOC("No matching bones."));
                 }
             }
             ImGui::EndChild();
@@ -180,7 +181,7 @@ namespace Lumina
                     }
                     else if (Skeleton == nullptr)
                     {
-                        ImGui::TextDisabled("This editor does not provide a skeleton.");
+                        ImGui::TextDisabled(LOC("This editor does not provide a skeleton."));
                     }
 
                     ImGui::EndCombo();
@@ -188,11 +189,11 @@ namespace Lumina
 
                 if (Skeleton == nullptr)
                 {
-                    ImGuiX::TextTooltip_Internal("This editor does not provide a skeleton to pick bones from");
+                    ImGuiX::TextTooltip_Internal(LOC("This editor does not provide a skeleton to pick bones from"));
                 }
                 else if (bStale)
                 {
-                    ImGuiX::TextTooltip_Internal("No bone of this name on the skeleton");
+                    ImGuiX::TextTooltip_Internal(LOC("No bone of this name on the skeleton"));
                 }
 
                 return Result;
@@ -238,7 +239,7 @@ namespace Lumina
 
                     if (Sockets != nullptr && !Sockets->Sockets.empty())
                     {
-                        ImGui::SeparatorText("Sockets");
+                        ImGui::SeparatorText(LOC("Sockets"));
                         for (const FName& Socket : Sockets->Sockets)
                         {
                             if (Socket.IsNone() || !ImGuiX::PassSearchFilter(Args.State->Filter, Socket.c_str()))
@@ -255,7 +256,7 @@ namespace Lumina
 
                     if (Sockets != nullptr && Sockets->Skeleton != nullptr)
                     {
-                        ImGui::SeparatorText("Bones");
+                        ImGui::SeparatorText(LOC("Bones"));
                         const FNamePickerResult FromTree = DrawBoneTree(Args, *Sockets->Skeleton);
                         if (FromTree.bChanged)
                         {
@@ -265,7 +266,7 @@ namespace Lumina
 
                     if (!bHasAny)
                     {
-                        ImGui::TextDisabled("The attach target has no sockets.");
+                        ImGui::TextDisabled(LOC("The attach target has no sockets."));
                     }
 
                     ImGui::EndCombo();
@@ -273,11 +274,11 @@ namespace Lumina
 
                 if (!bHasAny)
                 {
-                    ImGuiX::TextTooltip_Internal("Nothing here provides sockets, so this attaches at the origin");
+                    ImGuiX::TextTooltip_Internal(LOC("Nothing here provides sockets, so this attaches at the origin"));
                 }
                 else if (bStale)
                 {
-                    ImGuiX::TextTooltip_Internal("No socket or bone of this name on the attach target");
+                    ImGuiX::TextTooltip_Internal(LOC("No socket or bone of this name on the attach target"));
                 }
 
                 return Result;
@@ -335,18 +336,18 @@ namespace Lumina
 
             const char* GetItemIcon() const override { return bObjectValued ? LE_ICON_CUBE_OUTLINE : LE_ICON_VARIABLE; }
 
-            const char* GetStaleHint() const override { return "Not declared on this graph's parameter struct"; }
+            const char* GetStaleHint() const override { return LOC("Not declared on this graph's parameter struct"); }
 
             const char* GetUnavailableHint(const FPropertyEditContext& Context) const override
             {
                 const FAnimGraphEditContext* Anim = Context.Get<FAnimGraphEditContext>();
                 if (Anim == nullptr || Anim->Graph == nullptr)
                 {
-                    return "This editor does not provide a graph to pick parameters from";
+                    return LOC("This editor does not provide a graph to pick parameters from");
                 }
                 return (Anim->Graph->GetParameterStruct() == nullptr)
-                    ? "No parameter struct assigned; set one on the graph asset"
-                    : "The parameter struct declares no field of this type";
+                    ? LOC("No parameter struct assigned; set one on the graph asset")
+                    : LOC("The parameter struct declares no field of this type");
             }
 
         private:
@@ -374,12 +375,12 @@ namespace Lumina
 
             const char* GetStaleHint() const override
             {
-                return "Not authored on any clip this graph references; compile to publish it";
+                return LOC("Not authored on any clip this graph references; compile to publish it");
             }
 
             const char* GetUnavailableHint(const FPropertyEditContext&) const override
             {
-                return "No curves yet; author one on a clip, or type a name to create it";
+                return LOC("No curves yet; author one on a clip, or type a name to create it");
             }
         };
 
@@ -408,11 +409,11 @@ namespace Lumina
 
             const char* GetItemIcon() const override { return LE_ICON_CIRCLE_OUTLINE; }
 
-            const char* GetStaleHint() const override { return "No state of this name on this machine"; }
+            const char* GetStaleHint() const override { return LOC("No state of this name on this machine"); }
 
             const char* GetUnavailableHint(const FPropertyEditContext&) const override
             {
-                return "No named states on this machine; a state must be named before it can be aliased";
+                return LOC("No named states on this machine; a state must be named before it can be aliased");
             }
         };
 

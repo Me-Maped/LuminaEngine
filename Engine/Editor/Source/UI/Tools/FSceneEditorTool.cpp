@@ -332,7 +332,7 @@ namespace Lumina
     void FSceneEditorTool::DrawComponentSearchBar()
     {
         // Each table restores its own collapse state when its filter goes inactive.
-        ImGuiX::SearchBar("##DetailsSearch", DetailsFilter, LE_ICON_MAGNIFY " Search components and properties...");
+        ImGuiX::SearchBar("##DetailsSearch", DetailsFilter, LOC_ICON(LE_ICON_MAGNIFY, "Search components and properties..."));
 
         ImGui::Spacing();
     }
@@ -377,7 +377,7 @@ namespace Lumina
         if (bFiltering && VisibleCount == 0)
         {
             ImGui::Spacing();
-            ImGui::TextDisabled("   No components or properties match.");
+            ImGui::TextDisabled(LOC("   No components or properties match."));
         }
     }
 
@@ -491,7 +491,7 @@ namespace Lumina
         {
             ImGui::OpenPopup("ComponentOptions");
         }
-        ImGuiX::TextTooltip("{}", "Component options.");
+        ImGuiX::TextTooltip("{}", LOC("Component options."));
 
         if (!bIsRequired)
         {
@@ -504,7 +504,7 @@ namespace Lumina
                 ComponentDestroyRequests.push(FComponentDestroyRequest{ Entry.ReflectedType, Entity });
             }
             ImGui::PopStyleColor(3);
-            ImGuiX::TextTooltip("{}", "Remove this component.");
+            ImGuiX::TextTooltip("{}", LOC("Remove this component."));
         }
 
         if (ImGui::BeginPopup("ComponentOptions"))
@@ -524,14 +524,14 @@ namespace Lumina
                 bDetailsDirty = true;
             };
 
-            if (ImGui::MenuItem(LE_ICON_CONTENT_COPY " Copy Values", nullptr, false, Data != nullptr))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_COPY, "Copy Values"), nullptr, false, Data != nullptr))
             {
                 Clipboard.Type = Type;
                 CaptureComponentValues(Type, Data, Clipboard.Bytes);
             }
 
             const bool bCanPaste = Data != nullptr && Clipboard.Type == Type && !Clipboard.Bytes.empty();
-            if (ImGui::MenuItem(LE_ICON_CONTENT_PASTE " Paste Values", nullptr, false, bCanPaste))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_PASTE, "Paste Values"), nullptr, false, bCanPaste))
             {
                 ApplyTransacted("Paste Component Values", Clipboard.Bytes);
             }
@@ -540,7 +540,7 @@ namespace Lumina
             void* Defaults = Entry.Table != nullptr && Entry.Table->GetDefaultObject() != nullptr
                 ? Entry.Table->GetDefaultObject()
                 : Type->GetDefaultInstance();
-            if (ImGui::MenuItem(LE_ICON_RESTORE " Reset to Defaults", nullptr, false, Data != nullptr && Defaults != nullptr))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_RESTORE, "Reset to Defaults"), nullptr, false, Data != nullptr && Defaults != nullptr))
             {
                 TVector<uint8> DefaultValues;
                 CaptureComponentValues(Type, Defaults, DefaultValues);
@@ -549,7 +549,7 @@ namespace Lumina
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem(LE_ICON_CLOSE_CIRCLE " Remove Component", nullptr, false, !bIsRequired))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_CLOSE_CIRCLE, "Remove Component"), nullptr, false, !bIsRequired))
             {
                 ComponentDestroyRequests.push(FComponentDestroyRequest{ Entry.ReflectedType, Entity });
             }
@@ -671,7 +671,7 @@ namespace Lumina
         }
         else
         {
-            ImGuiX::Notifications::NotifyError("Failed to remove component: {0}", ComponentType->GetName().c_str());
+            ImGuiX::Notifications::NotifyError(LOCF("Failed to remove component: {0}"), ComponentType->GetName().c_str());
         }
     }
 
@@ -1139,7 +1139,7 @@ namespace Lumina
             Display.bShowSecondaryIcon = true;
             Display.SecondaryIconOn    = LE_ICON_SCRIPT_TEXT;
             Display.SecondaryIconOff   = LE_ICON_SCRIPT_TEXT_OUTLINE;
-            Display.SecondaryTooltip   = "Toggle this entity's script on/off (the entity stays active).";
+            Display.SecondaryTooltip   = LOC("Toggle this entity's script on/off (the entity stays active).");
         }
 
         OutlinerListView.EmplaceUserData<FEntityListViewItemData>(ItemEntity).Entity = Entity;
@@ -1193,18 +1193,18 @@ namespace Lumina
 
         if (bIsLockedPrefabChild)
         {
-            Display.TooltipSubtitle = FString("Prefab child #" + Format("{}", (Entity).Value) + ", hierarchy locked");
+            Display.TooltipSubtitle = Format(LOCF("Prefab child #{}, hierarchy locked"), (Entity).Value);
         }
         else if (bIsPrefabInstanceRoot)
         {
-            Display.TooltipSubtitle = FString("Prefab instance #" + Format("{}", (Entity).Value));
+            Display.TooltipSubtitle = Format(LOCF("Prefab instance #{}"), (Entity).Value);
         }
         else
         {
-            Display.TooltipSubtitle = FString("Entity #" + Format("{}", (Entity).Value));
+            Display.TooltipSubtitle = Format(LOCF("Entity #{}"), (Entity).Value);
         }
 
-        Display.TooltipChipHeader = "COMPONENTS";
+        Display.TooltipChipHeader = LOC("COMPONENTS");
         Display.TooltipChips.clear();
         ECS::Utils::ForEachComponent(Registry, Entity, [&](void*, const ECS::FSparseSet&, CStruct* StructType)
         {
@@ -1214,7 +1214,7 @@ namespace Lumina
         });
         if (Display.TooltipChips.empty())
         {
-            Display.TooltipChips.emplace_back("(none)");
+            Display.TooltipChips.emplace_back(LOC("(none)"));
         }
 
         Display.bTooltipBuilt = true;
@@ -1603,7 +1603,7 @@ namespace Lumina
             Display.bAllowRenaming = true;
             Display.bShowDisabledIcon = true;
             Display.TooltipTitle = FString(LE_ICON_FOLDER " ") + Folder->Name.c_str();
-            Display.TooltipSubtitle = "Outliner folder, organization only";
+            Display.TooltipSubtitle = LOC("Outliner folder, organization only");
             Display.bTooltipBuilt = true;
 
             for (ECS::FEntity Member : Folder->Entities)
@@ -1985,36 +1985,36 @@ namespace Lumina
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem(LE_ICON_FOLDER_PLUS " New Subfolder"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_FOLDER_PLUS, "New Subfolder")))
         {
             PendingFolderRename = CreateSceneFolder(MakeUniqueFolderName(FolderID), FolderID);
         }
 
-        if (ImGui::MenuItem(LE_ICON_PENCIL " Rename", "F2"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_PENCIL, "Rename"), "F2"))
         {
             PendingFolderRename = FolderID;
         }
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem(LE_ICON_SELECT_GROUP " Select Contents", nullptr, false, !Contents.empty()))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_SELECT_GROUP, "Select Contents"), nullptr, false, !Contents.empty()))
         {
             SelectFolderContents(FolderID);
         }
 
-        if (ImGui::MenuItem(LE_ICON_EYE_OFF " Hide Contents", nullptr, false, !Contents.empty()))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_EYE_OFF, "Hide Contents"), nullptr, false, !Contents.empty()))
         {
             SetFolderContentsHidden(FolderID, true);
         }
 
-        if (ImGui::MenuItem(LE_ICON_EYE " Show Contents", nullptr, false, !Contents.empty()))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_EYE, "Show Contents"), nullptr, false, !Contents.empty()))
         {
             SetFolderContentsHidden(FolderID, false);
         }
 
-        if (ImGui::BeginMenu(LE_ICON_FOLDER_MOVE " Move Folder Into"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_FOLDER_MOVE, "Move Folder Into")))
         {
-            if (ImGui::MenuItem(LE_ICON_HOME " Root", nullptr, false, Folder->ParentID != SSceneFolderComponent::NoFolder))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_HOME, "Root"), nullptr, false, Folder->ParentID != SSceneFolderComponent::NoFolder))
             {
                 MoveFolderIntoFolder(FolderID, SSceneFolderComponent::NoFolder);
             }
@@ -2040,19 +2040,19 @@ namespace Lumina
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem(LE_ICON_FOLDER_REMOVE " Delete Folder"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_FOLDER_REMOVE, "Delete Folder")))
         {
             DeleteSceneFolder(FolderID, false);
         }
-        ImGuiX::TextTooltip("{}", "Removes the folder. Its contents move up to the parent folder.");
+        ImGuiX::TextTooltip("{}", LOC("Removes the folder. Its contents move up to the parent folder."));
 
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::Danger());
-        if (ImGui::MenuItem(LE_ICON_TRASH_CAN " Delete Folder and Contents"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_TRASH_CAN, "Delete Folder and Contents")))
         {
             DeleteSceneFolder(FolderID, true);
         }
         ImGui::PopStyleColor();
-        ImGuiX::TextTooltip("{}", "Deletes the folder and every entity inside it.");
+        ImGuiX::TextTooltip("{}", LOC("Deletes the folder and every entity inside it."));
 
         ImGui::PopStyleVar(3);
     }
@@ -2064,12 +2064,12 @@ namespace Lumina
             return;
         }
 
-        if (!ImGui::BeginMenu(LE_ICON_FOLDER_MOVE " Move to Folder"))
+        if (!ImGui::BeginMenu(LOC_ICON(LE_ICON_FOLDER_MOVE, "Move to Folder")))
         {
             return;
         }
 
-        if (ImGui::MenuItem(LE_ICON_HOME " Root"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_HOME, "Root")))
         {
             MoveEntitiesToFolder(Entities, SSceneFolderComponent::NoFolder);
         }
@@ -2093,7 +2093,7 @@ namespace Lumina
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem(LE_ICON_FOLDER_PLUS " New Folder..."))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_FOLDER_PLUS, "New Folder...")))
         {
             const uint32 NewFolder = CreateSceneFolder(MakeUniqueFolderName(SSceneFolderComponent::NoFolder), SSceneFolderComponent::NoFolder);
             MoveEntitiesToFolder(Entities, NewFolder);
@@ -2118,7 +2118,7 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         {
-            ImGui::SetTooltip("New folder. Folders group entities in the outliner only.");
+            ImGui::SetTooltip(LOC("New folder. Folders group entities in the outliner only."));
         }
         ImGui::EndDisabled();
     }
@@ -2182,12 +2182,12 @@ namespace Lumina
         ECS::FRegistry& Registry = GetSceneRegistry();
         if (!Registry.IsValid(Entity) || (NewParent != ECS::NullEntity && !Registry.IsValid(NewParent)))
         {
-            return "That entity no longer exists.";
+            return LOC("That entity no longer exists.");
         }
 
         if (Entity == NewParent || (NewParent != ECS::NullEntity && ECS::Utils::IsDescendantOf(Registry, NewParent, Entity)))
         {
-            return "The new parent is inside the entity's own subtree, which would make a cycle.";
+            return LOC("The new parent is inside the entity's own subtree, which would make a cycle.");
         }
 
         // A refresh mirrors an inherited node back under its prefab parent, so moving one would not stick.
@@ -2198,7 +2198,7 @@ namespace Lumina
         };
         if (IsInheritedPrefabNode(Entity) || IsInheritedPrefabNode(NewParent))
         {
-            return "Cannot reparent prefab-instance children. Edit the source prefab instead.";
+            return LOC("Cannot reparent prefab-instance children. Edit the source prefab instead.");
         }
 
         return FString();
@@ -2383,18 +2383,18 @@ namespace Lumina
         // Planned before the transaction, because opening one snapshots the whole registry.
         const SceneOps::FAddComponentPlan Plan = SceneOps::PlanAddComponent(Registry, Targets, PickedMetaType);
 
-        const char* ComponentName = Plan.Component ? Plan.Component->GetName().c_str() : "that component";
+        const char* ComponentName = Plan.Component ? Plan.Component->GetName().c_str() : LOC("that component");
 
         if (!Plan.HasWork())
         {
             // Saying nothing is indistinguishable from the click not registering.
             if (Targets.size() == 1)
             {
-                ImGuiX::Notifications::NotifyWarning("This entity already has {0}.", ComponentName);
+                ImGuiX::Notifications::NotifyWarning(LOCF("This entity already has {0}."), ComponentName);
             }
             else
             {
-                ImGuiX::Notifications::NotifyWarning("All {0} selected entities already have {1}.",
+                ImGuiX::Notifications::NotifyWarning(LOCF("All {0} selected entities already have {1}."),
                     (uint32)Targets.size(), ComponentName);
             }
 
@@ -2408,8 +2408,8 @@ namespace Lumina
 
         if (Plan.AlreadyPresent > 0)
         {
-            ImGuiX::Notifications::NotifyInfo("Added {0} to {1} entities; {2} already had it.",
-                Plan.Component ? Plan.Component->GetName().c_str() : "component",
+            ImGuiX::Notifications::NotifyInfo(LOCF("Added {0} to {1} entities; {2} already had it."),
+                Plan.Component ? Plan.Component->GetName().c_str() : LOC("component"),
                 (uint32)Plan.Missing.size(), Plan.AlreadyPresent);
         }
 
@@ -2449,7 +2449,11 @@ namespace Lumina
         }
 
         // Force-opens while a filter is active, so matches stay visible in a collapsed section.
-        bool BeginPickerSection(const char* Icon, const char* Label, int32 Count, bool bForceOpen)
+        // Identity is the untranslated section name and is what the header's ImGui ID hashes, so
+        // neither a language switch nor the count in the visible text moves the ID -- the count is
+        // drawn but deliberately kept out of the identity, since adding a plugin that registers one
+        // more component type would otherwise collapse every section.
+        bool BeginPickerSection(const char* Icon, const char* Label, const char* Identity, int32 Count, bool bForceOpen)
         {
             if (bForceOpen)
             {
@@ -2463,6 +2467,8 @@ namespace Lumina
             Header.append("  (");
             Header.append(Format("{}", Count).c_str());
             Header.append(")");
+            Header.append("###");
+            Header.append(Identity);
 
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::SectionHeader());
             const bool bOpen = ImGui::CollapsingHeader(Header.c_str(),
@@ -2583,7 +2589,7 @@ namespace Lumina
             ImGui::PushID(Category.Name.c_str());
 
             const char* CategoryIcon = PickerCategoryIcon(Category.Name);
-            if (BeginPickerSection(CategoryIcon, Category.Name.c_str(), (int32)Category.Entries.size(), bFiltering))
+            if (BeginPickerSection(CategoryIcon, LOC_VIEW_CTX(Category.Name.c_str(), "category"), Category.Name.c_str(), (int32)Category.Entries.size(), bFiltering))
             {
                 if (ImGui::BeginTable("##Components", 2, GPickerTableFlags))
                 {
@@ -2620,8 +2626,8 @@ namespace Lumina
                         if (bEveryTargetHasIt && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                         {
                             ImGui::SetTooltip(Targets.size() == 1
-                                ? "This entity already has this component."
-                                : "Every selected entity already has this component.");
+                                ? LOC("This entity already has this component.")
+                                : LOC("Every selected entity already has this component."));
                         }
                     }
 
@@ -2707,7 +2713,7 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("Camera Speed: %.1fx", Speed);
+            ImGui::SetTooltip(LOC("Camera Speed: %.1fx"), Speed);
         }
 
         if (ImGui::BeginPopup("CameraSettings", ImGuiWindowFlags_NoMove))
@@ -2715,10 +2721,10 @@ namespace Lumina
             // The editor camera (EditorEntity) lives in the tool's own World, not the observed world.
             STransformComponent& CameraTransform = World->GetComponent<STransformComponent>(EditorEntity);
 
-            ImGui::SeparatorText(LE_ICON_VIDEO " Camera Settings");
+            ImGui::SeparatorText(LOC_ICON(LE_ICON_VIDEO, "Camera Settings"));
 
             bool bHasCameraLight = World->HasComponent<SPointLightComponent>(EditorEntity);
-            ImGui::TextUnformatted("Camera Light");
+            ImGui::TextUnformatted(LOC("Camera Light"));
             if (ImGuiX::IconButton(LE_ICON_LIGHTBULB, "Light"))
             {
                 if (bHasCameraLight)
@@ -2737,20 +2743,20 @@ namespace Lumina
             if (bHasCameraLight)
             {
                 auto&& PL = World->GetComponent<SPointLightComponent>(EditorEntity);
-                ImGuiX::SliderFloat("Intensity", &PL.Intensity, 0.0f, 300.0f);
-                ImGuiX::SliderFloat("Attenuation", &PL.Attenuation, 0.0f, 200.0f);
-                ImGui::ColorEdit3("Color", &PL.LightColor.x, ImGuiColorEditFlags_Float);
+                ImGuiX::SliderFloat(LOC("Intensity"), &PL.Intensity, 0.0f, 300.0f);
+                ImGuiX::SliderFloat(LOC("Attenuation"), &PL.Attenuation, 0.0f, 200.0f);
+                ImGui::ColorEdit3(LOC("Color"), &PL.LightColor.x, ImGuiColorEditFlags_Float);
             }
             
             ImGui::Separator();
             
-            ImGui::TextUnformatted("Movement Speed");
-            if (ImGui::SliderFloat("##Speed", &Speed, 0.1f, 100.0f, "%.1fx"))
+            ImGui::TextUnformatted(LOC("Movement Speed"));
+            if (ImGui::SliderFloat("##Speed", &Speed, 0.1f, 100.0f, LOC("%.1fx")))
             {
                 CameraState.Speed = Speed;
             }
             ImGui::SameLine();
-            if (ImGui::SmallButton("Reset##Speed"))
+            if (ImGui::SmallButton(LOC_ID("Reset")))
             {
                 Speed = 1.0f;
                 CameraState.Speed = 1.0f;
@@ -2762,7 +2768,7 @@ namespace Lumina
             ImGui::TextUnformatted(LE_ICON_AXIS_ARROW);
             ImGui::PopStyleColor();
             ImGui::SameLine();
-            ImGuiX::TextTooltip("Translation (Location)");
+            ImGuiX::TextTooltip(LOCF("Translation (Location)"));
             FVector3 CameraLocation = CameraTransform.GetWorldLocation();
             if (ImGui::DragFloat3("T", Math::ValuePtr(CameraLocation), 0.01f))
             {
@@ -2772,7 +2778,7 @@ namespace Lumina
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::Success());
             ImGui::TextUnformatted(LE_ICON_ROTATE_360);
             ImGui::PopStyleColor();
-            ImGuiX::TextTooltip("Rotation (Euler Angles)");
+            ImGuiX::TextTooltip(LOCF("Rotation (Euler Angles)"));
             ImGui::SameLine();
             const FQuat CameraRotation = CameraTransform.GetRotation();
             if (!Math::IsSameRotation(CameraRotation, CameraEulerRotationSource))
@@ -2788,16 +2794,16 @@ namespace Lumina
             }
 
             ImGui::Separator();
-            if (ImGui::Button("Reset Position", ImVec2(-1, 0)))
+            if (ImGui::Button(LOC("Reset Position"), ImVec2(-1, 0)))
             {
                 World->GetComponent<STransformComponent>(EditorEntity).SetLocation(FVector3(0.0f));
             }
-            if (ImGui::Button("Reset Rotation", ImVec2(-1, 0)))
+            if (ImGui::Button(LOC("Reset Rotation"), ImVec2(-1, 0)))
             {
                 World->GetComponent<STransformComponent>(EditorEntity).SetRotation(FQuat(1.0f, 0.0f, 0.0f, 0.0f));
             }
             ImGui::Spacing();
-            if (ImGui::Button("Close", ImVec2(-1, 0)))
+            if (ImGui::Button(LOC("Close"), ImVec2(-1, 0)))
             {
                 ImGui::CloseCurrentPopup();
             }
@@ -2809,18 +2815,18 @@ namespace Lumina
         {
             FocusViewportToEntity(GetLastSelectedEntity());
         }
-        ImGuiX::TextTooltip("Focus on Selection (F)");
+        ImGuiX::TextTooltip(LOCF("Focus on Selection (F)"));
     }
 
     void FSceneEditorTool::DrawSnapSettingsPopup()
     {
-        ImGui::Text("Snap Settings");
+        ImGui::Text(LOC("Snap Settings"));
         ImGuiX::HelpMarker(
-            "Constrains gizmo drags to fixed steps. Translate = world units. Rotate = degrees. "
-            "Scale = multiplicative factor. Toggle quickly with the Snap button on the toolbar.");
+            LOC("Constrains gizmo drags to fixed steps. Translate = world units. Rotate = degrees. "
+            "Scale = multiplicative factor. Toggle quickly with the Snap button on the toolbar."));
         ImGui::Separator();
 
-        if (ImGui::Checkbox("Enable Snap", &bGuizmoSnapEnabled))
+        if (ImGui::Checkbox(LOC("Enable Snap"), &bGuizmoSnapEnabled))
         {
             PersistGizmoSettings();
         }
@@ -2829,29 +2835,29 @@ namespace Lumina
         ImGui::PushStyleColor(ImGuiCol_Header, EditorColors::WithAlpha(EditorColors::Accent(), 0.3f));
         bool bAnySettingDirty = false;
 
-        if (ImGui::CollapsingHeader("Translation", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Translation"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             ImGui::PushID("Translate");
             ImGui::Indent();
             ImGui::BeginDisabled(!bGuizmoSnapEnabled);
-            ImGui::Text("Presets:"); ImGui::SameLine();
+            ImGui::Text(LOC("Presets:")); ImGui::SameLine();
             if (ImGui::Button("0.1")) { GuizmoSnapTranslate = 0.1f; bAnySettingDirty = true; } ImGui::SameLine();
             if (ImGui::Button("1.0")) { GuizmoSnapTranslate = 1.0f; bAnySettingDirty = true; } ImGui::SameLine();
             if (ImGui::Button("5.0")) { GuizmoSnapTranslate = 5.0f; bAnySettingDirty = true; } ImGui::SameLine();
             if (ImGui::Button("10"))  { GuizmoSnapTranslate = 10.0f; bAnySettingDirty = true; } ImGui::SameLine();
             if (ImGui::Button("50"))  { GuizmoSnapTranslate = 50.0f; bAnySettingDirty = true; }
-            if (ImGui::DragFloat("Value##Translation", &GuizmoSnapTranslate, 0.1f, 0.01f, 1000.0f, "%.2f units")) { bAnySettingDirty = true; }
+            if (ImGui::DragFloat("Value##Translation", &GuizmoSnapTranslate, 0.1f, 0.01f, 1000.0f, LOC("%.2f units"))) { bAnySettingDirty = true; }
             ImGui::EndDisabled();
             ImGui::Unindent();
             ImGui::PopID();
         }
 
-        if (ImGui::CollapsingHeader("Rotation", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Rotation"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             ImGui::PushID("Rotate");
             ImGui::Indent();
             ImGui::BeginDisabled(!bGuizmoSnapEnabled);
-            ImGui::Text("Presets:"); ImGui::SameLine();
+            ImGui::Text(LOC("Presets:")); ImGui::SameLine();
             if (ImGui::Button("1 " LE_ICON_ANGLE_ACUTE))  { GuizmoSnapRotate = 1.0f; bAnySettingDirty = true; } ImGui::SameLine();
             if (ImGui::Button("5 " LE_ICON_ANGLE_ACUTE))  { GuizmoSnapRotate = 5.0f; bAnySettingDirty = true; } ImGui::SameLine();
             if (ImGui::Button("15 " LE_ICON_ANGLE_ACUTE)) { GuizmoSnapRotate = 15.0f; bAnySettingDirty = true; } ImGui::SameLine();
@@ -2863,12 +2869,12 @@ namespace Lumina
             ImGui::PopID();
         }
 
-        if (ImGui::CollapsingHeader("Scale", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Scale"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             ImGui::PushID("Scale");
             ImGui::Indent();
             ImGui::BeginDisabled(!bGuizmoSnapEnabled);
-            ImGui::Text("Presets:"); ImGui::SameLine();
+            ImGui::Text(LOC("Presets:")); ImGui::SameLine();
             if (ImGui::Button("0.1"))  { GuizmoSnapScale = 0.1f; bAnySettingDirty = true; } ImGui::SameLine();
             if (ImGui::Button("0.25")) { GuizmoSnapScale = 0.25f; bAnySettingDirty = true; } ImGui::SameLine();
             if (ImGui::Button("0.5"))  { GuizmoSnapScale = 0.5f; bAnySettingDirty = true; } ImGui::SameLine();
@@ -2896,7 +2902,7 @@ namespace Lumina
         {
             bWorldGridEnabled = !bWorldGridEnabled;
         }
-        ImGuiX::TextTooltip("Toggle Grid");
+        ImGuiX::TextTooltip(LOCF("Toggle Grid"));
 
         ImGui::SameLine();
 
@@ -2917,7 +2923,7 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("Gizmo: %s (R)", ImGuiX::ImGuizmoOpToString(GuizmoOp).data());
+            ImGui::SetTooltip(LOC("Gizmo: %s (R)"), ImGuiX::ImGuizmoOpToString(GuizmoOp).data());
         }
 
         ImGui::SameLine();
@@ -2931,7 +2937,7 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("Gizmo Space: %s (X)", bIsLocalMode ? "Local" : "World");
+            ImGui::SetTooltip(LOC("Gizmo Space: %s (X)"), bIsLocalMode ? LOC("Local") : LOC("World"));
         }
 
         if (bGuizmoSnapEnabled)
@@ -2951,7 +2957,7 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("Snap Settings (Click to toggle) (Right click for config)");
+            ImGui::SetTooltip(LOC("Snap Settings (Click to toggle) (Right click for config)"));
         }
         if (ImGui::IsItemClicked(ImGuiMouseButton_Right) || (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)))
         {
@@ -2975,7 +2981,7 @@ namespace Lumina
         DrawAddToEntityOrWorldPopup();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("Add something to the scene.");
+            ImGui::SetTooltip(LOC("Add something to the scene."));
         }
 
     }
@@ -3114,7 +3120,7 @@ namespace Lumina
         ImDrawList* DL = ImGui::GetWindowDrawList();
         DL->AddRectFilled(ImVec2(Min.x - 3.0f, Min.y - 18.0f), ImVec2(Max.x + 3.0f, Max.y + 3.0f),
             IM_COL32(0, 0, 0, 190), 4.0f);
-        DL->AddText(ImVec2(Min.x + 2.0f, Min.y - 16.0f), IM_COL32(235, 235, 235, 220), "Camera Preview");
+        DL->AddText(ImVec2(Min.x + 2.0f, Min.y - 16.0f), IM_COL32(235, 235, 235, 220), LOC("Camera Preview"));
         DL->AddImage(ImGuiX::ToImTextureRef((uint32)PreviewID), Min, Max);
         DL->AddRect(Min, Max, IM_COL32(255, 255, 255, 110), 2.0f);
 
@@ -3415,7 +3421,7 @@ namespace Lumina
     // On the base, since the prefab editor's preview world is what GetSceneRegistry resolves.
     void FSceneEditorTool::PushRenameEntityModal(ECS::FEntity Entity)
     {
-        ToolContext->PushModal("Rename Entity", ImVec2(450.0f, 250.0f), [this, Entity]() -> bool
+        ToolContext->PushModal(LOC("Rename Entity"), ImVec2(450.0f, 250.0f), [this, Entity]() -> bool
         {
             auto& NameComponent = GetSceneRegistry().Get<SNameComponent>(Entity);
 
@@ -3427,7 +3433,7 @@ namespace Lumina
                 InputBuffer = NameComponent.Name.c_str();
             }
     
-            ImGui::Text("Enter new name:");
+            ImGui::Text(LOC("Enter new name:"));
             ImGui::Spacing();
     
             ImGui::SetNextItemWidth(-1.0f);
@@ -3441,7 +3447,7 @@ namespace Lumina
             const float AvailWidth = ImGui::GetContentRegionAvail().x;
             ImGui::SetCursorPosX((AvailWidth - ButtonWidth * 2 - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
     
-            if (ImGui::Button("OK", ImVec2(ButtonWidth, 0.0f)) || bShouldClose)
+            if (ImGui::Button(LOC("OK"), ImVec2(ButtonWidth, 0.0f)) || bShouldClose)
             {
                 NameComponent.Name = FName(InputBuffer.c_str());
 
@@ -3463,7 +3469,7 @@ namespace Lumina
     
             ImGui::SameLine();
     
-            if (ImGui::Button("Cancel", ImVec2(ButtonWidth, 0.0f)))
+            if (ImGui::Button(LOC("Cancel"), ImVec2(ButtonWidth, 0.0f)))
             {
                 return true;
             }
@@ -3502,7 +3508,7 @@ namespace Lumina
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::LargeBold);
             if (bMultiSelect)
             {
-                ImGuiX::Text("{} Entities Selected", (uint32)SelectedEntities.size());
+                ImGuiX::Text(LOCF("{} Entities Selected"), (uint32)SelectedEntities.size());
             }
             else
             {
@@ -3513,11 +3519,11 @@ namespace Lumina
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextDim());
             if (bMultiSelect)
             {
-                ImGuiX::Text("Editing {}", EntityName);
+                ImGuiX::Text(LOCF("Editing {}"), EntityName);
             }
             else
             {
-                ImGuiX::Text("ID {}", (Entity).Value);
+                ImGuiX::Text(LOCF("ID {}"), (Entity).Value);
             }
             ImGui::PopStyleColor();
 
@@ -3539,7 +3545,7 @@ namespace Lumina
             DrawAddToEntityOrWorldPopup(Entity);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             {
-                ImGui::SetTooltip("Add Component");
+                ImGui::SetTooltip(LOC("Add Component"));
             }
 
             // Tool-specific header buttons, such as the world editor's Add Tag.
@@ -3557,7 +3563,7 @@ namespace Lumina
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
             {
-                ImGui::SetTooltip(bMultiSelect ? "Rename is single selection only" : "Rename Entity");
+                ImGui::SetTooltip(bMultiSelect ? LOC("Rename is single selection only") : LOC("Rename Entity"));
             }
 
             ImGui::EndDisabled();
@@ -3572,8 +3578,8 @@ namespace Lumina
             {
                 if (bMultiSelect)
                 {
-                    if (Dialogs::Confirmation("Confirm Deletion",
-                        "Are you sure you want to delete {0} selected entities?\n\nThis action cannot be undone.",
+                    if (Dialogs::Confirmation(LOC("Confirm Deletion"),
+                        LOCF("Are you sure you want to delete {0} selected entities?\n\nThis action cannot be undone."),
                         (uint32)SelectedEntities.size()))
                     {
                         for (ECS::FEntity Selected : SelectedEntities)
@@ -3585,8 +3591,8 @@ namespace Lumina
                         }
                     }
                 }
-                else if (Dialogs::Confirmation("Confirm Deletion",
-                    "Are you sure you want to delete entity \"{0}\"?\n\nThis action cannot be undone.",
+                else if (Dialogs::Confirmation(LOC("Confirm Deletion"),
+                    LOCF("Are you sure you want to delete entity \"{0}\"?\n\nThis action cannot be undone."),
                     (uint32)Entity))
                 {
                     EntityDestroyRequests.push(Entity);
@@ -3594,7 +3600,7 @@ namespace Lumina
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             {
-                ImGui::SetTooltip(bMultiSelect ? "Delete Selected" : "Delete Entity");
+                ImGui::SetTooltip(bMultiSelect ? LOC("Delete Selected") : LOC("Delete Entity"));
             }
 
             ImGui::PopStyleColor(3);
@@ -3607,14 +3613,14 @@ namespace Lumina
             ImGui::EndTable();
         }
 
-        ImGui::SeparatorText("Details");
+        ImGui::SeparatorText(LOC("Details"));
 
         // Tool-specific sections above the component list, such as the world editor's Tags.
         DrawDetailsExtraSections(Entity);
 
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextDim());
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(LE_ICON_CUBE " Components");
+        ImGui::TextUnformatted(LOC_ICON(LE_ICON_CUBE, "Components"));
         ImGui::PopStyleColor();
 
         ImGui::Spacing();
@@ -3645,7 +3651,7 @@ namespace Lumina
 
             ImGui::Spacing();
 
-            const char* EmptyText = "Nothing selected";
+            const char* EmptyText = LOC("Nothing selected");
             ImVec2 TextSize = ImGui::CalcTextSize(EmptyText);
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (200.0f - TextSize.x) * 0.5f);
             ImGui::TextUnformatted(EmptyText);
@@ -3653,7 +3659,7 @@ namespace Lumina
             ImGui::Spacing();
 
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::WithAlpha(EditorColors::TextMuted(), 0.7f));
-            const char* HintText = "Select an entity to view properties";
+            const char* HintText = LOC("Select an entity to view properties");
             ImVec2 HintSize = ImGui::CalcTextSize(HintText);
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (200.0f - HintSize.x) * 0.5f);
             ImGui::TextUnformatted(HintText);
@@ -3683,7 +3689,7 @@ namespace Lumina
     void FSceneEditorTool::DrawFilterOptions()
     {
 
-        if (ImGui::Button("Reset Filters", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f)))
+        if (ImGui::Button(LOC("Reset Filters"), ImVec2(ImGui::GetContentRegionAvail().x, 0.0f)))
         {
             EntityFilterState.ComponentFilters.clear();
         }
@@ -3694,7 +3700,7 @@ namespace Lumina
             ImGuiTableFlags_SizingStretchSame |
             ImGuiTableFlags_ScrollY, ImVec2(0.0f, 400.0f)))
         {
-            ImGui::TableSetupColumn("Component Type");
+            ImGui::TableSetupColumn(LOC_ID("Component Type"));
             ImGui::TableHeadersRow();
 
             for (Lumina::ECS::FSparseSet* StoragePtr : GetSceneRegistry().GetActiveStorages())
@@ -3755,7 +3761,7 @@ namespace Lumina
             ImGui::PopStyleColor();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
-                ImGui::SetTooltip(bForeign ? "Inspecting another world - switch back to add entities." : "Add a new entity.");
+                ImGui::SetTooltip(bForeign ? LOC("Inspecting another world - switch back to add entities.") : LOC("Add a new entity."));
             }
             DrawAddToEntityOrWorldPopup();
             ImGui::EndDisabled();
@@ -3774,7 +3780,7 @@ namespace Lumina
                 ImVec2 TextPos = ImGui::GetItemRectMin();
                 TextPos.x += Style.FramePadding.x + 2.0f;
                 TextPos.y += Style.FramePadding.y;
-                DrawList->AddText(TextPos, EditorColors::U32(EditorColors::TextMuted()), LE_ICON_FILE_SEARCH " Search entities...");
+                DrawList->AddText(TextPos, EditorColors::U32(EditorColors::TextMuted()), LOC_ICON(LE_ICON_FILE_SEARCH, "Search entities..."));
             }
 
             ImGui::SameLine();
@@ -3797,12 +3803,12 @@ namespace Lumina
 
             if (ImGui::IsItemHovered())
             {
-                ImGui::SetTooltip(bFilterActive ? "Filters active - Click to configure" : "Configure filters");
+                ImGui::SetTooltip(bFilterActive ? LOC("Filters active - Click to configure") : LOC("Configure filters"));
             }
 
             if (ImGui::BeginPopup("FilterPopup", ImGuiWindowFlags_NoMove))
             {
-                ImGui::SeparatorText("Component Filters");
+                ImGui::SeparatorText(LOC("Component Filters"));
                 DrawFilterOptions();
                 ImGui::EndPopup();
             }
@@ -3815,11 +3821,11 @@ namespace Lumina
         DrawOutlinerWorldSelector();
 
         {
-            ImGui::Text(LE_ICON_FORMAT_LIST_NUMBERED " Total Entities: %zu", CountOutlinerEntities());
+            ImGui::Text(LOC_ICON(LE_ICON_FORMAT_LIST_NUMBERED, "Total Entities: %zu"), CountOutlinerEntities());
             const float RefreshButtonOffset = ImGui::GetContentRegionAvail().x - 24 - ImGui::GetStyle().FramePadding.x;
             ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
             ImGui::TextDisabled("(%zu)", (size_t)GetSceneRegistry().NumEntities());
-            ImGui::SetItemTooltip("Entities listed below, parentheses include those hidden from the outliner.");
+            ImGui::SetItemTooltip(LOC("Entities listed below, parentheses include those hidden from the outliner."));
             ImGui::SameLine(RefreshButtonOffset);
             if (ImGui::Button(LE_ICON_REFRESH))
             {
@@ -3870,12 +3876,12 @@ namespace Lumina
         {
             if (Entity == ECS::NullEntity)
             {
-                ImGui::TextColored(EditorColors::SectionHeader(), LE_ICON_PLUS " Create New Entity");
+                ImGui::TextColored(EditorColors::SectionHeader(), LOC_ICON(LE_ICON_PLUS, "Create New Entity"));
                 ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
             }
             else if (SelectedEntities.size() > 1 && IsEntitySelected(Entity))
             {
-                ImGui::TextColored(EditorColors::AccentAlt(), LE_ICON_SELECT_GROUP " Add to %llu selected entities",
+                ImGui::TextColored(EditorColors::AccentAlt(), LOC_ICON(LE_ICON_SELECT_GROUP, "Add to %llu selected entities"),
                     (unsigned long long)SelectedEntities.size());
                 ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
             }
@@ -3895,7 +3901,7 @@ namespace Lumina
                 ImVec2 TextPos = ImGui::GetItemRectMin();
                 TextPos.x += Style.FramePadding.x + 2.0f;
                 TextPos.y += Style.FramePadding.y;
-                DrawList->AddText(TextPos, EditorColors::U32(EditorColors::TextMuted()), LE_ICON_FOLDER_SEARCH " Search components...");
+                DrawList->AddText(TextPos, EditorColors::U32(EditorColors::TextMuted()), LOC_ICON(LE_ICON_FOLDER_SEARCH, "Search components..."));
             }
             ImGui::PopStyleVar();
 
@@ -3944,7 +3950,7 @@ namespace Lumina
                         if (!FilteredPrefabs.empty())
                         {
                             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6.0f, 3.0f));
-                            if (BeginPickerSection(LE_ICON_PACKAGE_VARIANT_CLOSED, "Prefabs", (int32)FilteredPrefabs.size(), bFiltering)
+                            if (BeginPickerSection(LE_ICON_PACKAGE_VARIANT_CLOSED, LOC("Prefabs"), "Prefabs", (int32)FilteredPrefabs.size(), bFiltering)
                                 && ImGui::BeginTable("##Prefabs", 2, GPickerTableFlags))
                             {
                                 ImGui::TableSetupColumn("##Icon", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
@@ -3998,7 +4004,7 @@ namespace Lumina
                     if (!FilteredPrimitives.empty())
                     {
                         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6.0f, 3.0f));
-                        if (BeginPickerSection(LE_ICON_SHAPE, "Primitives", (int32)FilteredPrimitives.size(), bFiltering)
+                        if (BeginPickerSection(LE_ICON_SHAPE, LOC("Primitives"), "Primitives", (int32)FilteredPrimitives.size(), bFiltering)
                             && ImGui::BeginTable("##Primitives", 2, GPickerTableFlags))
                         {
                             ImGui::TableSetupColumn("##Icon", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
@@ -4006,7 +4012,7 @@ namespace Lumina
 
                             for (const FPrimitiveEntry* Entry : FilteredPrimitives)
                             {
-                                if (DrawPickerRow(Entry, Entry->Icon, Entry->Name))
+                                if (DrawPickerRow(Entry, Entry->Icon, LOC(Entry->Name)))
                                 {
                                     CStaticMesh* PrimitiveMesh = Entry->GetMesh();
                                     if (GetSceneRegistry().IsValid(Entity))
@@ -4070,7 +4076,7 @@ namespace Lumina
             ImGui::BeginGroup();
             {
                 ImGui::PushStyleColor(ImGuiCol_Button, EditorColors::Danger());
-                if (ImGui::Button("Cancel", ImVec2(80.0f, 0.0f)))
+                if (ImGui::Button(LOC("Cancel"), ImVec2(80.0f, 0.0f)))
                 {
                     ImGui::CloseCurrentPopup();
                     AddEntityComponentFilter.Clear();
@@ -4081,7 +4087,7 @@ namespace Lumina
                 {
                     ImGui::SameLine();
                     ImGui::PushStyleColor(ImGuiCol_Button, EditorColors::Button());
-                    if (ImGui::Button(LE_ICON_CUBE " Empty Entity", ImVec2(-1, 0.0f)))
+                    if (ImGui::Button(LOC_ICON(LE_ICON_CUBE, "Empty Entity"), ImVec2(-1, 0.0f)))
                     {
                         CreateEntity();
                         ImGui::CloseCurrentPopup();
@@ -4091,7 +4097,7 @@ namespace Lumina
 
                     if (ImGui::IsItemHovered())
                     {
-                        ImGui::SetTooltip("Create entity without any components");
+                        ImGui::SetTooltip(LOC("Create entity without any components"));
                     }
                 }
             }

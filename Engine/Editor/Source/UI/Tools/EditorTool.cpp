@@ -157,7 +157,7 @@ namespace Lumina
             InputViewport->GetContext().SetInputMode(EInputMode::Game);
             FInputViewportRegistry::Get().Register(InputViewport.get());
 
-            RegisterAction({"Draw NavMesh", "View", "Toggle the navmesh debug overlay (View Mode > Navigation)",
+            RegisterAction({LOC("Draw NavMesh"), "View", LOC("Toggle the navmesh debug overlay (View Mode > Navigation)"),
                 FInputChord{ImGuiKey_P}, []
                 {
                     FConsoleRegistry& Console = FConsoleRegistry::Get();
@@ -166,9 +166,9 @@ namespace Lumina
         }
 
         // Every tool keeps a history, so every tool answers the same chords for it.
-        RegisterAction({"Undo", "History", "Revert the last transacted edit",
+        RegisterAction({LOC("Undo"), "History", LOC("Revert the last transacted edit"),
             FInputChord{ImGuiKey_Z, true}, [this]{ Undo(); }});
-        RegisterAction({"Redo", "History", "Re-apply the last undone edit",
+        RegisterAction({LOC("Redo"), "History", LOC("Re-apply the last undone edit"),
             FInputChord{ImGuiKey_Y, true}, [this]{ Redo(); }});
 
         OnInitialize();
@@ -323,14 +323,14 @@ namespace Lumina
             }
         };
 
-        ToggleBool("Editor.Debug.Skeletons",     LE_ICON_BONE " Show Skeleton", "Draw the bone hierarchy for skeletal meshes.");
+        ToggleBool("Editor.Debug.Skeletons",     LOC_ICON(LE_ICON_BONE, "Show Skeleton"), LOC("Draw the bone hierarchy for skeletal meshes."));
         ImGui::Separator();
 
         const bool bMaster = Console.TryGetAs<bool>("Editor.Debug.Skeletons") && Console.GetAs<bool>("Editor.Debug.Skeletons");
         ImGui::BeginDisabled(!bMaster);
-        ToggleBool("Editor.Debug.SkeletonNames", "Bone Names", "Label each bone with its name.");
-        ToggleBool("Editor.Debug.SkeletonAxes",  "Bone Axes",  "Draw a per-bone local axis triad.");
-        ToggleBool("Editor.Debug.SkeletonXRay",  "X-Ray",      "Draw bones through the mesh (no depth test).");
+        ToggleBool("Editor.Debug.SkeletonNames", LOC("Bone Names"), LOC("Label each bone with its name."));
+        ToggleBool("Editor.Debug.SkeletonAxes",  LOC("Bone Axes"),  LOC("Draw a per-bone local axis triad."));
+        ToggleBool("Editor.Debug.SkeletonXRay",  LOC("X-Ray"),      LOC("Draw bones through the mesh (no depth test)."));
 
         auto DragDistance = [&](const char* Name, const char* Label, float MaxValue, const char* Tooltip)
         {
@@ -349,9 +349,9 @@ namespace Lumina
             }
         };
 
-        DragDistance("Editor.Debug.SkeletonNameDist",  "Name Distance",  100.0f,  nullptr);
-        DragDistance("Editor.Debug.SkeletonJointDist", "Joint Distance", 500.0f,  "Past this, joint spheres and axes are dropped.");
-        DragDistance("Editor.Debug.SkeletonShapeDist", "Shape Distance", 2000.0f, "Past this, every bone collapses to a single line.");
+        DragDistance("Editor.Debug.SkeletonNameDist",  LOC("Name Distance"),  100.0f,  nullptr);
+        DragDistance("Editor.Debug.SkeletonJointDist", LOC("Joint Distance"), 500.0f,  LOC("Past this, joint spheres and axes are dropped."));
+        DragDistance("Editor.Debug.SkeletonShapeDist", LOC("Shape Distance"), 2000.0f, LOC("Past this, every bone collapses to a single line."));
         ImGui::EndDisabled();
     }
 
@@ -563,7 +563,7 @@ namespace Lumina
             }
             ImGui::PopStyleColor();
             // TextTooltip takes a consteval format string, so a ternary of literals cannot be the format.
-            ImGuiX::TextTooltip("{}", bUnsaved ? "Save -- this asset has unsaved changes" : "Save (no changes)");
+            ImGuiX::TextTooltip("{}", bUnsaved ? LOC("Save -- this asset has unsaved changes") : LOC("Save (no changes)"));
         }
 
         const FFixedString AssetVirtualPath = GetAssetVirtualPath();
@@ -574,7 +574,7 @@ namespace Lumina
                 ToolContext->BrowseToAsset(FStringView(AssetVirtualPath.c_str(), AssetVirtualPath.size()));
             }
 
-            ImGuiX::TextTooltip("Browse to asset in Content Browser");
+            ImGuiX::TextTooltip(LOCF("Browse to asset in Content Browser"));
         }
 
         ImGui::BeginDisabled(!AllowsUndoRedo() || !CanUndo());
@@ -587,11 +587,11 @@ namespace Lumina
         
         if (CanUndo())
         {
-            ImGuiX::TextTooltip("Undo {} (Ctrl+Z)", PeekUndoLabel().c_str());
+            ImGuiX::TextTooltip(LOCF("Undo {} (Ctrl+Z)"), PeekUndoLabel().c_str());
         }
         else
         {
-            ImGuiX::TextTooltip("Nothing to undo");
+            ImGuiX::TextTooltip(LOCF("Nothing to undo"));
         }
 
         ImGui::BeginDisabled(!AllowsUndoRedo() || !CanRedo());
@@ -604,15 +604,15 @@ namespace Lumina
         
         if (CanRedo())
         {
-            ImGuiX::TextTooltip("Redo {} (Ctrl+Y)", PeekRedoLabel().c_str());
+            ImGuiX::TextTooltip(LOCF("Redo {} (Ctrl+Y)"), PeekRedoLabel().c_str());
         }
         else
         {
-            ImGuiX::TextTooltip("Nothing to redo");
+            ImGuiX::TextTooltip(LOCF("Nothing to redo"));
         }
         
 
-        if (ImGui::BeginMenu(LE_ICON_HELP_CIRCLE_OUTLINE" Help"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_HELP_CIRCLE_OUTLINE, "Help")))
         {
             DrawKeybindsMenu();
 
@@ -636,7 +636,7 @@ namespace Lumina
             return;
         }
 
-        if (ImGui::BeginMenu(LE_ICON_EYE " Visualize"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_EYE, "Visualize")))
         {
             DrawViewModePopupContents();
             ImGui::EndMenu();
@@ -668,7 +668,7 @@ namespace Lumina
 
         if (bHovered)
         {
-            ImGui::SetTooltip(bOrtho ? "Orthographic (click for perspective)" : "Perspective (click for orthographic)");
+            ImGui::SetTooltip(bOrtho ? LOC("Orthographic (click for perspective)") : LOC("Perspective (click for orthographic)"));
         }
 
         ImDrawList* DrawList = ImGui::GetWindowDrawList();
@@ -1017,8 +1017,8 @@ namespace Lumina
             if (!bHasSceneImage)
             {
                 const char* Message = Scene == nullptr
-                                    ? "No renderer for this world"
-                                    : "Waiting for the first rendered frame";
+                                    ? LOC("No renderer for this world")
+                                    : LOC("Waiting for the first rendered frame");
                 const ImVec2 TextSize = ImGui::CalcTextSize(Message);
                 const ImVec2 TextPos(WindowPosition.x + (ViewportSize.x - TextSize.x) * 0.5f,
                                      WindowPosition.y + (ViewportSize.y - TextSize.y) * 0.5f);
@@ -1116,7 +1116,7 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("View Mode Options");
+            ImGui::SetTooltip(LOC("View Mode Options"));
         }
 
         if (ImGui::BeginPopup("ViewModePopup", ImGuiWindowFlags_NoMove))
@@ -1130,16 +1130,16 @@ namespace Lumina
     {
         IRenderScene* RenderScene = HasWorld() ? World->GetRenderer() : nullptr;
 
-        ImGui::Text("Visualizations");
+        ImGui::Text(LOC("Visualizations"));
         ImGui::Separator();
 
-        if (ImGui::BeginMenu("Components"))
+        if (ImGui::BeginMenu(LOC("Components")))
         {
-            ImGui::Checkbox("Show All", &bShowComponentVisualizers);
+            ImGui::Checkbox(LOC("Show All"), &bShowComponentVisualizers);
             ImGui::BeginDisabled(!bShowComponentVisualizers);
 
-            ImGui::Checkbox("Interactive Handles", &bVisualizerHandlesEnabled);
-            ImGui::SetItemTooltip("Face, radius and cone handles you can drag in the viewport.");
+            ImGui::Checkbox(LOC("Interactive Handles"), &bVisualizerHandlesEnabled);
+            ImGui::SetItemTooltip(LOC("Face, radius and cone handles you can drag in the viewport."));
             ImGui::Separator();
 
             for (auto&& [Struct, Visualizer] : CComponentVisualizerRegistry::Get().GetVisualizers())
@@ -1162,12 +1162,12 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("Physics"))
+        if (ImGui::BeginMenu(LOC("Physics")))
         {
             if (const bool* bValue = FConsoleRegistry::Get().TryGetAs<bool>("Physics.Debug.Draw"))
             {
                 bool bProxy = *bValue;
-                if (ImGui::MenuItem("Toggle Collision", nullptr, &bProxy))
+                if (ImGui::MenuItem(LOC("Toggle Collision"), nullptr, &bProxy))
                 {
                     FConsoleRegistry::Get().SetAs("Physics.Debug.Draw", bProxy);
                 }
@@ -1175,12 +1175,12 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("Navigation"))
+        if (ImGui::BeginMenu(LOC("Navigation")))
         {
             if (const bool* bValue = FConsoleRegistry::Get().TryGetAs<bool>("Nav.DrawDebug"))
             {
                 bool bProxy = *bValue;
-                if (ImGui::MenuItem("Draw NavMesh", "P", &bProxy))
+                if (ImGui::MenuItem(LOC("Draw NavMesh"), "P", &bProxy))
                 {
                     FConsoleRegistry::Get().SetAs("Nav.DrawDebug", bProxy);
                 }
@@ -1188,7 +1188,7 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(LE_ICON_BONE " Skeleton"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_BONE, "Skeleton")))
         {
             DrawSkeletonDebugMenuItems();
             ImGui::EndMenu();
@@ -1201,11 +1201,11 @@ namespace Lumina
             return;
         }
 
-        if (ImGui::BeginMenu("Rendering"))
+        if (ImGui::BeginMenu(LOC("Rendering")))
         {
             FSceneRenderSettings& Settings = RenderScene->GetSceneRenderSettings();
 
-            if (ImGui::BeginMenu("View Mode"))
+            if (ImGui::BeginMenu(LOC("View Mode")))
             {
                 struct FViewModeEntry { ERenderSceneDebugFlags Mode; const char* Label; };
 
@@ -1270,30 +1270,30 @@ namespace Lumina
                     for (size_t i = 0; i < Count; ++i)
                     {
                         bool bSelected = Settings.Flags == Entries[i].Mode;
-                        if (ImGui::MenuItem(Entries[i].Label, nullptr, bSelected))
+                        if (ImGui::MenuItem(LOC(Entries[i].Label), nullptr, bSelected))
                         {
                             Settings.Flags = Entries[i].Mode;
                         }
                     }
                 };
 
-                DrawGroup("Shading", Shading, std::size(Shading));
+                DrawGroup(LOC("Shading"), Shading, std::size(Shading));
                 ImGui::Spacing();
-                DrawGroup("Buffers", Buffers, std::size(Buffers));
+                DrawGroup(LOC("Buffers"), Buffers, std::size(Buffers));
                 ImGui::Spacing();
-                DrawGroup("Shading Models", ShadingModels, std::size(ShadingModels));
+                DrawGroup(LOC("Shading Models"), ShadingModels, std::size(ShadingModels));
                 ImGui::Spacing();
-                DrawGroup("Geometry", Geometry, std::size(Geometry));
+                DrawGroup(LOC("Geometry"), Geometry, std::size(Geometry));
                 ImGui::Spacing();
-                DrawGroup("Lighting", Lighting, std::size(Lighting));
+                DrawGroup(LOC("Lighting"), Lighting, std::size(Lighting));
                 ImGui::Spacing();
-                DrawGroup("Translucency", Translucency, std::size(Translucency));
+                DrawGroup(LOC("Translucency"), Translucency, std::size(Translucency));
 
                 ImGui::EndMenu();
             }
 
             // Each entry says what it costs to disable, so nobody leaves one off and reports a frame-rate bug.
-            if (ImGui::BeginMenu("Culling"))
+            if (ImGui::BeginMenu(LOC("Culling")))
             {
                 // Spelled out per entry, since these are bitfields and there is no pointer to one.
                 static const char* const kNames[] =
@@ -1332,10 +1332,10 @@ namespace Lumina
                 bool bChanged[std::size(kNames)] = {};
                 for (size_t i = 0; i < std::size(kNames); ++i)
                 {
-                    bChanged[i] = ImGui::MenuItem(kNames[i], nullptr, &bValues[i]);
+                    bChanged[i] = ImGui::MenuItem(LOC(kNames[i]), nullptr, &bValues[i]);
                     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                     {
-                        ImGui::SetTooltip("%s", kTooltips[i]);
+                        ImGui::SetTooltip("%s", LOC(kTooltips[i]));
                     }
                 }
 
@@ -1353,7 +1353,7 @@ namespace Lumina
                 const bool bAllOff = !Settings.bFrustumCull && !Settings.bConeCull && !Settings.bOcclusionCull
                                   && !Settings.bMeshletOcclusionCull && !Settings.bShadowOcclusionCull
                                   && !Settings.bCPUInstanceCull && !Settings.bUseLODs;
-                if (ImGui::MenuItem("Disable All Culling", nullptr, bAllOff))
+                if (ImGui::MenuItem(LOC("Disable All Culling"), nullptr, bAllOff))
                 {
                     const uint8 bEnable = bAllOff ? 1u : 0u;
                     Settings.bFrustumCull          = bEnable;
@@ -1366,24 +1366,24 @@ namespace Lumina
                 }
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 {
-                    ImGui::SetTooltip("Turns every stage above off (and back on). Expensive -- for isolating "
-                                      "missing geometry, not for working in.");
+                    ImGui::SetTooltip(LOC("Turns every stage above off (and back on). Expensive -- for isolating "
+                                      "missing geometry, not for working in."));
                 }
 
                 ImGui::Separator();
 
                 // This pins every stage's inputs rather than turning one off, so you can fly out and look.
                 bool bFrozen = (bool)Settings.bFreezeCulling;
-                if (ImGui::MenuItem("Freeze Culling", nullptr, &bFrozen))
+                if (ImGui::MenuItem(LOC("Freeze Culling"), nullptr, &bFrozen))
                 {
                     Settings.bFreezeCulling = bFrozen;
                 }
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 {
-                    ImGui::SetTooltip("Pins the cull to the camera, frustums and depth pyramid as they are now, "
+                    ImGui::SetTooltip(LOC("Pins the cull to the camera, frustums and depth pyramid as they are now, "
                                       "then lets you fly out and see what it selected.\n"
                                       "The frozen volume is drawn in orange. Rendering keeps following the real "
-                                      "camera; only culling is frozen.");
+                                      "camera; only culling is frozen."));
                 }
 
                 ImGui::EndMenu();
@@ -1392,19 +1392,19 @@ namespace Lumina
             ImGui::Separator();
 
             bool bWireframe = Settings.bWireframe;
-            if (ImGui::MenuItem("Wireframe", nullptr, &bWireframe))
+            if (ImGui::MenuItem(LOC("Wireframe"), nullptr, &bWireframe))
             {
                 Settings.bWireframe = bWireframe;
             }
 
             bool bDrawBillboards = Settings.bDrawBillboards;
-            if (ImGui::MenuItem("Draw Billboards", nullptr, &bDrawBillboards))
+            if (ImGui::MenuItem(LOC("Draw Billboards"), nullptr, &bDrawBillboards))
             {
                 Settings.bDrawBillboards = bDrawBillboards;
             }
 
             bool bDrawAABB = Settings.bDrawAABB;
-            if (ImGui::MenuItem("Draw Bounds", nullptr, &bDrawAABB))
+            if (ImGui::MenuItem(LOC("Draw Bounds"), nullptr, &bDrawAABB))
             {
                 Settings.bDrawAABB = bDrawAABB;
             }
@@ -1449,7 +1449,7 @@ namespace Lumina
         }
 
         // Faint, translucent hint in the top-right (clear of the toolbar at top-left).
-        const char*  Hint     = "Shift+F1: Editor focus";
+        const char*  Hint     = LOC("Shift+F1: Editor focus");
         const ImVec2 TextSize = ImGui::CalcTextSize(Hint);
         const float  Pad = 6.0f, Margin = 8.0f;
         const ImVec2 BgMin(Max.x - TextSize.x - Pad * 2.0f - Margin, Min.y + Margin);
@@ -1626,15 +1626,15 @@ namespace Lumina
 
     void FEditorTool::DrawCameraModeSelector(float ItemWidth)
     {
-        const char* Label = (CameraState.Mode == EEditorCameraMode::Orbit) ? "Orbit" : "Free";
+        const char* Label = (CameraState.Mode == EEditorCameraMode::Orbit) ? LOC("Orbit") : LOC("Free");
         ImGui::PushItemWidth(ItemWidth);
         if (ImGui::BeginCombo("##CameraMode", Label, ImGuiComboFlags_HeightLarge))
         {
-            if (ImGui::Selectable("Free", CameraState.Mode == EEditorCameraMode::Free))
+            if (ImGui::Selectable(LOC("Free"), CameraState.Mode == EEditorCameraMode::Free))
             {
                 SetCameraMode(EEditorCameraMode::Free);
             }
-            if (ImGui::Selectable("Orbit", CameraState.Mode == EEditorCameraMode::Orbit))
+            if (ImGui::Selectable(LOC("Orbit"), CameraState.Mode == EEditorCameraMode::Orbit))
             {
                 SetCameraMode(EEditorCameraMode::Orbit);
             }
@@ -1655,7 +1655,7 @@ namespace Lumina
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             {
-                ImGui::SetTooltip("Reset Pan (return to anchor)");
+                ImGui::SetTooltip(LOC("Reset Pan (return to anchor)"));
             }
         }
     }
@@ -2157,7 +2157,7 @@ namespace Lumina
     {
         const bool bDisabled = EditorActions.empty();
         ImGui::BeginDisabled(bDisabled);
-        const bool bOpen = ImGui::BeginMenu(LE_ICON_KEYBOARD" Keybinds");
+        const bool bOpen = ImGui::BeginMenu(LOC_ICON(LE_ICON_KEYBOARD, "Keybinds"));
 
         // BeginMenu already pushed the submenu window, so popping here trips ImGui's error recovery.
         if (!bOpen)
@@ -2181,14 +2181,14 @@ namespace Lumina
         if (ImGui::BeginTable("KeybindsTable", 2,
             ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
         {
-            ImGui::TableSetupColumn("Action",   ImGuiTableColumnFlags_WidthStretch, 0.6f);
-            ImGui::TableSetupColumn("Shortcut", ImGuiTableColumnFlags_WidthStretch, 0.4f);
+            ImGui::TableSetupColumn(LOC_ID("Action"),   ImGuiTableColumnFlags_WidthStretch, 0.6f);
+            ImGui::TableSetupColumn(LOC_ID("Shortcut"), ImGuiTableColumnFlags_WidthStretch, 0.4f);
 
             for (const FString& Category : CategoryOrder)
             {
                 ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
                 ImGui::TableNextColumn();
-                ImGui::TextDisabled("%s", Category.empty() ? "General" : Category.c_str());
+                ImGui::TextDisabled("%s", Category.empty() ? LOC("General") : LOC(Category.c_str()));
                 ImGui::TableNextColumn();
 
                 for (const FEditorAction* A : ByCategory[Category])
@@ -2418,7 +2418,7 @@ namespace Lumina
         bRestoringTransaction = true;
         TransactionManager.Undo();   // applies the transaction and fires OnPostApply -> OnPostUndoRedo
         bRestoringTransaction = false;
-        ImGuiX::Notifications::NotifyInfo("Undid {}", Name);
+        ImGuiX::Notifications::NotifyInfo(LOCF("Undid {}"), Name);
     }
 
     void FEditorTool::Redo()
@@ -2432,7 +2432,7 @@ namespace Lumina
         bRestoringTransaction = true;
         TransactionManager.Redo();
         bRestoringTransaction = false;
-        ImGuiX::Notifications::NotifyInfo("Redid {}", Name);
+        ImGuiX::Notifications::NotifyInfo(LOCF("Redid {}"), Name);
     }
 
     void FEditorTool::ClearTransactionHistory()

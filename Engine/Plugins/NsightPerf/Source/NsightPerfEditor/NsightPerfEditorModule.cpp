@@ -1,5 +1,6 @@
 #include "NsightPerfEditorModule.h"
 
+#include "Localization/Localization.h"
 #include "Core/Module/ModuleManager.h"
 #include "Log/Log.h"
 
@@ -74,7 +75,7 @@ void FNsightPerfEditorModule::StartupModule()
     }
     
     FToolsMenuEntry Entry;
-    Entry.Label    = LE_ICON_GAUGE " Nsight Perf HUD";
+    Entry.Label    = LOC_ICON(LE_ICON_GAUGE, "Nsight Perf HUD");
     Entry.IsActive = []() -> bool
     {
         FEditorUI* UI = GetEditorUI();

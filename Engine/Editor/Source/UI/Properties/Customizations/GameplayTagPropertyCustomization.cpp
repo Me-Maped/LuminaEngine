@@ -1,4 +1,5 @@
 ﻿#include "GameplayTagPropertyCustomization.h"
+#include "Localization/Localization.h"
 
 
 #include "imgui.h"
@@ -27,7 +28,7 @@ namespace Lumina
 
         // The closed preview mirrors the open list, showing the tag icon and the dotted name.
         FFixedString Preview = LE_ICON_TAG "  ";
-        Preview += Value.TagName.IsNone() ? "None" : Value.TagName.c_str();
+        Preview += Value.TagName.IsNone() ? LOC("None") : Value.TagName.c_str();
 
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - LineHeight - Spacing);
 
@@ -46,7 +47,7 @@ namespace Lumina
             }
 
             // Search box. Any edit re-filters the tree on the next Draw.
-            if (TagFilter.Draw("##filter", PopupWidth - ImGui::CalcTextSize("Clear").x - Style.FramePadding.x * 2.0f - Spacing))
+            if (TagFilter.Draw("##filter", PopupWidth - ImGui::CalcTextSize(LOC("Clear")).x - Style.FramePadding.x * 2.0f - Spacing))
             {
                 TagTree.MarkTreeDirty();
             }
@@ -55,12 +56,12 @@ namespace Lumina
                 ImVec2 HintPos = ImGui::GetItemRectMin();
                 HintPos.x += Style.FramePadding.x + 2.0f;
                 HintPos.y += Style.FramePadding.y;
-                ImGui::GetWindowDrawList()->AddText(HintPos, ImGui::GetColorU32(ImGuiCol_TextDisabled), LE_ICON_MAGNIFY " Search...");
+                ImGui::GetWindowDrawList()->AddText(HintPos, ImGui::GetColorU32(ImGuiCol_TextDisabled), LOC_ICON(LE_ICON_MAGNIFY, "Search..."));
             }
 
             // Clear back to None.
             ImGui::SameLine(0.0f, Spacing);
-            if (ImGui::Button("Clear"))
+            if (ImGui::Button(LOC("Clear")))
             {
                 Value.TagName = FName();
                 bChanged = true;
@@ -93,7 +94,7 @@ namespace Lumina
             if (LastBuiltCount == 0)
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-                ImGui::TextUnformatted(TagFilter.IsActive() ? "No matching tags." : "No tags. Use + to add one.");
+                ImGui::TextUnformatted(TagFilter.IsActive() ? LOC("No matching tags.") : LOC("No tags. Use + to add one."));
                 ImGui::PopStyleColor();
             }
 
@@ -115,16 +116,16 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Add a new gameplay tag");
+            ImGui::SetTooltip(LOC("Add a new gameplay tag"));
         }
 
         if (ImGui::BeginPopup("AddGameplayTag"))
         {
-            ImGui::TextUnformatted("New tag (e.g. Ability.Fire.Fireball)");
+            ImGui::TextUnformatted(LOC("New tag (e.g. Ability.Fire.Fireball)"));
             ImGui::SetNextItemWidth(280.0f);
             const bool bEnter = ImGui::InputText("##newtag", NewTagBuffer, sizeof(NewTagBuffer), ImGuiInputTextFlags_EnterReturnsTrue);
             ImGui::SameLine();
-            const bool bAdd = ImGui::Button("Add");
+            const bool bAdd = ImGui::Button(LOC("Add"));
 
             if ((bEnter || bAdd) && NewTagBuffer[0] != '\0')
             {

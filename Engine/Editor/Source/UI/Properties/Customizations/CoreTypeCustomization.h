@@ -4,6 +4,7 @@
 #include "Core/Math/Transform.h"
 #include "Core/Object/ObjectHandleTyped.h"
 #include "Core/Delegates/ScriptDelegate.h"
+#include "Localization/Localization.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Core/Object/SoftObjectPtr.h"
 #include "Core/Reflection/PropertyCustomization/PropertyCustomization.h"
@@ -297,11 +298,12 @@ namespace Lumina
 
             if (Total == 0)
             {
-                ImGui::TextDisabled("Unbound");
+                ImGui::TextDisabled(LOC("Unbound"));
             }
             else
             {
-                ImGuiX::Text(LE_ICON_FLASH " {} bound ({} native, {} script)", Total, (Total - Managed), Managed);
+                ImGuiX::Text(Fmt::RuntimeFormat(LOC_ICON(LE_ICON_FLASH, "{} bound ({} native, {} script)")),
+                    Total, (Total - Managed), Managed);
             }
             return EPropertyChangeOp::None;
         }

@@ -62,7 +62,7 @@ namespace Lumina
 
         const char* StatusLabel(bool bLoaded)
         {
-            return bLoaded ? LE_ICON_CHECK_CIRCLE " Loaded" : LE_ICON_CIRCLE_OUTLINE " Unloaded";
+            return bLoaded ? LOC_ICON(LE_ICON_CHECK_CIRCLE, "Loaded") : LOC_ICON(LE_ICON_CIRCLE_OUTLINE, "Unloaded");
         }
 
         ImVec4 StatusColor(bool bLoaded)
@@ -111,38 +111,38 @@ namespace Lumina
 
     void FAssetRegistryEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("What this is",
-            "Every asset the registry discovered on disk, grouped by class. Shows which are resident in "
+        DrawHelpTextRow(LOC("What this is"),
+            LOC("Every asset the registry discovered on disk, grouped by class. Shows which are resident in "
             "memory right now versus only on disk, their live strong ref-count, an estimate of the CPU-side "
-            "bulk data they hold, and their on-disk size.");
-        DrawHelpTextRow("Loaded vs Unloaded",
-            "An asset is Loaded when a CObject for its GUID exists in memory. Unloaded assets have no "
-            "ref-count or CPU footprint until something requests them.");
-        DrawHelpTextRow("Ref Count",
-            "The object's strong ref-count: how many TStrongObjectPtrs keep it alive (components, materials, the "
-            "open editor, etc). Zero on a loaded asset means it is a candidate for unloading.");
-        DrawHelpTextRow("Referenced By",
-            "The saved packages that import the selected asset, read from the registry, so it works for "
+            "bulk data they hold, and their on-disk size."));
+        DrawHelpTextRow(LOC("Loaded vs Unloaded"),
+            LOC("An asset is Loaded when a CObject for its GUID exists in memory. Unloaded assets have no "
+            "ref-count or CPU footprint until something requests them."));
+        DrawHelpTextRow(LOC("Ref Count"),
+            LOC("The object's strong ref-count: how many TStrongObjectPtrs keep it alive (components, materials, the "
+            "open editor, etc). Zero on a loaded asset means it is a candidate for unloading."));
+        DrawHelpTextRow(LOC("Referenced By"),
+            LOC("The saved packages that import the selected asset, read from the registry, so it works for "
             "unloaded assets too. For a loaded asset, Scan Live Objects instead searches every object in memory "
-            "for reflected references, which also finds unsaved ones but takes a noticeable moment.");
-        DrawHelpTextRow("Refresh",
-            "Re-reads the registry and recomputes the referencer list. The list also follows registry changes "
-            "on its own, and loaded state and ref-counts are rechecked continuously a slice at a time.");
-        DrawHelpTextRow("Open",
-            "Double-click any row (or use the row's context menu) to open it in its asset editor.");
-        DrawHelpTextRow("Selection",
-            "Click selects, Ctrl+click toggles, Shift+click selects a range (across category groups), "
+            "for reflected references, which also finds unsaved ones but takes a noticeable moment."));
+        DrawHelpTextRow(LOC("Refresh"),
+            LOC("Re-reads the registry and recomputes the referencer list. The list also follows registry changes "
+            "on its own, and loaded state and ref-counts are rechecked continuously a slice at a time."));
+        DrawHelpTextRow(LOC("Open"),
+            LOC("Double-click any row (or use the row's context menu) to open it in its asset editor."));
+        DrawHelpTextRow(LOC("Selection"),
+            LOC("Click selects, Ctrl+click toggles, Shift+click selects a range (across category groups), "
             "Ctrl+A selects everything currently visible, Escape clears. The range and Ctrl+A both "
-            "respect the active filters -- they only ever touch what you can see.");
-        DrawHelpTextRow("Types filter",
-            "Per-class checkboxes. A class you have never touched is visible, so newly imported asset "
-            "types are never silently hidden.");
-        DrawHelpTextRow("Resave",
-            "Rewrites the selected assets' packages -- or, with nothing selected, everything matching the "
+            "respect the active filters -- they only ever touch what you can see."));
+        DrawHelpTextRow(LOC("Types filter"),
+            LOC("Per-class checkboxes. A class you have never touched is visible, so newly imported asset "
+            "types are never silently hidden."));
+        DrawHelpTextRow(LOC("Resave"),
+            LOC("Rewrites the selected assets' packages -- or, with nothing selected, everything matching the "
             "current filters. Unlike File > Save All this saves packages whether or not they are dirty, "
             "and loads anything not in memory, which is what upgrades unchanged assets to a new "
             "serialization format (e.g. splitting texture mips for streaming). It runs a few packages "
-            "per frame so the editor stays responsive, and can be stopped part-way.");
+            "per frame so the editor stays responsive, and can be stopped part-way."));
     }
 
     uint64 FAssetRegistryEditorTool::EstimateCpuBytes(CObject* Asset)
@@ -619,15 +619,15 @@ namespace Lumina
             };
 
             ImGui::Columns(5, nullptr, false);
-            Stat("TOTAL ASSETS",  ImVec4(0.7f, 0.8f, 1.0f, 1.0f), Format("{}", Total));
+            Stat(LOC("TOTAL ASSETS"),  ImVec4(0.7f, 0.8f, 1.0f, 1.0f), Format("{}", Total));
             ImGui::NextColumn();
-            Stat("LOADED",        ImVec4(0.45f, 0.85f, 0.5f, 1.0f), Format("{}", Loaded));
+            Stat(LOC("LOADED"),        ImVec4(0.45f, 0.85f, 0.5f, 1.0f), Format("{}", Loaded));
             ImGui::NextColumn();
-            Stat("UNLOADED",      ImVec4(0.65f, 0.65f, 0.68f, 1.0f), Format("{}", Total - Loaded));
+            Stat(LOC("UNLOADED"),      ImVec4(0.65f, 0.65f, 0.68f, 1.0f), Format("{}", Total - Loaded));
             ImGui::NextColumn();
-            Stat("CPU MEMORY",    ImVec4(1.0f, 0.75f, 0.4f, 1.0f), ImGuiX::FormatSize(TotalCpu));
+            Stat(LOC("CPU MEMORY"),    ImVec4(1.0f, 0.75f, 0.4f, 1.0f), ImGuiX::FormatSize(TotalCpu));
             ImGui::NextColumn();
-            Stat("ON DISK",       ImVec4(0.7f, 0.7f, 0.9f, 1.0f), ImGuiX::FormatSize(TotalDisk));
+            Stat(LOC("ON DISK"),       ImVec4(0.7f, 0.7f, 0.9f, 1.0f), ImGuiX::FormatSize(TotalDisk));
             ImGui::Columns(1);
         }
         ImGui::EndChild();
@@ -639,12 +639,12 @@ namespace Lumina
         // Taken from the registry rather than TypeVisibility, so an untouched type still appears.
         const TVector<FName>& Types = AssetTypes;
 
-        if (ImGui::MenuItem("Show All"))
+        if (ImGui::MenuItem(LOC("Show All")))
         {
             TypeVisibility.clear();
             bVisibleStale = true;
         }
-        if (ImGui::MenuItem("Hide All"))
+        if (ImGui::MenuItem(LOC("Hide All")))
         {
             for (const FName& Type : Types)
             {
@@ -678,7 +678,7 @@ namespace Lumina
 
     void FAssetRegistryEditorTool::DrawFilterBar()
     {
-        if (ImGui::Button(LE_ICON_REFRESH " Refresh"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_REFRESH, "Refresh")))
         {
             bRowsStale.store(true, std::memory_order_release);
             NextRowsRebuildSeconds = 0.0;
@@ -687,7 +687,7 @@ namespace Lumina
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(260.0f);
-        if (ImGui::InputTextWithHint("##Search", LE_ICON_MAGNIFY " Search assets...", SearchBuffer, IM_ARRAYSIZE(SearchBuffer)))
+        if (ImGui::InputTextWithHint("##Search", LOC_ICON(LE_ICON_MAGNIFY, "Search assets..."), SearchBuffer, IM_ARRAYSIZE(SearchBuffer)))
         {
             SearchFilter  = SearchBuffer;
             bVisibleStale = true;
@@ -698,11 +698,11 @@ namespace Lumina
         FFixedString TypeLabel;
         if (Hidden > 0)
         {
-            FormatTo(TypeLabel, LE_ICON_FILTER " Types ({} hidden)", Hidden);
+            TypeLabel = FormatAs<FFixedString>(Fmt::RuntimeFormat(LOC_ICON(LE_ICON_FILTER, "Types ({} hidden)")), Hidden);
         }
         else
         {
-            TypeLabel = LE_ICON_FILTER " Types";
+            TypeLabel = LOC_ICON(LE_ICON_FILTER, "Types");
         }
 
         // A plain toolbar row, and BeginMenu outside a menu bar renders with no button chrome.
@@ -726,9 +726,9 @@ namespace Lumina
         }
 
         ImGui::SameLine();
-        bVisibleStale |= ImGui::Checkbox("Group by Category", &bGroupByCategory);
+        bVisibleStale |= ImGui::Checkbox(LOC("Group by Category"), &bGroupByCategory);
         ImGui::SameLine();
-        bVisibleStale |= ImGui::Checkbox("Loaded Only", &bShowLoadedOnly);
+        bVisibleStale |= ImGui::Checkbox(LOC("Loaded Only"), &bShowLoadedOnly);
 
         // The fallback to everything visible is what makes filter-then-resave a one-click migration.
         const uint32 SelectedCount = (uint32)SelectedGUIDs.size();
@@ -738,7 +738,7 @@ namespace Lumina
         ImGui::BeginDisabled(TargetCount == 0);
 
         FFixedString ResaveLabel;
-        FormatTo(ResaveLabel, LE_ICON_CONTENT_SAVE_ALL " Resave ({})", TargetCount);
+        ResaveLabel = FormatAs<FFixedString>(Fmt::RuntimeFormat(LOC_ICON(LE_ICON_CONTENT_SAVE_ALL, "Resave ({})")), TargetCount);
         if (ImGui::Button(ResaveLabel.c_str()))
         {
             OpenResaveModal();
@@ -746,14 +746,14 @@ namespace Lumina
         ImGui::EndDisabled();
 
         ImGuiX::TextTooltip("{}", SelectedCount > 0
-            ? "Rewrite every selected asset's package, dirty or not. Loads anything not in memory."
-            : "Nothing selected -- this rewrites every asset matching the current filters. "
-              "Ctrl+A selects the visible list.");
+            ? LOC("Rewrite every selected asset's package, dirty or not. Loads anything not in memory.")
+            : LOC("Nothing selected -- this rewrites every asset matching the current filters. "
+              "Ctrl+A selects the visible list."));
 
         if (SelectedCount > 0)
         {
             ImGui::SameLine();
-            ImGui::TextDisabled("%u selected", SelectedCount);
+            ImGui::TextDisabled(LOC("%u selected"), SelectedCount);
         }
     }
 
@@ -790,31 +790,31 @@ namespace Lumina
             return;
         }
 
-        ToolContext->PushModal("Resave Assets", ImVec2(520.0f, 260.0f), [this]() -> bool
+        ToolContext->PushModal(LOC("Resave Assets"), ImVec2(520.0f, 260.0f), [this]() -> bool
         {
             switch (ResavePhase)
             {
             case EResavePhase::Confirm:
             {
-                ImGui::TextWrapped("Rewrite %u asset(s)?", (uint32)ResaveQueue.size());
+                ImGui::TextWrapped(LOC("Rewrite %u asset(s)?"), (uint32)ResaveQueue.size());
                 ImGui::Spacing();
                 ImGui::TextWrapped(
-                    "Every package is saved whether or not it is dirty, and anything not currently in "
+                    LOC("Every package is saved whether or not it is dirty, and anything not currently in "
                     "memory is loaded first. This is what upgrades assets to a new serialization format "
-                    "(for example splitting texture mips for streaming).");
+                    "(for example splitting texture mips for streaming)."));
                 ImGui::Spacing();
-                ImGui::TextDisabled("A project-wide resave loads the entire project and can take a while.");
+                ImGui::TextDisabled(LOC("A project-wide resave loads the entire project and can take a while."));
 
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f)))
+                if (ImGui::Button(LOC("Cancel"), ImVec2(120.0f, 0.0f)))
                 {
                     return true;
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Resave", ImVec2(120.0f, 0.0f)))
+                if (ImGui::Button(LOC("Resave"), ImVec2(120.0f, 0.0f)))
                 {
                     ResavePhase = EResavePhase::Running;
                 }
@@ -829,7 +829,7 @@ namespace Lumina
                     ? 1.0f
                     : (float)((double)ResaveIndex / (double)ResaveQueue.size());
 
-                ImGui::Text("Resaving... %u / %u", ResaveIndex, (uint32)ResaveQueue.size());
+                ImGui::Text(LOC("Resaving... %u / %u"), ResaveIndex, (uint32)ResaveQueue.size());
                 ImGui::Spacing();
                 ImGui::ProgressBar(Progress, ImVec2(-1.0f, 0.0f));
                 ImGui::Spacing();
@@ -840,7 +840,7 @@ namespace Lumina
                 ImGui::Spacing();
 
                 // Stops issuing more saves; the ones already committed stay committed.
-                if (ImGui::Button("Stop", ImVec2(120.0f, 0.0f)))
+                if (ImGui::Button(LOC("Stop"), ImVec2(120.0f, 0.0f)))
                 {
                     ResavePhase = EResavePhase::Done;
                 }
@@ -855,31 +855,31 @@ namespace Lumina
             case EResavePhase::Done:
             default:
             {
-                ImGui::Text("Resaved %u package(s).", ResaveSaved);
+                ImGui::Text(LOC("Resaved %u package(s)."), ResaveSaved);
                 if (ResaveFailed > 0)
                 {
                     ImGui::TextColored(ImVec4(0.95f, 0.4f, 0.35f, 1.0f),
-                        "%u asset(s) failed -- see the log.", ResaveFailed);
+                        LOC("%u asset(s) failed -- see the log."), ResaveFailed);
                 }
                 if (ResaveIndex < ResaveQueue.size())
                 {
-                    ImGui::TextDisabled("Stopped with %u remaining.", (uint32)ResaveQueue.size() - ResaveIndex);
+                    ImGui::TextDisabled(LOC("Stopped with %u remaining."), (uint32)ResaveQueue.size() - ResaveIndex);
                 }
 
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                if (ImGui::Button("Close", ImVec2(120.0f, 0.0f)))
+                if (ImGui::Button(LOC("Close"), ImVec2(120.0f, 0.0f)))
                 {
                     if (ResaveFailed > 0)
                     {
-                        ImGuiX::Notifications::NotifyError("Resave: {0} package(s) saved, {1} asset(s) failed.",
+                        ImGuiX::Notifications::NotifyError(LOCF("Resave: {0} package(s) saved, {1} asset(s) failed."),
                             ResaveSaved, ResaveFailed);
                     }
                     else
                     {
-                        ImGuiX::Notifications::NotifySuccess("Resave: {0} package(s) saved.", ResaveSaved);
+                        ImGuiX::Notifications::NotifySuccess(LOCF("Resave: {0} package(s) saved."), ResaveSaved);
                     }
 
                     // Disk sizes just changed under the snapshot.
@@ -982,7 +982,7 @@ namespace Lumina
                         RangeAnchor  = (int32)(BaseIndex + (uint32)i);
                     }
 
-                    if (ImGui::MenuItem(LE_ICON_FILE " Open Asset"))
+                    if (ImGui::MenuItem(LOC_ICON(LE_ICON_FILE, "Open Asset")))
                     {
                         if (ToolContext)
                         {
@@ -992,7 +992,7 @@ namespace Lumina
 
                     {
                         FFixedString ResaveLabel;
-                        FormatTo(ResaveLabel, LE_ICON_CONTENT_SAVE_ALL " Resave {} Selected", (uint32)SelectedGUIDs.size());
+                        ResaveLabel = FormatAs<FFixedString>(Fmt::RuntimeFormat(LOC_ICON(LE_ICON_CONTENT_SAVE_ALL, "Resave {} Selected")), (uint32)SelectedGUIDs.size());
                         if (ImGui::MenuItem(ResaveLabel.c_str()))
                         {
                             OpenResaveModal();
@@ -1000,18 +1000,18 @@ namespace Lumina
                     }
 
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Copy Name"))
+                    if (ImGui::MenuItem(LOC("Copy Name")))
                     {
                         ImGui::SetClipboardText(Row.Name.c_str());
                     }
-                    if (ImGui::MenuItem("Copy Path"))
+                    if (ImGui::MenuItem(LOC("Copy Path")))
                     {
                         if (const FAssetData* Data = FAssetRegistry::Get().GetAssetByGUID(Row.GUID))
                         {
                             ImGui::SetClipboardText(Data->Path.c_str());
                         }
                     }
-                    if (ImGui::MenuItem("Copy GUID"))
+                    if (ImGui::MenuItem(LOC("Copy GUID")))
                     {
                         ImGui::SetClipboardText(Row.GUID.ToString().c_str());
                     }
@@ -1068,12 +1068,12 @@ namespace Lumina
 
         auto SetupColumns = [](bool bFreezeHeader)
         {
-            ImGui::TableSetupColumn("Name",     ImGuiTableColumnFlags_WidthStretch, 0.32f);
-            ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthStretch, 0.20f);
-            ImGui::TableSetupColumn("Status",   ImGuiTableColumnFlags_WidthStretch, 0.16f);
-            ImGui::TableSetupColumn("Refs",     ImGuiTableColumnFlags_WidthStretch, 0.08f);
-            ImGui::TableSetupColumn("CPU Mem",  ImGuiTableColumnFlags_WidthStretch, 0.12f);
-            ImGui::TableSetupColumn("On Disk",  ImGuiTableColumnFlags_WidthStretch, 0.12f);
+            ImGui::TableSetupColumn(LOC_ID("Name"),     ImGuiTableColumnFlags_WidthStretch, 0.32f);
+            ImGui::TableSetupColumn(LOC_ID("Category"), ImGuiTableColumnFlags_WidthStretch, 0.20f);
+            ImGui::TableSetupColumn(LOC_ID("Status"),   ImGuiTableColumnFlags_WidthStretch, 0.16f);
+            ImGui::TableSetupColumn(LOC_ID("Refs"),     ImGuiTableColumnFlags_WidthStretch, 0.08f);
+            ImGui::TableSetupColumn(LOC_ID("CPU Mem"),  ImGuiTableColumnFlags_WidthStretch, 0.12f);
+            ImGui::TableSetupColumn(LOC_ID("On Disk"),  ImGuiTableColumnFlags_WidthStretch, 0.12f);
             if (bFreezeHeader)
             {
                 ImGui::TableSetupScrollFreeze(0, 1);
@@ -1127,12 +1127,12 @@ namespace Lumina
 
         if (Selected == nullptr)
         {
-            ImGui::TextDisabled("Select an asset to view details");
+            ImGui::TextDisabled(LOC("Select an asset to view details"));
             return;
         }
 
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.9f, 1.0f, 1.0f));
-        ImGui::TextUnformatted(LE_ICON_DATABASE " Asset Details");
+        ImGui::TextUnformatted(LOC_ICON(LE_ICON_DATABASE, "Asset Details"));
         ImGui::PopStyleColor();
         ImGui::Separator();
         ImGui::Spacing();
@@ -1146,34 +1146,34 @@ namespace Lumina
             ImGui::Spacing();
         };
 
-        Field("Name",  Selected->Name.ToString());
-        Field("Class", Selected->Class.ToString(), CategoryColor(Selected->Class));
+        Field(LOC("Name"),  Selected->Name.ToString());
+        Field(LOC("Class"), Selected->Class.ToString(), CategoryColor(Selected->Class));
         const FAssetData* SelectedData = FAssetRegistry::Get().GetAssetByGUID(Selected->GUID);
-        Field("Path",  SelectedData != nullptr ? FString(SelectedData->Path.c_str()) : FString());
-        Field("GUID",  Selected->GUID.ToString(), ImVec4(0.55f, 0.55f, 0.55f, 1.0f));
+        Field(LOC("Path"),  SelectedData != nullptr ? FString(SelectedData->Path.c_str()) : FString());
+        Field(LOC("GUID"),  Selected->GUID.ToString(), ImVec4(0.55f, 0.55f, 0.55f, 1.0f));
 
         // Looked up live, since the referencer scan dereferences it and the row may not have been rechecked yet.
         CObject* LoadedObject = FindObject<CObject>(Selected->GUID);
         const bool bLoaded = LoadedObject != nullptr;
-        Field("Status", StatusLabel(bLoaded), StatusColor(bLoaded));
-        Field("On Disk", ImGuiX::FormatSize(Selected->DiskBytes).c_str());
+        Field(LOC("Status"), StatusLabel(bLoaded), StatusColor(bLoaded));
+        Field(LOC("On Disk"), ImGuiX::FormatSize(Selected->DiskBytes).c_str());
 
         if (bLoaded)
         {
-            Field("CPU Memory", ImGuiX::FormatSize(Selected->CpuBytes).c_str(), ImVec4(1.0f, 0.75f, 0.4f, 1.0f));
-            Field("Ref Count", Format("{}", Selected->RefCount),
+            Field(LOC("CPU Memory"), ImGuiX::FormatSize(Selected->CpuBytes).c_str(), ImVec4(1.0f, 0.75f, 0.4f, 1.0f));
+            Field(LOC("Ref Count"), Format("{}", Selected->RefCount),
                 Selected->RefCount > 0 ? ImVec4(0.85f, 0.85f, 0.85f, 1.0f) : ImVec4(0.9f, 0.6f, 0.3f, 1.0f));
         }
         else
         {
-            ImGui::TextDisabled("Not resident in memory, so no ref-count");
-            ImGui::TextDisabled("or footprint until something loads it.");
+            ImGui::TextDisabled(LOC("Not resident in memory, so no ref-count"));
+            ImGui::TextDisabled(LOC("or footprint until something loads it."));
             ImGui::Spacing();
         }
 
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.9f, 1.0f, 1.0f));
-        ImGui::TextUnformatted(LE_ICON_LINK " Referenced By");
+        ImGui::TextUnformatted(LOC_ICON(LE_ICON_LINK, "Referenced By"));
         ImGui::PopStyleColor();
         ImGui::Separator();
 
@@ -1182,26 +1182,26 @@ namespace Lumina
             RebuildRegistryReferencers(Selected->GUID);
         }
 
-        if (bLoaded && ImGui::SmallButton(LE_ICON_MAGNIFY " Scan Live Objects"))
+        if (bLoaded && ImGui::SmallButton(LOC_ICON(LE_ICON_MAGNIFY, "Scan Live Objects")))
         {
             RebuildLiveReferencers(LoadedObject);
         }
-        ImGui::TextDisabled("%s", bReferencersFromLiveScan ? "From a scan of objects in memory." : "From saved packages.");
+        ImGui::TextDisabled("%s", bReferencersFromLiveScan ? LOC("From a scan of objects in memory.") : LOC("From saved packages."));
 
         if (Referencers.empty())
         {
-            ImGui::TextDisabled("No references found.");
+            ImGui::TextDisabled(LOC("No references found."));
             if (bReferencersFromLiveScan)
             {
-                ImGui::TextDisabled("(ECS components still count toward ref-count.)");
+                ImGui::TextDisabled(LOC("(ECS components still count toward ref-count.)"));
             }
         }
         else if (ImGui::BeginTable("##Referencers", 2,
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY,
             ImVec2(0, 0)))
         {
-            ImGui::TableSetupColumn("Object");
-            ImGui::TableSetupColumn("Class");
+            ImGui::TableSetupColumn(LOC_ID("Object"));
+            ImGui::TableSetupColumn(LOC_ID("Class"));
             ImGui::TableHeadersRow();
 
             ImGuiListClipper Clipper;
@@ -1216,7 +1216,7 @@ namespace Lumina
                     ImGui::TextUnformatted(Ref.Name.c_str());
                     if (ImGui::IsItemHovered())
                     {
-                        ImGui::SetTooltip("Package %s", Ref.Package.c_str());
+                        ImGui::SetTooltip(LOC("Package %s"), Ref.Package.c_str());
                     }
                     ImGui::TableSetColumnIndex(1);
                     ImGui::PushStyleColor(ImGuiCol_Text, CategoryColor(Ref.Class));

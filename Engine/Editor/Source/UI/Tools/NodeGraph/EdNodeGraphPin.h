@@ -44,6 +44,12 @@ namespace Lumina
         
         virtual uint32 GetPinColor() const { return PinColor; }
 
+        // Localization context for this pin's name. A pin name doubles as an identifier, so it is
+        // translated only where it is drawn, and a domain in which a word reads differently supplies
+        // a tag here -- "Pan" is 声像 on an audio node but 平移 in a viewport. Null means the pin
+        // name is unambiguous and the plain source lookup is enough.
+        virtual const char* GetPinLocalizationContext() const { return nullptr; }
+
         // Shader type this pin carries ("float2", ...); empty for graphs whose pins are untyped.
         virtual FString GetPinTypeName() const { return FString(); }
         void SetPinColor(uint32 Color) { PinColor = Color;}

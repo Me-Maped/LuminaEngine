@@ -1,4 +1,5 @@
 #include "AnimGraphNode_LayeredBlendPerBone.h"
+#include "Localization/Localization.h"
 #include "UI/Tools/NodeGraph/Animation/AnimationGraphCompiler.h"
 
 namespace Lumina
@@ -33,9 +34,9 @@ namespace Lumina
             else
             {
                 EdNodeGraph::FError NodeWarning;
-                NodeWarning.Name        = "Unknown Bone";
-                NodeWarning.Description = FString("Layered Blend Per Bone references bone '") + BoneName.ToString() +
-                    "' which doesn't exist on the graph's skeleton; falling back to a whole-skeleton blend.";
+                NodeWarning.Name        = LOC("Unknown Bone");
+                NodeWarning.Description = FString(LOC("Layered Blend Per Bone references bone '")) + BoneName.ToString() +
+                    LOC("' which doesn't exist on the graph's skeleton; falling back to a whole-skeleton blend.");
                 NodeWarning.Node        = this;
                 Compiler.AddWarning(NodeWarning);
             }
@@ -50,10 +51,10 @@ namespace Lumina
             else
             {
                 EdNodeGraph::FError NodeWarning;
-                NodeWarning.Name        = "No Bone / Mask";
+                NodeWarning.Name        = LOC("No Bone / Mask");
                 NodeWarning.Description = MaskName.IsNone()
-                    ? FString("Layered Blend Per Bone has no Bone or Mask set; falling back to a whole-skeleton blend.")
-                    : FString("Layered Blend Per Bone references mask '") + MaskName.ToString() + "' which isn't defined on the graph asset's Bone Masks list.";
+                    ? FString(LOC("Layered Blend Per Bone has no Bone or Mask set; falling back to a whole-skeleton blend."))
+                    : FString(LOC("Layered Blend Per Bone references mask '")) + MaskName.ToString() + LOC("' which isn't defined on the graph asset's Bone Masks list.");
                 NodeWarning.Node        = this;
                 Compiler.AddWarning(NodeWarning);
             }

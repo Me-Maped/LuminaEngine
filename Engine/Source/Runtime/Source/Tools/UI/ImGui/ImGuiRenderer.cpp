@@ -27,6 +27,7 @@
 #include "Containers/HashTable.h"
 #include "backends/imgui_impl_glfw.h"
 #include "Log/Log.h"
+#include "FileSystem/FileSystem.h"
 
 namespace Lumina
 {
@@ -272,6 +273,16 @@ namespace Lumina
     	IconFontConfig.PixelSnapH = true;
     	IconFontConfig.RasterizerMultiply = 1.5f;
 
+        // Every merged source shares these bytes. Dynamic glyph loading needs them until the
+        // atlas is destroyed, so the renderer owns the buffer rather than a local or static cache.
+        constexpr const char* CJKFontPath = "/Engine/Resources/Fonts/NotoSansCJK/NotoSansCJKsc-Regular.otf";
+        CJKFontData.clear();
+        if (!VFS::ReadFile(CJKFontData, CJKFontPath) || CJKFontData.empty())
+        {
+            PANIC("Failed to load bundled Chinese font '{}'. Check engine resources / LUMINA_DIR.", CJKFontPath);
+        }
+        LOG_DISPLAY("CJK fallback: '{}' (Noto Sans CJK SC Regular).", CJKFontPath);
+
 		ImGuiIO& io = ImGui::GetIO();
     	auto CreateFontFromFile = [&] (FStringView Path, float FontSize, float IconFontSize, ImGuiX::Font::EFont FontID, const ImVec2& GlyphOffset)
     	{
@@ -290,6 +301,23 @@ namespace Lumina
     		{
     			LOG_ERROR("Failed to load icon font '{}'; editor icons will be missing. Check engine resources / LUMINA_DIR.", IconFontFile.c_str());
     		}
+
+            // Merged last, so Latin keeps the primary face and icons keep their own. Merge-mode sources
+            // are tried in order until one has the codepoint, so a face without Chinese is skipped by
+            // the loader and one without icons is never reached for them.
+            if (!CJKFontData.empty())
+            {
+                ImFontConfig CJKConfig;
+                CJKConfig.FontDataOwnedByAtlas = false;  // CJKFontData owns the bytes.
+                CJKConfig.MergeMode = true;
+                CJKConfig.PixelSnapH = true;
+
+                // Size 0 in merge mode inherits the source font's size, so Chinese matches the Latin text.
+                if (io.Fonts->AddFontFromMemoryTTF(CJKFontData.data(), static_cast<int>(CJKFontData.size()), 0.0f, &CJKConfig) == nullptr)
+                {
+                    PANIC("Failed to merge bundled Chinese font '{}'.", CJKFontPath);
+                }
+            }
     	};
 		
 
@@ -400,7 +428,9 @@ namespace Lumina
 
     void IImGuiRenderer::Deinitialize()
     {
-    	ImGui::DestroyContext();
+        ImGui::DestroyContext(Context);
+        Context = nullptr;
+        CJKFontData.clear();
     }
 
     void IImGuiRenderer::StartFrame(const FUpdateContext& UpdateContext)

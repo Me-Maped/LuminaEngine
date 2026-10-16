@@ -1,4 +1,5 @@
 ﻿#include "AssetRefPropertyCustomization.h"
+#include "Localization/Localization.h"
 
 #include "imgui.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
@@ -139,14 +140,14 @@ namespace Lumina
                 VFS::PlatformOpen(ResolvedPath);
             }
         }
-        ImGuiX::TextTooltip("{}", bEngineEditor ? "Open in the UI editor" : "Open in your native editor");
+        ImGuiX::TextTooltip("{}", bEngineEditor ? LOC("Open in the UI editor") : LOC("Open in your native editor"));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_CONTENT_COPY "##Copy", GAssetRefButtonSize))
         {
             ImGui::SetClipboardText(ResolvedPath.c_str());
         }
-        ImGuiX::TextTooltip("Copy the path to your clipboard");
+        ImGuiX::TextTooltip(LOCF("Copy the path to your clipboard"));
 
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
@@ -158,7 +159,7 @@ namespace Lumina
             bWasChanged = true;
         }
         ImGui::PopStyleColor(3);
-        ImGuiX::TextTooltip("Clear the reference");
+        ImGuiX::TextTooltip(LOCF("Clear the reference"));
 
         ImGui::PopItemWidth();
         ImGui::PopID();

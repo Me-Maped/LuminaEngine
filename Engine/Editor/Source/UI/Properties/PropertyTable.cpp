@@ -1,4 +1,5 @@
 ﻿#include "PropertyTable.h"
+#include "Localization/Localization.h"
 
 #include <cstdlib>
 
@@ -35,6 +36,24 @@ namespace Lumina
     static constexpr uint32     ArrayControlSeed = 428768833;
     static constexpr float      ResetColumnWidth = 22.0f;
     static ImU32 ModifiedMarkerColor() { return EditorColors::U32(EditorColors::Warning()); }
+
+    // Display-only translation of a reflected property's name. The name itself stays the identity --
+    // it is the ImGui ID, the key the table is grouped and searched by, and what a save records -- so
+    // only the drawn half moves. The table is keyed by the English display name, which is what
+    // FProperty::MakeDisplayNameFromName derives from the C++ member name.
+    static const char* LocalizedPropertyName(const FProperty* Property)
+    {
+        const FCStringView Display = Property->GetPropertyDisplayName();
+        return FLocalization::Get().Translate(FStringView(Display.c_str(), Display.size()));
+    }
+
+    // Same, for a header that is also an ImGui ID: the identity goes after "###", so switching the
+    // language cannot move the ID and collapse (or reassign) the row's stored state.
+    static const char* LocalizedPropertyNameId(const FProperty* Property)
+    {
+        const FCStringView Display = Property->GetPropertyDisplayName();
+        return Localization::LocalizedId(FStringView(Display.c_str(), Display.size()));
+    }
 
     // Inside a session only Finished commits, since a lifecycle-free widget sends a lone Updated.
     static bool IsCommitOp(EPropertyChangeOp Op, bool bSessionActive)
@@ -469,7 +488,7 @@ namespace Lumina
 
         if (!ArePropertiesCompatible(PropertyHandle->Property, PropertyHandle->Property))
         {
-            ImGuiX::Notifications::NotifyWarning("'{0}' is not a copyable property type.", PropertyHandle->Property->Name);
+            ImGuiX::Notifications::NotifyWarning(LOCF("'{0}' is not a copyable property type."), PropertyHandle->Property->Name);
             return;
         }
 
@@ -481,7 +500,7 @@ namespace Lumina
         PropertyHandle->Property->Serialize(Proxy, Value);
 
         GPropertyClipboardSource = PropertyHandle->Property;
-        ImGuiX::Notifications::NotifySuccess("Copied '{0}'.", PropertyHandle->Property->Name);
+        ImGuiX::Notifications::NotifySuccess(LOCF("Copied '{0}'."), PropertyHandle->Property->Name);
     }
 
     void FPropertyRow::PastePropertyValue()
@@ -494,7 +513,7 @@ namespace Lumina
 
         if (!ArePropertiesCompatible(GPropertyClipboardSource, PropertyHandle->Property))
         {
-            ImGuiX::Notifications::NotifyWarning("Clipboard holds a '{0}'; cannot paste into '{1}'.",
+            ImGuiX::Notifications::NotifyWarning(LOCF("Clipboard holds a '{0}'; cannot paste into '{1}'."),
                 GPropertyClipboardSource->Name, PropertyHandle->Property->Name);
             return;
         }
@@ -518,7 +537,7 @@ namespace Lumina
         DispatchChange(EPropertyChangeOp::Finished);
         ChangeOp = EPropertyChangeOp::None;
 
-        ImGuiX::Notifications::NotifySuccess("Pasted into '{0}'.", PropertyHandle->Property->Name);
+        ImGuiX::Notifications::NotifySuccess(LOCF("Pasted into '{0}'."), PropertyHandle->Property->Name);
     }
 
     void FPropertyRow::PerformResetToDefault()
@@ -662,7 +681,7 @@ namespace Lumina
             if (ImGui::BeginPopupContextItem("##PropCtx"))
             {
                 ImGui::BeginDisabled(!bDiffers || bReadOnly || IsReadOnly() || bMultipleValues);
-                if (ImGui::MenuItem(LE_ICON_REFRESH " Reset to Default"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_REFRESH, "Reset to Default")))
                 {
                     PerformResetToDefault();
                 }
@@ -703,7 +722,7 @@ namespace Lumina
                 ImGui::AlignTextToFramePadding();
                 if (bMultipleValues)
                 {
-                    ImGui::TextDisabled("(Multiple Values)");
+                    ImGui::TextDisabled(LOC("(Multiple Values)"));
                 }
                 else
                 {
@@ -733,7 +752,7 @@ namespace Lumina
                     ImGui::PopStyleVar();
                     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                     {
-                        ImGuiX::TextTooltip_Internal("Reset to default");
+                        ImGuiX::TextTooltip_Internal(LOC("Reset to default"));
                     }
                 }
 
@@ -833,7 +852,7 @@ namespace Lumina
         FStringView Tooltip = Property->GetMetadata("ToolTip");
         if (Tooltip.empty())
         {
-            Tooltip = Property->GetPropertyDisplayName();
+            Tooltip = LocalizedPropertyName(Property);
         }
         ImGuiX::WrappedTooltip_Internal(Tooltip);
     }
@@ -886,8 +905,7 @@ namespace Lumina
         {
             return FStringView();
         }
-        const FCStringView Display = PropertyHandle->Property->GetPropertyDisplayName();
-        return FStringView(Display.c_str(), Display.size());
+        return FStringView(LocalizedPropertyName(PropertyHandle->Property));
     }
 
     void FPropertyPropertyRow::DrawHeader(float Offset, const FPropertyDrawArgs& Args)
@@ -901,7 +919,7 @@ namespace Lumina
         }
         else
         {
-            ImGui::TextUnformatted(PropertyHandle->Property->GetPropertyDisplayName().c_str());
+            ImGui::TextUnformatted(LocalizedPropertyName(PropertyHandle->Property));
         }
 
         DrawPropertyTooltip(PropertyHandle->Property);
@@ -917,7 +935,7 @@ namespace Lumina
         }
         else
         {
-            ImGui::TextUnformatted(LE_ICON_EXCLAMATION "Missing Property Customization");
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_EXCLAMATION, "Missing Property Customization"));
         }
 
         ImGui::EndDisabled();
@@ -931,7 +949,7 @@ namespace Lumina
             snprintf(Buf, sizeof(Buf), "%lld", static_cast<long long>(PropertyHandle->Index));
             return ImGui::CalcTextSize(Buf).x;
         }
-        return ImGui::CalcTextSize(PropertyHandle->Property->GetPropertyDisplayName().c_str()).x;
+        return ImGui::CalcTextSize(LocalizedPropertyName(PropertyHandle->Property)).x;
     }
 
     bool FPropertyRow::HasExtraControls() const
@@ -967,7 +985,7 @@ namespace Lumina
 
         if (ImGui::BeginPopupContextItem(nullptr, ImGuiPopupFlags_MouseButtonLeft))
         {
-            if (bAllowResize && ImGui::MenuItem(LE_ICON_PLUS " Insert New Element"))
+            if (bAllowResize && ImGui::MenuItem(LOC_ICON(LE_ICON_PLUS, "Insert New Element")))
             {
                 ArrayRow->QueueMutation([ArrayProperty, ContainerPtr]
                 {
@@ -975,7 +993,7 @@ namespace Lumina
                 });
             }
 
-            if (bAllowReorder && Index > 0 && ImGui::MenuItem(LE_ICON_ARROW_UP " Move Element Up"))
+            if (bAllowReorder && Index > 0 && ImGui::MenuItem(LOC_ICON(LE_ICON_ARROW_UP, "Move Element Up")))
             {
                 ArrayRow->QueueMutation([ArrayProperty, ContainerPtr, Index]
                 {
@@ -983,7 +1001,7 @@ namespace Lumina
                 });
             }
 
-            if (bAllowReorder && ArrayNum > 0 && Cmp::Less(Index, ArrayNum - 1) && ImGui::MenuItem(LE_ICON_ARROW_DOWN " Move Element Down"))
+            if (bAllowReorder && ArrayNum > 0 && Cmp::Less(Index, ArrayNum - 1) && ImGui::MenuItem(LOC_ICON(LE_ICON_ARROW_DOWN, "Move Element Down")))
             {
                 ArrayRow->QueueMutation([ArrayProperty, ContainerPtr, Index]
                 {
@@ -991,7 +1009,7 @@ namespace Lumina
                 });
             }
 
-            if (bAllowResize && ImGui::MenuItem(LE_ICON_TRASH_CAN " Remove Element"))
+            if (bAllowResize && ImGui::MenuItem(LOC_ICON(LE_ICON_TRASH_CAN, "Remove Element")))
             {
                 ArrayRow->QueueMutation([ArrayProperty, ContainerPtr, Index]
                 {
@@ -1004,7 +1022,7 @@ namespace Lumina
 
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::TextTooltip_Internal("Array Element Options");
+            ImGuiX::TextTooltip_Internal(LOC("Array Element Options"));
         }
     }
 
@@ -1053,7 +1071,7 @@ namespace Lumina
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, 0);
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, 0);
         const ImGuiTreeNodeFlags Flags = ElementCount ? 0 : ImGuiTreeNodeFlags_Leaf;
-        bExpanded = ImGui::CollapsingHeader(ArrayProperty->GetPropertyDisplayName().c_str(), Flags);
+        bExpanded = ImGui::CollapsingHeader(LocalizedPropertyNameId(ArrayProperty), Flags);
         ImGui::PopStyleColor(3);
 
         DrawPropertyTooltip(ArrayProperty);
@@ -1062,12 +1080,12 @@ namespace Lumina
     void FArrayPropertyRow::DrawEditor(const FPropertyDrawArgs& Args)
     {
         const size_t ElementCount = ArrayProperty->GetNum(GetPropertyHandle()->GetValuePtr());
-        ImGui::TextColored(EditorColors::TextMuted(), "%llu Elements", static_cast<unsigned long long>(ElementCount));
+        ImGui::TextColored(EditorColors::TextMuted(), LOC("%llu Elements"), static_cast<unsigned long long>(ElementCount));
     }
 
     float FArrayPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(ArrayProperty->GetPropertyDisplayName().c_str()).x;
+        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(LocalizedPropertyNameId(ArrayProperty), nullptr, true).x;
     }
 
     bool FArrayPropertyRow::IsInnerFixedHeight() const
@@ -1126,10 +1144,10 @@ namespace Lumina
         ImGui::TableNextColumn();
         ImGui::Dummy(ImVec2(Offset, 0));
         ImGui::SameLine();
-        ImGui::TextDisabled("%d more element%s hidden", HiddenCount, HiddenCount == 1 ? "" : "s");
+        ImGui::TextDisabled(HiddenCount == 1 ? LOC("%d more element hidden") : LOC("%d more elements hidden"), HiddenCount);
 
         ImGui::TableNextColumn();
-        if (ImGui::SmallButton("Show All"))
+        if (ImGui::SmallButton(LOC("Show All")))
         {
             bShowAllElements = true;
         }
@@ -1199,7 +1217,7 @@ namespace Lumina
         ImGui::PopStyleVar();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::TextTooltip_Internal("Add array element");
+            ImGuiX::TextTooltip_Internal(LOC("Add array element"));
         }
 
         ImGui::SameLine();
@@ -1214,7 +1232,7 @@ namespace Lumina
         ImGui::PopStyleVar();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::TextTooltip_Internal("Remove all array elements");
+            ImGuiX::TextTooltip_Internal(LOC("Remove all array elements"));
         }
     }
 
@@ -1262,7 +1280,7 @@ namespace Lumina
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, 0);
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, 0);
         const ImGuiTreeNodeFlags Flags = Count ? 0 : ImGuiTreeNodeFlags_Leaf;
-        bExpanded = ImGui::CollapsingHeader(MapProperty->GetPropertyDisplayName().c_str(), Flags);
+        bExpanded = ImGui::CollapsingHeader(LocalizedPropertyNameId(MapProperty), Flags);
         ImGui::PopStyleColor(3);
 
         DrawPropertyTooltip(MapProperty);
@@ -1271,12 +1289,12 @@ namespace Lumina
     void FMapPropertyRow::DrawEditor(const FPropertyDrawArgs& Args)
     {
         const size_t Count = MapProperty->GetNum(GetPropertyHandle()->GetValuePtr());
-        ImGui::TextColored(EditorColors::TextMuted(), "%llu Entries", static_cast<unsigned long long>(Count));
+        ImGui::TextColored(EditorColors::TextMuted(), LOC("%llu Entries"), static_cast<unsigned long long>(Count));
     }
 
     float FMapPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(MapProperty->GetPropertyDisplayName().c_str()).x;
+        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(LocalizedPropertyNameId(MapProperty), nullptr, true).x;
     }
 
     void FMapPropertyRow::RebuildChildren()
@@ -1334,7 +1352,7 @@ namespace Lumina
         ImGui::PopStyleVar();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::TextTooltip_Internal("Add map entry");
+            ImGuiX::TextTooltip_Internal(LOC("Add map entry"));
         }
 
         ImGui::SameLine();
@@ -1346,7 +1364,7 @@ namespace Lumina
         ImGui::PopStyleVar();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::TextTooltip_Internal("Remove all map entries");
+            ImGuiX::TextTooltip_Internal(LOC("Remove all map entries"));
         }
     }
 
@@ -1497,7 +1515,7 @@ namespace Lumina
                 Map->GetKeyProperty()->CopyCompleteValue(Slot, PreviousKey);
             }
             if (KeyCustomization) { KeyCustomization->HandleExternalUpdate(KeyHandle); }
-            ImGuiX::Notifications::NotifyWarning("Duplicate map key ignored; keys must be unique.");
+            ImGuiX::Notifications::NotifyWarning(LOCF("Duplicate map key ignored; keys must be unique."));
         }
         
         if (Ops && Ops->HasPostEdit() && Callbacks.Instance && bFirePostEdit)
@@ -1525,7 +1543,7 @@ namespace Lumina
         else
         {
             // A non-leaf key gets a read-only placeholder and is edited through add and remove.
-            ImGui::TextDisabled("<key %lld>", static_cast<long long>(EntryIndex));
+            ImGui::TextDisabled(LOC("<key %lld>"), static_cast<long long>(EntryIndex));
         }
     }
 
@@ -1562,7 +1580,7 @@ namespace Lumina
         ImGui::PopStyleVar();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::TextTooltip_Internal("Remove entry");
+            ImGuiX::TextTooltip_Internal(LOC("Remove entry"));
         }
     }
 
@@ -1604,7 +1622,7 @@ namespace Lumina
             }
             else
             {
-                ImGui::TextUnformatted(StructProperty->GetPropertyDisplayName().c_str());
+                ImGui::TextUnformatted(LocalizedPropertyName(StructProperty));
             }
             DrawPropertyTooltip(StructProperty);
             return;
@@ -1614,7 +1632,7 @@ namespace Lumina
         ImGui::PushStyleColor(ImGuiCol_Header, 0);
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, 0);
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, 0);
-        bExpanded = ImGui::CollapsingHeader(StructProperty->GetPropertyDisplayName().c_str());
+        bExpanded = ImGui::CollapsingHeader(LocalizedPropertyNameId(StructProperty));
         ImGui::PopStyleColor(3);
 
         DrawPropertyTooltip(StructProperty);
@@ -1643,7 +1661,7 @@ namespace Lumina
 
     float FStructPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        const float LabelWidth = ImGui::CalcTextSize(StructProperty->GetPropertyDisplayName().c_str()).x;
+        const float LabelWidth = ImGui::CalcTextSize(LocalizedPropertyNameId(StructProperty), nullptr, true).x;
         return Customization ? LabelWidth : ImGui::GetTreeNodeToLabelSpacing() + LabelWidth;
     }
 
@@ -1703,13 +1721,13 @@ namespace Lumina
             }
         }
 
-        const char* Preview = Current ? InstancedStructLabel(Current) : "None";
+        const char* Preview = Current ? InstancedStructLabel(Current) : LOC("None");
 
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
         const int32 Picked = ImGuiX::SearchableCombo(StrId, Preview, static_cast<int32>(Candidates.size()) + 1, CurrentIndex,
             [&Candidates](int32 Index) -> FFixedString
             {
-                return (Index == 0) ? FFixedString("None") : FFixedString(InstancedStructLabel(Candidates[Index - 1]));
+                return (Index == 0) ? FFixedString(LOC("None")) : FFixedString(InstancedStructLabel(Candidates[Index - 1]));
             }, LE_ICON_CUBE_OUTLINE);
         ImGui::PopItemWidth();
 
@@ -1756,7 +1774,7 @@ namespace Lumina
         ImGui::PushStyleColor(ImGuiCol_Header, 0);
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, 0);
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, 0);
-        bExpanded = ImGui::CollapsingHeader(InstancedStructProperty->GetPropertyDisplayName().c_str());
+        bExpanded = ImGui::CollapsingHeader(LocalizedPropertyNameId(InstancedStructProperty));
         ImGui::PopStyleColor(3);
 
         DrawPropertyTooltip(InstancedStructProperty);
@@ -1800,7 +1818,7 @@ namespace Lumina
 
     float FInstancedStructPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(InstancedStructProperty->GetPropertyDisplayName().c_str()).x;
+        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(LocalizedPropertyNameId(InstancedStructProperty), nullptr, true).x;
     }
 
     void FInstancedStructPropertyRow::RebuildChildren()
@@ -1849,7 +1867,7 @@ namespace Lumina
     {
         ImGui::Dummy(ImVec2(Offset, 0));
         ImGui::SameLine();
-        ImGui::TextUnformatted(OptionalProperty->GetPropertyDisplayName().c_str());
+        ImGui::TextUnformatted(LocalizedPropertyName(OptionalProperty));
         DrawPropertyTooltip(OptionalProperty);
     }
 
@@ -1880,17 +1898,17 @@ namespace Lumina
         ImGui::SameLine();
         if (bEngaged)
         {
-            ImGui::TextDisabled("set");
+            ImGui::TextDisabled(LOC("set"));
         }
         else
         {
-            ImGui::TextDisabled("(none)");
+            ImGui::TextDisabled(LOC("(none)"));
         }
     }
 
     float FOptionalPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::CalcTextSize(OptionalProperty->GetPropertyDisplayName().c_str()).x;
+        return ImGui::CalcTextSize(LocalizedPropertyName(OptionalProperty)).x;
     }
 
     void FOptionalPropertyRow::OnValueResetToDefault()
@@ -1961,7 +1979,10 @@ namespace Lumina
 
     FStringView FCategoryPropertyRow::GetFilterLabel() const
     {
-        return FStringView(Category.c_str());
+        // What the filter matches has to be what the header shows, or a search typed in the active
+        // language would miss every section. The view returned here points into the table (or into
+        // the interned name), so it stays valid as long as the old one did.
+        return FLocalization::Get().TranslateView(FStringView(Category.c_str()), FStringView("category"));
     }
 
     void FCategoryPropertyRow::DrawHeader(float Offset, const FPropertyDrawArgs& Args)
@@ -1978,13 +1999,18 @@ namespace Lumina
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorColors::U32(EditorColors::RowBgActive()));
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorColors::U32(EditorColors::RowBgHovered()));
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextPrimary());
-        bExpanded = ImGui::CollapsingHeader(Category.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+        // Translated at the last moment: Category is the group's identity FName, so translating it
+        // where it is read would fork the grouping key. "###" keeps the ID on the original name,
+        // which also stops two categories that translate alike from sharing one header.
+        bExpanded = ImGui::CollapsingHeader(LOC_ID_CTX(Category.c_str(), "category"), ImGuiTreeNodeFlags_DefaultOpen);
         ImGui::PopStyleColor(4);
     }
 
     float FCategoryPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(Category.c_str()).x;
+        // The width of what is drawn, so this measures the plain translation rather than the
+        // "label###identity" form the header uses, which would measure the suffix as well.
+        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(LOC_VIEW_CTX(Category.c_str(), "category")).x;
     }
 
     FPropertyTable::FPropertyTable(void* InObject, CStruct* InType)
@@ -2182,7 +2208,7 @@ namespace Lumina
         {
             // PushID(this) only covers rows, so two tables in one window collided on the same widget id.
             ImGui::PushID(this);
-            ImGuiX::SearchBar("##PropertySearch", PropertyFilter, LE_ICON_MAGNIFY " Search properties...");
+            ImGuiX::SearchBar("##PropertySearch", PropertyFilter, LOC_ICON(LE_ICON_MAGNIFY, "Search properties..."));
             ImGui::PopID();
         }
 

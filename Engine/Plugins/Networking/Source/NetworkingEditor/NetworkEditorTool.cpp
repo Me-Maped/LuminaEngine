@@ -25,21 +25,21 @@ namespace Lumina
         {
             switch (Mode)
             {
-            case ENetMode::Standalone:      return "Standalone";
-            case ENetMode::Client:          return "Client";
-            case ENetMode::ListenServer:    return "Listen Server";
-            case ENetMode::DedicatedServer: return "Dedicated Server";
+            case ENetMode::Standalone:      return LOC("Standalone");
+            case ENetMode::Client:          return LOC("Client");
+            case ENetMode::ListenServer:    return LOC("Listen Server");
+            case ENetMode::DedicatedServer: return LOC("Dedicated Server");
             }
-            return "Unknown";
+            return LOC("Unknown");
         }
 
         const char* ConnStateName(EConnectionState State)
         {
             switch (State)
             {
-            case EConnectionState::Disconnected: return "Disconnected";
-            case EConnectionState::Connecting:   return "Connecting";
-            case EConnectionState::Connected:    return "Connected";
+            case EConnectionState::Disconnected: return LOC("Disconnected");
+            case EConnectionState::Connecting:   return LOC("Connecting");
+            case EConnectionState::Connected:    return LOC("Connected");
             }
             return "?";
         }
@@ -58,10 +58,10 @@ namespace Lumina
         {
             switch (Role)
             {
-            case ENetRole::None:            return "None";
-            case ENetRole::SimulatedProxy:  return "SimulatedProxy";
-            case ENetRole::AutonomousProxy: return "AutonomousProxy";
-            case ENetRole::Authority:       return "Authority";
+            case ENetRole::None:            return LOC("None");
+            case ENetRole::SimulatedProxy:  return LOC("SimulatedProxy");
+            case ENetRole::AutonomousProxy: return LOC("AutonomousProxy");
+            case ENetRole::Authority:       return LOC("Authority");
             }
             return "?";
         }
@@ -121,7 +121,7 @@ namespace Lumina
     {
         if (GWorldManager == nullptr)
         {
-            ImGui::TextDisabled("World manager not initialized.");
+            ImGui::TextDisabled(LOC("World manager not initialized."));
             return;
         }
 
@@ -141,8 +141,8 @@ namespace Lumina
 
         if (NetWorlds.empty())
         {
-            ImGui::TextDisabled("No active network sessions.");
-            ImGui::TextWrapped("Start a multiplayer PIE session (Play settings -> Net Mode) to see connections and stats here.");
+            ImGui::TextDisabled(LOC("No active network sessions."));
+            ImGui::TextWrapped(LOC("Start a multiplayer PIE session (Play settings -> Net Mode) to see connections and stats here."));
             SelectedWorld = nullptr;
             return;
         }
@@ -160,7 +160,7 @@ namespace Lumina
             return FString(Buf);
         };
 
-        ImGui::TextUnformatted("Session:");
+        ImGui::TextUnformatted(LOC("Session:"));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(280.0f);
         if (ImGui::BeginCombo("##NetWorld", WorldLabel(SelectedWorld).c_str()))
@@ -177,14 +177,14 @@ namespace Lumina
             ImGui::EndCombo();
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("(%d networked world%s)", (int)NetWorlds.size(), NetWorlds.size() == 1 ? "" : "s");
+        ImGui::TextDisabled(LOC("(%d networked world%s)"), (int)NetWorlds.size(), NetWorlds.size() == 1 ? "" : LOC_S);
 
         ImGui::Separator();
 
         FNetWorldState* State = GetNetState(SelectedWorld);
         if (State == nullptr)
         {
-            ImGui::TextDisabled("Selected world is no longer networked.");
+            ImGui::TextDisabled(LOC("Selected world is no longer networked."));
             return;
         }
 
@@ -213,7 +213,7 @@ namespace Lumina
         }
 
         // --- Validation / Warnings ---
-        if (ImGui::CollapsingHeader("Validation", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Validation"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             bool bAny = false;
             char Buf[256];
@@ -224,13 +224,13 @@ namespace Lumina
 
             if (RepStats.OversizedSnapshotDrops > 0)
             {
-                snprintf(Buf, sizeof(Buf), "Transform snapshot exceeded the 64 KB frame cap %u time(s) -- updates were DROPPED. "
-                    "Reduce replicated entities or split the snapshot.", RepStats.OversizedSnapshotDrops);
+                snprintf(Buf, sizeof(Buf), LOC("Transform snapshot exceeded the 64 KB frame cap %u time(s) -- updates were DROPPED. "
+                    "Reduce replicated entities or split the snapshot."), RepStats.OversizedSnapshotDrops);
                 Bullet(ColBad, Buf);
             }
             else if (CapPct >= 0.75f)
             {
-                snprintf(Buf, sizeof(Buf), "Transform snapshot at %.0f%% of the 64 KB frame cap (%u entities).",
+                snprintf(Buf, sizeof(Buf), LOC("Transform snapshot at %.0f%% of the 64 KB frame cap (%u entities)."),
                     CapPct * 100.0f, RepStats.MovementEntityCount);
                 Bullet(ColWarn, Buf);
             }
@@ -239,23 +239,23 @@ namespace Lumina
             {
                 if (C.PacketLoss > 0.15f)
                 {
-                    snprintf(Buf, sizeof(Buf), "Connection %u packet loss %.0f%%.", C.ConnectionId, C.PacketLoss * 100.0f);
+                    snprintf(Buf, sizeof(Buf), LOC("Connection %u packet loss %.0f%%."), C.ConnectionId, C.PacketLoss * 100.0f);
                     Bullet(ColBad, Buf);
                 }
                 else if (C.PacketLoss > 0.05f)
                 {
-                    snprintf(Buf, sizeof(Buf), "Connection %u packet loss %.1f%%.", C.ConnectionId, C.PacketLoss * 100.0f);
+                    snprintf(Buf, sizeof(Buf), LOC("Connection %u packet loss %.1f%%."), C.ConnectionId, C.PacketLoss * 100.0f);
                     Bullet(ColWarn, Buf);
                 }
 
                 if (C.RoundTripTimeMs > 300)
                 {
-                    snprintf(Buf, sizeof(Buf), "Connection %u RTT %u ms (high).", C.ConnectionId, C.RoundTripTimeMs);
+                    snprintf(Buf, sizeof(Buf), LOC("Connection %u RTT %u ms (high)."), C.ConnectionId, C.RoundTripTimeMs);
                     Bullet(ColBad, Buf);
                 }
                 else if (C.RoundTripTimeMs > 150)
                 {
-                    snprintf(Buf, sizeof(Buf), "Connection %u RTT %u ms.", C.ConnectionId, C.RoundTripTimeMs);
+                    snprintf(Buf, sizeof(Buf), LOC("Connection %u RTT %u ms."), C.ConnectionId, C.RoundTripTimeMs);
                     Bullet(ColWarn, Buf);
                 }
             }
@@ -265,46 +265,46 @@ namespace Lumina
                 const float Avg = static_cast<float>(RingSampleSum) / static_cast<float>(RingCount);
                 if (Avg < 2.0f)
                 {
-                    snprintf(Buf, sizeof(Buf), "Proxy interpolation buffers starving (avg %.1f samples) -- expect stutter.", Avg);
+                    snprintf(Buf, sizeof(Buf), LOC("Proxy interpolation buffers starving (avg %.1f samples) -- expect stutter."), Avg);
                     Bullet(ColWarn, Buf);
                 }
             }
 
             if (!bAny)
             {
-                ImGui::TextColored(ColGood, "  - No issues detected.");
+                ImGui::TextColored(ColGood, LOC("  - No issues detected."));
             }
         }
 
         // --- Overview ---
-        if (ImGui::CollapsingHeader("Overview", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Overview"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             int NetworkedEntities = 0;
             for (auto E : Registry.View<SNetworkComponent>()) { (void)E; ++NetworkedEntities; }
 
-            ImGui::BulletText("Role: %s", NetModeName(SelectedWorld->GetNetMode()));
-            ImGui::BulletText("Local Peer Id: %u%s", State->LocalPeerId, bIsServer ? " (server)" : "");
+            ImGui::BulletText(LOC("Role: %s"), NetModeName(SelectedWorld->GetNetMode()));
+            ImGui::BulletText(LOC("Local Peer Id: %u%s"), State->LocalPeerId, bIsServer ? LOC(" (server)") : "");
             if (bIsServer)
             {
-                ImGui::BulletText("Connected Clients: %d", State->ConnectedClients);
+                ImGui::BulletText(LOC("Connected Clients: %d"), State->ConnectedClients);
             }
             else
             {
-                ImGui::BulletText("Connected to server: %s", State->bClientConnected ? "yes" : "no");
+                ImGui::BulletText(LOC("Connected to server: %s"), State->bClientConnected ? LOC("yes") : LOC("no"));
             }
-            ImGui::BulletText("Networked Entities: %d", NetworkedEntities);
-            ImGui::BulletText("NetGUID Table: %d entries", (int)State->GuidTable.GuidToEntity.size());
+            ImGui::BulletText(LOC("Networked Entities: %d"), NetworkedEntities);
+            ImGui::BulletText(LOC("NetGUID Table: %d entries"), (int)State->GuidTable.GuidToEntity.size());
             uint32 DynamicSpawns = 0;
             for (const auto& Pair : State->GuidTable.GuidToEntity)
             {
                 if (Pair.first >= NetGUID_DynamicStart) { ++DynamicSpawns; }
             }
-            ImGui::BulletText("Dynamic Spawns Tracked: %d", (int)DynamicSpawns);
+            ImGui::BulletText(LOC("Dynamic Spawns Tracked: %d"), (int)DynamicSpawns);
         }
 
         // --- Transport totals + throughput ---
         const FNetworkStats Stats = State->Transport->GetStats();
-        if (ImGui::CollapsingHeader("Transport", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Transport"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             if (ImGui::BeginTable("##Totals", 2, ImGuiTableFlags_SizingFixedFit))
             {
@@ -314,10 +314,10 @@ namespace Lumina
                     ImGui::TableNextColumn(); ImGui::TextUnformatted(K);
                     ImGui::TableNextColumn(); ImGui::TextUnformatted(V.c_str());
                 };
-                Row("Sent",            FormatBytesNice((double)Stats.TotalSentBytes));
-                Row("Received",        FormatBytesNice((double)Stats.TotalReceivedBytes));
-                Row("Packets Sent",    FString(Format("{}", Stats.TotalSentPackets).c_str()));
-                Row("Packets Recv",    FString(Format("{}", Stats.TotalReceivedPackets).c_str()));
+                Row(LOC("Sent"),            FormatBytesNice((double)Stats.TotalSentBytes));
+                Row(LOC("Received"),        FormatBytesNice((double)Stats.TotalReceivedBytes));
+                Row(LOC("Packets Sent"),    FString(Format(LOCF("{}"), Stats.TotalSentPackets).c_str()));
+                Row(LOC("Packets Recv"),    FString(Format(LOCF("{}"), Stats.TotalReceivedPackets).c_str()));
                 ImGui::EndTable();
             }
 
@@ -327,14 +327,14 @@ namespace Lumina
             const float CurRecv = H.RecvRate[(H.Head + FNetHistory::Capacity - 1) % FNetHistory::Capacity];
 
             ImGui::Spacing();
-            ImGui::Text("Send: %s/s", FormatBytesNice(CurSend).c_str());
+            ImGui::Text(LOC("Send: %s/s"), FormatBytesNice(CurSend).c_str());
             ImGui::PlotLines("##Send", H.SendRate, FNetHistory::Capacity, H.Head, nullptr, 0.0f, FLT_MAX, ImVec2(-1, 60));
-            ImGui::Text("Recv: %s/s", FormatBytesNice(CurRecv).c_str());
+            ImGui::Text(LOC("Recv: %s/s"), FormatBytesNice(CurRecv).c_str());
             ImGui::PlotLines("##Recv", H.RecvRate, FNetHistory::Capacity, H.Head, nullptr, 0.0f, FLT_MAX, ImVec2(-1, 60));
         }
 
         // --- Replication (what the net layer actually sent this tick) ---
-        if (ImGui::CollapsingHeader("Replication", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Replication"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             int MoveRepl = 0, RoleAuth = 0, RoleSim = 0, RoleAuto = 0, RoleNone = 0;
             for (ECS::FEntity E : Registry.View<SNetworkComponent>())
@@ -359,83 +359,83 @@ namespace Lumina
             const ImVec4 BarCol = (RepStats.OversizedSnapshotDrops > 0) ? ColBad : (CapPct >= 0.75f ? ColWarn : ColGood);
 
             char Overlay[96];
-            snprintf(Overlay, sizeof(Overlay), "%s / %s  (largest frame)",
+            snprintf(Overlay, sizeof(Overlay), LOC("%s / %s  (largest frame)"),
                 FormatBytesNice((double)SmoothBytes).c_str(),
                 FormatBytesNice((double)Net::MaxFramedMessageSize).c_str());
 
-            ImGui::TextUnformatted("Largest transform frame vs 64 KB cap:");
+            ImGui::TextUnformatted(LOC("Largest transform frame vs 64 KB cap:"));
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram, BarCol);
             ImGui::ProgressBar(CapPct, ImVec2(-1, 0), Overlay);
             ImGui::PopStyleColor();
 
-            ImGui::BulletText("Movement-replicated entities: %d", MoveRepl);
-            ImGui::BulletText("Relevant per client: %u avg, %u max  (of %d) -- interest culling",
+            ImGui::BulletText(LOC("Movement-replicated entities: %d"), MoveRepl);
+            ImGui::BulletText(LOC("Relevant per client: %u avg, %u max  (of %d) -- interest culling"),
                 RepStats.RelevantAvg, RepStats.RelevantMax, MoveRepl);
             // The snapshot is split into as many <=64 KB frames as needed, so any entity count replicates.
             const float BytesPerEnt = RepStats.MovementEntityCount
                 ? static_cast<float>(RepStats.MovementTotalBytes) / static_cast<float>(RepStats.MovementEntityCount) : 0.0f;
-            ImGui::BulletText("Snapshot total: %s across %u frame%s  (%u entities, %.1f B/entity)",
+            ImGui::BulletText(LOC("Snapshot total: %s across %u frame%s  (%u entities, %.1f B/entity)"),
                 FormatBytesNice((double)RepStats.MovementTotalBytes).c_str(),
-                RepStats.MovementChunks, RepStats.MovementChunks == 1 ? "" : "s",
+                RepStats.MovementChunks, RepStats.MovementChunks == 1 ? "" : LOC_S,
                 RepStats.MovementEntityCount, BytesPerEnt);
-            ImGui::BulletText("Peak frame: %s", FormatBytesNice((double)RepStats.PeakMovementFrameBytes).c_str());
+            ImGui::BulletText(LOC("Peak frame: %s"), FormatBytesNice((double)RepStats.PeakMovementFrameBytes).c_str());
             if (RepStats.OversizedSnapshotDrops > 0)
             {
-                ImGui::TextColored(ColBad, "  Oversized frame drops: %u", RepStats.OversizedSnapshotDrops);
+                ImGui::TextColored(ColBad, LOC("  Oversized frame drops: %u"), RepStats.OversizedSnapshotDrops);
             }
-            ImGui::BulletText("Datagrams: unreliable %s, reliable %s",
+            ImGui::BulletText(LOC("Datagrams: unreliable %s, reliable %s"),
                 FormatBytesNice((double)RepStats.UnreliableBatchBytes).c_str(),
                 FormatBytesNice((double)RepStats.ReliableBatchBytes).c_str());
-            ImGui::BulletText("Last tick: %u spawns, %u despawns, %u property updates%s",
+            ImGui::BulletText(LOC("Last tick: %u spawns, %u despawns, %u property updates%s"),
                 RepStats.SpawnsSent, RepStats.DespawnsSent, RepStats.PropertyUpdatesSent,
-                RepStats.bKeyframeThisTick ? "  (keyframe)" : "");
-            ImGui::BulletText("Roles: Authority %d, Simulated %d, Autonomous %d, None %d",
+                RepStats.bKeyframeThisTick ? LOC("  (keyframe)") : "");
+            ImGui::BulletText(LOC("Roles: Authority %d, Simulated %d, Autonomous %d, None %d"),
                 RoleAuth, RoleSim, RoleAuto, RoleNone);
 
             // With chunking this stays under the cap, since the snapshot just splits into more frames.
             const float CurSnap = H.MovementBytes[(H.Head + FNetHistory::Capacity - 1) % FNetHistory::Capacity];
             ImGui::Spacing();
-            ImGui::Text("Largest frame (cap = top of plot): %s", FormatBytesNice(CurSnap).c_str());
+            ImGui::Text(LOC("Largest frame (cap = top of plot): %s"), FormatBytesNice(CurSnap).c_str());
             ImGui::PlotLines("##Snap", H.MovementBytes, FNetHistory::Capacity, H.Head, nullptr,
                 0.0f, static_cast<float>(Net::MaxFramedMessageSize), ImVec2(-1, 60));
         }
 
         // --- Interpolation (client-side smoothing health) ---
-        if (ImGui::CollapsingHeader("Interpolation", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Interpolation"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             const CNetworkSettings* NS = GetDefault<CNetworkSettings>();
-            ImGui::BulletText("Interp delay: %.0f ms", (NS ? NS->InterpDelay : 0.1f) * 1000.0f);
-            ImGui::BulletText("Clock offset: %.1f ms", State->ClockOffset * 1000.0);
-            ImGui::BulletText("Latest server time: %.2f s", State->LatestServerTime);
+            ImGui::BulletText(LOC("Interp delay: %.0f ms"), (NS ? NS->InterpDelay : 0.1f) * 1000.0f);
+            ImGui::BulletText(LOC("Clock offset: %.1f ms"), State->ClockOffset * 1000.0);
+            ImGui::BulletText(LOC("Latest server time: %.2f s"), State->LatestServerTime);
             if (RingCount > 0)
             {
-                ImGui::BulletText("Proxy rings: %d active, avg %.1f samples (min %d, cap %d)",
+                ImGui::BulletText(LOC("Proxy rings: %d active, avg %.1f samples (min %d, cap %d)"),
                     RingCount, (float)RingSampleSum / (float)RingCount, RingMin, FNetInterpState::Capacity);
             }
             else
             {
-                ImGui::BulletText("Proxy rings: none active");
+                ImGui::BulletText(LOC("Proxy rings: none active"));
             }
         }
 
         // --- Per-connection stats ---
-        if (ImGui::CollapsingHeader("Connections", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Connections"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             if (Conns.empty())
             {
-                ImGui::TextDisabled("No peers.");
+                ImGui::TextDisabled(LOC("No peers."));
             }
             else if (ImGui::BeginTable("##Conns", 8,
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
             {
-                ImGui::TableSetupColumn("Id");
-                ImGui::TableSetupColumn("State");
-                ImGui::TableSetupColumn("RTT");
-                ImGui::TableSetupColumn("Loss");
-                ImGui::TableSetupColumn("Sent");
-                ImGui::TableSetupColumn("Recv");
-                ImGui::TableSetupColumn("Pkts");
-                ImGui::TableSetupColumn("Lost");
+                ImGui::TableSetupColumn(LOC_ID("Id"));
+                ImGui::TableSetupColumn(LOC_ID("State"));
+                ImGui::TableSetupColumn(LOC_ID("RTT"));
+                ImGui::TableSetupColumn(LOC_ID("Loss"));
+                ImGui::TableSetupColumn(LOC_ID("Sent"));
+                ImGui::TableSetupColumn(LOC_ID("Recv"));
+                ImGui::TableSetupColumn(LOC_ID("Pkts"));
+                ImGui::TableSetupColumn(LOC_ID("Lost"));
                 ImGui::TableHeadersRow();
 
                 for (const FConnectionStats& C : Conns)
@@ -455,10 +455,10 @@ namespace Lumina
         }
 
         // --- Per-entity replication (collapsed; capped + filterable so big sessions stay responsive) ---
-        if (ImGui::CollapsingHeader("Entities"))
+        if (ImGui::CollapsingHeader(LOC_ID("Entities")))
         {
             static ImGuiTextFilter Filter;
-            Filter.Draw("Filter (name)", 180.0f);
+            Filter.Draw(LOC("Filter (name)"), 180.0f);
 
             constexpr int MaxRows = 256;
             int Shown = 0, Total = 0;
@@ -466,12 +466,12 @@ namespace Lumina
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp
                 | ImGuiTableFlags_ScrollY, ImVec2(0, 220)))
             {
-                ImGui::TableSetupColumn("NetGUID");
-                ImGui::TableSetupColumn("Name");
-                ImGui::TableSetupColumn("Role");
-                ImGui::TableSetupColumn("Owner");
-                ImGui::TableSetupColumn("Move");
-                ImGui::TableSetupColumn("Ring");
+                ImGui::TableSetupColumn(LOC_ID("NetGUID"));
+                ImGui::TableSetupColumn(LOC_ID("Name"));
+                ImGui::TableSetupColumn(LOC_ID("Role"));
+                ImGui::TableSetupColumn(LOC_ID("Owner"));
+                ImGui::TableSetupColumn(LOC_ID("Move"));
+                ImGui::TableSetupColumn(LOC_ID("Ring"));
                 ImGui::TableHeadersRow();
 
                 for (ECS::FEntity E : Registry.View<SNetworkComponent>())
@@ -493,41 +493,41 @@ namespace Lumina
                     ImGui::TableNextColumn(); ImGui::TextUnformatted(Name);
                     ImGui::TableNextColumn(); ImGui::TextUnformatted(NetRoleName(N.LocalRole));
                     ImGui::TableNextColumn(); ImGui::Text("%u", N.OwningConnectionId);
-                    ImGui::TableNextColumn(); ImGui::TextUnformatted(N.bReplicatesMovement ? "yes" : "no");
+                    ImGui::TableNextColumn(); ImGui::TextUnformatted(N.bReplicatesMovement ? LOC("yes") : LOC("no"));
                     ImGui::TableNextColumn(); ImGui::Text("%d", Ring);
                 }
                 ImGui::EndTable();
             }
             if (Shown < Total)
             {
-                ImGui::TextDisabled("Showing %d of %d networked entities (cap/filter).", Shown, Total);
+                ImGui::TextDisabled(LOC("Showing %d of %d networked entities (cap/filter)."), Shown, Total);
             }
         }
     }
 
     void FNetworkEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Sessions",
-            "Each networked world (the listen server and every client preview) is a separate session. "
-            "Pick one to inspect its transport and connections.");
-        DrawHelpTextRow("Transport",
-            "Cumulative bytes/packets the ENet host has sent/received, plus a rolling bytes/sec graph.");
-        DrawHelpTextRow("Validation",
-            "Surfaces problems detected this tick: a transform snapshot approaching or exceeding the 64 KB "
+        DrawHelpTextRow(LOC("Sessions"),
+            LOC("Each networked world (the listen server and every client preview) is a separate session. "
+            "Pick one to inspect its transport and connections."));
+        DrawHelpTextRow(LOC("Transport"),
+            LOC("Cumulative bytes/packets the ENet host has sent/received, plus a rolling bytes/sec graph."));
+        DrawHelpTextRow(LOC("Validation"),
+            LOC("Surfaces problems detected this tick: a transform snapshot approaching or exceeding the 64 KB "
             "frame cap (oversized snapshots are dropped wholesale), high packet loss / RTT, and starving "
-            "client interpolation buffers. Green means nothing flagged.");
-        DrawHelpTextRow("Replication",
-            "What the server actually sent this tick: the transform-snapshot size vs the 64 KB frame cap "
+            "client interpolation buffers. Green means nothing flagged."));
+        DrawHelpTextRow(LOC("Replication"),
+            LOC("What the server actually sent this tick: the transform-snapshot size vs the 64 KB frame cap "
             "(the bar goes yellow at 75%, red once frames drop), peak size, datagram sizes, spawn/despawn/"
-            "property-update counts, the role breakdown, and a snapshot-size graph (plot top = the cap).");
-        DrawHelpTextRow("Interpolation",
-            "Client-side smoothing health: render interp delay, server/client clock offset, and the proxy "
-            "sample-ring fill (a low average means stutter under loss).");
-        DrawHelpTextRow("Connections",
-            "Per-peer round-trip time, measured packet loss, and throughput. RTT/loss populate after a few "
-            "reliable round-trips. Use the Play settings' Network Simulation to inject latency/loss.");
-        DrawHelpTextRow("Entities",
-            "Per-entity replication state (NetGUID, name, role, owner, movement flag, interpolation sample "
-            "count). Capped to 256 rows and name-filterable so large sessions stay responsive.");
+            "property-update counts, the role breakdown, and a snapshot-size graph (plot top = the cap)."));
+        DrawHelpTextRow(LOC("Interpolation"),
+            LOC("Client-side smoothing health: render interp delay, server/client clock offset, and the proxy "
+            "sample-ring fill (a low average means stutter under loss)."));
+        DrawHelpTextRow(LOC("Connections"),
+            LOC("Per-peer round-trip time, measured packet loss, and throughput. RTT/loss populate after a few "
+            "reliable round-trips. Use the Play settings' Network Simulation to inject latency/loss."));
+        DrawHelpTextRow(LOC("Entities"),
+            LOC("Per-entity replication state (NetGUID, name, role, owner, movement flag, interpolation sample "
+            "count). Capped to 256 rows and name-filterable so large sessions stay responsive."));
     }
 }

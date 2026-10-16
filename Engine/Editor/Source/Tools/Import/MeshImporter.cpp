@@ -1,4 +1,5 @@
 #include "EditorPCH.h"
+#include "Localization/Localization.h"
 #include "MeshImporter.h"
 
 #include "Tools/Import/ImportPaths.h"
@@ -558,6 +559,7 @@ namespace Lumina
         // The only stage that expands instances, so the cost is paid once and only on merge.
         bool MergeInstancesIntoSingleMesh(FMeshImportData& Data, FString& OutError)
         {
+            const auto Localized = FLocalization::Get().Read();
             size_t TotalStaticVerts = 0, TotalStaticIndices = 0;
             size_t TotalSkinnedVerts = 0, TotalSkinnedIndices = 0;
 
@@ -590,10 +592,10 @@ namespace Lumina
             constexpr size_t MaxMergedVerts = (size_t)0xFFFFFFFFu;
             if (TotalStaticVerts > MaxMergedVerts || TotalSkinnedVerts > MaxMergedVerts)
             {
-                OutError = FString(Format(
+                OutError = FString(Format(LOCF_IN(Localized,
                     "Merging would flatten every instance into {0} static / {1} skinned vertices, past the {2} "
                     "vertex limit of the 32-bit index stream. Import with 'Merge Meshes' off to get one asset "
-                    "per unique mesh instead.",
+                    "per unique mesh instead."),
                     TotalStaticVerts, TotalSkinnedVerts, MaxMergedVerts).c_str());
                 return false;
             }
@@ -1254,6 +1256,7 @@ namespace Lumina
 
     void CMeshImporter::BuildAssets(const FImportRequest& Request, FImportResult& OutResult, FScopedSlowTask* Progress)
     {
+        const auto Localized = FLocalization::Get().Read();
         FMeshImportOptions Options = BuildOptions(false);
 
         constexpr float kFinalizeBudget = 0.72f;
@@ -1266,7 +1269,7 @@ namespace Lumina
         {
             if (Progress)
             {
-                Progress->UpdateMessage("Merging instances...");
+                Progress->UpdateMessage(LOC_IN(Localized, "Merging instances..."));
             }
             if (!MergeInstancesIntoSingleMesh(SourceData, OutResult.Error))
             {
@@ -1319,7 +1322,7 @@ namespace Lumina
 
         if (Progress)
         {
-            Progress->EnterProgressFrame(kCreateBudget, "Creating assets...");
+            Progress->EnterProgressFrame(kCreateBudget, LOC_IN(Localized, "Creating assets..."));
         }
 
         TVector<TStrongObjectPtr<CObject>>& CreatedObjects = OutResult.CreatedObjects;
@@ -1483,7 +1486,7 @@ namespace Lumina
         {
             if (Progress)
             {
-                Progress->UpdateMessage("Importing textures...");
+                Progress->UpdateMessage(LOC_IN(Localized, "Importing textures..."));
             }
 
             for (const FMeshImportMaterial& Material : SourceData.Materials)
@@ -1597,7 +1600,7 @@ namespace Lumina
         {
             if (Progress)
             {
-                Progress->UpdateMessage("Generating materials...");
+                Progress->UpdateMessage(LOC_IN(Localized, "Generating materials..."));
             }
 
             {
@@ -1733,7 +1736,7 @@ namespace Lumina
         {
             if (Progress)
             {
-                Progress->UpdateMessage("Building scene prefab...");
+                Progress->UpdateMessage(LOC_IN(Localized, "Building scene prefab..."));
             }
 
             const FFixedString PrefabPath = BuildPath("Prefab");
@@ -1745,7 +1748,7 @@ namespace Lumina
 
         if (Progress)
         {
-            Progress->UpdateMessage("Saving packages...");
+            Progress->UpdateMessage(LOC_IN(Localized, "Saving packages..."));
         }
 
         const float SaveStep = kSaveBudget / (float)std::max<size_t>((size_t)1, CreatedObjects.size());
@@ -1848,6 +1851,7 @@ namespace Lumina
 
     bool CMeshImporter::ReimportAsset(CObject* Asset, const FImportRequest& Request, FScopedSlowTask* Progress)
     {
+        const auto Localized = FLocalization::Get().Read();
         CMesh* Mesh = Cast<CMesh>(Asset);
         if (Mesh == nullptr)
         {
@@ -1887,7 +1891,7 @@ namespace Lumina
 
         if (Progress)
         {
-            Progress->EnterProgressFrame(0.1f, "Replacing mesh data...");
+            Progress->EnterProgressFrame(0.1f, LOC_IN(Localized, "Replacing mesh data..."));
         }
 
         // Name follows the ASSET, so the object keeps its identity through a reimport.
@@ -1943,7 +1947,8 @@ namespace Lumina
                 return;
             }
 
-            const FFixedString Header = FormatAs<FFixedString>("Meshes ({})###MeshStats", SourceData.Resources.size());
+            FFixedString Header = FormatAs<FFixedString>(LOCF("Meshes ({})"), SourceData.Resources.size());
+            Header += "###MeshStats";
             if (!ImGui::CollapsingHeader(Header.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
             {
                 return;
@@ -1952,7 +1957,7 @@ namespace Lumina
             if (SourceData.SourceNodeCount > SourceData.Resources.size())
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextDim());
-                ImGui::Text("%u source nodes collapsed to %zu unique meshes",
+                ImGui::Text(LOC("%u source nodes collapsed to %zu unique meshes"),
                             SourceData.SourceNodeCount, SourceData.Resources.size());
                 ImGui::PopStyleColor();
             }
@@ -1965,10 +1970,10 @@ namespace Lumina
             if (ImGui::BeginTable("MeshStatsTable", 4, Flags, ImVec2(0, Height)))
             {
                 ImGui::TableSetupScrollFreeze(0, 1);
-                ImGui::TableSetupColumn("Name",     ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableSetupColumn("Verts",    ImGuiTableColumnFlags_WidthFixed, 80);
-                ImGui::TableSetupColumn("Indices",  ImGuiTableColumnFlags_WidthFixed, 80);
-                ImGui::TableSetupColumn("Surfaces", ImGuiTableColumnFlags_WidthFixed, 80);
+                ImGui::TableSetupColumn(LOC_ID("Name"),     ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(LOC_ID("Verts"),    ImGuiTableColumnFlags_WidthFixed, 80);
+                ImGui::TableSetupColumn(LOC_ID("Indices"),  ImGuiTableColumnFlags_WidthFixed, 80);
+                ImGui::TableSetupColumn(LOC_ID("Surfaces"), ImGuiTableColumnFlags_WidthFixed, 80);
                 ImGui::TableHeadersRow();
 
                 ImGuiListClipper Clipper;
@@ -2006,8 +2011,9 @@ namespace Lumina
             }
 
             const uint32 Lights = Points + Spots + Directionals;
-            const FFixedString Header = FormatAs<FFixedString>("Scene ({} nodes, {} lights)###SceneGraph",
+            FFixedString Header = FormatAs<FFixedString>(LOCF("Scene ({} nodes, {} lights)"),
                                                                SourceData.SceneNodes.size(), Lights);
+            Header += "###SceneGraph";
             if (!ImGui::CollapsingHeader(Header.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
             {
                 return;
@@ -2016,21 +2022,21 @@ namespace Lumina
             if (!bImportAsPrefab)
             {
                 ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f),
-                    LE_ICON_ALERT_CIRCLE_OUTLINE " Import As Prefab is off, so no entities, lights or cameras are created.");
+                    LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "Import As Prefab is off, so no entities, lights or cameras are created."));
             }
             else if (bMergeMeshes)
             {
                 ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f),
-                    LE_ICON_ALERT_CIRCLE_OUTLINE " Merge Meshes flattens the scene, which skips the prefab entirely.");
+                    LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "Merge Meshes flattens the scene, which skips the prefab entirely."));
             }
             else if (Lights == 0)
             {
                 ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f),
-                    LE_ICON_ALERT_CIRCLE_OUTLINE " This source exports no lights, so the prefab relies on the world it is placed in.");
+                    LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "This source exports no lights, so the prefab relies on the world it is placed in."));
             }
 
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextDim());
-            ImGui::Text("Point %u   Spot %u   Directional %u   Cameras %u", Points, Spots, Directionals, Cameras);
+            ImGui::Text(LOC("Point %u   Spot %u   Directional %u   Cameras %u"), Points, Spots, Directionals, Cameras);
             ImGui::PopStyleColor();
         });
 
@@ -2041,7 +2047,8 @@ namespace Lumina
                 return;
             }
 
-            const FFixedString Header = FormatAs<FFixedString>("Textures ({})###Textures", SourceData.Images.size());
+            FFixedString Header = FormatAs<FFixedString>(LOCF("Textures ({})"), SourceData.Images.size());
+            Header += "###Textures";
             if (!ImGui::CollapsingHeader(Header.c_str()))
             {
                 return;
@@ -2052,7 +2059,7 @@ namespace Lumina
             if (ImGui::BeginTable("TextureTable", 2, Flags))
             {
                 ImGui::TableSetupColumn("##thumb", ImGuiTableColumnFlags_WidthFixed, ThumbSize + 8);
-                ImGui::TableSetupColumn("Source",  ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(LOC_ID("Source"),  ImGuiTableColumnFlags_WidthStretch);
 
                 ImGuiListClipper Clipper;
                 Clipper.Begin((int)SourceData.Images.size(), ThumbSize + 8);
@@ -2083,7 +2090,8 @@ namespace Lumina
                 return;
             }
 
-            const FFixedString Header = FormatAs<FFixedString>("Skeletons ({})###Skeletons", SourceData.Skeletons.size());
+            FFixedString Header = FormatAs<FFixedString>(LOCF("Skeletons ({})"), SourceData.Skeletons.size());
+            Header += "###Skeletons";
             if (!ImGui::CollapsingHeader(Header.c_str()))
             {
                 return;
@@ -2100,24 +2108,24 @@ namespace Lumina
                     Matched += MeshTarget->FindBoneIndex(Bone.Name) >= 0 ? 1 : 0;
                 }
 
-                ImGui::TextDisabled("Skinned meshes bind to %s; no skeleton is created from this file.",
+                ImGui::TextDisabled(LOC("Skinned meshes bind to %s; no skeleton is created from this file."),
                                     TargetSkeleton->GetName().c_str());
 
                 if (Matched == (int32)FileSkeleton.Bones.size())
                 {
                     ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.5f, 1.0f),
-                        LE_ICON_CHECK_CIRCLE_OUTLINE " Every bone matches by name.");
+                        LOC_ICON(LE_ICON_CHECK_CIRCLE_OUTLINE, "Every bone matches by name."));
                 }
                 else if (Matched > 0)
                 {
                     ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f),
-                        LE_ICON_ALERT_CIRCLE_OUTLINE " %d of %zu bones match; unmatched influences are dropped.",
+                        LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "%d of %zu bones match; unmatched influences are dropped."),
                         Matched, FileSkeleton.Bones.size());
                 }
                 else
                 {
                     ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
-                        LE_ICON_ALERT_CIRCLE_OUTLINE " No bone matches; this file's own skeleton is used instead.");
+                        LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "No bone matches; this file's own skeleton is used instead."));
                 }
             }
 
@@ -2169,7 +2177,8 @@ namespace Lumina
                 return;
             }
 
-            const FFixedString Header = FormatAs<FFixedString>("Animations ({})###Animations", SourceData.Animations.size());
+            FFixedString Header = FormatAs<FFixedString>(LOCF("Animations ({})"), SourceData.Animations.size());
+            Header += "###Animations";
             if (!ImGui::CollapsingHeader(Header.c_str()))
             {
                 return;
@@ -2178,7 +2187,7 @@ namespace Lumina
             const FSkeletonResource* Target = TargetSkeleton != nullptr ? TargetSkeleton->GetSkeletonResource() : nullptr;
             if (TargetSkeleton != nullptr)
             {
-                ImGui::TextDisabled("Binding to %s", TargetSkeleton->GetName().c_str());
+                ImGui::TextDisabled(LOC("Binding to %s"), TargetSkeleton->GetName().c_str());
             }
 
             for (size_t i = 0; i < SourceData.Animations.size(); ++i)
@@ -2187,7 +2196,7 @@ namespace Lumina
                 ImGui::PushID((int)i);
                 if (ImGui::TreeNodeEx(Anim.Name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth))
                 {
-                    ImGui::TextDisabled("Duration: %.2fs   Channels: %zu", Anim.Duration, Anim.Channels.size());
+                    ImGui::TextDisabled(LOC("Duration: %.2fs   Channels: %zu"), Anim.Duration, Anim.Channels.size());
 
                     // An unmatched channel silently freezes its bone at bind pose, so surface it here.
                     if (Target != nullptr)
@@ -2201,12 +2210,12 @@ namespace Lumina
                         if (Unmatched == 0)
                         {
                             ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.5f, 1.0f),
-                                LE_ICON_CHECK_CIRCLE_OUTLINE " Every channel matches a bone.");
+                                LOC_ICON(LE_ICON_CHECK_CIRCLE_OUTLINE, "Every channel matches a bone."));
                         }
                         else
                         {
                             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f),
-                                LE_ICON_ALERT_CIRCLE_OUTLINE " %d of %zu channels have no bone of that name.",
+                                LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "%d of %zu channels have no bone of that name."),
                                 Unmatched, Anim.Channels.size());
                         }
                     }

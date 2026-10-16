@@ -1,4 +1,5 @@
 #include "AnimGraphNode_Curve.h"
+#include "Localization/Localization.h"
 #include "UI/Tools/NodeGraph/Animation/AnimationGraphCompiler.h"
 
 namespace Lumina
@@ -17,8 +18,8 @@ namespace Lumina
         if (CurveSlot == Constants::kIndexNone)
         {
             EdNodeGraph::FError NodeError;
-            NodeError.Name        = "Missing Curve Name";
-            NodeError.Description = "Get Curve node has no curve name assigned; it will read 0.";
+            NodeError.Name        = LOC("Missing Curve Name");
+            NodeError.Description = LOC("Get Curve node has no curve name assigned; it will read 0.");
             NodeError.Node        = this;
             Compiler.AddError(NodeError);
 
@@ -47,8 +48,8 @@ namespace Lumina
         if (CurveSlot == Constants::kIndexNone)
         {
             EdNodeGraph::FError NodeError;
-            NodeError.Name        = "Missing Curve Name";
-            NodeError.Description = "Set Curve node has no curve name assigned; the pose passes through unchanged.";
+            NodeError.Name        = LOC("Missing Curve Name");
+            NodeError.Description = LOC("Set Curve node has no curve name assigned; the pose passes through unchanged.");
             NodeError.Node        = this;
             Compiler.AddError(NodeError);
 

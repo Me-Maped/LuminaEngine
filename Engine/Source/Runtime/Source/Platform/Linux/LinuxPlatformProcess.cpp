@@ -20,6 +20,7 @@
 #include "Log/Log.h"
 #include "Paths/Paths.h"
 #include "Platform/Process/PlatformProcess.h"
+#include "Localization/Localization.h"
 #include "Core/Threading/Thread.h"
 #include <atomic>
 #include <signal.h>
@@ -1105,6 +1106,15 @@ namespace Lumina::Platform
             bool bMultiple,
             TVector<FFixedString>& OutPaths)
         {
+            // The filter's display names are resource strings, so they are translated here rather than
+            // at every call site. Null still means "no filter", and is what picks a folder.
+            FString LocalizedFilter;
+            if (Filter != nullptr)
+            {
+                LocalizedFilter = Localization::LocalizeFileDialogFilter(Filter);
+                Filter = LocalizedFilter.c_str();
+            }
+
             const FString Zenity = FindOnPath("zenity");
 
             if (Zenity.empty())

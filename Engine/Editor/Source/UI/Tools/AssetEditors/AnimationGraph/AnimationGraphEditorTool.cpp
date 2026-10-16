@@ -55,24 +55,24 @@ namespace Lumina
             {
                 switch (Type)
                 {
-                case EAnimTaskType::ReferencePose:      return "Reference Pose";
-                case EAnimTaskType::SampleClip:         return "Sample Clip";
-                case EAnimTaskType::Blend:              return "Blend";
-                case EAnimTaskType::BlendMasked:        return "Layered Blend";
-                case EAnimTaskType::MakeAdditive:       return "Make Additive";
-                case EAnimTaskType::ApplyAdditive:      return "Apply Additive";
-                case EAnimTaskType::Inertialize:        return "Inertialize";
-                case EAnimTaskType::DeadBlend:          return "Dead Blend";
-                case EAnimTaskType::SavePoseSnapshot:   return "Save Snapshot";
-                case EAnimTaskType::LoadPoseSnapshot:   return "Pose Snapshot";
-                case EAnimTaskType::FABRIK:             return "FABRIK";
-                case EAnimTaskType::LookAt:             return "Look At";
-                case EAnimTaskType::FootIK:             return "Foot IK";
-                case EAnimTaskType::TranslateBone:      return "Translate Bone";
-                case EAnimTaskType::BoneTransform:      return "Bone Transform";
-                case EAnimTaskType::TwoBoneIK:          return "Two Bone IK";
+                case EAnimTaskType::ReferencePose:      return LOC("Reference Pose");
+                case EAnimTaskType::SampleClip:         return LOC("Sample Clip");
+                case EAnimTaskType::Blend:              return LOC("Blend");
+                case EAnimTaskType::BlendMasked:        return LOC("Layered Blend");
+                case EAnimTaskType::MakeAdditive:       return LOC("Make Additive");
+                case EAnimTaskType::ApplyAdditive:      return LOC("Apply Additive");
+                case EAnimTaskType::Inertialize:        return LOC("Inertialize");
+                case EAnimTaskType::DeadBlend:          return LOC("Dead Blend");
+                case EAnimTaskType::SavePoseSnapshot:   return LOC("Save Snapshot");
+                case EAnimTaskType::LoadPoseSnapshot:   return LOC("Pose Snapshot");
+                case EAnimTaskType::FABRIK:             return LOC("FABRIK");
+                case EAnimTaskType::LookAt:             return LOC("Look At");
+                case EAnimTaskType::FootIK:             return LOC("Foot IK");
+                case EAnimTaskType::TranslateBone:      return LOC("Translate Bone");
+                case EAnimTaskType::BoneTransform:      return LOC("Bone Transform");
+                case EAnimTaskType::TwoBoneIK:          return LOC("Two Bone IK");
                 }
-                return "Unknown";
+                return LOC("Unknown");
             }
 
             // Pose sources green, blends blue, additive violet, state machines amber, bone ops teal.
@@ -107,11 +107,11 @@ namespace Lumina
                 {
                 case EAnimTaskType::SampleClip:
                     // Time first, since it is the per-frame liveness signal and long clip names get ellipsized.
-                    return Format("t={:.3f}s   {}", Entry.Time,
-                                  Entry.ClipName.IsNone() ? "<no clip>" : Entry.ClipName.c_str());
+                    return Format(LOCF("t={:.3f}s   {}"), Entry.Time,
+                                  Entry.ClipName.IsNone() ? LOC("<no clip>") : Entry.ClipName.c_str());
 
                 case EAnimTaskType::BlendMasked:
-                    return Format("alpha {:.2f}   mask {}/{} bones",
+                    return Format(LOCF("alpha {:.2f}   mask {}/{} bones"),
                                   Entry.Alpha, Entry.MaskWeightedBones, Entry.MaskTotalBones);
 
                 case EAnimTaskType::Blend:
@@ -122,19 +122,19 @@ namespace Lumina
                 case EAnimTaskType::LookAt:
                 case EAnimTaskType::FootIK:
                 case EAnimTaskType::TranslateBone:
-                    return Format("alpha {:.2f}", Entry.Alpha);
+                    return Format(LOCF("alpha {:.2f}"), Entry.Alpha);
 
                 case EAnimTaskType::Inertialize:
-                    return Format("inertialization t={:.3f}s", Entry.Time);
+                    return Format(LOCF("inertialization t={:.3f}s"), Entry.Time);
 
                 case EAnimTaskType::DeadBlend:
-                    return Format("dead blend t={:.3f}s", Entry.Time);
+                    return Format(LOCF("dead blend t={:.3f}s"), Entry.Time);
 
                 case EAnimTaskType::MakeAdditive:
-                    return FString("relative to bind pose");
+                    return FString(LOC("relative to bind pose"));
 
                 case EAnimTaskType::ReferencePose:
-                    return FString("skeleton bind pose");
+                    return FString(LOC("skeleton bind pose"));
 
                 case EAnimTaskType::SavePoseSnapshot:
                 case EAnimTaskType::LoadPoseSnapshot:
@@ -176,13 +176,13 @@ namespace Lumina
             {
                 if (Entry.DepA < 0 && Entry.DepB < 0)
                 {
-                    return FString("none (source task)");
+                    return FString(LOC("none (source task)"));
                 }
                 if (Entry.DepB < 0)
                 {
-                    return Format("task {}", (int32)Entry.DepA);
+                    return Format(LOCF("task {}"), (int32)Entry.DepA);
                 }
-                return Format("task {}, task {}", (int32)Entry.DepA, (int32)Entry.DepB);
+                return Format(LOCF("task {}, task {}"), (int32)Entry.DepA, (int32)Entry.DepB);
             }
         }
     }
@@ -235,7 +235,7 @@ namespace Lumina
         if (const uint32 Repaired = NodeGraph->UnaliasSubGraphs(VisitedGraphs))
         {
             Asset->GetPackage()->MarkDirty();
-            ImGuiX::Notifications::NotifyWarning("Gave {0} duplicated node(s) their own sub-graph. Save to keep the split.", Repaired);
+            ImGuiX::Notifications::NotifyWarning(LOCF("Gave {0} duplicated node(s) their own sub-graph. Save to keep the split."), Repaired);
         }
 
         GetPropertyTable()->SetPostEditCallback([this](const FPropertyChangedEvent&)
@@ -253,7 +253,7 @@ namespace Lumina
         });
 
         // EnterGraph creates its context, wires callbacks and pushes it.
-        EnterGraph(NodeGraph.Get(), "Animation Graph");
+        EnterGraph(NodeGraph.Get(), LOC("Animation Graph"));
 
         // Seeds the runtime asset so the preview viewport has something to evaluate on the first frame.
         Compile(false);
@@ -573,7 +573,7 @@ namespace Lumina
 
     void FAnimationGraphEditorTool::DrawToolMenu(const FUpdateContext& /*UpdateContext*/)
     {
-        if (ImGui::MenuItem(LE_ICON_COG " Compile"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_COG, "Compile")))
         {
             Compile();
         }
@@ -677,12 +677,12 @@ namespace Lumina
         if (!Graph->Skeleton.IsValid())
         {
             ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.35f, 1.0f),
-                "No skeleton assigned -- set one on the graph asset to see a preview mesh.");
+                LOC("No skeleton assigned -- set one on the graph asset to see a preview mesh."));
         }
         else if (!Graph->Skeleton->PreviewMesh.IsValid())
         {
             ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.35f, 1.0f),
-                "Skeleton has no preview mesh assigned.");
+                LOC("Skeleton has no preview mesh assigned."));
         }
     }
 
@@ -696,19 +696,19 @@ namespace Lumina
         // The canvas in view, so a State Alias lists the states it can name.
         StateMachineCtx.Graph = GraphStack.empty() ? nullptr : Cast<CAnimStateMachineGraph>(GraphStack.back().Graph);
 
-        if (ImGui::Button(LE_ICON_COG " Compile"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_COG, "Compile")))
         {
             Compile();
         }
 
         ImGui::SameLine();
-        ImGui::Checkbox("Auto Compile", &bAutoCompile);
+        ImGui::Checkbox(LOC("Auto Compile"), &bAutoCompile);
 
         ImGui::SameLine();
-        ImGui::Checkbox("Debug", &bDebugEnabled);
+        ImGui::Checkbox(LOC("Debug"), &bDebugEnabled);
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::TextTooltip_Internal("Animate flow, show live pin values, and highlight the active state from the selected target");
+            ImGuiX::TextTooltip_Internal(LOC("Animate flow, show live pin values, and highlight the active state from the selected target"));
         }
 
         if (bDebugEnabled)
@@ -719,11 +719,11 @@ namespace Lumina
         ImGui::SameLine();
         if (bHasCompilationErrors)
         {
-            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "Compile failed");
+            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), LOC("Compile failed"));
         }
         else if (!CompilationLog.empty())
         {
-            ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.45f, 1.0f), "Compiled");
+            ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.45f, 1.0f), LOC("Compiled"));
         }
 
         ImGui::Separator();
@@ -737,9 +737,9 @@ namespace Lumina
             !GraphStack.empty() && Cast<CAnimStateMachineGraph>(GraphStack.back().Graph) != nullptr)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped("Click a transition's condition badge to edit it here. Drag from a State's right band "
+            ImGui::TextWrapped(LOC("Click a transition's condition badge to edit it here. Drag from a State's right band "
                 "onto another State's left band to add one. Click a State to rename it, double-click to edit its "
-                "blend tree, and right-click the canvas to add a State or an Any State source.");
+                "blend tree, and right-click the canvas to add a State or an Any State source."));
             ImGui::PopStyleColor();
             ImGui::Separator();
         }
@@ -791,20 +791,20 @@ namespace Lumina
 
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::SectionHeader());
-        ImGui::SeparatorText(LE_ICON_ARROW_RIGHT_BOLD " Outgoing Transitions");
+        ImGui::SeparatorText(LOC_ICON(LE_ICON_ARROW_RIGHT_BOLD, "Outgoing Transitions"));
         ImGui::PopStyleColor();
 
         if (Outgoing.empty())
         {
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped("None. Drag from this State's right edge onto another State to add one.");
+            ImGui::TextWrapped(LOC("None. Drag from this State's right edge onto another State to add one."));
             ImGui::PopStyleColor();
             return;
         }
 
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-        ImGui::TextWrapped("Tested top to bottom while this state is active; the first passing condition wins. "
-                           "Reorder with Priority.");
+        ImGui::TextWrapped(LOC("Tested top to bottom while this state is active; the first passing condition wins. "
+                           "Reorder with Priority."));
         ImGui::PopStyleColor();
 
         for (int32 Index = 0; Index < (int32)Outgoing.size(); ++Index)
@@ -821,9 +821,9 @@ namespace Lumina
             // Condition and blend length are the two things worth scanning without expanding every entry.
             ImGui::SameLine();
             ImGui::TextColored(Transition->Conditions.empty() ? EditorColors::Warning() : EditorColors::TextDim(),
-                               "   %s", Transition->GetConditionText().c_str());
+                               LOC("   %s"), Transition->GetConditionText().c_str());
             ImGui::SameLine();
-            ImGui::TextColored(EditorColors::TextMuted(), "   %.2fs", Transition->BlendDuration);
+            ImGui::TextColored(EditorColors::TextMuted(), LOC("   %.2fs"), Transition->BlendDuration);
 
             if (bOpen)
             {
@@ -891,7 +891,7 @@ namespace Lumina
         }
 
         ImGui::Spacing();
-        if (!ImGui::CollapsingHeader(LE_ICON_CHART_BELL_CURVE " Curves", ImGuiTreeNodeFlags_DefaultOpen))
+        if (!ImGui::CollapsingHeader(LOC_ICON_ID(LE_ICON_CHART_BELL_CURVE, "Curves"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             return;
         }
@@ -925,17 +925,17 @@ namespace Lumina
 
     void FAnimationGraphEditorTool::DrawParameters(CAnimationGraph* Graph)
     {
-        ImGui::TextWrapped("Read-only view of the preview entity's live parameter block. At runtime gameplay "
-            "code writes these directly on the Animation Graph Component.");
+        ImGui::TextWrapped(LOC("Read-only view of the preview entity's live parameter block. At runtime gameplay "
+            "code writes these directly on the Animation Graph Component."));
         ImGui::Separator();
 
         CStruct* Struct = Graph->GetParameterStruct();
         if (Struct == nullptr)
         {
             ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.35f, 1.0f),
-                "No parameter struct assigned. Set one on the");
+                LOC("No parameter struct assigned. Set one on the"));
             ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.35f, 1.0f),
-                "graph asset (Graph Properties) to declare parameters.");
+                LOC("graph asset (Graph Properties) to declare parameters."));
             return;
         }
 
@@ -947,7 +947,7 @@ namespace Lumina
         if (Base == nullptr)
         {
             ParameterTable.Reset();
-            ImGui::TextDisabled("Preview entity has no instance yet.");
+            ImGui::TextDisabled(LOC("Preview entity has no instance yet."));
             return;
         }
 
@@ -965,7 +965,7 @@ namespace Lumina
         if (!ParameterTable->PrepareAndTestFilter())
         {
             ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.35f, 1.0f),
-                "Struct declares no readable fields.");
+                LOC("Struct declares no readable fields."));
             return;
         }
 
@@ -1164,23 +1164,23 @@ namespace Lumina
         {
             switch (Type)
             {
-            case EWorldType::Game:       return "Game";
-            case EWorldType::Simulation: return "Sim";
-            case EWorldType::Editor:     return "Editor";
-            default:                     return "World";
+            case EWorldType::Game:       return LOC("Game");
+            case EWorldType::Simulation: return LOC("Sim");
+            case EWorldType::Editor:     return LOC("Editor");
+            default:                     return LOC("World");
             }
         };
 
         CAnimationGraph* AssetGraph = Cast<CAnimationGraph>(Asset.Get());
 
         // Resolve the current selection's label; revert to preview if it's gone.
-        FString CurrentLabel = "Preview";
+        FString CurrentLabel = LOC("Preview");
         if (CWorld* CurWorld = DebugTargetWorld.Get())
         {
             if (CurWorld->IsValidEntity(DebugTargetEntity))
             {
                 const SNameComponent* Name = CurWorld->TryGetComponent<SNameComponent>(DebugTargetEntity);
-                CurrentLabel = Name ? Name->Name.ToString() : FString("Entity");
+                CurrentLabel = Name ? Name->Name.ToString() : FString(LOC("Entity"));
             }
             else
             {
@@ -1192,7 +1192,7 @@ namespace Lumina
         // Flattened into one indexable list so the searchable picker can select by index.
         TVector<FString> Labels;
         TVector<TPair<CWorld*, ECS::FEntity>> Targets;
-        Labels.push_back("Preview");
+        Labels.push_back(LOC("Preview"));
         Targets.push_back({ nullptr, static_cast<ECS::FEntity>(ECS::NullEntity) });
 
         int32 CurrentIndex = DebugTargetWorld.IsValid() ? Constants::kIndexNone : 0;
@@ -1215,7 +1215,7 @@ namespace Lumina
                     }
 
                     const SNameComponent* Name = CandidateWorld->TryGetComponent<SNameComponent>(Entity);
-                    Labels.push_back((Name ? Name->Name.ToString() : FString("Entity"))
+                    Labels.push_back((Name ? Name->Name.ToString() : FString(LOC("Entity")))
                         + "  (" + WorldTypeLabel(Ctx->Type) + ")");
                     Targets.push_back({ CandidateWorld, Entity });
 
@@ -1274,26 +1274,26 @@ namespace Lumina
         CSkeleton* Skeleton = (Graph != nullptr && Graph->Skeleton.IsValid()) ? Graph->Skeleton.Get() : nullptr;
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Clips");
+        ImGui::TextUnformatted(LOC("Clips"));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 140.0f);
         ClipFilter.Draw("##ClipFilter");
 
         ImGui::SameLine();
-        if (ImGui::Checkbox("Any skeleton", &bClipBrowserAnySkeleton))
+        if (ImGui::Checkbox(LOC("Any skeleton"), &bClipBrowserAnySkeleton))
         {
             ClipCacheAssetCount = -1; // force a rebuild with the new filter
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::TextTooltip_Internal("List every animation clip, not just the ones authored against this graph's skeleton");
+            ImGuiX::TextTooltip_Internal(LOC("List every animation clip, not just the ones authored against this graph's skeleton"));
         }
 
         if (Skeleton == nullptr && !bClipBrowserAnySkeleton)
         {
             ImGui::Separator();
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped("Assign a skeleton to this graph to list its clips, or tick \"Any skeleton\".");
+            ImGui::TextWrapped(LOC("Assign a skeleton to this graph to list its clips, or tick \"Any skeleton\"."));
             ImGui::PopStyleColor();
             return;
         }
@@ -1349,14 +1349,14 @@ namespace Lumina
         {
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
             ImGui::TextWrapped(bClipBrowserAnySkeleton
-                ? "No animation clips found in the project."
-                : "No clips reference this skeleton. Import an animation against it, or tick \"Any skeleton\".");
+                ? LOC("No animation clips found in the project.")
+                : LOC("No clips reference this skeleton. Import an animation against it, or tick \"Any skeleton\"."));
             ImGui::PopStyleColor();
             return;
         }
 
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-        ImGui::TextWrapped("Drag a clip onto the graph canvas to add a Play Animation Clip node, or double-click to drop one in the middle.");
+        ImGui::TextWrapped(LOC("Drag a clip onto the graph canvas to add a Play Animation Clip node, or double-click to drop one in the middle."));
         ImGui::PopStyleColor();
         ImGui::Separator();
 
@@ -1446,18 +1446,18 @@ namespace Lumina
         }
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Target");
+        ImGui::TextUnformatted(LOC("Target"));
         DrawDebugTargetCombo();
 
         ImGui::SameLine(0.0f, 16.0f);
         ImGui::SetNextItemWidth(120.0f);
-        ImGui::SliderFloat("##TaskZoom", &TaskGraphZoom, 0.6f, 1.6f, "zoom %.2fx");
+        ImGui::SliderFloat("##TaskZoom", &TaskGraphZoom, 0.6f, 1.6f, LOC("zoom %.2fx"));
 
         ImGui::SameLine(0.0f, 16.0f);
-        ImGui::Checkbox("Show skipped", &bTaskGraphShowSkipped);
+        ImGui::Checkbox(LOC("Show skipped"), &bTaskGraphShowSkipped);
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::TextTooltip_Internal("Include tasks the executor skipped this frame (branches not reachable from the output)");
+            ImGuiX::TextTooltip_Internal(LOC("Include tasks the executor skipped this frame (branches not reachable from the output)"));
         }
 
         const FAnimTaskSnapshot& Snap = TaskSnapshot;
@@ -1468,11 +1468,11 @@ namespace Lumina
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
             ImGui::TextWrapped(
                 MeshComp == nullptr
-                    ? "No debug target. Assign a skeleton so the preview mesh spawns, or pick a live entity above."
-                    : "No task list captured yet.\n\n"
+                    ? LOC("No debug target. Assign a skeleton so the preview mesh spawns, or pick a live entity above.")
+                    : LOC("No task list captured yet.\n\n"
                       "The target only records tasks on frames it actually evaluates: the graph must be compiled, "
                       "and the mesh must be visible (off-screen meshes freeze their pose, and distant ones "
-                      "evaluate every 2-4 frames).");
+                      "evaluate every 2-4 frames)."));
             ImGui::PopStyleColor();
             return;
         }
@@ -1482,39 +1482,39 @@ namespace Lumina
 
         ImGui::Separator();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(EditorColors::TextPrimary(), "%d tasks", (int32)Snap.Entries.size());
+        ImGui::TextColored(EditorColors::TextPrimary(), LOC("%d tasks"), (int32)Snap.Entries.size());
         ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextMuted(), "|");
-        ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::Success(), "%d ran", Snap.ReachableCount);
+        ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::Success(), LOC("%d ran"), Snap.ReachableCount);
         if (SkippedCount > 0)
         {
             ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextMuted(), "|");
-            ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::Warning(), "%d skipped", SkippedCount);
+            ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::Warning(), LOC("%d skipped"), SkippedCount);
         }
         ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextMuted(), "|");
-        ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextDim(), "%d levels", Snap.NumLevels);
+        ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextDim(), LOC("%d levels"), Snap.NumLevels);
         ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextMuted(), "|");
-        ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextDim(), "peak %d pose buffers", Snap.PeakLiveBuffers);
+        ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextDim(), LOC("peak %d pose buffers"), Snap.PeakLiveBuffers);
         ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextMuted(), "|");
         ImGui::SameLine(0.0f, 6.0f);
         if (Snap.ActiveBoneCount > 0 && Snap.ActiveBoneCount < Snap.NumBones)
         {
-            ImGui::TextColored(EditorColors::Warning(), "%d/%d bones (LOD cut)", Snap.ActiveBoneCount, Snap.NumBones);
+            ImGui::TextColored(EditorColors::Warning(), LOC("%d/%d bones (LOD cut)"), Snap.ActiveBoneCount, Snap.NumBones);
         }
         else
         {
-            ImGui::TextColored(EditorColors::TextDim(), "%d bones", Snap.NumBones);
+            ImGui::TextColored(EditorColors::TextDim(), LOC("%d bones"), Snap.NumBones);
         }
         if (Snap.bLockRoot)
         {
             ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextMuted(), "|");
-            ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextDim(), "root pinned");
+            ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextDim(), LOC("root pinned"));
         }
 
         // The threading reality stated where it cannot be misread, one list is one thread.
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-        ImGui::TextWrapped("This whole list runs start-to-finish on a single worker thread; the animation system's "
+        ImGui::TextWrapped(LOC("This whole list runs start-to-finish on a single worker thread; the animation system's "
                            "parallelism is across meshes, not within one graph. Columns are dependency levels: tasks "
-                           "in the same column have no dependency between them.");
+                           "in the same column have no dependency between them."));
         ImGui::PopStyleColor();
         ImGui::Separator();
 
@@ -1607,7 +1607,8 @@ namespace Lumina
                               6.0f * Scale);
 
             const int32 Count = (int32)Columns[L].size();
-            const FString Header = Format("Level {}  ({} task{})", L, Count, Count == 1 ? "" : "s");
+            const FString Header = Count == 1 ? Format(LOCF("Level {}  ({} task)"), L, Count)
+                                               : Format(LOCF("Level {}  ({} tasks)"), L, Count);
             DL->AddText(Font, SmallFont, ImVec2(BandMin.x + 8.0f * Scale, Origin.y - HeaderH + 4.0f * Scale),
                         EditorColors::U32(EditorColors::TextMuted()), Header.c_str());
         }
@@ -1683,7 +1684,7 @@ namespace Lumina
             float TextY = Min.y + PadY;
 
             // Measured first so the title can reserve room instead of running underneath it.
-            const FString Order = Entry.bReachable ? Format("#{}", (int32)Entry.ExecOrder) : FString("skipped");
+            const FString Order = Entry.bReachable ? Format("#{}", (int32)Entry.ExecOrder) : FString(LOC("skipped"));
             const ImVec2 OrderSize = Font->CalcTextSizeA(SmallFont, FLT_MAX, 0.0f, Order.c_str());
 
             // Category dot + title.
@@ -1710,8 +1711,8 @@ namespace Lumina
             // Shows where this task's pose lives and whether it reused its input's buffer.
             if (Entry.bReachable && Entry.BufferIndex >= 0)
             {
-                const FString Where = Format("buffer {}  ({})", (int32)Entry.BufferIndex,
-                                             Entry.bStoleBuffer ? "in place" : "new");
+                const FString Where = Format(LOCF("buffer {}  ({})"), (int32)Entry.BufferIndex,
+                                             Entry.bStoleBuffer ? LOC("in place") : LOC("new"));
                 const FString Chip = AnimGraphDetail::FitText(Font, SmallFont, Where.c_str(), BodyMaxW);
                 DL->AddText(Font, SmallFont, ImVec2(TextX, TextY),
                             EditorColors::U32(EditorColors::WithAlpha(
@@ -1726,21 +1727,21 @@ namespace Lumina
                 ImGui::BeginTooltip();
                 ImGui::TextColored(Category, "%s", AnimGraphDetail::TaskTypeName(Entry.Type));
                 ImGui::Separator();
-                ImGui::Text("Task index    %d%s", i, bIsOutput ? "   (graph output)" : "");
-                ImGui::Text("Level         %d", (int32)Entry.Level);
-                ImGui::Text("Dependencies  %s", AnimGraphDetail::BuildDepText(Entry).c_str());
+                ImGui::Text(LOC("Task index    %d%s"), i, bIsOutput ? LOC("   (graph output)") : "");
+                ImGui::Text(LOC("Level         %d"), (int32)Entry.Level);
+                ImGui::Text(LOC("Dependencies  %s"), AnimGraphDetail::BuildDepText(Entry).c_str());
                 ImGui::Separator();
                 if (Entry.bReachable)
                 {
-                    ImGui::Text("Executed      yes, position %d", (int32)Entry.ExecOrder);
-                    ImGui::Text("Pose buffer   %d %s", (int32)Entry.BufferIndex,
-                                Entry.bStoleBuffer ? "(reused its input's, zero copy)" : "(fresh from the pool)");
-                    ImGui::Text("Buffers live  %d", (int32)Entry.LiveBuffers);
+                    ImGui::Text(LOC("Executed      yes, position %d"), (int32)Entry.ExecOrder);
+                    ImGui::Text(LOC("Pose buffer   %d %s"), (int32)Entry.BufferIndex,
+                                Entry.bStoleBuffer ? LOC("(reused its input's, zero copy)") : LOC("(fresh from the pool)"));
+                    ImGui::Text(LOC("Buffers live  %d"), (int32)Entry.LiveBuffers);
                 }
                 else
                 {
-                    ImGui::TextColored(EditorColors::Warning(), "Skipped: not reachable from the output task.");
-                    ImGui::TextColored(EditorColors::TextMuted(), "Inactive branches cost nothing to evaluate.");
+                    ImGui::TextColored(EditorColors::Warning(), LOC("Skipped: not reachable from the output task."));
+                    ImGui::TextColored(EditorColors::TextMuted(), LOC("Inactive branches cost nothing to evaluate."));
                 }
                 const FString DetailLine = AnimGraphDetail::BuildTaskDetail(Entry);
                 if (!DetailLine.empty())

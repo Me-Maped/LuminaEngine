@@ -1,6 +1,7 @@
 #include "Core/Threading/Thread.h"
 #include "World/ECS/Registry.h"
 #include "EditorPCH.h"
+#include "Localization/Localization.h"
 #include "ComponentVisualizer.h"
 #include "ComponentVisualizerContext.h"
 #include "Core/Math/Color.h"
@@ -672,7 +673,7 @@ namespace Lumina
         {
             ImGui::TextUnformatted(BoxFaceName(Face.Axis, Face.Sign));
             ImGui::SameLine();
-            ImGui::TextDisabled("face");
+            ImGui::TextDisabled(LOC("face"));
             ImGui::Separator();
 
             float LocalSize = Box.HalfExtent[Face.Axis] * 2.0f;
@@ -693,7 +694,7 @@ namespace Lumina
             }
 
             bool bTrigger = Box.bIsTrigger;
-            if (ImGui::Checkbox("Trigger", &bTrigger))
+            if (ImGui::Checkbox(LOC("Trigger"), &bTrigger))
             {
                 Context.BeginEdit("Toggle Collider Trigger");
                 Box.bIsTrigger = bTrigger;
@@ -701,7 +702,7 @@ namespace Lumina
                 Context.EndEdit();
             }
 
-            if (ImGui::SmallButton("Center"))
+            if (ImGui::SmallButton(LOC("Center")))
             {
                 Context.BeginEdit("Center Box Collider");
                 Box.TranslationOffset = FVector3(0.0f);
@@ -710,7 +711,7 @@ namespace Lumina
             }
 
             ImGui::SameLine();
-            if (ImGui::SmallButton("Done"))
+            if (ImGui::SmallButton(LOC("Done")))
             {
                 Context.ClearSubElementSelection();
             }
@@ -1452,18 +1453,18 @@ namespace Lumina
 
             if (bHasPoint)
             {
-                ImGui::Text("Point %d", PointIndex);
+                ImGui::Text(LOC("Point %d"), PointIndex);
             }
             else
             {
-                ImGui::TextDisabled("Spline");
+                ImGui::TextDisabled(LOC("Spline"));
             }
 
             ImGui::SameLine();
-            ImGui::TextDisabled("of %d", (int32)Spline.Points.size());
+            ImGui::TextDisabled(LOC("of %d"), (int32)Spline.Points.size());
             ImGui::Separator();
 
-            if (ImGui::SmallButton(LE_ICON_VECTOR_POINT_PLUS " Add"))
+            if (ImGui::SmallButton(LOC_ICON(LE_ICON_VECTOR_POINT_PLUS, "Add")))
             {
                 Context.BeginEdit("Add Spline Point");
 
@@ -1496,11 +1497,11 @@ namespace Lumina
                 Context.MarkDirty();
                 Context.EndEdit();
             }
-            ImGui::SetItemTooltip("Add a point at the end of the spline");
+            ImGui::SetItemTooltip(LOC("Add a point at the end of the spline"));
 
             ImGui::SameLine();
             ImGui::BeginDisabled(!bHasPoint);
-            if (ImGui::SmallButton(LE_ICON_VECTOR_POINT_MINUS " Delete"))
+            if (ImGui::SmallButton(LOC_ICON(LE_ICON_VECTOR_POINT_MINUS, "Delete")))
             {
                 Context.BeginEdit("Delete Spline Point");
 
@@ -1512,15 +1513,16 @@ namespace Lumina
                 Context.EndEdit();
             }
             ImGui::EndDisabled();
-            ImGui::SetItemTooltip("Delete the selected point (Del)");
+            ImGui::SetItemTooltip(LOC("Delete the selected point (Del)"));
 
             ImGui::BeginDisabled(!bHasPoint);
             {
-                static const char* ModeNames[] = { "Auto", "Linear", "User" };
+                // Drawn, so it has to be localized; the enum value stays the index.
+                const char* ModeLabels[] = { LOC("Auto"), LOC("Linear"), LOC("User") };
                 int32 Mode = bHasPoint ? (int32)Spline.Points[PointIndex].TangentMode : 0;
 
                 ImGui::SetNextItemWidth(90.0f);
-                if (ImGui::Combo("Tangent", &Mode, ModeNames, IM_ARRAYSIZE(ModeNames)) && bHasPoint)
+                if (ImGui::Combo(LOC("Tangent"), &Mode, ModeLabels, IM_ARRAYSIZE(ModeLabels)) && bHasPoint)
                 {
                     Context.BeginEdit("Set Tangent Mode");
 
@@ -1534,7 +1536,7 @@ namespace Lumina
             ImGui::EndDisabled();
 
             bool bClosedLoop = Spline.bClosedLoop;
-            if (ImGui::Checkbox("Closed", &bClosedLoop))
+            if (ImGui::Checkbox(LOC("Closed"), &bClosedLoop))
             {
                 Context.BeginEdit("Toggle Spline Loop");
 
@@ -1546,9 +1548,9 @@ namespace Lumina
             }
 
             ImGui::SameLine();
-            ImGui::Checkbox("Indices", &bShowPointIndices);
+            ImGui::Checkbox(LOC("Indices"), &bShowPointIndices);
 
-            if (ImGui::SmallButton("Reset Tangents"))
+            if (ImGui::SmallButton(LOC("Reset Tangents")))
             {
                 Context.BeginEdit("Reset Spline Tangents");
 
@@ -1564,15 +1566,15 @@ namespace Lumina
                 Context.MarkDirty();
                 Context.EndEdit();
             }
-            ImGui::SetItemTooltip("Return every hand-authored tangent to Auto");
+            ImGui::SetItemTooltip(LOC("Return every hand-authored tangent to Auto"));
 
             ImGui::SameLine();
-            if (ImGui::SmallButton("Done"))
+            if (ImGui::SmallButton(LOC("Done")))
             {
                 Context.ClearSubElementSelection();
             }
 
-            ImGui::TextDisabled("Ctrl+Click the curve to insert");
+            ImGui::TextDisabled(LOC("Ctrl+Click the curve to insert"));
 
             Context.EndPanel();
         }

@@ -54,7 +54,7 @@ namespace Lumina
             const bool bHasSelection = Montage != nullptr && SelectedKind != ESelectionKind::None;
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText(bHasSelection ? "Selection Details" : "Asset Details");
+            ImGui::SeparatorText(bHasSelection ? LOC("Selection Details") : LOC("Asset Details"));
             ImGuiX::Font::PopFont();
 
             ImGui::Spacing();
@@ -286,7 +286,7 @@ namespace Lumina
     {
         FAssetEditorTool::DrawToolMenu(UpdateContext);
 
-        if (ImGui::BeginMenu(LE_ICON_BONE " Skeleton"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_BONE, "Skeleton")))
         {
             DrawSkeletonDebugMenuItems();
             ImGui::EndMenu();
@@ -295,23 +295,23 @@ namespace Lumina
 
     void FAnimationMontageEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Slots",
-            "A montage plays its slot tracks through the matching Slot node in an animation graph. "
-            "Add a Slot node, name it the same as a track here, and wire your locomotion pose into its Source.");
-        DrawHelpTextRow("Segments",
-            "Drag an animation from the content browser onto a slot lane to add a segment. "
+        DrawHelpTextRow(LOC("Slots"),
+            LOC("A montage plays its slot tracks through the matching Slot node in an animation graph. "
+            "Add a Slot node, name it the same as a track here, and wire your locomotion pose into its Source."));
+        DrawHelpTextRow(LOC("Segments"),
+            LOC("Drag an animation from the content browser onto a slot lane to add a segment. "
             "Drag a segment to move it, drag its right edge to change its play rate. "
-            "Right-click a lane for Reflow, which packs the segments end to end.");
-        DrawHelpTextRow("Sections",
-            "Sections split the timeline into named regions. A section runs to the next one in time order, "
+            "Right-click a lane for Reflow, which packs the segments end to end."));
+        DrawHelpTextRow(LOC("Sections"),
+            LOC("Sections split the timeline into named regions. A section runs to the next one in time order, "
             "then continues into its Next Section; leaving Next Section empty ends the montage there. "
-            "Point Next Section at itself to loop, and call JumpToMontageSection from script to chain a combo.");
-        DrawHelpTextRow("Playing from script",
-            "Grab the entity's AnimationGraphComponent:\n"
+            "Point Next Section at itself to loop, and call JumpToMontageSection from script to chain a combo."));
+        DrawHelpTextRow(LOC("Playing from script"),
+            LOC("Grab the entity's AnimationGraphComponent:\n"
             "  anim.PlayMontage(Montage, 1.0f)\n"
             "  anim.JumpToMontageSection(Montage, \"Combo2\")\n"
             "  anim.StopMontage(Montage)\n"
-            "Notifies fire into the same buffer as graph notifies, so WasNotifyTriggered sees them.");
+            "Notifies fire into the same buffer as graph notifies, so WasNotifyTriggered sees them."));
     }
 
     void FAnimationMontageEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const
@@ -368,7 +368,7 @@ namespace Lumina
             }
         }
 
-        if (ImGui::Button(bIsPlaying ? LE_ICON_PAUSE " Pause" : LE_ICON_PLAY " Play", ImVec2(96, 0)))
+        if (ImGui::Button(bIsPlaying ? LOC_ICON(LE_ICON_PAUSE, "Pause") : LOC_ICON(LE_ICON_PLAY, "Play"), ImVec2(96, 0)))
         {
             if (!bIsPlaying && Playhead >= Duration && !bLooping)
             {
@@ -378,7 +378,7 @@ namespace Lumina
         }
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_STOP " Stop", ImVec2(80, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_STOP, "Stop"), ImVec2(80, 0)))
         {
             bIsPlaying = false;
             Playhead   = 0.0f;
@@ -396,25 +396,25 @@ namespace Lumina
         }
 
         ImGui::SameLine();
-        ImGui::Checkbox(LE_ICON_REPEAT " Loop", &bLooping);
+        ImGui::Checkbox(LOC_ICON(LE_ICON_REPEAT, "Loop"), &bLooping);
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110.0f);
-        ImGui::SliderFloat("##PlayRate", &PlayRate, 0.05f, 4.0f, "Rate %.2fx");
+        ImGui::SliderFloat("##PlayRate", &PlayRate, 0.05f, 4.0f, LOC("Rate %.2fx"));
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110.0f);
-        ImGui::SliderFloat("##Zoom", &TimelineZoom, 1.0f, 16.0f, LE_ICON_MAGNIFY " %.1fx");
+        ImGui::SliderFloat("##Zoom", &TimelineZoom, 1.0f, 16.0f, LOC_ICON(LE_ICON_MAGNIFY, "%.1fx"));
 
         ImGui::SameLine();
-        ImGui::Checkbox("Snap", &bSnapToFrame);
+        ImGui::Checkbox(LOC("Snap"), &bSnapToFrame);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(70.0f);
-        ImGui::DragInt("##FPS", &FrameRate, 1.0f, 1, 240, "%d fps");
+        ImGui::DragInt("##FPS", &FrameRate, 1.0f, 1, 240, LOC("%d fps"));
 
         const int Frame      = (int)roundf(Playhead * (float)FrameRate);
         const int TotalFrame = (int)roundf(Duration * (float)FrameRate);
-        const FString Readout = Format("{:.3f}s / {:.3f}s   (frame {}/{})", Playhead, Duration, Frame, TotalFrame);
+        const FString Readout = Format(LOCF("{:.3f}s / {:.3f}s   (frame {}/{})"), Playhead, Duration, Frame, TotalFrame);
         const float TextW = ImGui::CalcTextSize(Readout.c_str()).x;
         ImGui::SameLine();
         ImGui::SetCursorPosX(Math::Max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - TextW - 16.0f));
@@ -423,14 +423,14 @@ namespace Lumina
 
     void FAnimationMontageEditorTool::DrawSlotTracks(CAnimationMontage* Montage, float Duration)
     {
-        if (ImGui::Button(LE_ICON_PLUS " Slot"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Slot")))
         {
             SAnimMontageSlotTrack& Track = Montage->SlotTracks.emplace_back();
             Track.SlotName = FName(Format("Slot {}", (int)Montage->SlotTracks.size()).c_str());
             MarkMontageDirty();
         }
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_PLUS " Section"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Section")))
         {
             SAnimMontageSection& Section = Montage->Sections.emplace_back();
             Section.Name = FName(Format("Section{}", (int)Montage->Sections.size()).c_str());
@@ -438,7 +438,7 @@ namespace Lumina
             MarkMontageDirty();
         }
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_PLUS " Notify"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Notify")))
         {
             SAnimMontageNotify& Notify = Montage->Notifies.emplace_back();
             Notify.Name  = "NewNotify";
@@ -449,7 +449,7 @@ namespace Lumina
             MarkMontageDirty();
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("(drag a clip from the content browser onto a slot lane)");
+        ImGui::TextDisabled(LOC("(drag a clip from the content browser onto a slot lane)"));
 
         const int32 NumTracks = (int32)Montage->SlotTracks.size();
         const float CanvasHeight = kMontageRulerHeight + kMontageSectionHeight + NumTracks * kMontageTrackHeight + kMontageNotifyHeight + 8.0f;
@@ -525,7 +525,7 @@ namespace Lumina
 
         // Section lane, drawn here because it shares the canvas geometry above.
         DrawList->AddRectFilled(ImVec2(CanvasPos.x, SectionY0), ImVec2(LaneX1, SectionY0 + kMontageSectionHeight), IM_COL32(30, 30, 36, 255));
-        DrawList->AddText(ImVec2(CanvasPos.x + 8, SectionY0 + 4), IM_COL32(170, 172, 182, 220), "Sections");
+        DrawList->AddText(ImVec2(CanvasPos.x + 8, SectionY0 + 4), IM_COL32(170, 172, 182, 220), LOC("Sections"));
 
         DrawList->PushClipRect(ImVec2(LaneX0, SectionY0), ImVec2(LaneX1, SectionY0 + kMontageSectionHeight), true);
         for (int32 i = 0; i < (int32)Montage->Sections.size(); ++i)
@@ -586,17 +586,17 @@ namespace Lumina
                     snprintf(RenameBuf, sizeof(RenameBuf), "%s", Track.SlotName.c_str());
                 }
                 ImGui::SetNextItemWidth(160);
-                if (ImGui::InputText("Slot Name", RenameBuf, sizeof(RenameBuf), ImGuiInputTextFlags_EnterReturnsTrue))
+                if (ImGui::InputText(LOC("Slot Name"), RenameBuf, sizeof(RenameBuf), ImGuiInputTextFlags_EnterReturnsTrue))
                 {
                     Track.SlotName = FName(RenameBuf);
                     MarkMontageDirty();
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem(LE_ICON_ARROW_COLLAPSE_LEFT " Reflow Segments"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_ARROW_COLLAPSE_LEFT, "Reflow Segments")))
                 {
                     ReflowTrack(Montage, t);
                 }
-                if (NumTracks > 1 && ImGui::MenuItem(LE_ICON_DELETE " Delete Slot"))
+                if (NumTracks > 1 && ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Delete Slot")))
                 {
                     Montage->SlotTracks.erase(Montage->SlotTracks.begin() + t);
                     PreviewTrack = 0;
@@ -647,7 +647,7 @@ namespace Lumina
                     DrawList->AddLine(ImVec2(LX, BarY0), ImVec2(LX, BarY1), kSegmentLoopBar, 1.0f);
                 }
 
-                const char* ClipName = Segment.Animation.IsValid() ? Segment.Animation->GetName().c_str() : "<empty>";
+                const char* ClipName = Segment.Animation.IsValid() ? Segment.Animation->GetName().c_str() : LOC("<empty>");
                 DrawList->AddText(ImVec2(X0 + 6.0f, BarY0 + 2.0f), IM_COL32(255, 255, 255, 235), ClipName);
 
                 const ImVec2 M = IO.MousePos;
@@ -671,7 +671,7 @@ namespace Lumina
 
         // Notify lane.
         DrawList->AddRectFilled(ImVec2(CanvasPos.x, NotifyY0), ImVec2(LaneX1, NotifyY0 + kMontageNotifyHeight), IM_COL32(30, 30, 36, 255));
-        DrawList->AddText(ImVec2(CanvasPos.x + 8, NotifyY0 + 5), IM_COL32(170, 172, 182, 220), "Notifies");
+        DrawList->AddText(ImVec2(CanvasPos.x + 8, NotifyY0 + 5), IM_COL32(170, 172, 182, 220), LOC("Notifies"));
 
         DrawList->PushClipRect(ImVec2(LaneX0, NotifyY0), ImVec2(LaneX1, NotifyY0 + kMontageNotifyHeight), true);
 
@@ -723,7 +723,7 @@ namespace Lumina
             const bool bOver = bCanvasHovered && fabsf(M.x - X) <= 6.0f && M.y >= Top && M.y <= Bot;
             if (bOver)
             {
-                ImGui::SetTooltip("%s @ %.3fs", Notify.Name.c_str(), Notify.Time);
+                ImGui::SetTooltip(LOC("%s @ %.3fs"), Notify.Name.c_str(), Notify.Time);
             }
             if (DragMode == EDragMode::None && bOver && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             {
@@ -886,22 +886,22 @@ namespace Lumina
             }
 
             SAnimMontageSegment& Segment = Track.Segments[SelectedIndex];
-            ImGui::TextDisabled(LE_ICON_ANIMATION " Segment on '%s'", Track.SlotName.c_str());
+            ImGui::TextDisabled(LOC_ICON(LE_ICON_ANIMATION, "Segment on '%s'"), Track.SlotName.c_str());
 
             const float ClipDuration = Segment.Animation.IsValid() ? Segment.Animation->GetDuration() : 0.0f;
 
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::DragFloat("Start", &Segment.StartTime, 0.01f, 0.0f, 1000.0f, "%.3fs")) { MarkMontageDirty(); }
+            if (ImGui::DragFloat(LOC("Start"), &Segment.StartTime, 0.01f, 0.0f, 1000.0f, LOC("%.3fs"))) { MarkMontageDirty(); }
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::DragFloat("Clip Start", &Segment.ClipStartTime, 0.01f, 0.0f, ClipDuration, "%.3fs")) { MarkMontageDirty(); }
+            if (ImGui::DragFloat(LOC("Clip Start"), &Segment.ClipStartTime, 0.01f, 0.0f, ClipDuration, LOC("%.3fs"))) { MarkMontageDirty(); }
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::DragFloat("Clip End", &Segment.ClipEndTime, 0.01f, 0.0f, ClipDuration, "%.3fs")) { MarkMontageDirty(); }
+            if (ImGui::DragFloat(LOC("Clip End"), &Segment.ClipEndTime, 0.01f, 0.0f, ClipDuration, LOC("%.3fs"))) { MarkMontageDirty(); }
 
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::DragFloat("Rate", &Segment.PlayRate, 0.01f, 0.05f, 20.0f, "%.2fx")) { MarkMontageDirty(); }
+            if (ImGui::DragFloat(LOC("Rate"), &Segment.PlayRate, 0.01f, 0.05f, 20.0f, LOC("%.2fx"))) { MarkMontageDirty(); }
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::DragInt("Loops", &Segment.LoopCount, 0.1f, 1, 64)) { MarkMontageDirty(); }
-            ImGui::TextDisabled("occupies %.3fs", Segment.GetTimelineLength());
+            if (ImGui::DragInt(LOC("Loops"), &Segment.LoopCount, 0.1f, 1, 64)) { MarkMontageDirty(); }
+            ImGui::TextDisabled(LOC("occupies %.3fs"), Segment.GetTimelineLength());
             break;
         }
         case ESelectionKind::Section:
@@ -912,19 +912,19 @@ namespace Lumina
             }
 
             SAnimMontageSection& Section = Montage->Sections[SelectedIndex];
-            ImGui::TextDisabled(LE_ICON_BOOKMARK " Section");
+            ImGui::TextDisabled(LOC_ICON(LE_ICON_BOOKMARK, "Section"));
 
             snprintf(NameBuf, sizeof(NameBuf), "%s", Section.Name.c_str());
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::InputText("Name", NameBuf, sizeof(NameBuf))) { Section.Name = FName(NameBuf); MarkMontageDirty(); }
+            if (ImGui::InputText(LOC("Name"), NameBuf, sizeof(NameBuf))) { Section.Name = FName(NameBuf); MarkMontageDirty(); }
 
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::DragFloat("Start##Sec", &Section.StartTime, 0.01f, 0.0f, Duration, "%.3fs")) { MarkMontageDirty(); }
+            if (ImGui::DragFloat("Start##Sec", &Section.StartTime, 0.01f, 0.0f, Duration, LOC("%.3fs"))) { MarkMontageDirty(); }
 
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::BeginCombo("Next", Section.NextSection.IsNone() ? "<end montage>" : Section.NextSection.c_str()))
+            if (ImGui::BeginCombo(LOC("Next"), Section.NextSection.IsNone() ? LOC("<end montage>") : Section.NextSection.c_str()))
             {
-                if (ImGui::Selectable("<end montage>", Section.NextSection.IsNone()))
+                if (ImGui::Selectable(LOC("<end montage>"), Section.NextSection.IsNone()))
                 {
                     Section.NextSection = FName();
                     MarkMontageDirty();
@@ -949,18 +949,18 @@ namespace Lumina
             }
 
             SAnimMontageNotify& Notify = Montage->Notifies[SelectedIndex];
-            ImGui::TextDisabled(LE_ICON_BELL " Notify");
+            ImGui::TextDisabled(LOC_ICON(LE_ICON_BELL, "Notify"));
 
             snprintf(NameBuf, sizeof(NameBuf), "%s", Notify.Name.c_str());
             ImGui::SetNextItemWidth(FieldWidth);
             if (ImGui::InputText("Name##N", NameBuf, sizeof(NameBuf))) { Notify.Name = FName(NameBuf); MarkMontageDirty(); }
 
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::DragFloat("Time##N", &Notify.Time, 0.01f, 0.0f, Duration, "%.3fs")) { MarkMontageDirty(); }
+            if (ImGui::DragFloat("Time##N", &Notify.Time, 0.01f, 0.0f, Duration, LOC("%.3fs"))) { MarkMontageDirty(); }
 
             NotifyTrackCombo(Montage, Notify.Track, "Track##N");
 
-            if (ImGui::Button(LE_ICON_PLUS " Make Ranged"))
+            if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Make Ranged")))
             {
                 SAnimMontageNotifyState& State = Montage->NotifyStates.emplace_back();
                 State.Name      = Notify.Name;
@@ -975,7 +975,7 @@ namespace Lumina
             }
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Notify Type");
+            ImGui::SeparatorText(LOC("Notify Type"));
             if (DrawInstancedStructEditor("Type##N", Notify.Notify, SAnimNotify::StaticStruct(), NotifyDetails))
             {
                 MarkMontageDirty();
@@ -990,21 +990,21 @@ namespace Lumina
             }
 
             SAnimMontageNotifyState& State = Montage->NotifyStates[SelectedIndex];
-            ImGui::TextDisabled(LE_ICON_BELL_OUTLINE " Notify State");
+            ImGui::TextDisabled(LOC_ICON(LE_ICON_BELL_OUTLINE, "Notify State"));
 
             snprintf(NameBuf, sizeof(NameBuf), "%s", State.Name.c_str());
             ImGui::SetNextItemWidth(FieldWidth);
             if (ImGui::InputText("Name##NS", NameBuf, sizeof(NameBuf))) { State.Name = FName(NameBuf); MarkMontageDirty(); }
 
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::DragFloat("Start##NS", &State.StartTime, 0.01f, 0.0f, Duration, "%.3fs")) { MarkMontageDirty(); }
+            if (ImGui::DragFloat("Start##NS", &State.StartTime, 0.01f, 0.0f, Duration, LOC("%.3fs"))) { MarkMontageDirty(); }
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::DragFloat("End##NS", &State.EndTime, 0.01f, 0.0f, Duration, "%.3fs")) { MarkMontageDirty(); }
+            if (ImGui::DragFloat("End##NS", &State.EndTime, 0.01f, 0.0f, Duration, LOC("%.3fs"))) { MarkMontageDirty(); }
 
             NotifyTrackCombo(Montage, State.Track, "Track##NS");
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Notify Type");
+            ImGui::SeparatorText(LOC("Notify Type"));
             if (DrawInstancedStructEditor("Type##NS", State.Notify, SAnimNotifyState::StaticStruct(), NotifyDetails))
             {
                 MarkMontageDirty();
@@ -1013,7 +1013,7 @@ namespace Lumina
         }
         default:
         {
-            ImGui::TextDisabled("Select a segment, section or notify on the timeline to edit it.");
+            ImGui::TextDisabled(LOC("Select a segment, section or notify on the timeline to edit it."));
             return;
         }
         }
@@ -1021,7 +1021,7 @@ namespace Lumina
         if (SelectedKind != ESelectionKind::None)
         {
             ImGui::Spacing();
-            if (ImGui::Button(LE_ICON_DELETE " Delete"))
+            if (ImGui::Button(LOC_ICON(LE_ICON_DELETE, "Delete")))
             {
                 DeleteSelected(Montage);
             }

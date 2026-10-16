@@ -13,15 +13,15 @@ namespace Lumina
         {
             if (Bytes >= Constants::kMiB)
             {
-                snprintf(Out, Capacity, "%.1f MiB", (double)Bytes / double(Constants::kMiB));
+                snprintf(Out, Capacity, LOC("%.1f MiB"), (double)Bytes / double(Constants::kMiB));
             }
             else if (Bytes >= 1024ull)
             {
-                snprintf(Out, Capacity, "%.1f KiB", (double)Bytes / double(Constants::kKiB));
+                snprintf(Out, Capacity, LOC("%.1f KiB"), (double)Bytes / double(Constants::kKiB));
             }
             else
             {
-                snprintf(Out, Capacity, "%llu B", (unsigned long long)Bytes);
+                snprintf(Out, Capacity, LOC("%llu B"), (unsigned long long)Bytes);
             }
         }
 
@@ -75,7 +75,7 @@ namespace Lumina
     {
         if (Stats.empty())
         {
-            ImGui::TextDisabled("Nothing recorded at this layer yet.");
+            ImGui::TextDisabled(LOC("Nothing recorded at this layer yet."));
             return;
         }
 
@@ -88,17 +88,17 @@ namespace Lumina
         }
 
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Name",  ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort);
-        ImGui::TableSetupColumn("Reqs",  ImGuiTableColumnFlags_WidthFixed, 50.0f);
-        ImGui::TableSetupColumn("Last",  ImGuiTableColumnFlags_WidthFixed, 68.0f);
-        ImGui::TableSetupColumn("Avg",   ImGuiTableColumnFlags_WidthFixed, 68.0f);
-        ImGui::TableSetupColumn("Max",   ImGuiTableColumnFlags_WidthFixed, 68.0f);
-        ImGui::TableSetupColumn("Total", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+        ImGui::TableSetupColumn(LOC_ID("Name"),  ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort);
+        ImGui::TableSetupColumn(LOC_ID("Reqs"),  ImGuiTableColumnFlags_WidthFixed, 50.0f);
+        ImGui::TableSetupColumn(LOC_ID("Last"),  ImGuiTableColumnFlags_WidthFixed, 68.0f);
+        ImGui::TableSetupColumn(LOC_ID("Avg"),   ImGuiTableColumnFlags_WidthFixed, 68.0f);
+        ImGui::TableSetupColumn(LOC_ID("Max"),   ImGuiTableColumnFlags_WidthFixed, 68.0f);
+        ImGui::TableSetupColumn(LOC_ID("Total"), ImGuiTableColumnFlags_WidthFixed, 72.0f);
         if (bShowSize)
         {
-            ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 74.0f);
+            ImGui::TableSetupColumn(LOC_ID("Size"), ImGuiTableColumnFlags_WidthFixed, 74.0f);
         }
-        ImGui::TableSetupColumn("Outcome", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, 130.0f);
+        ImGui::TableSetupColumn(LOC_ID("Outcome"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, 130.0f);
         ImGui::TableHeadersRow();
 
         // Sorted on the display copy, so the tracker never has to hold an order for the UI's sake.
@@ -129,13 +129,13 @@ namespace Lumina
             ImGui::Text("%u", Stat.Count);
 
             ImGui::TableNextColumn();
-            ImGui::TextColored(CostColor(Stat.LastMs), "%.2f ms", Stat.LastMs);
+            ImGui::TextColored(CostColor(Stat.LastMs), LOC("%.2f ms"), Stat.LastMs);
             ImGui::TableNextColumn();
-            ImGui::Text("%.2f ms", Stat.AverageMs());
+            ImGui::Text(LOC("%.2f ms"), Stat.AverageMs());
             ImGui::TableNextColumn();
-            ImGui::TextColored(CostColor(Stat.MaxMs), "%.2f ms", Stat.MaxMs);
+            ImGui::TextColored(CostColor(Stat.MaxMs), LOC("%.2f ms"), Stat.MaxMs);
             ImGui::TableNextColumn();
-            ImGui::Text("%.1f ms", Stat.TotalMs);
+            ImGui::Text(LOC("%.1f ms"), Stat.TotalMs);
 
             if (bShowSize)
             {
@@ -144,7 +144,7 @@ namespace Lumina
                 ImGui::TextUnformatted(Buffer);
                 if (ImGui::IsItemHovered())
                 {
-                    ImGui::SetTooltip("%u exports, %u imports", Stat.Exports, Stat.Imports);
+                    ImGui::SetTooltip(LOC("%u exports, %u imports"), Stat.Exports, Stat.Imports);
                 }
             }
 
@@ -185,13 +185,13 @@ namespace Lumina
         const uint32 Requests = Tracker.GetTotalRequests();
         const uint32 Resident = Tracker.GetResidentHits();
 
-        ImGui::Text("%u requests", Requests);
+        ImGui::Text(LOC("%u requests"), Requests);
         ProfilerView::Divider();
-        ImGui::Text("%.1f ms total", Tracker.GetTotalRequestMs());
+        ImGui::Text(LOC("%.1f ms total"), Tracker.GetTotalRequestMs());
         ProfilerView::Divider();
-        ImGui::Text("%u resident hits", Resident);
+        ImGui::Text(LOC("%u resident hits"), Resident);
         ProfilerView::Divider();
-        if (ImGui::SmallButton("Clear"))
+        if (ImGui::SmallButton(LOC("Clear")))
         {
             Tracker.Clear();
             AssetRecent.clear();
@@ -200,30 +200,30 @@ namespace Lumina
         }
 
         ImGui::SetNextItemWidth(220.0f);
-        ImGui::InputTextWithHint("##assetfilter", "Filter by name", AssetFilter, sizeof(AssetFilter));
+        ImGui::InputTextWithHint("##assetfilter", LOC("Filter by name"), AssetFilter, sizeof(AssetFilter));
         ImGui::SameLine();
-        ImGui::TextDisabled("L loaded, R resident, J joined, F failed");
+        ImGui::TextDisabled(LOC("L loaded, R resident, J joined, F failed"));
 
         if (Requests == 0 && AssetPackages.empty())
         {
-            ImGui::TextDisabled("No asset loads recorded yet. Open or import an asset.");
+            ImGui::TextDisabled(LOC("No asset loads recorded yet. Open or import an asset."));
             return;
         }
 
         ImGui::Spacing();
-        if (ImGui::CollapsingHeader("Requests (what was asked for)", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Requests (what was asked for)"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             DrawAssetTable("##assetrequests", AssetRequests, false);
         }
 
         ImGui::Spacing();
-        if (ImGui::CollapsingHeader("Packages (what the disk did)"))
+        if (ImGui::CollapsingHeader(LOC_ID("Packages (what the disk did)")))
         {
             DrawAssetTable("##assetpackages", AssetPackages, true);
         }
 
         ImGui::Spacing();
-        if (ImGui::CollapsingHeader("Recent"))
+        if (ImGui::CollapsingHeader(LOC_ID("Recent")))
         {
             if (ImGui::BeginChild("##assetrecent", ImVec2(0.0f, 200.0f), true))
             {
@@ -237,11 +237,11 @@ namespace Lumina
                         continue;
                     }
 
-                    ImGui::TextColored(CostColor(Record.DurationMs), "%7.2f ms", Record.DurationMs);
+                    ImGui::TextColored(CostColor(Record.DurationMs), LOC("%7.2f ms"), Record.DurationMs);
                     ImGui::SameLine();
-                    ImGui::TextColored(OutcomeColor(Record.Outcome), "%-8s", LexAssetLoadOutcome(Record.Outcome));
+                    ImGui::TextColored(OutcomeColor(Record.Outcome), "%-8s", LOC_VIEW(LexAssetLoadOutcome(Record.Outcome)));
                     ImGui::SameLine();
-                    ImGui::TextDisabled(Record.Source == EAssetLoadSource::Request ? "req " : "pkg ");
+                    ImGui::TextDisabled(Record.Source == EAssetLoadSource::Request ? LOC("req ") : LOC("pkg "));
                     ImGui::SameLine();
                     ImGui::TextUnformatted(Name.c_str());
                 }

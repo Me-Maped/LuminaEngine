@@ -1,4 +1,5 @@
 #include "AnimGraphNode_StateRouting.h"
+#include "Localization/Localization.h"
 #include "UI/Tools/NodeGraph/Animation/AnimStateMachineGraph.h"
 
 namespace Lumina
@@ -17,7 +18,7 @@ namespace Lumina
     {
         if (SourceStates.empty())
         {
-            return FString("Alias (empty)");
+            return FString(LOC("Alias (empty)"));
         }
 
         if (SourceStates.size() == 1)
@@ -44,6 +45,6 @@ namespace Lumina
 
     FString CAnimGraphNode_StateConduit::GetNodeTitleText() const
     {
-        return ConduitName.IsNone() ? FString("Conduit") : FString(ConduitName.c_str());
+        return ConduitName.IsNone() ? FString(LOC("Conduit")) : FString(ConduitName.c_str());
     }
 }

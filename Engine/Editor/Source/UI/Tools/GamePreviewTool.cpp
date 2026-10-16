@@ -52,13 +52,13 @@ namespace Lumina
 
     void FGamePreviewTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Play (PIE)",
-            "This tool runs the duplicated PIE world. The original editor world is suspended; "
-            "Stop returns to it and discards PIE-side changes.");
-        DrawHelpTextRow("Input",
-            "Click the viewport to focus.");
-        DrawHelpTextRow("Pause",
-            "Use the editor's simulation controls to pause/resume the running PIE world.");
+        DrawHelpTextRow(LOC("Play (PIE)"),
+            LOC("This tool runs the duplicated PIE world. The original editor world is suspended; "
+            "Stop returns to it and discards PIE-side changes."));
+        DrawHelpTextRow(LOC("Input"),
+            LOC("Click the viewport to focus."));
+        DrawHelpTextRow(LOC("Pause"),
+            LOC("Use the editor's simulation controls to pause/resume the running PIE world."));
     }
 
     void FGamePreviewTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const

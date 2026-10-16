@@ -1,4 +1,5 @@
 ﻿#include "CurveGradientCustomization.h"
+#include "Localization/Localization.h"
 
 #include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Core/Object/Cast.h"
@@ -55,7 +56,7 @@ namespace Lumina
 
         if (InCurve.IsEmpty())
         {
-            const char* Empty = "empty";
+            const char* Empty = LOC("empty");
             const ImVec2 TextSize = ImGui::CalcTextSize(Empty);
             DrawList->AddText(ImVec2(Min.x + (Size.x - TextSize.x) * 0.5f, Min.y + (Size.y - TextSize.y) * 0.5f),
                 IM_COL32(140, 140, 148, 255), Empty);
@@ -132,17 +133,17 @@ namespace Lumina
             bEditorOpen = true;
             ImGui::OpenPopup("CurveEditorPopup");
         }
-        ImGuiX::TextTooltip("{}", "Click to edit");
+        ImGuiX::TextTooltip("{}", LOC("Click to edit"));
 
         ImGui::SameLine();
         bool bUseAsset = Value.bUseAsset;
-        if (ImGui::Checkbox("Asset", &bUseAsset))
+        if (ImGui::Checkbox(LOC("Asset"), &bUseAsset))
         {
             Value.bUseAsset = bUseAsset;
             bDirty = true;
         }
-        ImGuiX::TextTooltip("{}", "Use a shared Curve asset instead of the curve authored here. "
-                                  "The inline curve is kept, so turning this back off restores it.");
+        ImGuiX::TextTooltip("{}", LOC("Use a shared Curve asset instead of the curve authored here. "
+                                  "The inline curve is kept, so turning this back off restores it."));
 
         if (Value.bUseAsset && DrawAssetSlot())
         {
@@ -154,7 +155,7 @@ namespace Lumina
             if (bAssetMode)
             {
                 // Read-only, since this curve is owned by another asset and shared with every other user.
-                ImGui::TextDisabled("Read-only -- open the Curve asset to edit it.");
+                ImGui::TextDisabled(LOC("Read-only -- open the Curve asset to edit it."));
                 ImGui::Separator();
                 DrawThumbnail(Shown, ImVec2(520.0f, 260.0f));
             }
@@ -322,7 +323,7 @@ namespace Lumina
         {
             ImGui::OpenPopup("GradientEditorPopup");
         }
-        ImGuiX::TextTooltip("{}", "Click to edit stops");
+        ImGuiX::TextTooltip("{}", LOC("Click to edit stops"));
 
         ImGui::SameLine();
         ImGui::TextDisabled("%d", Value.NumKeys());
@@ -372,7 +373,7 @@ namespace Lumina
 
                 float Time = Key.Time;
                 ImGui::SetNextItemWidth(EditorWidth);
-                if (ImGui::DragFloat("##StopTime", &Time, 0.005f, 0.0f, 0.0f, "Time %.3f"))
+                if (ImGui::DragFloat("##StopTime", &Time, 0.005f, 0.0f, 0.0f, LOC("Time %.3f")))
                 {
                     Key.Time = Time;
                     Value.SortKeys();
@@ -380,7 +381,7 @@ namespace Lumina
                 }
 
                 ImGui::BeginDisabled(Value.NumKeys() <= 1);
-                if (ImGui::Button(LE_ICON_DELETE " Remove Stop"))
+                if (ImGui::Button(LOC_ICON(LE_ICON_DELETE, "Remove Stop")))
                 {
                     Value.RemoveKey(SelectedStop);
                     SelectedStop = Constants::kIndexNone;
@@ -390,7 +391,7 @@ namespace Lumina
             }
             else
             {
-                ImGui::TextDisabled("Double-click the ramp to add a stop; click a stop to edit it.");
+                ImGui::TextDisabled(LOC("Double-click the ramp to add a stop; click a stop to edit it."));
             }
 
             ImGui::EndPopup();

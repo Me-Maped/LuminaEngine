@@ -1079,18 +1079,18 @@ namespace Lumina
 
     void FRmlUiEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("RmlUi",
-            "Lumina ships RmlUi as its HTML/CSS-style markup layer. Documents live as plain .rml files "
-            "alongside their .rcss stylesheets, no asset packaging.");
-        DrawHelpTextRow("Live Preview",
-            "Saving (Ctrl+S) reloads the document on the right pane. Auto Reload watches the file on disk "
-            "and refreshes when external editors save.");
-        DrawHelpTextRow("Decorators",
-            "FRmlUiRenderer supports CPU gradient decorators (horizontal-gradient / vertical-gradient) but NOT "
-            "shader-backed ones (linear-gradient, radial-gradient). Use the supported names.");
-        DrawHelpTextRow("Resolution / Safe Zones",
-            "Use the toolbar to lock canvas size to a target resolution. Safe zone overlays help align "
-            "controls on TVs / consoles where overscan trims the edges.");
+        DrawHelpTextRow(LOC("RmlUi"),
+            LOC("Lumina ships RmlUi as its HTML/CSS-style markup layer. Documents live as plain .rml files "
+            "alongside their .rcss stylesheets, no asset packaging."));
+        DrawHelpTextRow(LOC("Live Preview"),
+            LOC("Saving (Ctrl+S) reloads the document on the right pane. Auto Reload watches the file on disk "
+            "and refreshes when external editors save."));
+        DrawHelpTextRow(LOC("Decorators"),
+            LOC("FRmlUiRenderer supports CPU gradient decorators (horizontal-gradient / vertical-gradient) but NOT "
+            "shader-backed ones (linear-gradient, radial-gradient). Use the supported names."));
+        DrawHelpTextRow(LOC("Resolution / Safe Zones"),
+            LOC("Use the toolbar to lock canvas size to a target resolution. Safe zone overlays help align "
+            "controls on TVs / consoles where overscan trims the edges."));
     }
 
     void FRmlUiEditorTool::OnSave()
@@ -1105,13 +1105,13 @@ namespace Lumina
 
         if (!VFS::WriteFile(FStringView(VirtualPath.c_str(), VirtualPath.size()), View))
         {
-            ImGuiX::Notifications::NotifyError("Failed to save '{0}'.", VirtualPath.c_str());
+            ImGuiX::Notifications::NotifyError(LOCF("Failed to save '{0}'."), VirtualPath.c_str());
             return;
         }
 
         LastSyncedText = Body;
         bBufferDirty = false;
-        ImGuiX::Notifications::NotifySuccess("Saved '{0}'.", VirtualPath.c_str());
+        ImGuiX::Notifications::NotifySuccess(LOCF("Saved '{0}'."), VirtualPath.c_str());
 
         ReloadDocument(/*bAlwaysReport*/ true);
     }
@@ -1204,97 +1204,97 @@ namespace Lumina
         if (bBufferDirty)
         {
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "  *unsaved");
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), LOC("  *unsaved"));
         }
 
         ImGui::Spacing();
 
-        if (ImGui::Button(LE_ICON_CONTENT_SAVE " Save"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CONTENT_SAVE, "Save")))
         {
             OnSave();
         }
-        ImGuiX::TextTooltip("Write the buffer to disk (Ctrl+S).");
+        ImGuiX::TextTooltip(LOCF("Write the buffer to disk (Ctrl+S)."));
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_REFRESH " Reload"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_REFRESH, "Reload")))
         {
             LoadFromDisk();
             ReloadDocument(/*bAlwaysReport*/ true);
         }
-        ImGuiX::TextTooltip("Discard buffer changes and reload from disk.");
+        ImGuiX::TextTooltip(LOCF("Discard buffer changes and reload from disk."));
 
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
 
         ImGui::BeginDisabled(!CodeEditor.CanUndo());
-        if (ImGui::Button(LE_ICON_UNDO_VARIANT " Undo")) CodeEditor.Undo();
-        ImGuiX::TextTooltip("Undo last change (Ctrl+Z).");
+        if (ImGui::Button(LOC_ICON(LE_ICON_UNDO_VARIANT, "Undo"))) CodeEditor.Undo();
+        ImGuiX::TextTooltip(LOCF("Undo last change (Ctrl+Z)."));
         ImGui::EndDisabled();
 
         ImGui::SameLine();
         ImGui::BeginDisabled(!CodeEditor.CanRedo());
-        if (ImGui::Button(LE_ICON_REDO_VARIANT " Redo")) CodeEditor.Redo();
-        ImGuiX::TextTooltip("Redo last undone change (Ctrl+Y).");
+        if (ImGui::Button(LOC_ICON(LE_ICON_REDO_VARIANT, "Redo"))) CodeEditor.Redo();
+        ImGuiX::TextTooltip(LOCF("Redo last undone change (Ctrl+Y)."));
         ImGui::EndDisabled();
 
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
 
-        if (ImGui::Button(LE_ICON_PLAY " Re-render"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLAY, "Re-render")))
         {
             ReloadDocument(/*bAlwaysReport*/ true);
         }
-        ImGuiX::TextTooltip("Re-parse the current buffer into the preview.");
+        ImGuiX::TextTooltip(LOCF("Re-parse the current buffer into the preview."));
 
         ImGui::SameLine();
-        ImGui::Checkbox("Auto", &bAutoReload);
-        ImGuiX::TextTooltip("Re-parse the buffer ~250ms after each edit.");
+        ImGui::Checkbox(LOC("Auto"), &bAutoReload);
+        ImGuiX::TextTooltip(LOCF("Re-parse the buffer ~250ms after each edit."));
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_MAGNIFY " Find"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_MAGNIFY, "Find")))
         {
             CodeEditor.OpenFindReplaceWindow();
         }
-        ImGuiX::TextTooltip("Open the find/replace bar (Ctrl+F).");
+        ImGuiX::TextTooltip(LOCF("Open the find/replace bar (Ctrl+F)."));
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_FORMAT_LINE_SPACING " Goto"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_FORMAT_LINE_SPACING, "Goto")))
         {
             bRequestOpenGoto = true;
         }
-        ImGuiX::TextTooltip("Jump to a specific line number (Ctrl+G).");
+        ImGuiX::TextTooltip(LOCF("Jump to a specific line number (Ctrl+G)."));
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_CODE_BRACES " Snippets"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CODE_BRACES, "Snippets")))
         {
             ImGui::OpenPopup("##rml_snippets");
         }
-        ImGuiX::TextTooltip("Insert a tag or RCSS rule at the cursor.");
+        ImGuiX::TextTooltip(LOCF("Insert a tag or RCSS rule at the cursor."));
         DrawSnippetsPopup();
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_AUTO_FIX " Format"))
+        if (ImGui::Button(LOC_ICON_CTX(LE_ICON_AUTO_FIX, "Format", "rmlui")))
         {
             ImGui::OpenPopup("##rml_format");
         }
-        ImGuiX::TextTooltip("Whitespace and case transforms.");
+        ImGuiX::TextTooltip(LOCF("Whitespace and case transforms."));
         DrawFormatPopup();
 
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
 
-        if (ImGui::Button(LE_ICON_HELP_CIRCLE " Help"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_HELP_CIRCLE, "Help")))
         {
             ImGui::OpenPopup("##rml_help");
         }
-        ImGuiX::TextTooltip("Quick RML / RCSS reference.");
+        ImGuiX::TextTooltip(LOCF("Quick RML / RCSS reference."));
         DrawHelpPopup();
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_COG " Settings"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_COG, "Settings")))
         {
             ImGui::OpenPopup("##rml_editor_settings");
         }
@@ -1303,43 +1303,43 @@ namespace Lumina
         {
             bool bDirty = false;
 
-            ImGui::TextDisabled("Display");
+            ImGui::TextDisabled(LOC("Display"));
             ImGui::Separator();
 
-            ImGui::SliderFloat("Font scale", &EditorFontScale, 0.75f, 3.0f, "%.2fx");
-            ImGuiX::TextTooltip("Tip: Ctrl+wheel over the editor adjusts this live.");
+            ImGui::SliderFloat(LOC("Font scale"), &EditorFontScale, 0.75f, 3.0f, "%.2fx");
+            ImGuiX::TextTooltip(LOCF("Tip: Ctrl+wheel over the editor adjusts this live."));
 
-            if (ImGui::SliderFloat("Line spacing", &EditorLineSpacing, 1.0f, 2.0f, "%.2f")) bDirty = true;
-            if (ImGui::SliderInt("Tab size", &EditorTabSize, 1, 8)) bDirty = true;
-            if (ImGui::Checkbox("Show line numbers",      &bEditorShowLineNumbers)) bDirty = true;
-            if (ImGui::Checkbox("Show whitespace",        &bEditorShowWhitespace))  bDirty = true;
-            if (ImGui::Checkbox("Show scrollbar minimap", &bEditorShowMiniMap))     bDirty = true;
-            if (ImGui::Checkbox("Read-only",              &bEditorReadOnly))        bDirty = true;
+            if (ImGui::SliderFloat(LOC("Line spacing"), &EditorLineSpacing, 1.0f, 2.0f, "%.2f")) bDirty = true;
+            if (ImGui::SliderInt(LOC("Tab size"), &EditorTabSize, 1, 8)) bDirty = true;
+            if (ImGui::Checkbox(LOC("Show line numbers"),      &bEditorShowLineNumbers)) bDirty = true;
+            if (ImGui::Checkbox(LOC("Show whitespace"),        &bEditorShowWhitespace))  bDirty = true;
+            if (ImGui::Checkbox(LOC("Show scrollbar minimap"), &bEditorShowMiniMap))     bDirty = true;
+            if (ImGui::Checkbox(LOC("Read-only"),              &bEditorReadOnly))        bDirty = true;
 
             ImGui::Spacing();
-            ImGui::TextDisabled("Editing");
+            ImGui::TextDisabled(LOC("Editing"));
             ImGui::Separator();
-            if (ImGui::Checkbox("Auto-indent",          &bAutoIndent))           bDirty = true;
-            if (ImGui::Checkbox("Match brackets",       &bShowMatchingBrackets)) bDirty = true;
-            if (ImGui::Checkbox("Auto-close pairs",     &bCompletePairedGlyphs)) bDirty = true;
-            if (ImGui::Checkbox("Insert spaces on Tab", &bInsertSpacesOnTabs))   bDirty = true;
-            ImGuiX::TextTooltip("When on, pressing Tab inserts spaces instead of a tab character.");
-            ImGui::Checkbox("Trim trailing whitespace on save", &bTrimTrailingOnSave);
+            if (ImGui::Checkbox(LOC("Auto-indent"),          &bAutoIndent))           bDirty = true;
+            if (ImGui::Checkbox(LOC("Match brackets"),       &bShowMatchingBrackets)) bDirty = true;
+            if (ImGui::Checkbox(LOC("Auto-close pairs"),     &bCompletePairedGlyphs)) bDirty = true;
+            if (ImGui::Checkbox(LOC("Insert spaces on Tab"), &bInsertSpacesOnTabs))   bDirty = true;
+            ImGuiX::TextTooltip(LOCF("When on, pressing Tab inserts spaces instead of a tab character."));
+            ImGui::Checkbox(LOC("Trim trailing whitespace on save"), &bTrimTrailingOnSave);
 
             ImGui::Spacing();
-            ImGui::TextDisabled("Theme");
+            ImGui::TextDisabled(LOC("Theme"));
             ImGui::Separator();
 
             int PaletteIdx = (int)EditorPalette;
-            const char* PaletteLabels[] = { "Dark", "Light" };
-            if (ImGui::Combo("Palette", &PaletteIdx, PaletteLabels, IM_ARRAYSIZE(PaletteLabels)))
+            const char* PaletteLabels[] = { LOC("Dark"), LOC("Light") };
+            if (ImGui::Combo(LOC("Palette"), &PaletteIdx, PaletteLabels, IM_ARRAYSIZE(PaletteLabels)))
             {
                 EditorPalette = (EPalette)PaletteIdx;
                 bDirty = true;
             }
 
             // Saving fires the live-refresh, so the editor recolors immediately.
-            if (ImGui::Button(LE_ICON_DICE_5 " Randomize colors", ImVec2(-1, 0)))
+            if (ImGui::Button(LOC_ICON(LE_ICON_DICE_5, "Randomize colors"), ImVec2(-1, 0)))
             {
                 CRmlUiEditorSettings* Colors = GetMutableDefault<CRmlUiEditorSettings>();
                 Colors->TagColor         = RandomVibrantColor();
@@ -1352,18 +1352,18 @@ namespace Lumina
                 Colors->PunctuationColor = RandomVibrantColor();
                 GConfig->SaveSettings(CRmlUiEditorSettings::StaticClass());
             }
-            ImGuiX::TextTooltip("Roll a random vibrant set of syntax colors.");
+            ImGuiX::TextTooltip(LOCF("Roll a random vibrant set of syntax colors."));
 
             ImGui::Spacing();
             ImGui::Separator();
 
-            if (ImGui::Button("Persist as default", ImVec2(-1, 0)))
+            if (ImGui::Button(LOC("Persist as default"), ImVec2(-1, 0)))
             {
                 PersistSettings();
-                ImGuiX::Notifications::NotifySuccess("RmlUi editor settings saved.");
+                ImGuiX::Notifications::NotifySuccess(LOCF("RmlUi editor settings saved."));
             }
 
-            if (ImGui::Button("Reset to defaults", ImVec2(-1, 0)))
+            if (ImGui::Button(LOC("Reset to defaults"), ImVec2(-1, 0)))
             {
                 EditorFontScale = 1.25f;
                 EditorTabSize = 4;
@@ -1405,22 +1405,22 @@ namespace Lumina
             return;
         }
 
-        ImGui::TextDisabled("RML elements");
+        ImGui::TextDisabled(LOC("RML elements"));
         ImGui::Separator();
         for (const FRmlSnippet& Snip : kRmlDocSnippets)
         {
-            if (ImGui::MenuItem(Snip.Label))
+            if (ImGui::MenuItem(LOC(Snip.Label)))
             {
                 InsertSnippet(Snip.Body);
             }
         }
 
         ImGui::Spacing();
-        ImGui::TextDisabled("RCSS rules");
+        ImGui::TextDisabled(LOC("RCSS rules"));
         ImGui::Separator();
         for (const FRmlSnippet& Snip : kRcssSnippets)
         {
-            if (ImGui::MenuItem(Snip.Label))
+            if (ImGui::MenuItem(LOC(Snip.Label)))
             {
                 InsertSnippet(Snip.Body);
             }
@@ -1446,23 +1446,23 @@ namespace Lumina
             return;
         }
 
-        ImGui::TextDisabled("Document");
+        ImGui::TextDisabled(LOC("Document"));
         ImGui::Separator();
-        if (ImGui::MenuItem("Strip trailing whitespace")) CodeEditor.StripTrailingWhitespaces();
-        if (ImGui::MenuItem("Tabs to spaces"))            CodeEditor.TabsToSpaces();
-        if (ImGui::MenuItem("Spaces to tabs"))            CodeEditor.SpacesToTabs();
+        if (ImGui::MenuItem(LOC("Strip trailing whitespace"))) CodeEditor.StripTrailingWhitespaces();
+        if (ImGui::MenuItem(LOC("Tabs to spaces")))            CodeEditor.TabsToSpaces();
+        if (ImGui::MenuItem(LOC("Spaces to tabs")))            CodeEditor.SpacesToTabs();
 
         ImGui::Spacing();
-        ImGui::TextDisabled("Selection");
+        ImGui::TextDisabled(LOC("Selection"));
         ImGui::Separator();
         const bool bHasSel = CodeEditor.AnyCursorHasSelection();
         ImGui::BeginDisabled(!bHasSel);
-        if (ImGui::MenuItem("Indent",       "Tab"))        CodeEditor.IndentLines();
-        if (ImGui::MenuItem("Deindent",     "Shift+Tab"))  CodeEditor.DeindentLines();
-        if (ImGui::MenuItem("Move up",      "Alt+Up"))     CodeEditor.MoveUpLines();
-        if (ImGui::MenuItem("Move down",    "Alt+Down"))   CodeEditor.MoveDownLines();
-        if (ImGui::MenuItem("To upper case"))               CodeEditor.SelectionToUpperCase();
-        if (ImGui::MenuItem("To lower case"))               CodeEditor.SelectionToLowerCase();
+        if (ImGui::MenuItem(LOC("Indent"),       "Tab"))        CodeEditor.IndentLines();
+        if (ImGui::MenuItem(LOC("Deindent"),     "Shift+Tab"))  CodeEditor.DeindentLines();
+        if (ImGui::MenuItem(LOC("Move up"),      "Alt+Up"))     CodeEditor.MoveUpLines();
+        if (ImGui::MenuItem(LOC("Move down"),    "Alt+Down"))   CodeEditor.MoveDownLines();
+        if (ImGui::MenuItem(LOC("To upper case")))               CodeEditor.SelectionToUpperCase();
+        if (ImGui::MenuItem(LOC("To lower case")))               CodeEditor.SelectionToLowerCase();
         ImGui::EndDisabled();
 
         ImGui::EndPopup();
@@ -1475,14 +1475,14 @@ namespace Lumina
             return;
         }
 
-        ImGui::TextDisabled("Goto line (1 - %d)", CodeEditor.GetLineCount());
+        ImGui::TextDisabled(LOC("Goto line (1 - %d)"), CodeEditor.GetLineCount());
         ImGui::Separator();
         ImGui::SetNextItemWidth(160.0f);
         ImGui::SetKeyboardFocusHere();
         const bool bSubmit = ImGui::InputInt("##rml_goto_input", &GotoLineBuffer, 1, 10, ImGuiInputTextFlags_EnterReturnsTrue);
 
         ImGui::SameLine();
-        const bool bGo = ImGui::Button("Go");
+        const bool bGo = ImGui::Button(LOC("Go"));
 
         if (bSubmit || bGo)
         {
@@ -1502,10 +1502,10 @@ namespace Lumina
             return;
         }
 
-        ImGui::TextColored(ImVec4(0.6f, 0.85f, 1.0f, 1.0f), "RML / RCSS Quick Reference");
+        ImGui::TextColored(ImVec4(0.6f, 0.85f, 1.0f, 1.0f), LOC("RML / RCSS Quick Reference"));
         ImGui::Separator();
 
-        if (ImGui::CollapsingHeader("Editor shortcuts", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Editor shortcuts"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             if (ImGui::BeginTable("##rml_help_keys", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
             {
@@ -1515,17 +1515,17 @@ namespace Lumina
                     ImGui::TableNextColumn(); ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.45f, 1.0f), "%s", Key);
                     ImGui::TableNextColumn(); ImGui::TextUnformatted(Desc);
                 };
-                Row("Ctrl+S",        "Save");
-                Row("Ctrl+F",        "Find / replace");
-                Row("Ctrl+G",        "Goto line");
-                Row("Ctrl+Z / Y",    "Undo / redo");
-                Row("Ctrl+Wheel",    "Zoom font (in editor)");
-                Row("Tab / Shift+Tab","Indent / deindent selection");
-                Row("Alt+Up / Down", "Move line(s) up/down");
+                Row("Ctrl+S",        LOC("Save"));
+                Row("Ctrl+F",        LOC("Find / replace"));
+                Row("Ctrl+G",        LOC("Goto line"));
+                Row("Ctrl+Z / Y",    LOC("Undo / redo"));
+                Row("Ctrl+Wheel",    LOC("Zoom font (in editor)"));
+                Row("Tab / Shift+Tab",LOC("Indent / deindent selection"));
+                Row("Alt+Up / Down", LOC("Move line(s) up/down"));
                 ImGui::EndTable();
             }
         }
-        if (ImGui::CollapsingHeader("Preview shortcuts"))
+        if (ImGui::CollapsingHeader(LOC_ID("Preview shortcuts")))
         {
             if (ImGui::BeginTable("##rml_help_preview", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
             {
@@ -1535,42 +1535,42 @@ namespace Lumina
                     ImGui::TableNextColumn(); ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.45f, 1.0f), "%s", Key);
                     ImGui::TableNextColumn(); ImGui::TextUnformatted(Desc);
                 };
-                Row("Ctrl+Wheel",  "Zoom canvas (centered on mouse)");
-                Row("Middle-drag", "Pan");
-                Row("Double-click","Reset view");
+                Row("Ctrl+Wheel",  LOC("Zoom canvas (centered on mouse)"));
+                Row(LOC("Middle-drag"), LOC("Pan"));
+                Row(LOC("Double-click"), LOC("Reset view"));
                 ImGui::EndTable();
             }
         }
-        if (ImGui::CollapsingHeader("RML basics"))
+        if (ImGui::CollapsingHeader(LOC_ID("RML basics")))
         {
-            ImGui::TextWrapped(
+            ImGui::TextWrapped(LOC(
                 "<rml> is the document root.\n"
                 "<head> holds <title>, <style>, <link>; <body> holds visible elements.\n"
                 "Inline RCSS goes inside a <style> block; external sheets via:\n"
                 "    <link rel=\"stylesheet\" type=\"text/rcss\" href=\"...\"/>\n"
                 "Use id=\"\" / class=\"\" to target with selectors. data-model / data-bind\n"
-                "drive Rml's data binding system.");
+                "drive Rml's data binding system."));
         }
-        if (ImGui::CollapsingHeader("RCSS units"))
+        if (ImGui::CollapsingHeader(LOC_ID("RCSS units")))
         {
-            ImGui::TextWrapped(
+            ImGui::TextWrapped(LOC(
                 "px - raw pixels\n"
                 "dp - density-independent (scales with DPI slider)\n"
                 "%%  - percentage of parent\n"
                 "em - relative to current font size\n"
-                "vw / vh - viewport width / height percent");
+                "vw / vh - viewport width / height percent"));
         }
-        if (ImGui::CollapsingHeader("Layout, flex"))
+        if (ImGui::CollapsingHeader(LOC_ID("Layout, flex")))
         {
-            ImGui::TextWrapped(
+            ImGui::TextWrapped(LOC(
                 "display: flex;\n"
                 "flex-direction: row | column;\n"
                 "justify-content: flex-start | center | space-between | ...\n"
                 "align-items: stretch | center | flex-start | ...\n"
                 "gap: 8dp;\n"
-                "Children: flex: 1; flex-grow / flex-shrink / flex-basis.");
+                "Children: flex: 1; flex-grow / flex-shrink / flex-basis."));
         }
-        if (ImGui::CollapsingHeader("Decorators & font effects"))
+        if (ImGui::CollapsingHeader(LOC_ID("Decorators & font effects")))
         {
             ImGui::TextWrapped(
                 "decorator: image( url );\n"
@@ -1580,23 +1580,23 @@ namespace Lumina
                 "font-effect: shadow(0dp 1dp #000a);\n"
                 "font-effect: glow(2dp 0dp 0dp #4af);");
         }
-        if (ImGui::CollapsingHeader("Pseudo-classes"))
+        if (ImGui::CollapsingHeader(LOC_ID("Pseudo-classes")))
         {
-            ImGui::TextWrapped(
+            ImGui::TextWrapped(LOC(
                 ":hover :active :focus :checked :disabled\n"
                 ":nth-child(n) :first-child :last-child\n"
-                "Combine: button:hover.primary { ... }");
+                "Combine: button:hover.primary { ... }"));
         }
-        if (ImGui::CollapsingHeader("Color literals"))
+        if (ImGui::CollapsingHeader(LOC_ID("Color literals")))
         {
-            ImGui::TextWrapped(
+            ImGui::TextWrapped(LOC(
                 "#rgb / #rgba / #rrggbb / #rrggbbaa hex literals.\n"
-                "Click any hex literal in the editor to pop the color picker.");
+                "Click any hex literal in the editor to pop the color picker."));
         }
 
         ImGui::Spacing();
         ImGui::Separator();
-        ImGui::TextDisabled("Editor auto-reloads the preview ~250ms after each edit.");
+        ImGui::TextDisabled(LOC("Editor auto-reloads the preview ~250ms after each edit."));
         ImGui::EndPopup();
     }
 
@@ -1627,7 +1627,7 @@ namespace Lumina
             }
             const size_t Bytes = CachedDocBytes;
 
-            ImGui::Text("Ln %d, Col %d", Pos.line + 1, Pos.column + 1);
+            ImGui::Text(LOC("Ln %d, Col %d"), Pos.line + 1, Pos.column + 1);
 
             if (CodeEditor.AnyCursorHasSelection())
             {
@@ -1635,19 +1635,19 @@ namespace Lumina
                 const std::string SelText = CodeEditor.GetSectionText(Sel.start.line, Sel.start.column, Sel.end.line, Sel.end.column);
                 const int SelLines = (Sel.end.line - Sel.start.line) + 1;
                 ImGui::SameLine(0, 12);
-                ImGui::TextColored(ImVec4(0.85f, 0.75f, 0.45f, 1.0f), "(sel %zu chars / %d lines)", SelText.size(), SelLines);
+                ImGui::TextColored(ImVec4(0.85f, 0.75f, 0.45f, 1.0f), LOC("(sel %zu chars / %d lines)"), SelText.size(), SelLines);
             }
 
             ImGui::SameLine(0, 20);
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.65f, 1.0f), "%d lines", LineCount);
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.65f, 1.0f), LOC("%d lines"), LineCount);
             ImGui::SameLine(0, 20);
             if (Bytes >= 1024)
             {
-                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.65f, 1.0f), "%.1f KB", float(Bytes) / 1024.0f);
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.65f, 1.0f), LOC("%.1f KB"), float(Bytes) / 1024.0f);
             }
             else
             {
-                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.65f, 1.0f), "%zu B", Bytes);
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.65f, 1.0f), LOC("%zu B"), Bytes);
             }
 
             ImGui::SameLine(0, 20);
@@ -1655,19 +1655,19 @@ namespace Lumina
 
             ImGui::SameLine(0, 20);
             ImGui::TextColored(ImVec4(0.55f, 0.65f, 0.85f, 1.0f), "%s : %d",
-                bInsertSpacesOnTabs ? "Spaces" : "Tabs", EditorTabSize);
-            ImGuiX::TextTooltip("Indent mode and tab size. Toggle in Settings.");
+                bInsertSpacesOnTabs ? LOC("Spaces") : LOC("Tabs"), EditorTabSize);
+            ImGuiX::TextTooltip(LOCF("Indent mode and tab size. Toggle in Settings."));
 
             if (bEditorReadOnly)
             {
                 ImGui::SameLine(0, 20);
-                ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.25f, 1.0f), "READ-ONLY");
+                ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.25f, 1.0f), LOC("READ-ONLY"));
             }
 
             if (bBufferDirty)
             {
                 ImGui::SameLine(0, 20);
-                ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "modified");
+                ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), LOC("modified"));
             }
         }
         ImGui::EndChild();
@@ -1678,12 +1678,12 @@ namespace Lumina
     void FRmlUiEditorTool::DrawPreviewToolbar()
     {
         // Resolution preset.
-        ImGui::TextUnformatted("Canvas:");
+        ImGui::TextUnformatted(LOC("Canvas:"));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(140.0f);
 
         const char* Items[IM_ARRAYSIZE(ResolutionPresets)];
-        for (int i = 0; i < IM_ARRAYSIZE(ResolutionPresets); ++i) Items[i] = ResolutionPresets[i].Label;
+        for (int i = 0; i < IM_ARRAYSIZE(ResolutionPresets); ++i) Items[i] = LOC(ResolutionPresets[i].Label);
 
         if (ImGui::Combo("##rml_resolution", &ResolutionPreset, Items, IM_ARRAYSIZE(Items)))
         {
@@ -1693,17 +1693,17 @@ namespace Lumina
                 CanvasHeight = ResolutionPresets[ResolutionPreset].Height;
             }
         }
-        ImGuiX::TextTooltip("Render canvas resolution. The preview pane scales the canvas to fit; use View Zoom for 1:1 inspection.");
+        ImGuiX::TextTooltip(LOCF("Render canvas resolution. The preview pane scales the canvas to fit; use View Zoom for 1:1 inspection."));
 
         if (ResolutionPreset == CustomPresetIndex)
         {
             ImGui::SameLine();
             int W = (int)CanvasWidth, H = (int)CanvasHeight;
             ImGui::SetNextItemWidth(70.0f);
-            if (ImGui::DragInt("##rml_w", &W, 4.0f, 16, 7680, "W %d")) CanvasWidth  = (uint32)Math::Max(16, W);
+            if (ImGui::DragInt("##rml_w", &W, 4.0f, 16, 7680, LOC("W %d"))) CanvasWidth  = (uint32)Math::Max(16, W);
             ImGui::SameLine();
             ImGui::SetNextItemWidth(70.0f);
-            if (ImGui::DragInt("##rml_h", &H, 4.0f, 16, 4320, "H %d")) CanvasHeight = (uint32)Math::Max(16, H);
+            if (ImGui::DragInt("##rml_h", &H, 4.0f, 16, 4320, LOC("H %d"))) CanvasHeight = (uint32)Math::Max(16, H);
         }
 
         // Only meaningful when both dimensions are set.
@@ -1715,33 +1715,33 @@ namespace Lumina
                 std::swap(CanvasWidth, CanvasHeight);
                 ResolutionPreset = CustomPresetIndex;
             }
-            ImGuiX::TextTooltip("Swap width and height (portrait/landscape).");
+            ImGuiX::TextTooltip(LOCF("Swap width and height (portrait/landscape)."));
         }
 
         ImGui::SameLine();
-        ImGui::TextUnformatted("|  DPI:");
+        ImGui::TextUnformatted(LOC("|  DPI:"));
         ImGui::SameLine();
-        ImGui::Checkbox("Auto##rml_dpi_auto", &bAutoDpi);
-        ImGuiX::TextTooltip("Match the engine dp convention (canvas height / 1080) so dp-sized UI previews at in-game scale.");
+        ImGui::Checkbox(LOC_ID("Auto"), &bAutoDpi);
+        ImGuiX::TextTooltip(LOCF("Match the engine dp convention (canvas height / 1080) so dp-sized UI previews at in-game scale."));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110.0f);
         ImGui::BeginDisabled(bAutoDpi);
-        if (ImGui::SliderFloat("##rml_dpi", &PreviewDpiScale, 0.25f, 4.0f, "%.2fx"))
+        if (ImGui::SliderFloat("##rml_dpi", &PreviewDpiScale, 0.25f, 4.0f, LOC("%.2fx")))
         {
             if (PreviewContext != nullptr) RmlUi::SetEditorContextDpiScale(PreviewContext, PreviewDpiScale);
         }
         ImGui::EndDisabled();
-        ImGuiX::TextTooltip("Density-independent pixel ratio. Turn off Auto to set it manually.");
+        ImGuiX::TextTooltip(LOCF("Density-independent pixel ratio. Turn off Auto to set it manually."));
 
         ImGui::SameLine();
-        ImGui::TextUnformatted("|  View:");
+        ImGui::TextUnformatted(LOC("|  View:"));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110.0f);
         ImGui::SliderFloat("##rml_view", &ViewZoom, 0.1f, 4.0f, "%.2fx");
-        ImGuiX::TextTooltip("Pan with middle-drag, zoom with Ctrl+wheel, double-click to reset.");
+        ImGuiX::TextTooltip(LOCF("Pan with middle-drag, zoom with Ctrl+wheel, double-click to reset."));
 
         ImGui::SameLine();
-        if (ImGui::SmallButton("Reset View"))
+        if (ImGui::SmallButton(LOC("Reset View")))
         {
             ViewZoom = 1.0f;
             ViewPan = ImVec2(0, 0);
@@ -1750,24 +1750,24 @@ namespace Lumina
         // Second row.
         ImGui::Spacing();
 
-        if (ImGui::Button(LE_ICON_PALETTE " Background"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PALETTE, "Background")))
         {
             ImGui::OpenPopup("##rml_bg_popup");
         }
         if (ImGui::BeginPopup("##rml_bg_popup"))
         {
             int Mode = (int)BgMode;
-            const char* Modes[] = { "Checker", "Solid", "Transparent" };
-            if (ImGui::Combo("Mode", &Mode, Modes, IM_ARRAYSIZE(Modes))) BgMode = (EBgMode)Mode;
+            const char* Modes[] = { LOC("Checker"), LOC("Solid"), LOC("Transparent") };
+            if (ImGui::Combo(LOC("Mode"), &Mode, Modes, IM_ARRAYSIZE(Modes))) BgMode = (EBgMode)Mode;
             if (BgMode == EBgMode::Solid)
             {
-                ImGui::ColorEdit4("Color", &BgColor.x, ImGuiColorEditFlags_NoInputs);
+                ImGui::ColorEdit4(LOC("Color"), &BgColor.x, ImGuiColorEditFlags_NoInputs);
             }
             ImGui::EndPopup();
         }
 
         ImGui::SameLine();
-        ImGui::Checkbox("Grid", &bShowGrid);
+        ImGui::Checkbox(LOC("Grid"), &bShowGrid);
         if (bShowGrid)
         {
             ImGui::SameLine();
@@ -1775,30 +1775,30 @@ namespace Lumina
             ImGui::DragFloat("##rml_grid_size", &GridSize, 1.0f, 4.0f, 512.0f, "%.0fpx");
             ImGui::SameLine();
             ImGui::ColorEdit4("##rml_grid_color", &GridColor.x, ImGuiColorEditFlags_NoInputs);
-            ImGuiX::TextTooltip("Canvas-space grid for layout alignment.");
+            ImGuiX::TextTooltip(LOCF("Canvas-space grid for layout alignment."));
         }
 
         ImGui::SameLine();
         ImGui::TextUnformatted("|");
         ImGui::SameLine();
-        ImGui::Checkbox("Safe zones", &bShowSafeZones);
+        ImGui::Checkbox(LOC("Safe zones"), &bShowSafeZones);
         if (bShowSafeZones)
         {
             ImGui::SameLine();
             ImGui::SetNextItemWidth(80.0f);
-            ImGui::SliderFloat("##rml_safe_action", &SafeZoneAction, 0.50f, 1.0f, "Act %.2f");
+            ImGui::SliderFloat("##rml_safe_action", &SafeZoneAction, 0.50f, 1.0f, LOC("Act %.2f"));
             ImGui::SameLine();
             ImGui::SetNextItemWidth(80.0f);
-            ImGui::SliderFloat("##rml_safe_title", &SafeZoneTitle, 0.50f, 1.0f, "Tit %.2f");
+            ImGui::SliderFloat("##rml_safe_title", &SafeZoneTitle, 0.50f, 1.0f, LOC("Tit %.2f"));
             ImGui::SameLine();
             ImGui::ColorEdit4("##rml_safe_color", &SafeZoneColor.x, ImGuiColorEditFlags_NoInputs);
-            ImGuiX::TextTooltip("Inner rectangle: title-safe (text/HUD). Outer: action-safe (interactive elements).");
+            ImGuiX::TextTooltip(LOCF("Inner rectangle: title-safe (text/HUD). Outer: action-safe (interactive elements)."));
         }
 
         ImGui::SameLine();
         ImGui::TextUnformatted("|");
         ImGui::SameLine();
-        ImGui::Checkbox("Rulers", &bShowRulers);
+        ImGui::Checkbox(LOC("Rulers"), &bShowRulers);
     }
 
     void FRmlUiEditorTool::DrawPreviewCanvas()
@@ -1811,7 +1811,7 @@ namespace Lumina
 
         if (PreviewContext == nullptr)
         {
-            ImGui::TextDisabled("Preview unavailable.");
+            ImGui::TextDisabled(LOC("Preview unavailable."));
             return;
         }
 
@@ -1898,7 +1898,7 @@ namespace Lumina
         {
             ImGui::EndChild();
             ImGui::PopStyleColor();
-            ImGui::TextDisabled("Preview unavailable.");
+            ImGui::TextDisabled(LOC("Preview unavailable."));
             return;
         }
 
@@ -2053,7 +2053,7 @@ namespace Lumina
                     {
                         // Both sizes, since the layout resolution and the rasterized pixel count now differ.
                         static char Buf[160];
-                        std::snprintf(Buf, sizeof(Buf), "%ux%u  raster %ux%u  view %.2fx  dpi %.2fx",
+                        std::snprintf(Buf, sizeof(Buf), LOC("%ux%u  raster %ux%u  view %.2fx  dpi %.2fx"),
                                       EffW, EffH, PreviewWidth, PreviewHeight, ViewZoom, PreviewDpiScale);
                         return Buf;
                     }());
@@ -2193,11 +2193,11 @@ namespace Lumina
         {
             if (Headline.empty())
             {
-                ImGuiX::Notifications::NotifyError("{} failed to parse.", Name.c_str());
+                ImGuiX::Notifications::NotifyError(LOCF("{} failed to parse."), Name.c_str());
             }
             else
             {
-                ImGuiX::Notifications::NotifyError("{} failed to parse: {}", Name.c_str(), Headline.c_str());
+                ImGuiX::Notifications::NotifyError(LOCF("{} failed to parse: {}"), Name.c_str(), Headline.c_str());
             }
             return;
         }
@@ -2207,7 +2207,7 @@ namespace Lumina
             // Only worth saying when it is news, since a clean reload is the normal case.
             if (!bWasClean)
             {
-                ImGuiX::Notifications::NotifySuccess("{} reloaded cleanly.", Name.c_str());
+                ImGuiX::Notifications::NotifySuccess(LOCF("{} reloaded cleanly."), Name.c_str());
             }
             return;
         }
@@ -2215,16 +2215,16 @@ namespace Lumina
         FString Suffix;
         if (Diagnostics.size() > 1)
         {
-            Suffix = Format(" (+{} more)", (int32)Diagnostics.size() - 1);
+            Suffix = Format(LOCF(" (+{} more)"), (int32)Diagnostics.size() - 1);
         }
 
         if (ErrorCount > 0)
         {
-            ImGuiX::Notifications::NotifyError("{}: {}{}", Name.c_str(), Headline.c_str(), Suffix.c_str());
+            ImGuiX::Notifications::NotifyError(LOCF("{}: {}{}"), Name.c_str(), Headline.c_str(), Suffix.c_str());
         }
         else
         {
-            ImGuiX::Notifications::NotifyWarning("{}: {}{}", Name.c_str(), Headline.c_str(), Suffix.c_str());
+            ImGuiX::Notifications::NotifyWarning(LOCF("{}: {}{}"), Name.c_str(), Headline.c_str(), Suffix.c_str());
         }
     }
 
@@ -2438,7 +2438,7 @@ namespace Lumina
         const FTreeNodeID Body = Tree.CreateNode(InvalidTreeNode, LE_ICON_FOLDER "  body (root)");
         {
             FTreeNodeDisplay& Display = Tree.Get<FTreeNodeDisplay>(Body);
-            Display.TooltipText = "The document body. New elements land here when nothing else is selected.";
+            Display.TooltipText = LOC("The document body. New elements land here when nothing else is selected.");
 
             FRmlHierarchyItem& Item = Tree.EmplaceUserData<FRmlHierarchyItem>(Body);
             Item.bIsBody = true;
@@ -2493,7 +2493,7 @@ namespace Lumina
             if (bAssigned)
             {
                 // A chip keeps it out of the label, so filtering still matches on tag and id alone.
-                Display.TooltipChipHeader = "Widget";
+                Display.TooltipChipHeader = LOC("Widget");
                 Display.TooltipChips.push_back(FString(Assigned.c_str(), Assigned.size()));
             }
 
@@ -2519,28 +2519,28 @@ namespace Lumina
     {
         if (!HasElementTree())
         {
-            ImGui::TextWrapped(LE_ICON_INFORMATION_OUTLINE
-                " Stylesheets have no document tree. Open the .rml that links this sheet to author elements.");
+            ImGui::TextWrapped(LOC_ICON(LE_ICON_INFORMATION_OUTLINE,
+                "Stylesheets have no document tree. Open the .rml that links this sheet to author elements."));
             return;
         }
 
-        ImGui::Checkbox("Overlays", &bShowSlotOverlays);
-        ImGuiX::TextTooltip("Outline the document's id'd elements over the preview canvas.");
+        ImGui::Checkbox(LOC("Overlays"), &bShowSlotOverlays);
+        ImGuiX::TextTooltip(LOCF("Outline the document's id'd elements over the preview canvas."));
 
         ImGui::SameLine();
         ImGui::BeginDisabled(!bShowSlotOverlays);
         ImGui::SetNextItemWidth(110.0f);
-        const char* kDetailLabels[] = { "All", "Assigned", "Selection" };
+        const char* kDetailLabels[] = { LOC("All"), LOC("Assigned"), LOC("Selection") };
         int DetailIdx = (int)OverlayDetail;
         if (ImGui::Combo("##overlay_detail", &DetailIdx, kDetailLabels, IM_ARRAYSIZE(kDetailLabels)))
         {
             OverlayDetail = (EOverlayDetail)DetailIdx;
         }
-        ImGuiX::TextTooltip("How much of the document to outline. Selection-only keeps a busy layout readable.");
+        ImGuiX::TextTooltip(LOCF("How much of the document to outline. Selection-only keeps a busy layout readable."));
         ImGui::EndDisabled();
 
         ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputTextWithHint("##hierarchy_search", LE_ICON_MAGNIFY " Filter elements", HierarchySearch, sizeof(HierarchySearch));
+        ImGui::InputTextWithHint("##hierarchy_search", LOC_ICON(LE_ICON_MAGNIFY, "Filter elements"), HierarchySearch, sizeof(HierarchySearch));
         ImGui::Separator();
 
         // Selection and expansion live in the widget; this only re-supplies nodes when the source moved.
@@ -2571,17 +2571,17 @@ namespace Lumina
     {
         if (!HasElementTree())
         {
-            ImGui::TextWrapped(LE_ICON_INFORMATION_OUTLINE " Stylesheets have no elements to inspect.");
+            ImGui::TextWrapped(LOC_ICON(LE_ICON_INFORMATION_OUTLINE, "Stylesheets have no elements to inspect."));
             return;
         }
 
         if (SelectedOpenLt == ~size_t(0))
         {
-            ImGui::TextDisabled("Select an element in the Hierarchy.");
+            ImGui::TextDisabled(LOC("Select an element in the Hierarchy."));
             return;
         }
 
-        SectionHeader(LE_ICON_COG, "Inspector");
+        SectionHeader(LE_ICON_COG, LOC("Inspector"));
 
         if (SelectedSlotId.empty())
         {
@@ -2598,13 +2598,13 @@ namespace Lumina
             OffsetToLineCol(CompAssignText, SelectedOpenLt, EditorTabSize, Line, Col);
         }
 
-        ImGui::TextDisabled("Line %d", Line);
+        ImGui::TextDisabled(LOC("Line %d"), Line);
         ImGui::SameLine();
-        if (ImGui::SmallButton(LE_ICON_TARGET " Reveal in code"))
+        if (ImGui::SmallButton(LOC_ICON(LE_ICON_TARGET, "Reveal in code")))
         {
             RevealSelectionInCode();
         }
-        ImGuiX::TextTooltip("Jump the code editor to this element's open tag.");
+        ImGuiX::TextTooltip(LOCF("Jump the code editor to this element's open tag."));
 
         ImGui::Separator();
 
@@ -2613,7 +2613,7 @@ namespace Lumina
         std::string Inner;
         if (!Sel.empty() && GetEditableInnerText(CompAssignText, Sel, Inner) && !Inner.empty())
         {
-            ImGui::TextDisabled(LE_ICON_FORMAT_TEXT " Text");
+            ImGui::TextDisabled(LOC_ICON(LE_ICON_FORMAT_TEXT, "Text"));
             ImGui::TextWrapped("%s", Inner.c_str());
             ImGui::Spacing();
         }
@@ -2623,32 +2623,32 @@ namespace Lumina
         {
             const float Dpi = Math::Max(0.01f, PreviewDpiScale);
 
-            ImGui::TextDisabled(LE_ICON_RULER " Layout");
-            ImGui::Text("Position   %.0f, %.0f dp", std::round(Slot->OffsetPx.x / Dpi), std::round(Slot->OffsetPx.y / Dpi));
-            ImGui::Text("Size       %.0f x %.0f dp", std::round(Slot->SizePx.x / Dpi), std::round(Slot->SizePx.y / Dpi));
-            ImGui::Text("Depth      %d", Slot->Depth);
-            ImGui::Text("Children   %d", Slot->ChildCount);
+            ImGui::TextDisabled(LOC_ICON(LE_ICON_RULER, "Layout"));
+            ImGui::Text(LOC("Position   %.0f, %.0f dp"), std::round(Slot->OffsetPx.x / Dpi), std::round(Slot->OffsetPx.y / Dpi));
+            ImGui::Text(LOC("Size       %.0f x %.0f dp"), std::round(Slot->SizePx.x / Dpi), std::round(Slot->SizePx.y / Dpi));
+            ImGui::Text(LOC("Depth      %d"), Slot->Depth);
+            ImGui::Text(LOC("Children   %d"), Slot->ChildCount);
 
             if (!Slot->AssignedSrc.empty())
             {
                 ImGui::Spacing();
-                ImGui::TextDisabled(LE_ICON_PUZZLE " Widget");
+                ImGui::TextDisabled(LOC_ICON(LE_ICON_PUZZLE, "Widget"));
                 ImGui::TextWrapped("%s", Slot->AssignedSrc.c_str());
             }
         }
         else if (Sel.empty())
         {
-            ImGui::TextDisabled("No id, so the live preview cannot report its layout.");
+            ImGui::TextDisabled(LOC("No id, so the live preview cannot report its layout."));
         }
         else
         {
-            ImGui::TextDisabled("Not in the live preview yet. It appears once the document reloads.");
+            ImGui::TextDisabled(LOC("Not in the live preview yet. It appears once the document reloads."));
         }
 
         DrawElementBindings();
 
         ImGui::Spacing();
-        ImGui::TextDisabled("Read only. Edit the document in the code editor.");
+        ImGui::TextDisabled(LOC("Read only. Edit the document in the code editor."));
     }
 
     void FRmlUiEditorTool::DrawSlotOverlays(const ImVec2& CanvasMin, float ScalePx)

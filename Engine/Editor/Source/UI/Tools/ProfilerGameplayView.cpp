@@ -57,7 +57,7 @@ namespace Lumina
                     }
                     if (Name.IsNone())
                     {
-                        Out += "<unknown>";
+                        Out += LOC("<unknown>");
                     }
                     else
                     {
@@ -96,7 +96,7 @@ namespace Lumina
             {
                 if (A.bExclusive || B.bExclusive)
                 {
-                    return FString("exclusive (declares everything)");
+                    return FString(LOC("exclusive (declares everything)"));
                 }
 
                 TVector<uint32> Shared;
@@ -282,45 +282,45 @@ namespace Lumina
         ImGui::AlignTextToFramePadding();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::TextTooltip_Internal("Hold the last capture so it can be read without it moving under the cursor");
+            ImGuiX::TextTooltip_Internal(LOC("Hold the last capture so it can be read without it moving under the cursor"));
         }
 
         ImGui::SameLine(0.0f, 16.0f);
         if (bFrozen)
         {
-            ImGui::TextColored(EditorColors::Warning(), LE_ICON_PAUSE " frozen");
+            ImGui::TextColored(EditorColors::Warning(), LOC_ICON(LE_ICON_PAUSE, "frozen"));
         }
         else
         {
             const char Spinner[] = { '|', '/', '-', '\\' };
-            ImGui::TextColored(EditorColors::Success(), "live %c", Spinner[(DrawTicks / 6) % 4]);
+            ImGui::TextColored(EditorColors::Success(), LOC("live %c"), Spinner[(DrawTicks / 6) % 4]);
         }
 
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), "%d systems", (int32)Schedule.size());
+        ImGui::TextColored(EditorColors::TextDim(), LOC("%d systems"), (int32)Schedule.size());
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), "%d batches", (int32)ScheduleColumns.size());
+        ImGui::TextColored(EditorColors::TextDim(), LOC("%d batches"), (int32)ScheduleColumns.size());
         InsightsDetail::StripSeparator();
 
         constexpr double BudgetMs = 16.667;
         const double Share = GameplayFrame.TotalMs / BudgetMs;
         const ImVec4 HotColor = Share > 1.0 ? EditorColors::Danger()
             : (Share > 0.6 ? EditorColors::Warning() : EditorColors::Success());
-        ImGui::TextColored(HotColor, "%.3f ms gameplay", GameplayFrame.TotalMs);
+        ImGui::TextColored(HotColor, LOC("%.3f ms gameplay"), GameplayFrame.TotalMs);
 
         if (ImGui::BeginTabBar("##insights"))
         {
-            if (ImGui::BeginTabItem(LE_ICON_SITEMAP " Schedule"))
+            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_SITEMAP, "Schedule")))
             {
                 DrawSchedule();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem(LE_ICON_TABLE " Stats"))
+            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_TABLE, "Stats")))
             {
                 DrawStats();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem(LE_ICON_INFORMATION " Detail"))
+            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_INFORMATION, "Detail")))
             {
                 DrawDetail();
                 ImGui::EndTabItem();
@@ -337,28 +337,28 @@ namespace Lumina
             ImGui::Spacing();
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
             ImGui::TextWrapped(ResolveWorld() == nullptr
-                ? "No active world. Open a level, or enter Play, to inspect a system schedule."
-                : "The active world has no registered systems.");
+                ? LOC("No active world. Open a level, or enter Play, to inspect a system schedule.")
+                : LOC("The active world has no registered systems."));
             ImGui::PopStyleColor();
             return;
         }
 
         ImGui::AlignTextToFramePadding();
         ImGui::SetNextItemWidth(120.0f);
-        ImGui::SliderFloat("##ScheduleZoom", &ScheduleZoom, 0.6f, 1.6f, "zoom %.2fx");
+        ImGui::SliderFloat("##ScheduleZoom", &ScheduleZoom, 0.6f, 1.6f, LOC("zoom %.2fx"));
 
         ImGui::SameLine(0.0f, 16.0f);
-        ImGui::Checkbox("Conflict edges", &bShowEdges);
+        ImGui::Checkbox(LOC("Conflict edges"), &bShowEdges);
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::TextTooltip_Internal("Link each system to the systems in the previous batch whose declared access it conflicts with: the reason it could not run any earlier");
+            ImGuiX::TextTooltip_Internal(LOC("Link each system to the systems in the previous batch whose declared access it conflicts with: the reason it could not run any earlier"));
         }
 
         const int32 Selection = ResolveSelection();
         if (Selection != Constants::kIndexNone)
         {
             ImGui::SameLine(0.0f, 16.0f);
-            if (ImGui::SmallButton("Clear selection"))
+            if (ImGui::SmallButton(LOC("Clear selection")))
             {
                 SelectedIndex = Constants::kIndexNone;
                 SelectedName  = FName();
@@ -386,23 +386,23 @@ namespace Lumina
 
         ImGui::Separator();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(EditorColors::TextPrimary(), "%d systems", (int32)Schedule.size());
+        ImGui::TextColored(EditorColors::TextPrimary(), LOC("%d systems"), (int32)Schedule.size());
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::Success(), "%d run in parallel", ParallelCount);
+        ImGui::TextColored(EditorColors::Success(), LOC("%d run in parallel"), ParallelCount);
         if (ExclusiveCount > 0)
         {
             InsightsDetail::StripSeparator();
-            ImGui::TextColored(EditorColors::Warning(), "%d exclusive", ExclusiveCount);
+            ImGui::TextColored(EditorColors::Warning(), LOC("%d exclusive"), ExclusiveCount);
         }
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), "%d batches", (int32)ScheduleColumns.size());
+        ImGui::TextColored(EditorColors::TextDim(), LOC("%d batches"), (int32)ScheduleColumns.size());
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), "widest x%d", WidestBatch);
+        ImGui::TextColored(EditorColors::TextDim(), LOC("widest x%d"), WidestBatch);
 
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-        ImGui::TextWrapped("Columns are parallel batches: everything in one column runs concurrently on job-system workers, "
+        ImGui::TextWrapped(LOC("Columns are parallel batches: everything in one column runs concurrently on job-system workers, "
                            "and the next column waits for all of it. Stage bands are hard barriers. Click a system to see "
-                           "every system in its stage it can never share a batch with.");
+                           "every system in its stage it can never share a batch with."));
         ImGui::PopStyleColor();
         ImGui::Separator();
 
@@ -496,10 +496,17 @@ namespace Lumina
             }
 
             const int32 StageBatches = Last - L + 1;
+            // Translated in two pieces so each count picks its own singular or plural entry: a plural
+            // suffix handed in as an argument would leak a Latin "s" into a translated sentence.
+            char SystemsText[32];
+            snprintf(SystemsText, sizeof(SystemsText),
+                     StageSystems == 1 ? LOC("%d system") : LOC("%d systems"), StageSystems);
+            char BatchesText[32];
+            snprintf(BatchesText, sizeof(BatchesText),
+                     StageBatches == 1 ? LOC("%d batch") : LOC("%d batches"), StageBatches);
             char Header[128];
-            snprintf(Header, sizeof(Header), "%s   %d system%s  /  %d batch%s",
-                     InsightsDetail::StageName(Stage), StageSystems, StageSystems == 1 ? "" : "s",
-                     StageBatches, StageBatches == 1 ? "" : "es");
+            snprintf(Header, sizeof(Header), "%s   %s  /  %s",
+                     LOC_VIEW(InsightsDetail::StageName(Stage)), SystemsText, BatchesText);
             DL->AddText(Font, SmallFont, ImVec2(BandMin.x + 10.0f * Scale, BandMin.y + 4.0f * Scale),
                         EditorColors::U32(StageTint), Header);
 
@@ -521,11 +528,11 @@ namespace Lumina
             char Header[64];
             if (Column.Count > 1)
             {
-                snprintf(Header, sizeof(Header), "Batch %d   x%d parallel", (int32)Column.Batch, Column.Count);
+                snprintf(Header, sizeof(Header), LOC("Batch %d   x%d parallel"), (int32)Column.Batch, Column.Count);
             }
             else
             {
-                snprintf(Header, sizeof(Header), "Batch %d   serial", (int32)Column.Batch);
+                snprintf(Header, sizeof(Header), LOC("Batch %d   serial"), (int32)Column.Batch);
             }
             DL->AddText(Font, SmallFont, ImVec2(BandMin.x + 8.0f * Scale, Origin.y - BatchHeaderH + 2.0f * Scale),
                         EditorColors::U32(Column.Count > 1 ? EditorColors::Success() : EditorColors::TextMuted()), Header);
@@ -619,12 +626,12 @@ namespace Lumina
             ImVec4 BadgeColor = EditorColors::TextMuted();
             if (Stat != nullptr)
             {
-                snprintf(Badge, sizeof(Badge), "%.3f ms", Stat->InclusiveMs);
+                snprintf(Badge, sizeof(Badge), LOC("%.3f ms"), Stat->InclusiveMs);
                 BadgeColor = InsightsDetail::CostColor(GameplayFrame.TotalMs > 0.0 ? Stat->InclusiveMs / GameplayFrame.TotalMs : 0.0);
             }
             else if (Entry.bExclusive)
             {
-                snprintf(Badge, sizeof(Badge), "%s", LE_ICON_LOCK " alone");
+                snprintf(Badge, sizeof(Badge), "%s", LOC_ICON(LE_ICON_LOCK, "alone"));
                 BadgeColor = EditorColors::Warning();
             }
             const ImVec2 BadgeSize = Badge[0] != '\0'
@@ -649,14 +656,14 @@ namespace Lumina
 
             if (Entry.bExclusive)
             {
-                const FString ExclusiveLine = InsightsDetail::FitText(Font, SmallFont, "exclusive: conflicts with everything", BodyMaxW);
+                const FString ExclusiveLine = InsightsDetail::FitText(Font, SmallFont, LOC("exclusive: conflicts with everything"), BodyMaxW);
                 DL->AddText(Font, SmallFont, ImVec2(TextX, TextY),
                             EditorColors::U32(EditorColors::WithAlpha(EditorColors::Warning(), Alpha)), ExclusiveLine.c_str());
             }
             else
             {
                 const FString Writes = InsightsDetail::AccessList(Entry.Writes);
-                FString WriteLine = "W  ";
+                FString WriteLine = LOC("W  ");
                 WriteLine += Writes.empty() ? "-" : Writes.c_str();
                 const FString Fitted = InsightsDetail::FitText(Font, SmallFont, WriteLine.c_str(), BodyMaxW);
                 DL->AddText(Font, SmallFont, ImVec2(TextX, TextY),
@@ -666,7 +673,7 @@ namespace Lumina
                 TextY += SmallFont + LineGap;
 
                 const FString Reads = InsightsDetail::AccessList(Entry.Reads);
-                FString ReadLine = "R  ";
+                FString ReadLine = LOC("R  ");
                 ReadLine += Reads.empty() ? "-" : Reads.c_str();
                 const FString FittedReads = InsightsDetail::FitText(Font, SmallFont, ReadLine.c_str(), BodyMaxW);
                 DL->AddText(Font, SmallFont, ImVec2(TextX, TextY),
@@ -688,28 +695,30 @@ namespace Lumina
                 ImGui::BeginTooltip();
                 ImGui::TextColored(StageTint, "%s", Label.c_str());
                 ImGui::Separator();
-                ImGui::Text("Stage       %s", InsightsDetail::StageName(Entry.Stage));
-                ImGui::Text("Batch       %d   (%d system%s)", (int32)Entry.Batch, (int32)Entry.BatchSize,
-                            Entry.BatchSize == 1 ? "" : "s");
-                ImGui::Text("Priority    %d", (int32)Entry.Priority);
+                ImGui::Text(LOC("Stage       %s"), LOC_VIEW(InsightsDetail::StageName(Entry.Stage)));
+                ImGui::Text(Entry.BatchSize == 1 ? LOC("Batch       %d   (%d system)")
+                                                 : LOC("Batch       %d   (%d systems)"),
+                            (int32)Entry.Batch, (int32)Entry.BatchSize);
+                ImGui::Text(LOC("Priority    %d"), (int32)Entry.Priority);
                 ImGui::Separator();
                 if (Entry.bExclusive)
                 {
-                    ImGui::TextColored(EditorColors::Warning(), "Exclusive: declares everything, so it runs alone.");
-                    ImGui::TextColored(EditorColors::TextMuted(), "A system with no Access member defaults to this.");
+                    ImGui::TextColored(EditorColors::Warning(), LOC("Exclusive: declares everything, so it runs alone."));
+                    ImGui::TextColored(EditorColors::TextMuted(), LOC("A system with no Access member defaults to this."));
                 }
                 else
                 {
                     const FString Writes = InsightsDetail::AccessList(Entry.Writes);
                     const FString Reads  = InsightsDetail::AccessList(Entry.Reads);
-                    ImGui::TextColored(EditorColors::Danger(), "Writes      %s", Writes.empty() ? "(none)" : Writes.c_str());
-                    ImGui::TextColored(EditorColors::Accent(), "Reads       %s", Reads.empty() ? "(none)" : Reads.c_str());
+                    ImGui::TextColored(EditorColors::Danger(), LOC("Writes      %s"), Writes.empty() ? LOC("(none)") : Writes.c_str());
+                    ImGui::TextColored(EditorColors::Accent(), LOC("Reads       %s"), Reads.empty() ? LOC("(none)") : Reads.c_str());
                 }
                 if (Stat != nullptr)
                 {
                     ImGui::Separator();
-                    ImGui::TextColored(EditorColors::TextDim(), "%.3f ms over %d call%s", Stat->InclusiveMs,
-                                       (int32)Stat->Calls, Stat->Calls == 1 ? "" : "s");
+                    ImGui::TextColored(EditorColors::TextDim(),
+                        Stat->Calls == 1 ? LOC("%.3f ms over %d call") : LOC("%.3f ms over %d calls"),
+                        Stat->InclusiveMs, (int32)Stat->Calls);
                 }
                 ImGui::EndTooltip();
             }
@@ -743,13 +752,13 @@ namespace Lumina
         }
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(EditorColors::TextPrimary(), "%.3f ms", TotalMs);
+        ImGui::TextColored(EditorColors::TextPrimary(), LOC("%.3f ms"), TotalMs);
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(HotColor, "%.0f%% of 16.7 ms", Share * 100.0);
+        ImGui::TextColored(HotColor, LOC("%.0f%% of 16.7 ms"), Share * 100.0);
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), "%d scopes", (int32)GameplayFrame.Entries.size());
+        ImGui::TextColored(EditorColors::TextDim(), LOC("%d scopes"), (int32)GameplayFrame.Entries.size());
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), "%d calls", (int32)TotalCalls);
+        ImGui::TextColored(EditorColors::TextDim(), LOC("%d calls"), (int32)TotalCalls);
 
         const FProfilerHistory& History = Prof.GetFrameTotalHistory();
         if (!History.Values.empty())
@@ -761,7 +770,7 @@ namespace Lumina
         }
 
         ImGui::SetNextItemWidth(240.0f);
-        ImGui::InputTextWithHint("##filter", LE_ICON_MAGNIFY " Filter scopes", Filter, sizeof(Filter));
+        ImGui::InputTextWithHint("##filter", LOC_ICON(LE_ICON_MAGNIFY, "Filter scopes"), Filter, sizeof(Filter));
 
         const ImGuiTableFlags Flags = ImGuiTableFlags_Sortable | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV
             | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable;
@@ -769,13 +778,13 @@ namespace Lumina
         if (ImGui::BeginTable("##gpstats", 7, Flags))
         {
             ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("Scope",    ImGuiTableColumnFlags_WidthStretch, 2.0f);
-            ImGui::TableSetupColumn("Calls",    ImGuiTableColumnFlags_WidthFixed,  52.0f);
-            ImGui::TableSetupColumn("Total ms", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending | ImGuiTableColumnFlags_DefaultSort, 72.0f);
-            ImGui::TableSetupColumn("Self ms",  ImGuiTableColumnFlags_WidthFixed,  72.0f);
-            ImGui::TableSetupColumn("Avg ms",   ImGuiTableColumnFlags_WidthFixed,  72.0f);
-            ImGui::TableSetupColumn("Share",    ImGuiTableColumnFlags_WidthFixed,  72.0f);
-            ImGui::TableSetupColumn("History",  ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoSort, 1.4f);
+            ImGui::TableSetupColumn(LOC_ID("Scope"),    ImGuiTableColumnFlags_WidthStretch, 2.0f);
+            ImGui::TableSetupColumn(LOC_ID("Calls"),    ImGuiTableColumnFlags_WidthFixed,  52.0f);
+            ImGui::TableSetupColumn(LOC_ID("Total ms"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending | ImGuiTableColumnFlags_DefaultSort, 72.0f);
+            ImGui::TableSetupColumn(LOC_ID("Self ms"),  ImGuiTableColumnFlags_WidthFixed,  72.0f);
+            ImGui::TableSetupColumn(LOC_ID("Avg ms"),   ImGuiTableColumnFlags_WidthFixed,  72.0f);
+            ImGui::TableSetupColumn(LOC_ID("Share"),    ImGuiTableColumnFlags_WidthFixed,  72.0f);
+            ImGui::TableSetupColumn(LOC_ID("History"),  ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoSort, 1.4f);
             ImGui::TableHeadersRow();
 
             TVector<const FGameplayProfileEntry*> Rows;
@@ -859,8 +868,8 @@ namespace Lumina
         {
             ImGui::Spacing();
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped("No gameplay scopes yet. Enter Play to capture script and system updates, or instrument "
-                               "C# with  using (Profiler.Sample(\"Name\")) { ... }");
+            ImGui::TextWrapped(LOC("No gameplay scopes yet. Enter Play to capture script and system updates, or instrument "
+                               "C# with  using (Profiler.Sample(\"Name\")) { ... }"));
             ImGui::PopStyleColor();
         }
     }
@@ -873,7 +882,7 @@ namespace Lumina
         {
             ImGui::Spacing();
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped("Select a system on the Schedule canvas to inspect it here.");
+            ImGui::TextWrapped(LOC("Select a system on the Schedule canvas to inspect it here."));
             ImGui::PopStyleColor();
             return;
         }
@@ -887,44 +896,47 @@ namespace Lumina
         ImGui::PopStyleColor();
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(StageTint, "%s", InsightsDetail::StageName(Entry.Stage));
+        ImGui::TextColored(StageTint, "%s", LOC_VIEW(InsightsDetail::StageName(Entry.Stage)));
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), "batch %d", (int32)Entry.Batch);
+        ImGui::TextColored(EditorColors::TextDim(), LOC("batch %d"), (int32)Entry.Batch);
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), "priority %d", (int32)Entry.Priority);
+        ImGui::TextColored(EditorColors::TextDim(), LOC("priority %d"), (int32)Entry.Priority);
         InsightsDetail::StripSeparator();
         if (Entry.bExclusive)
         {
-            ImGui::TextColored(EditorColors::Warning(), LE_ICON_LOCK " runs alone");
+            ImGui::TextColored(EditorColors::Warning(), LOC_ICON(LE_ICON_LOCK, "runs alone"));
         }
         else if (Entry.BatchSize > 1)
         {
-            ImGui::TextColored(EditorColors::Success(), LE_ICON_LIGHTNING_BOLT " parallel with %d other%s",
-                               (int32)Entry.BatchSize - 1, Entry.BatchSize == 2 ? "" : "s");
+            ImGui::TextColored(EditorColors::Success(),
+                               Entry.BatchSize == 2
+                                   ? LOC_ICON(LE_ICON_LIGHTNING_BOLT, "parallel with %d other")
+                                   : LOC_ICON(LE_ICON_LIGHTNING_BOLT, "parallel with %d others"),
+                               (int32)Entry.BatchSize - 1);
         }
         else
         {
-            ImGui::TextColored(EditorColors::TextMuted(), "parallel-capable, alone this frame");
+            ImGui::TextColored(EditorColors::TextMuted(), LOC("parallel-capable, alone this frame"));
         }
 
         ImGui::Spacing();
-        ImGui::SeparatorText("Declared access");
+        ImGui::SeparatorText(LOC("Declared access"));
         if (Entry.bExclusive)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped("This system declares no FSystemAccess, so the scheduler treats it as writing everything. "
-                               "Declaring reads and writes lets it batch with other systems.");
+            ImGui::TextWrapped(LOC("This system declares no FSystemAccess, so the scheduler treats it as writing everything. "
+                               "Declaring reads and writes lets it batch with other systems."));
             ImGui::PopStyleColor();
         }
         else
         {
             const FString Writes = InsightsDetail::AccessList(Entry.Writes);
             const FString Reads  = InsightsDetail::AccessList(Entry.Reads);
-            ImGui::TextColored(EditorColors::Danger(), "Writes");
-            ImGui::TextUnformatted(Writes.empty() ? "(none)" : Writes.c_str());
+            ImGui::TextColored(EditorColors::Danger(), LOC("Writes"));
+            ImGui::TextUnformatted(Writes.empty() ? LOC("(none)") : Writes.c_str());
             ImGui::Spacing();
-            ImGui::TextColored(EditorColors::Accent(), "Reads");
-            ImGui::TextUnformatted(Reads.empty() ? "(none)" : Reads.c_str());
+            ImGui::TextColored(EditorColors::Accent(), LOC("Reads"));
+            ImGui::TextUnformatted(Reads.empty() ? LOC("(none)") : Reads.c_str());
         }
 
         // Cross-stage pairs are omitted, since a stage barrier already serializes those.
@@ -938,20 +950,22 @@ namespace Lumina
         }
 
         ImGui::Spacing();
-        ImGui::SeparatorText("Serialization");
+        ImGui::SeparatorText(LOC("Serialization"));
 
         if (ConflictIndices.empty())
         {
-            ImGui::TextColored(EditorColors::Success(), "Nothing in %s conflicts with this system.", InsightsDetail::StageName(Entry.Stage));
+            ImGui::TextColored(EditorColors::Success(), LOC("Nothing in %s conflicts with this system."), LOC_VIEW(InsightsDetail::StageName(Entry.Stage)));
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped("It can run in the stage's first batch alongside everything else.");
+            ImGui::TextWrapped(LOC("It can run in the stage's first batch alongside everything else."));
             ImGui::PopStyleColor();
         }
         else
         {
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped("These %d system%s can never share a batch with this one. Each row is a serialization point.",
-                               (int32)ConflictIndices.size(), ConflictIndices.size() == 1 ? "" : "s");
+            ImGui::TextWrapped(ConflictIndices.size() == 1
+                    ? LOC("These %d system can never share a batch with this one. Each row is a serialization point.")
+                    : LOC("These %d systems can never share a batch with this one. Each row is a serialization point."),
+                (int32)ConflictIndices.size());
             ImGui::PopStyleColor();
 
             const ImGuiTableFlags Flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV
@@ -959,9 +973,9 @@ namespace Lumina
 
             if (ImGui::BeginTable("##conflicts", 3, Flags))
             {
-                ImGui::TableSetupColumn("System",        ImGuiTableColumnFlags_WidthStretch, 1.6f);
-                ImGui::TableSetupColumn("Batch",         ImGuiTableColumnFlags_WidthFixed, 88.0f);
-                ImGui::TableSetupColumn("Shared access", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+                ImGui::TableSetupColumn(LOC_ID("System"),        ImGuiTableColumnFlags_WidthStretch, 1.6f);
+                ImGui::TableSetupColumn(LOC_ID("Batch"),         ImGuiTableColumnFlags_WidthFixed, 88.0f);
+                ImGui::TableSetupColumn(LOC_ID("Shared access"), ImGuiTableColumnFlags_WidthStretch, 2.0f);
                 ImGui::TableHeadersRow();
 
                 for (int32 Index : ConflictIndices)
@@ -986,12 +1000,12 @@ namespace Lumina
                     else
                     {
                         ImGui::TextColored(EditorColors::TextDim(), "%d %s", (int32)Other.Batch,
-                                           Other.Batch < Entry.Batch ? "before" : "after");
+                                           Other.Batch < Entry.Batch ? LOC("before") : LOC("after"));
                     }
 
                     ImGui::TableNextColumn();
                     const FString SharedList = InsightsDetail::SharedAccessList(Entry, Other);
-                    ImGui::TextColored(EditorColors::Warning(), "%s", SharedList.empty() ? "(none)" : SharedList.c_str());
+                    ImGui::TextColored(EditorColors::Warning(), "%s", SharedList.empty() ? LOC("(none)") : SharedList.c_str());
                 }
 
                 ImGui::EndTable();
@@ -1001,13 +1015,14 @@ namespace Lumina
         if (const FGameplayProfileEntry* Stat = FindStat(Entry.Name.ToString().c_str()))
         {
             ImGui::Spacing();
-            ImGui::SeparatorText("Timing (last frame)");
-            ImGui::TextColored(EditorColors::TextDim(), "%d call%s", (int32)Stat->Calls, Stat->Calls == 1 ? "" : "s");
+            ImGui::SeparatorText(LOC("Timing (last frame)"));
+            ImGui::TextColored(EditorColors::TextDim(),
+                Stat->Calls == 1 ? LOC("%d call") : LOC("%d calls"), (int32)Stat->Calls);
             InsightsDetail::StripSeparator();
             ImGui::TextColored(InsightsDetail::CostColor(GameplayFrame.TotalMs > 0.0 ? Stat->InclusiveMs / GameplayFrame.TotalMs : 0.0),
-                               "%.3f ms inclusive", Stat->InclusiveMs);
+                               LOC("%.3f ms inclusive"), Stat->InclusiveMs);
             InsightsDetail::StripSeparator();
-            ImGui::TextColored(EditorColors::TextDim(), "%.3f ms self", Stat->ExclusiveMs);
+            ImGui::TextColored(EditorColors::TextDim(), LOC("%.3f ms self"), Stat->ExclusiveMs);
         }
     }
 }

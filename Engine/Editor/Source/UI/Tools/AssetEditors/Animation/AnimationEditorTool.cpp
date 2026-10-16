@@ -70,7 +70,7 @@ namespace Lumina
             const bool bNotifySelected = Animation != nullptr && SelectedKind != ENotifyKind::None;
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText(bNotifySelected ? "Notify Details" : "Asset Details");
+            ImGui::SeparatorText(bNotifySelected ? LOC("Notify Details") : LOC("Asset Details"));
             ImGuiX::Font::PopFont();
 
             ImGui::Spacing();
@@ -298,33 +298,33 @@ namespace Lumina
 
     void FAnimationEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Playback",
-            "Play/Pause and Stop drive the preview through the animation system, so the clip "
-            "plays exactly as it will at runtime. Drag the playhead on the ruler to scrub.");
-        DrawHelpTextRow("Notify Tracks",
-            "Add lanes with '+ Track'. Right-click a lane to add a Notify (instant) or a "
+        DrawHelpTextRow(LOC("Playback"),
+            LOC("Play/Pause and Stop drive the preview through the animation system, so the clip "
+            "plays exactly as it will at runtime. Drag the playhead on the ruler to scrub."));
+        DrawHelpTextRow(LOC("Notify Tracks"),
+            LOC("Add lanes with '+ Track'. Right-click a lane to add a Notify (instant) or a "
             "Notify State (ranged). Drag markers to move them, drag a state's edges to resize. "
-            "Snap to Frame quantizes edits to the frame rate.");
-        DrawHelpTextRow("Listening in script",
-            "Grab the entity's SimpleAnimationComponent and bind by name:\n"
+            "Snap to Frame quantizes edits to the frame rate."));
+        DrawHelpTextRow(LOC("Listening in script"),
+            LOC("Grab the entity's SimpleAnimationComponent and bind by name:\n"
             "  anim:BindNotify(\"Footstep\", function(e, name, t) ... end)\n"
             "  anim:BindNotifyState(\"Trail\", onBegin, onTick, onEnd)\n"
-            "Bindings are per-entity and fire as the playhead crosses the notify.");
-        DrawHelpTextRow("Curves",
-            "Float Curves are named value tracks authored on the clip. Add one, scrub the playhead and "
+            "Bindings are per-entity and fire as the playhead crosses the notify."));
+        DrawHelpTextRow(LOC("Curves"),
+            LOC("Float Curves are named value tracks authored on the clip. Add one, scrub the playhead and "
             "type a value to key it, or edit keys and tangents directly in the curve view. They blend "
             "through the animation graph with the pose: read one with a Get Curve node, or from script "
             "with GetCurveValue(\"Name\").\n"
-            "Bone Channels plots the imported per-bone keyframes for inspection (read-only).");
+            "Bone Channels plots the imported per-bone keyframes for inspection (read-only)."));
     }
 
     void FAnimationEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)
     {
         FAssetEditorTool::DrawToolMenu(UpdateContext);
 
-        if (ImGui::BeginMenu(LE_ICON_MOVE_RESIZE " Gizmo Control"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_MOVE_RESIZE, "Gizmo Control")))
         {
-            const char* operations[] = { "Translate", "Rotate", "Scale" };
+            const char* operations[] = { LOC("Translate"), LOC("Rotate"), LOC("Scale") };
             static int currentOp = 0;
 
             if (ImGui::Combo("##", &currentOp, operations, IM_ARRAYSIZE(operations)))
@@ -340,7 +340,7 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(LE_ICON_BONE " Skeleton"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_BONE, "Skeleton")))
         {
             DrawSkeletonDebugMenuItems();
             ImGui::EndMenu();
@@ -381,7 +381,7 @@ namespace Lumina
         SSimpleAnimationComponent* AnimComp = GetPreviewComponent();
         if (AnimComp == nullptr)
         {
-            ImGui::TextDisabled("No preview mesh - assign a Skeleton with a Preview Mesh to scrub this clip.");
+            ImGui::TextDisabled(LOC("No preview mesh - assign a Skeleton with a Preview Mesh to scrub this clip."));
             return;
         }
 
@@ -393,13 +393,13 @@ namespace Lumina
 
         if (ImGui::BeginTabBar("##AnimTabs", ImGuiTabBarFlags_None))
         {
-            if (ImGui::BeginTabItem(LE_ICON_BELL " Notifies"))
+            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_BELL, "Notifies")))
             {
                 DrawNotifyTimeline(Animation, AnimComp, Duration);
                 ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem(LE_ICON_CHART_BELL_CURVE " Curves"))
+            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_CHART_BELL_CURVE, "Curves")))
             {
                 DrawCurvesTab(Animation, AnimComp, Duration);
                 ImGui::EndTabItem();
@@ -433,7 +433,7 @@ namespace Lumina
             AnimComp->bDirty = true;
         }
 
-        if (ImGui::Button(bIsPlaying ? LE_ICON_PAUSE " Pause" : LE_ICON_PLAY " Play", ImVec2(96, 0)))
+        if (ImGui::Button(bIsPlaying ? LOC_ICON(LE_ICON_PAUSE, "Pause") : LOC_ICON(LE_ICON_PLAY, "Play"), ImVec2(96, 0)))
         {
             if (!bIsPlaying && AnimComp->CurrentTime >= Duration && !bLooping)
             {
@@ -443,7 +443,7 @@ namespace Lumina
         }
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_STOP " Stop", ImVec2(80, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_STOP, "Stop"), ImVec2(80, 0)))
         {
             bIsPlaying            = false;
             AnimComp->CurrentTime = 0.0f;
@@ -464,26 +464,26 @@ namespace Lumina
         }
 
         ImGui::SameLine();
-        ImGui::Checkbox(LE_ICON_REPEAT " Loop", &bLooping);
+        ImGui::Checkbox(LOC_ICON(LE_ICON_REPEAT, "Loop"), &bLooping);
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110.0f);
-        ImGui::SliderFloat("##PlayRate", &Playrate, 0.05f, 4.0f, "Rate %.2fx");
+        ImGui::SliderFloat("##PlayRate", &Playrate, 0.05f, 4.0f, LOC("Rate %.2fx"));
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110.0f);
-        ImGui::SliderFloat("##Zoom", &TimelineZoom, 1.0f, 16.0f, LE_ICON_MAGNIFY " %.1fx");
+        ImGui::SliderFloat("##Zoom", &TimelineZoom, 1.0f, 16.0f, LOC_ICON(LE_ICON_MAGNIFY, "%.1fx"));
 
         ImGui::SameLine();
-        ImGui::Checkbox("Snap", &bSnapToFrame);
+        ImGui::Checkbox(LOC("Snap"), &bSnapToFrame);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(70.0f);
-        ImGui::DragInt("##FPS", &FrameRate, 1.0f, 1, 240, "%d fps");
+        ImGui::DragInt("##FPS", &FrameRate, 1.0f, 1, 240, LOC("%d fps"));
 
         // Time / frame readout, right-aligned.
         const int Frame      = (int)roundf(AnimComp->CurrentTime * (float)FrameRate);
         const int TotalFrame = (int)roundf(Duration * (float)FrameRate);
-        const FString Readout = Format("{:.3f}s / {:.3f}s   (frame {}/{})", AnimComp->CurrentTime, Duration, Frame, TotalFrame);
+        const FString Readout = Format(LOCF("{:.3f}s / {:.3f}s   (frame {}/{})"), AnimComp->CurrentTime, Duration, Frame, TotalFrame);
         const float TextW = ImGui::CalcTextSize(Readout.c_str()).x;
         ImGui::SameLine();
         ImGui::SetCursorPosX(Math::Max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - TextW - 16.0f));
@@ -495,13 +495,13 @@ namespace Lumina
         FAnimationResource* Resource = Animation->GetAnimationResource();
 
         // Track header column toolbar.
-        if (ImGui::Button(LE_ICON_PLUS " Track"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Track")))
         {
             Resource->NotifyTracks.push_back(FName(Format("Track {}", (int)Resource->NotifyTracks.size()).c_str()));
             MarkAnimationDirty();
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("(%d tracks - right-click a lane to add a notify)", (int)Resource->NotifyTracks.size());
+        ImGui::TextDisabled(LOC("(%d tracks - right-click a lane to add a notify)"), (int)Resource->NotifyTracks.size());
 
         ImGui::BeginChild("TimelineCanvas", ImVec2(0, 0), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
@@ -611,7 +611,7 @@ namespace Lumina
                     snprintf(RenameBuf, sizeof(RenameBuf), "%s", Resource->NotifyTracks[t].c_str());
                 }
                 ImGui::SetNextItemWidth(160);
-                if (ImGui::InputText("Name", RenameBuf, sizeof(RenameBuf), ImGuiInputTextFlags_EnterReturnsTrue))
+                if (ImGui::InputText(LOC("Name"), RenameBuf, sizeof(RenameBuf), ImGuiInputTextFlags_EnterReturnsTrue))
                 {
                     // A lane owns its entries by name, so they have to be re-tagged or they orphan.
                     const FName PreviousName = Resource->NotifyTracks[t];
@@ -633,7 +633,7 @@ namespace Lumina
                     MarkAnimationDirty();
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem(LE_ICON_SYNC " Sync Track", nullptr, bIsSyncTrack))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_SYNC, "Sync Track"), nullptr, bIsSyncTrack))
                 {
                     // One lane at a time, since a clip has a single cycle to line blends up on.
                     Resource->SyncTrackName = bIsSyncTrack ? FName() : Resource->NotifyTracks[t];
@@ -641,13 +641,13 @@ namespace Lumina
                 }
                 if (bIsSyncTrack)
                 {
-                    ImGui::TextDisabled("%d sync event(s)", Animation->GetSyncTrack().NumEvents());
+                    ImGui::TextDisabled(LOC("%d sync event(s)"), Animation->GetSyncTrack().NumEvents());
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem(LE_ICON_PLUS " Add Notify"))      { AddNotifyAt(Resource, Resource->NotifyTracks[t], AnimComp->CurrentTime, false); }
-                if (ImGui::MenuItem(LE_ICON_PLUS " Add Notify State")) { AddNotifyAt(Resource, Resource->NotifyTracks[t], AnimComp->CurrentTime, true); }
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_PLUS, "Add Notify")))      { AddNotifyAt(Resource, Resource->NotifyTracks[t], AnimComp->CurrentTime, false); }
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_PLUS, "Add Notify State"))) { AddNotifyAt(Resource, Resource->NotifyTracks[t], AnimComp->CurrentTime, true); }
                 ImGui::Separator();
-                if (NumTracks > 1 && ImGui::MenuItem(LE_ICON_DELETE " Delete Track"))
+                if (NumTracks > 1 && ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Delete Track")))
                 {
                     if (bIsSyncTrack)
                     {
@@ -677,15 +677,15 @@ namespace Lumina
         if (ImGui::BeginPopup("lane_add_ctx"))
         {
             const float ClickT = LaneAddTime;
-            ImGui::TextDisabled("at %.3fs", ClickT);
+            ImGui::TextDisabled(LOC("at %.3fs"), ClickT);
             ImGui::Separator();
             if (SelectedTrack >= 0 && SelectedTrack < NumTracks)
             {
-                if (ImGui::MenuItem(LE_ICON_BELL " Add Notify"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_BELL, "Add Notify")))
                 {
                     AddNotifyAt(Resource, Resource->NotifyTracks[SelectedTrack], ClickT, false);
                 }
-                if (ImGui::MenuItem(LE_ICON_BELL_OUTLINE " Add Notify State"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_BELL_OUTLINE, "Add Notify State")))
                 {
                     AddNotifyAt(Resource, Resource->NotifyTracks[SelectedTrack], ClickT, true);
                 }
@@ -796,7 +796,7 @@ namespace Lumina
             const bool bOver = bCanvasHovered && fabsf(M.x - X) <= 6.0f && M.y >= Top && M.y <= Bot;
             if (bOver)
             {
-                ImGui::SetTooltip("%s @ %.3fs", Notify.NotifyName.c_str(), Notify.Time);
+                ImGui::SetTooltip(LOC("%s @ %.3fs"), Notify.NotifyName.c_str(), Notify.Time);
             }
             if (DragMode == EDragMode::None && bOver && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             {
@@ -879,7 +879,7 @@ namespace Lumina
         // Shared item context menu
         if (ImGui::BeginPopup("notify_item_ctx"))
         {
-            if (ImGui::MenuItem(LE_ICON_MAP_MARKER " Move to playhead"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_MAP_MARKER, "Move to playhead")))
             {
                 if (SelectedKind == ENotifyKind::Point && SelectedIndex >= 0 && SelectedIndex < (int)Resource->Notifies.size())
                 {
@@ -894,7 +894,7 @@ namespace Lumina
                 }
                 MarkAnimationDirty();
             }
-            if (ImGui::MenuItem(LE_ICON_DELETE " Delete"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Delete")))
             {
                 DeleteSelected(Resource);
             }
@@ -915,7 +915,7 @@ namespace Lumina
         auto TrackCombo = [&](FName& Track)
         {
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::BeginCombo("Track", Track.c_str()))
+            if (ImGui::BeginCombo(LOC("Track"), Track.c_str()))
             {
                 for (const FName& Lane : Resource->NotifyTracks)
                 {
@@ -943,7 +943,7 @@ namespace Lumina
         auto ColorField = [&](FVector4& Color)
         {
             ImVec4 Col(Color.x, Color.y, Color.z, Color.w);
-            if (ImGui::ColorEdit4("Color", &Col.x, ImGuiColorEditFlags_NoInputs))
+            if (ImGui::ColorEdit4(LOC("Color"), &Col.x, ImGuiColorEditFlags_NoInputs))
             {
                 Color = FVector4(Col.x, Col.y, Col.z, Col.w);
                 MarkAnimationDirty();
@@ -954,53 +954,53 @@ namespace Lumina
         {
             FAnimationNotify& N = Resource->Notifies[SelectedIndex];
 
-            ImGui::TextDisabled(LE_ICON_BELL " Notify");
+            ImGui::TextDisabled(LOC_ICON(LE_ICON_BELL, "Notify"));
             ImGui::Spacing();
 
-            NameField(N.NotifyName, "Name");
+            NameField(N.NotifyName, LOC("Name"));
             TrackCombo(N.NotifyTrack);
 
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::DragFloat("Time", &N.Time, 0.005f, 0.0f, Duration, "%.3fs")) { MarkAnimationDirty(); }
+            if (ImGui::DragFloat(LOC("Time"), &N.Time, 0.005f, 0.0f, Duration, LOC("%.3fs"))) { MarkAnimationDirty(); }
 
             ColorField(N.Color);
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Notify Type");
-            if (DrawInstancedStructEditor("Type", N.Notify, SAnimNotify::StaticStruct(), NotifyDetails))
+            ImGui::SeparatorText(LOC("Notify Type"));
+            if (DrawInstancedStructEditor(LOC("Type"), N.Notify, SAnimNotify::StaticStruct(), NotifyDetails))
             {
                 MarkAnimationDirty();
             }
 
             ImGui::Spacing();
-            if (ImGui::Button(LE_ICON_DELETE " Delete")) { DeleteSelected(Resource); }
+            if (ImGui::Button(LOC_ICON(LE_ICON_DELETE, "Delete"))) { DeleteSelected(Resource); }
         }
         else if (SelectedKind == ENotifyKind::State && SelectedIndex >= 0 && SelectedIndex < (int)Resource->NotifyStates.size())
         {
             FAnimationNotifyState& S = Resource->NotifyStates[SelectedIndex];
 
-            ImGui::TextDisabled(LE_ICON_BELL_OUTLINE " Notify State");
+            ImGui::TextDisabled(LOC_ICON(LE_ICON_BELL_OUTLINE, "Notify State"));
             ImGui::Spacing();
 
-            NameField(S.NotifyName, "Name");
+            NameField(S.NotifyName, LOC("Name"));
             TrackCombo(S.NotifyTrack);
 
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::DragFloat("Start", &S.StartTime, 0.005f, 0.0f, S.EndTime - 0.001f, "%.3fs")) { MarkAnimationDirty(); }
+            if (ImGui::DragFloat(LOC("Start"), &S.StartTime, 0.005f, 0.0f, S.EndTime - 0.001f, LOC("%.3fs"))) { MarkAnimationDirty(); }
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::DragFloat("End", &S.EndTime, 0.005f, S.StartTime + 0.001f, Duration, "%.3fs")) { MarkAnimationDirty(); }
+            if (ImGui::DragFloat(LOC("End"), &S.EndTime, 0.005f, S.StartTime + 0.001f, Duration, LOC("%.3fs"))) { MarkAnimationDirty(); }
 
             ColorField(S.Color);
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Notify Type");
-            if (DrawInstancedStructEditor("Type", S.Notify, SAnimNotifyState::StaticStruct(), NotifyDetails))
+            ImGui::SeparatorText(LOC("Notify Type"));
+            if (DrawInstancedStructEditor(LOC("Type"), S.Notify, SAnimNotifyState::StaticStruct(), NotifyDetails))
             {
                 MarkAnimationDirty();
             }
 
             ImGui::Spacing();
-            if (ImGui::Button(LE_ICON_DELETE " Delete")) { DeleteSelected(Resource); }
+            if (ImGui::Button(LOC_ICON(LE_ICON_DELETE, "Delete"))) { DeleteSelected(Resource); }
         }
         else
         {
@@ -1037,13 +1037,13 @@ namespace Lumina
     {
         if (ImGui::BeginTabBar("##CurveTabs", ImGuiTabBarFlags_None))
         {
-            if (ImGui::BeginTabItem(LE_ICON_CHART_LINE " Float Curves"))
+            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_CHART_LINE, "Float Curves")))
             {
                 DrawFloatCurves(Animation, AnimComp, Duration);
                 ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem(LE_ICON_BONE " Bone Channels"))
+            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_BONE, "Bone Channels")))
             {
                 DrawBoneChannels(Animation, AnimComp, Duration);
                 ImGui::EndTabItem();
@@ -1058,7 +1058,7 @@ namespace Lumina
         FAnimationResource* Resource = Animation->GetAnimationResource();
 
         ImGui::BeginChild("CurveList", ImVec2(240, 0), true);
-        if (ImGui::Button(LE_ICON_PLUS " Curve", ImVec2(-1, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Curve"), ImVec2(-1, 0)))
         {
             AddCurve(Resource);
         }
@@ -1090,13 +1090,13 @@ namespace Lumina
                     snprintf(RenameBuf, sizeof(RenameBuf), "%s", Curve.Name.c_str());
                 }
                 ImGui::SetNextItemWidth(180);
-                if (ImGui::InputText("Name", RenameBuf, sizeof(RenameBuf), ImGuiInputTextFlags_EnterReturnsTrue))
+                if (ImGui::InputText(LOC("Name"), RenameBuf, sizeof(RenameBuf), ImGuiInputTextFlags_EnterReturnsTrue))
                 {
                     Curve.Name = FName(RenameBuf);
                     MarkAnimationDirty();
                 }
 
-                if (ImGui::MenuItem(LE_ICON_CONTENT_COPY " Duplicate"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_COPY, "Duplicate")))
                 {
                     FAnimationCurve Copy = Curve;
                     Copy.Name = FName((FString(Curve.Name.c_str()) + " Copy").c_str());
@@ -1108,7 +1108,7 @@ namespace Lumina
                     break;
                 }
 
-                if (ImGui::MenuItem(LE_ICON_DELETE " Delete"))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Delete")))
                 {
                     DeleteCurve(Resource, i);
                     ImGui::EndPopup();
@@ -1122,9 +1122,9 @@ namespace Lumina
 
         if (Resource->Curves.empty())
         {
-            ImGui::TextDisabled("No curves.");
-            ImGui::TextDisabled("Add one, then read it");
-            ImGui::TextDisabled("with a Get Curve node.");
+            ImGui::TextDisabled(LOC("No curves."));
+            ImGui::TextDisabled(LOC("Add one, then read it"));
+            ImGui::TextDisabled(LOC("with a Get Curve node."));
         }
         ImGui::EndChild();
 
@@ -1133,7 +1133,7 @@ namespace Lumina
         ImGui::BeginChild("CurvePanel", ImVec2(0, 0), true);
         if (SelectedCurve < 0 || SelectedCurve >= (int)Resource->Curves.size())
         {
-            ImGui::TextDisabled("Select a curve to edit its keys.");
+            ImGui::TextDisabled(LOC("Select a curve to edit its keys."));
             CurveWidget.SetCurve(nullptr);
             ImGui::EndChild();
             return;
@@ -1172,11 +1172,11 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("Value at the playhead. Editing keys the curve at %.3fs.", PlayheadTime);
+            ImGui::SetTooltip(LOC("Value at the playhead. Editing keys the curve at %.3fs."), PlayheadTime);
         }
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_PLUS " Key"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Key")))
         {
             Curve.Curve.UpdateOrAddKey(PlayheadTime, ValueAtPlayhead);
             Curve.Curve.ComputeAutoTangents();
@@ -1184,11 +1184,11 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("Key the current value at the playhead (%.3fs)", PlayheadTime);
+            ImGui::SetTooltip(LOC("Key the current value at the playhead (%.3fs)"), PlayheadTime);
         }
 
         ImGui::SameLine();
-        ImGui::TextDisabled("%d keys", Curve.Curve.NumKeys());
+        ImGui::TextDisabled(LOC("%d keys"), Curve.Curve.NumKeys());
 
         CurveWidget.SetCurve(&Curve.Curve);
         CurveWidget.SetOnModified([this]() { MarkAnimationDirty(); });
@@ -1202,7 +1202,7 @@ namespace Lumina
     {
         const FCompressedAnimData& Compressed = Animation->GetAnimationResource()->Compressed;
 
-        static const char* PathNames[NumTrackKinds] = { "Translation", "Rotation", "Scale" };
+        const char* PathNames[NumTrackKinds] = { LOC("Translation"), LOC("Rotation"), LOC("Scale") };
         static const char* PathIcons[NumTrackKinds] =
         {
             LE_ICON_AXIS_ARROW, LE_ICON_ROTATE_360, LE_ICON_ARROW_TOP_RIGHT_BOTTOM_LEFT
@@ -1225,7 +1225,7 @@ namespace Lumina
         };
 
         ImGui::BeginChild("CurveChannels", ImVec2(240, 0), true);
-        if (ImGui::CollapsingHeader("Channels", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Channels"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             for (int32 b = 0; b < (int32)Compressed.Bones.size(); ++b)
             {
@@ -1249,7 +1249,7 @@ namespace Lumina
                     if (Track->Format == EAnimTrackFormat::Constant)
                     {
                         ImGui::SameLine();
-                        ImGui::TextDisabled("(const)");
+                        ImGui::TextDisabled(LOC("(const)"));
                     }
                     ImGui::PopID();
                 }
@@ -1266,13 +1266,13 @@ namespace Lumina
 
         if (Track != nullptr && Track->Format != EAnimTrackFormat::None)
         {
-            ImGui::Text("Channel: %s - (%s)", Compressed.Bones[SelectedBone].BoneName.c_str(), PathNames[SelectedTrackKind]);
+            ImGui::Text(LOC("Channel: %s - (%s)"), Compressed.Bones[SelectedBone].BoneName.c_str(), PathNames[SelectedTrackKind]);
 
             if (ImPlot::BeginPlot("##AnimCurves", ImVec2(-1, -1)))
             {
                 ImPlot::SetupAxisLimits(ImAxis_X1, 0, Duration, ImGuiCond_Always);
-                ImPlot::SetupAxis(ImAxis_X1, "Time (s)");
-                ImPlot::SetupAxis(ImAxis_Y1, "Value");
+                ImPlot::SetupAxis(ImAxis_X1, LOC("Time (s)"));
+                ImPlot::SetupAxis(ImAxis_Y1, LOC("Value"));
 
                 const float TimeBefore = AnimComp->CurrentTime;
                 double CurrentTimeDouble = AnimComp->CurrentTime;
@@ -1318,7 +1318,7 @@ namespace Lumina
                     ZVals.push_back(Value.z);
                 }
 
-                const char* Suffix = SelectedTrackKind == 1 ? " (deg)" : "";
+                const char* Suffix = SelectedTrackKind == 1 ? LOC(" (deg)") : "";
                 ImPlot::PlotLine(FormatAs<FFixedString>("X{}", Suffix).c_str(),
                                  Times.data(), XVals.data(), (int)NumFrames);
                 ImPlot::PlotLine(FormatAs<FFixedString>("Y{}", Suffix).c_str(),
@@ -1331,7 +1331,7 @@ namespace Lumina
         }
         else
         {
-            ImGui::TextDisabled("Select a channel to view its curves.");
+            ImGui::TextDisabled(LOC("Select a channel to view its curves."));
         }
         ImGui::EndChild();
     }

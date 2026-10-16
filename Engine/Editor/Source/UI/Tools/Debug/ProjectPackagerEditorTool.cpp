@@ -37,32 +37,32 @@ namespace Lumina
 
     void FProjectPackagerEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("What this does",
-            "Walks FAssetData dependencies from the cook roots (project + enabled-plugin CookRoots[], "
+        DrawHelpTextRow(LOC("What this does"),
+            LOC("Walks FAssetData dependencies from the cook roots (project + enabled-plugin CookRoots[], "
             "plus every asset flagged EAssetFlags::Primary), strips EditorOnly properties via a cook-mode "
             "FPackageSaver, and writes one .pak per chunk. The Main chunk also carries shared content "
             "(/Engine resources, shader cache, /Config) and a pre-baked /Engine/AssetRegistry.bin so the "
-            "runtime skips the filesystem rescan.");
-        DrawHelpTextRow("Chunks",
-            "FCookGraph assigns each asset a chunk name (inherited along Hard/Owned edges from its root). "
+            "runtime skips the filesystem rescan."));
+        DrawHelpTextRow(LOC("Chunks"),
+            LOC("FCookGraph assigns each asset a chunk name (inherited along Hard/Owned edges from its root). "
             "The cooker writes <name>.pak for Main and <name>-<chunk>.pak for others, side-by-side. The "
-            "runtime mounts every .pak next to the exe at startup.");
-        DrawHelpTextRow("DDC",
-            "Cooked bytes are cached at <EngineInstall>/Intermediates/DDC/. Repeat cooks of unchanged "
+            "runtime mounts every .pak next to the exe at startup."));
+        DrawHelpTextRow(LOC("DDC"),
+            LOC("Cooked bytes are cached at <EngineInstall>/Intermediates/DDC/. Repeat cooks of unchanged "
             "assets skip the load+resave entirely. Bump FCookDDC::kCookStamp in code to invalidate the "
-            "whole cache after changing cook logic.");
-        DrawHelpTextRow("Cook vs Full Package",
-            "Cook Only stops after the .pak set, fast iteration when you only changed assets. "
-            "Full Package runs cook + build + copy and produces a runnable distribution.");
-        DrawHelpTextRow("Configurations",
-            "Shipping (default): no editor / no debug overhead, optimized. Development: profiler scopes + "
-            "asserts kept. Debug: unoptimized.");
-        DrawHelpTextRow("Extras",
-            "The Extras section adds files/directories to copy alongside the build (e.g. third-party DLLs, "
-            "docs, OpenSSL certs). Paths are relative to project root.");
-        DrawHelpTextRow("Build Output",
-            "The lower pane streams build output live. If a build fails, the stderr lines containing 'error' "
-            "are highlighted; full log is also kept on disk under <OutputDir>/build.log.");
+            "whole cache after changing cook logic."));
+        DrawHelpTextRow(LOC("Cook vs Full Package"),
+            LOC("Cook Only stops after the .pak set, fast iteration when you only changed assets. "
+            "Full Package runs cook + build + copy and produces a runnable distribution."));
+        DrawHelpTextRow(LOC("Configurations"),
+            LOC("Shipping (default): no editor / no debug overhead, optimized. Development: profiler scopes + "
+            "asserts kept. Debug: unoptimized."));
+        DrawHelpTextRow(LOC("Extras"),
+            LOC("The Extras section adds files/directories to copy alongside the build (e.g. third-party DLLs, "
+            "docs, OpenSSL certs). Paths are relative to project root."));
+        DrawHelpTextRow(LOC("Build Output"),
+            LOC("The lower pane streams build output live. If a build fails, the stderr lines containing 'error' "
+            "are highlighted; full log is also kept on disk under <OutputDir>/build.log."));
     }
 
     void FProjectPackagerEditorTool::AppendLog(FStringView Line)
@@ -333,7 +333,7 @@ namespace Lumina
     {
         if (GEngine == nullptr || GEngine->GetProjectName().empty())
         {
-            ImGui::TextDisabled("No project loaded.");
+            ImGui::TextDisabled(LOC("No project loaded."));
             return;
         }
 
@@ -347,23 +347,23 @@ namespace Lumina
         }
 
         // Project + cook-roots summary.
-        ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), LE_ICON_PACKAGE_VARIANT " Package Project");
+        ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), LOC_ICON(LE_ICON_PACKAGE_VARIANT, "Package Project"));
         ImGui::Separator();
 
-        ImGui::Text("Project:    %.*s", (int)GEngine->GetProjectName().size(), GEngine->GetProjectName().data());
+        ImGui::Text(LOC("Project:    %.*s"), (int)GEngine->GetProjectName().size(), GEngine->GetProjectName().data());
 
         const TVector<FCookRoot> Roots = GEngine->GetCookRoots();
         if (Roots.empty())
         {
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f),
-                "Cook Roots: <none, open Project Settings > Maps > Cook Roots to add asset paths,");
+                LOC("Cook Roots: <none, open Project Settings > Maps > Cook Roots to add asset paths,"));
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f),
-                "             or declare CookRoots in a .lplugin / flag assets EAssetFlags::Primary>");
+                LOC("             or declare CookRoots in a .lplugin / flag assets EAssetFlags::Primary>"));
         }
         else
         {
             const int32 ShownLimit = 6;
-            ImGui::Text("Cook Roots: %zu", Roots.size());
+            ImGui::Text(LOC("Cook Roots: %zu"), Roots.size());
             const int32 Count = (int32)Roots.size();
             for (int32 i = 0; i < Count && i < ShownLimit; ++i)
             {
@@ -372,7 +372,7 @@ namespace Lumina
             }
             if (Count > ShownLimit)
             {
-                ImGui::TextDisabled("    ... (+%d more)", Count - ShownLimit);
+                ImGui::TextDisabled(LOC("    ... (+%d more)"), Count - ShownLimit);
             }
         }
 
@@ -381,10 +381,10 @@ namespace Lumina
         if (bIsRunning)
         {
             ImGui::SameLine(ImGui::GetContentRegionAvail().x - 200);
-            const char* StageName = (Stage == EStage::Cooking)  ? "COOKING"
-                                  : (Stage == EStage::Building) ? "BUILDING"
-                                  : (Stage == EStage::Copying)  ? "COPYING"
-                                                                : "WORKING";
+            const char* StageName = (Stage == EStage::Cooking)  ? LOC("COOKING")
+                                  : (Stage == EStage::Building) ? LOC("BUILDING")
+                                  : (Stage == EStage::Copying)  ? LOC("COPYING")
+                                                                : LOC("WORKING");
             ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.25f, 1.0f), LE_ICON_PROGRESS_CLOCK " %s...", StageName);
         }
 
@@ -394,42 +394,42 @@ namespace Lumina
 
         // Editable fields.
         char OutBuf[512]; std::snprintf(OutBuf, sizeof(OutBuf), "%s", OutputDir.c_str());
-        ImGui::Text("Output Directory");
+        ImGui::Text(LOC("Output Directory"));
         ImGui::SetNextItemWidth(-1);
         if (ImGui::InputText("##out", OutBuf, sizeof(OutBuf)))
         {
             OutputDir = OutBuf;
         }
 
-        ImGui::Text("Build Configuration");
-        const char* Configs[] = { "Shipping", "Development", "Debug" };
+        ImGui::Text(LOC("Build Configuration"));
+        const char* Configs[] = { LOC("Shipping"), LOC("Development"), LOC("Debug") };
         ImGui::SetNextItemWidth(220.0f);
         ImGui::Combo("##cfg", &ConfigIndex, Configs, IM_ARRAYSIZE(Configs));
 
         ImGui::Spacing();
 
         const bool bWasServer = bServer;
-        if (ImGui::Checkbox("Dedicated server", &bServer) && OutputDir == DefaultOutputDir(bWasServer))
+        if (ImGui::Checkbox(LOC("Dedicated server"), &bServer) && OutputDir == DefaultOutputDir(bWasServer))
         {
             OutputDir = DefaultOutputDir(bServer);
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Builds the Server target as %s.exe, a headless host that\n"
-                              "loads the startup map and listens without -server.", PackageName().c_str());
+            ImGui::SetTooltip(LOC("Builds the Server target as %s.exe, a headless host that\n"
+                              "loads the startup map and listens without -server."), PackageName().c_str());
         }
 
         ImGui::Spacing();
 
-        ImGui::Checkbox("Expose /Game files as loose (modder-friendly)", &bExtractScriptsLoose);
+        ImGui::Checkbox(LOC("Expose /Game files as loose (modder-friendly)"), &bExtractScriptsLoose);
         if (ImGui::IsItemHovered())
         {
             ImGui::SetTooltip(
-                "When enabled, every non-.lasset file under /Game/ (.rcss, .rml,\n"
+                LOC("When enabled, every non-.lasset file under /Game/ (.rcss, .rml,\n"
                 "JSON, etc) is mirrored next to the cooked exe instead of being\n"
                 "bundled in the PAK. End users (or you, post-ship) can tweak\n"
                 "gameplay and UI without re-cooking. The runtime mounts the\n"
-                "loose folder over the PAK so loose copies take priority.");
+                "loose folder over the PAK so loose copies take priority."));
         }
 
         ImGui::Spacing();
@@ -441,12 +441,12 @@ namespace Lumina
         // Action buttons.
         ImGui::BeginDisabled(bIsRunning || Roots.empty());
         {
-            if (ImGui::Button(LE_ICON_PACKAGE_VARIANT " Cook + Build", ImVec2(180, 32)))
+            if (ImGui::Button(LOC_ICON(LE_ICON_PACKAGE_VARIANT, "Cook + Build"), ImVec2(180, 32)))
             {
                 RunFullPackage();
             }
             ImGui::SameLine();
-            if (ImGui::Button(LE_ICON_FILE_OUTLINE " Cook PAK Only", ImVec2(180, 32)))
+            if (ImGui::Button(LOC_ICON(LE_ICON_FILE_OUTLINE, "Cook PAK Only"), ImVec2(180, 32)))
             {
                 RunCookOnly();
             }
@@ -454,7 +454,7 @@ namespace Lumina
         ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_BROOM " Clear Log", ImVec2(120, 32)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_BROOM, "Clear Log"), ImVec2(120, 32)))
         {
             ClearLog();
         }
@@ -462,7 +462,7 @@ namespace Lumina
         if (bLastSuccess && !LastOutputDir.empty())
         {
             ImGui::SameLine();
-            if (ImGui::Button(LE_ICON_FOLDER_OPEN " Open Output", ImVec2(140, 32)))
+            if (ImGui::Button(LOC_ICON(LE_ICON_FOLDER_OPEN, "Open Output"), ImVec2(140, 32)))
             {
                 Platform::LaunchURL(UTF8_TO_TCHAR(LastOutputDir.c_str()));
             }
@@ -473,16 +473,16 @@ namespace Lumina
         {
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.55f, 1.0f),
-                LE_ICON_FILE_OUTLINE " Last cook output (%zu chunk%s):",
-                LastChunks.size(), LastChunks.size() == 1 ? "" : "s");
+                LOC_ICON(LE_ICON_FILE_OUTLINE, "Last cook output (%zu chunk%s):"),
+                LastChunks.size(), LastChunks.size() == 1 ? "" : LOC_S);
 
             if (ImGui::BeginTable("##chunks", 4,
                 ImGuiTableFlags_BordersInner | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX))
             {
-                ImGui::TableSetupColumn("Chunk",  ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                ImGui::TableSetupColumn("Assets", ImGuiTableColumnFlags_WidthFixed, 70.0f);
-                ImGui::TableSetupColumn("Size",   ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                ImGui::TableSetupColumn("Path",   ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn(LOC_ID("Chunk"),  ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                ImGui::TableSetupColumn(LOC_ID("Assets"), ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableSetupColumn(LOC_ID("Size"),   ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                ImGui::TableSetupColumn(LOC_ID("Path"),   ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableHeadersRow();
 
                 for (const FChunkSummary& C : LastChunks)
@@ -505,7 +505,7 @@ namespace Lumina
         }
 
         ImGui::Spacing();
-        ImGui::Checkbox("Auto-scroll log", &bAutoScroll);
+        ImGui::Checkbox(LOC("Auto-scroll log"), &bAutoScroll);
 
         ImGui::Separator();
 
@@ -572,11 +572,11 @@ namespace Lumina
     {
         const FString ProjectPath(GEngine->GetProjectPath().data(), GEngine->GetProjectPath().size());
 
-        ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.55f, 1.0f), LE_ICON_PACKAGE_VARIANT_CLOSED " Extras (manually included in PAK)");
+        ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.55f, 1.0f), LOC_ICON(LE_ICON_PACKAGE_VARIANT_CLOSED, "Extras (manually included in PAK)"));
         ImGui::Spacing();
 
         // Extra files
-        ImGui::TextDisabled("Extra Files");
+        ImGui::TextDisabled(LOC("Extra Files"));
         if (ImGui::BeginListBox("##extra_files", ImVec2(-1, 80)))
         {
             for (int32 i = 0; i < (int32)ExtraFiles.size(); ++i)
@@ -589,19 +589,19 @@ namespace Lumina
             }
             ImGui::EndListBox();
         }
-        if (ImGui::Button(LE_ICON_FILE_PLUS " Add File...", ImVec2(140, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_FILE_PLUS, "Add File..."), ImVec2(140, 0)))
         {
             FFixedString Picked;
             // Filter is "Display\0Pattern\0Display\0Pattern\0\0"; pass a generic All Files match.
             static const char Filter[] = "All Files\0*.*\0";
-            if (Platform::OpenFileDialogue(Picked, "Add Extra File", Filter, ProjectPath.c_str()))
+            if (Platform::OpenFileDialogue(Picked, LOC("Add Extra File"), Filter, ProjectPath.c_str()))
             {
                 ExtraFiles.emplace_back(Picked.c_str(), Picked.size());
             }
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(SelectedExtraFile < 0 || SelectedExtraFile >= (int32)ExtraFiles.size());
-        if (ImGui::Button(LE_ICON_MINUS " Remove File", ImVec2(140, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_MINUS, "Remove File"), ImVec2(140, 0)))
         {
             ExtraFiles.erase(ExtraFiles.begin() + SelectedExtraFile);
             SelectedExtraFile = -1;
@@ -611,7 +611,7 @@ namespace Lumina
         ImGui::Spacing();
 
         // Extra directories
-        ImGui::TextDisabled("Extra Directories");
+        ImGui::TextDisabled(LOC("Extra Directories"));
         if (ImGui::BeginListBox("##extra_dirs", ImVec2(-1, 80)))
         {
             for (int32 i = 0; i < (int32)ExtraDirectories.size(); ++i)
@@ -624,18 +624,18 @@ namespace Lumina
             }
             ImGui::EndListBox();
         }
-        if (ImGui::Button(LE_ICON_FOLDER_PLUS " Add Directory...", ImVec2(180, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_FOLDER_PLUS, "Add Directory..."), ImVec2(180, 0)))
         {
             FFixedString Picked;
             // Null filter = folder picker (see WindowsPlatformProcess::OpenFileDialogue).
-            if (Platform::OpenFileDialogue(Picked, "Add Extra Directory", nullptr, ProjectPath.c_str()))
+            if (Platform::OpenFileDialogue(Picked, LOC("Add Extra Directory"), nullptr, ProjectPath.c_str()))
             {
                 ExtraDirectories.emplace_back(Picked.c_str(), Picked.size());
             }
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(SelectedExtraDirectory < 0 || SelectedExtraDirectory >= (int32)ExtraDirectories.size());
-        if (ImGui::Button(LE_ICON_MINUS " Remove Directory", ImVec2(180, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_MINUS, "Remove Directory"), ImVec2(180, 0)))
         {
             ExtraDirectories.erase(ExtraDirectories.begin() + SelectedExtraDirectory);
             SelectedExtraDirectory = -1;

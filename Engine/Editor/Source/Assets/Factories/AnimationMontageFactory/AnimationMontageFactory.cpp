@@ -1,4 +1,5 @@
 #include "EditorPCH.h"
+#include "Localization/Localization.h"
 #include "AnimationMontageFactory.h"
 
 #include "Assets/AssetTypes/Mesh/Animation/Animation.h"
@@ -23,7 +24,7 @@ namespace Lumina
             SelectedAnimationGUID.Invalidate();
         }
 
-        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LE_ICON_BONE " Select Skeleton");
+        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LOC_ICON(LE_ICON_BONE, "Select Skeleton"));
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
@@ -32,7 +33,7 @@ namespace Lumina
         ImGuiX::AssetReferenceCombo("##Skeleton", CSkeleton::StaticClass(), SelectedSkeletonGUID, LE_ICON_BONE);
 
         ImGui::Spacing();
-        ImGui::TextUnformatted("First Clip (optional)");
+        ImGui::TextUnformatted(LOC("First Clip (optional)"));
         ImGui::SetNextItemWidth(-1.0f);
         ImGuiX::AssetReferenceCombo("##Animation", CAnimation::StaticClass(), SelectedAnimationGUID, LE_ICON_ANIMATION);
 
@@ -45,14 +46,14 @@ namespace Lumina
 
         bool bConfirm = false;
         ImGui::BeginDisabled(!SelectedSkeletonGUID.IsValid());
-        if (ImGui::Button(LE_ICON_CHECK " Create", ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CHECK, "Create"), ImVec2(ButtonWidth, 0)))
         {
             bConfirm = true;
         }
         ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_CLOSE " Cancel", ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CLOSE, "Cancel"), ImVec2(ButtonWidth, 0)))
         {
             SelectedSkeletonGUID.Invalidate();
             SelectedAnimationGUID.Invalidate();

@@ -31,14 +31,14 @@ namespace Lumina
 
         const char* MipStateLabel(const FTextureStreamingManager::FTextureSnapshot& Row)
         {
-            if (Row.bLoadInFlight)                            { return "loading"; }
-            if (Row.PinCount > 0)                             { return "pinned"; }
-            if (Row.BudgetedFirstMip < Row.ResidentFirstMip)  { return "streaming in"; }
-            if (Row.BudgetedFirstMip > Row.ResidentFirstMip)  { return "trimming"; }
+            if (Row.bLoadInFlight)                            { return LOC("loading"); }
+            if (Row.PinCount > 0)                             { return LOC("pinned"); }
+            if (Row.BudgetedFirstMip < Row.ResidentFirstMip)  { return LOC("streaming in"); }
+            if (Row.BudgetedFirstMip > Row.ResidentFirstMip)  { return LOC("trimming"); }
 
             // The budget had to give up mips quality asked for, so this texture pays for a pool that is too small.
-            if (Row.BudgetedFirstMip > Row.WantedFirstMip)    { return "budget-capped"; }
-            return "settled";
+            if (Row.BudgetedFirstMip > Row.WantedFirstMip)    { return LOC("budget-capped"); }
+            return LOC("settled");
         }
     }
 
@@ -56,29 +56,29 @@ namespace Lumina
 
     void FTextureStreamingEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("What this shows",
-            "Every texture registered with the streamer. Textures load holding only their inline tail "
+        DrawHelpTextRow(LOC("What this shows"),
+            LOC("Every texture registered with the streamer. Textures load holding only their inline tail "
             "(mips at or below 256px) and are promoted from there on demand -- by an editor tab pinning "
-            "them, or by the renderer reporting how much of the screen they cover.");
-        DrawHelpTextRow("Resident / Full",
-            "Resident is what the GPU image currently costs; Full is what the whole mip chain would cost. "
-            "The gap between the two totals is what streaming is saving you.");
-        DrawHelpTextRow("First mip",
-            "0 means fully resident. Higher means the top mips are on disk -- 'Tail' is the floor, the "
-            "most streamed-out this texture can get. Green = full, amber = partial, red = at the tail.");
-        DrawHelpTextRow("Coverage",
-            "Last reported on-screen size in pixels. A texture that is visibly large but shows 0 coverage "
-            "means the renderer feedback is not reaching the streamer -- that is a bug, not a policy.");
-        DrawHelpTextRow("Is it working?",
-            "Promotions and demotions should both climb as you fly the camera around. Zero promotions "
+            "them, or by the renderer reporting how much of the screen they cover."));
+        DrawHelpTextRow(LOC("Resident / Full"),
+            LOC("Resident is what the GPU image currently costs; Full is what the whole mip chain would cost. "
+            "The gap between the two totals is what streaming is saving you."));
+        DrawHelpTextRow(LOC("First mip"),
+            LOC("0 means fully resident. Higher means the top mips are on disk -- 'Tail' is the floor, the "
+            "most streamed-out this texture can get. Green = full, amber = partial, red = at the tail."));
+        DrawHelpTextRow(LOC("Coverage"),
+            LOC("Last reported on-screen size in pixels. A texture that is visibly large but shows 0 coverage "
+            "means the renderer feedback is not reaching the streamer -- that is a bug, not a policy."));
+        DrawHelpTextRow(LOC("Is it working?"),
+            LOC("Promotions and demotions should both climb as you fly the camera around. Zero promotions "
             "with textures sitting at their tail means nothing is demanding them. Bytes read should track "
-            "promotions; failed loads should stay at zero.");
-        DrawHelpTextRow("Settings",
-            "File > Settings > Rendering > Texture Streaming. Pool Size MB sets the budget, Resolution "
+            "promotions; failed loads should stay at zero."));
+        DrawHelpTextRow(LOC("Settings"),
+            LOC("File > Settings > Rendering > Texture Streaming. Pool Size MB sets the budget, Resolution "
             "Bias trades sharpness for memory, Max Loads In Flight bounds the IO, and unticking Enabled "
             "promotes everything and stops trimming (the pre-streaming behavior) if you need to rule the "
             "streamer out of a bug. Edits apply on the next frame and persist to the project's "
-            "/Config/GameSettings.json.");
+            "/Config/GameSettings.json."));
     }
 
     void FTextureStreamingEditorTool::DrawWindow(bool bIsFocused)
@@ -86,7 +86,7 @@ namespace Lumina
         FTextureStreamingManager* Streaming = FTextureStreamingManager::TryGet();
         if (Streaming == nullptr)
         {
-            ImGui::TextDisabled("No texture streaming manager (headless, or the renderer is not up).");
+            ImGui::TextDisabled(LOC("No texture streaming manager (headless, or the renderer is not up)."));
             return;
         }
 
@@ -101,11 +101,11 @@ namespace Lumina
         ImGui::Separator();
 
         ImGui::SetNextItemWidth(240.0f);
-        ImGui::InputTextWithHint("##Filter", LE_ICON_MAGNIFY " Filter (name / package)", Filter, sizeof(Filter));
+        ImGui::InputTextWithHint("##Filter", LOC_ICON(LE_ICON_MAGNIFY, "Filter (name / package)"), Filter, sizeof(Filter));
         ImGui::SameLine();
-        ImGui::Checkbox("Streamed only", &bStreamedOnly);
+        ImGui::Checkbox(LOC("Streamed only"), &bStreamedOnly);
         ImGui::SameLine();
-        ImGui::Checkbox("Pinned only", &bPinnedOnly);
+        ImGui::Checkbox(LOC("Pinned only"), &bPinnedOnly);
 
         if (!Pending.empty())
         {
@@ -130,7 +130,7 @@ namespace Lumina
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
 
-            ImGui::Text("Pool");
+            ImGui::Text(LOC("Pool"));
             ImGui::SameLine();
 
             // Over-budget is a real state, since pinned textures are exempt from eviction and push through it.
@@ -140,63 +140,63 @@ namespace Lumina
                 ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.85f, 0.35f, 0.3f, 1.0f));
             }
             ImGui::ProgressBar(Fraction > 1.0f ? 1.0f : Fraction, ImVec2(260.0f, 0.0f),
-                Format("{} / {}",
+                Format(LOCF("{} / {}"),
                     ImGuiX::FormatSize(Stats.ResidentBytes),
                     ImGuiX::FormatSize(Stats.BudgetBytes)).c_str());
             if (bOver)
             {
                 ImGui::PopStyleColor();
                 ImGui::SameLine();
-                ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.45f, 1.0f), "over budget");
+                ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.45f, 1.0f), LOC("over budget"));
             }
 
-            ImGui::Text("Streamable textures: ");
+            ImGui::Text(LOC("Streamable textures: "));
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.5f, 0.9f, 1.0f, 1.0f), "%u", Stats.NumTextures);
             ImGui::SameLine();
             ImGui::TextDisabled("|");
             ImGui::SameLine();
-            ImGui::Text("pinned: ");
+            ImGui::Text(LOC("pinned: "));
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.4f, 1.0f), "%u", Stats.NumPinned);
 
-            ImGui::Text("Fully resident would cost: ");
+            ImGui::Text(LOC("Fully resident would cost: "));
             ImGui::SameLine();
             ImGui::TextUnformatted(ImGuiX::FormatSize(Stats.FullyResidentBytes).c_str());
             ImGui::SameLine();
             ImGui::TextDisabled("->");
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), "%s saved", ImGuiX::FormatSize(Saved).c_str());
+            ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), LOC("%s saved"), ImGuiX::FormatSize(Saved).c_str());
 
             ImGui::TableSetColumnIndex(1);
 
             ImGui::PlotLines("##ResidentHistory", ResidentHistory, kHistory, HistoryCursor,
-                "Resident MiB", 0.0f, FLT_MAX, ImVec2(-1.0f, 60.0f));
+                LOC("Resident MiB"), 0.0f, FLT_MAX, ImVec2(-1.0f, 60.0f));
 
-            ImGui::Text("In flight: ");
+            ImGui::Text(LOC("In flight: "));
             ImGui::SameLine();
             ImGui::TextColored(Stats.NumLoadsInFlight > 0 ? ImVec4(0.5f, 0.9f, 1.0f, 1.0f) : ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
                 "%u", Stats.NumLoadsInFlight);
             ImGui::SameLine();
             ImGui::TextDisabled("|");
             ImGui::SameLine();
-            ImGui::Text("last frame: +%u / -%u", Stats.NumPromotedLastFrame, Stats.NumDemotedLastFrame);
+            ImGui::Text(LOC("last frame: +%u / -%u"), Stats.NumPromotedLastFrame, Stats.NumDemotedLastFrame);
 
-            ImGui::Text("Total: ");
+            ImGui::Text(LOC("Total: "));
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), "%llu promoted", (unsigned long long)Stats.TotalPromotions);
+            ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), LOC("%llu promoted"), (unsigned long long)Stats.TotalPromotions);
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.4f, 1.0f), "%llu demoted", (unsigned long long)Stats.TotalDemotions);
+            ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.4f, 1.0f), LOC("%llu demoted"), (unsigned long long)Stats.TotalDemotions);
             ImGui::SameLine();
             ImGui::TextDisabled("|");
             ImGui::SameLine();
-            ImGui::Text("%s read", ImGuiX::FormatSize(Stats.TotalBytesRead).c_str());
+            ImGui::Text(LOC("%s read"), ImGuiX::FormatSize(Stats.TotalBytesRead).c_str());
 
             // Loud, since a failed load means a bulk ref did not resolve rather than a policy outcome.
             if (Stats.TotalFailedLoads > 0)
             {
                 ImGui::TextColored(ImVec4(0.95f, 0.4f, 0.35f, 1.0f),
-                    LE_ICON_ALERT " %llu failed load(s) -- see the log", (unsigned long long)Stats.TotalFailedLoads);
+                    LOC_ICON(LE_ICON_ALERT, "%llu failed load(s) -- see the log"), (unsigned long long)Stats.TotalFailedLoads);
             }
 
             ImGui::EndTable();
@@ -204,20 +204,20 @@ namespace Lumina
 
         if (Stats.NumTextures == 0)
         {
-            ImGui::TextDisabled("Nothing registered. Assets saved before the PACKAGE_BULK_DATA version store "
-                                "every mip inline and are not streamable -- re-save or re-cook them.");
+            ImGui::TextDisabled(LOC("Nothing registered. Assets saved before the PACKAGE_BULK_DATA version store "
+                                "every mip inline and are not streamable -- re-save or re-cook them."));
         }
         else if (Stats.TotalPromotions == 0 && Stats.FrameCounter > 600)
         {
             ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.4f, 1.0f),
-                LE_ICON_ALERT " No texture has been promoted yet. If textures look blurry, the renderer's "
-                "coverage feedback is not reaching the streamer.");
+                LOC_ICON(LE_ICON_ALERT, "No texture has been promoted yet. If textures look blurry, the renderer's "
+                "coverage feedback is not reaching the streamer."));
         }
     }
 
     void FTextureStreamingEditorTool::DrawPendingTable()
     {
-        if (!ImGui::CollapsingHeader("In-flight requests", ImGuiTreeNodeFlags_DefaultOpen))
+        if (!ImGui::CollapsingHeader(LOC_ID("In-flight requests"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             return;
         }
@@ -225,11 +225,11 @@ namespace Lumina
         if (ImGui::BeginTable("##Pending", 5,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
         {
-            ImGui::TableSetupColumn("Texture", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("From mip", ImGuiTableColumnFlags_WidthFixed, 70.0f);
-            ImGui::TableSetupColumn("To mip", ImGuiTableColumnFlags_WidthFixed, 70.0f);
-            ImGui::TableSetupColumn("Staged", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-            ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+            ImGui::TableSetupColumn(LOC_ID("Texture"), ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(LOC_ID("From mip"), ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn(LOC_ID("To mip"), ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn(LOC_ID("Staged"), ImGuiTableColumnFlags_WidthFixed, 90.0f);
+            ImGui::TableSetupColumn(LOC_ID("State"), ImGuiTableColumnFlags_WidthFixed, 90.0f);
             ImGui::TableHeadersRow();
 
             for (const FTextureStreamingManager::FPendingSnapshot& Row : Pending)
@@ -237,7 +237,7 @@ namespace Lumina
                 ImGui::TableNextRow();
 
                 ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(Row.Name.IsNone() ? "<destroyed>" : Row.Name.c_str());
+                ImGui::TextUnformatted(Row.Name.IsNone() ? LOC("<destroyed>") : Row.Name.c_str());
 
                 ImGui::TableSetColumnIndex(1);
                 ImGui::Text("%u", Row.SourceFirstMip);
@@ -252,11 +252,11 @@ namespace Lumina
                 if (Row.bComplete)
                 {
                     // Complete but still listed means residency is applied on the game thread at the next Update.
-                    ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), "read, applying");
+                    ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), LOC("read, applying"));
                 }
                 else
                 {
-                    ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "reading");
+                    ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), LOC("reading"));
                 }
             }
 
@@ -277,16 +277,16 @@ namespace Lumina
         }
 
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Texture", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort);
-        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-        ImGui::TableSetupColumn("Format", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-        ImGui::TableSetupColumn("Mips", ImGuiTableColumnFlags_WidthFixed, 130.0f);
-        ImGui::TableSetupColumn("Residency", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-        ImGui::TableSetupColumn("Resident", ImGuiTableColumnFlags_WidthFixed, 85.0f);
-        ImGui::TableSetupColumn("Full", ImGuiTableColumnFlags_WidthFixed, 85.0f);
-        ImGui::TableSetupColumn("CPU", ImGuiTableColumnFlags_WidthFixed, 85.0f);
-        ImGui::TableSetupColumn("Coverage", ImGuiTableColumnFlags_WidthFixed, 85.0f);
-        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+        ImGui::TableSetupColumn(LOC_ID("Texture"), ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort);
+        ImGui::TableSetupColumn(LOC_ID("Size"), ImGuiTableColumnFlags_WidthFixed, 100.0f);
+        ImGui::TableSetupColumn(LOC_ID("Format"), ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn(LOC_ID("Mips"), ImGuiTableColumnFlags_WidthFixed, 130.0f);
+        ImGui::TableSetupColumn(LOC_ID("Residency"), ImGuiTableColumnFlags_WidthFixed, 120.0f);
+        ImGui::TableSetupColumn(LOC_ID("Resident"), ImGuiTableColumnFlags_WidthFixed, 85.0f);
+        ImGui::TableSetupColumn(LOC_ID("Full"), ImGuiTableColumnFlags_WidthFixed, 85.0f);
+        ImGui::TableSetupColumn(LOC_ID("CPU"), ImGuiTableColumnFlags_WidthFixed, 85.0f);
+        ImGui::TableSetupColumn(LOC_ID("Coverage"), ImGuiTableColumnFlags_WidthFixed, 85.0f);
+        ImGui::TableSetupColumn(LOC_ID("State"), ImGuiTableColumnFlags_WidthFixed, 90.0f);
         ImGui::TableHeadersRow();
 
         // The question this answers most often is what is eating the pool, which is the top of the list.
@@ -328,7 +328,7 @@ namespace Lumina
             ImGui::TextUnformatted(Row->Name.c_str());
             if (ImGui::IsItemHovered() && !Row->PackagePath.empty())
             {
-                ImGui::SetTooltip("%s\nbindless slot %d", Row->PackagePath.c_str(), Row->ResourceID);
+                ImGui::SetTooltip(LOC("%s\nbindless slot %d"), Row->PackagePath.c_str(), Row->ResourceID);
             }
 
             ImGui::TableSetColumnIndex(1);
@@ -339,20 +339,20 @@ namespace Lumina
 
             ImGui::TableSetColumnIndex(3);
             // Reads as the image holding mips 4 through 12 of a 13-mip chain.
-            ImGui::TextColored(ResidencyColor(*Row), "%u..%u of %u",
+            ImGui::TextColored(ResidencyColor(*Row), LOC("%u..%u of %u"),
                 Row->ResidentFirstMip, Row->NumMips > 0 ? Row->NumMips - 1u : 0u, Row->NumMips);
             if (ImGui::IsItemHovered())
             {
-                ImGui::SetTooltip(
+                ImGui::SetTooltip(LOC(
                     "resident from mip %u\n"
                     "wanted   mip %u   (quality target, ignores the pool)\n"
                     "budgeted mip %u   (what the pool allows)\n"
                     "tail     mip %u   (most streamed out it can get)\n"
-                    "%s",
+                    "%s"),
                     Row->ResidentFirstMip, Row->WantedFirstMip, Row->BudgetedFirstMip, Row->TailFirstMip,
                     Row->BudgetedFirstMip > Row->WantedFirstMip
-                        ? "budget is holding this below its quality target"
-                        : "pool is not constraining this texture");
+                        ? LOC("budget is holding this below its quality target")
+                        : LOC("pool is not constraining this texture"));
             }
 
             ImGui::TableSetColumnIndex(4);
@@ -382,14 +382,14 @@ namespace Lumina
             {
                 if (Row->FeedbackMask == 0u)
                 {
-                    ImGui::TextDisabled("idle");
+                    ImGui::TextDisabled(LOC("idle"));
                 }
                 else
                 {
                     const uint32 Finest = (uint32)Math::CountTrailingZeros64(Row->FeedbackMask);
-                    if (Finest == 0u)      { ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.5f, 1.0f), "want finer"); }
-                    else if (Finest == 1u) { ImGui::Text("exact"); }
-                    else                   { ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.4f, 1.0f), "+%u coarse", Finest - 1u); }
+                    if (Finest == 0u)      { ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.5f, 1.0f), LOC("want finer")); }
+                    else if (Finest == 1u) { ImGui::Text(LOC("exact")); }
+                    else                   { ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.4f, 1.0f), LOC("+%u coarse"), Finest - 1u); }
                 }
             }
             else
@@ -399,9 +399,9 @@ namespace Lumina
             }
             if (ImGui::IsItemHovered())
             {
-                ImGui::SetTooltip("The mip the shaders that sampled this texture asked for, relative to what "
+                ImGui::SetTooltip(LOC("The mip the shaders that sampled this texture asked for, relative to what "
                                   "is resident:\n'want finer' promotes one, '+N coarse' gives one back, "
-                                  "'idle' means nothing sampled it.\n\n%llu frame(s) since anything demanded it",
+                                  "'idle' means nothing sampled it.\n\n%llu frame(s) since anything demanded it"),
                     (unsigned long long)Row->FramesSinceDemand);
             }
 

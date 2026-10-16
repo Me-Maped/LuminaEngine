@@ -10,12 +10,12 @@ namespace Lumina
     {
         switch (Type)
         {
-        case RHI::ETextureType::Tex1D:        return "1D";
-        case RHI::ETextureType::Tex2D:        return "2D";
-        case RHI::ETextureType::Tex3D:        return "3D";
-        case RHI::ETextureType::TexCube:      return "Cube";
-        case RHI::ETextureType::Tex2DArray:   return "2D Array";
-        case RHI::ETextureType::TexCubeArray: return "Cube Array";
+        case RHI::ETextureType::Tex1D:        return LOC("1D");
+        case RHI::ETextureType::Tex2D:        return LOC("2D");
+        case RHI::ETextureType::Tex3D:        return LOC("3D");
+        case RHI::ETextureType::TexCube:      return LOC("Cube");
+        case RHI::ETextureType::Tex2DArray:   return LOC("2D Array");
+        case RHI::ETextureType::TexCubeArray: return LOC("Cube Array");
         }
         return "?";
     }
@@ -31,12 +31,12 @@ namespace Lumina
                 Out += Name;
             }
         };
-        Append(RHI::EImageUsageFlags::Sampled,         "Sampled");
-        Append(RHI::EImageUsageFlags::Storage,         "Storage");
-        Append(RHI::EImageUsageFlags::ColorAttachment, "Color");
-        Append(RHI::EImageUsageFlags::DepthAttachment, "Depth");
-        Append(RHI::EImageUsageFlags::TransferSrc,     "TSrc");
-        Append(RHI::EImageUsageFlags::TransferDst,     "TDst");
+        Append(RHI::EImageUsageFlags::Sampled,         LOC("Sampled"));
+        Append(RHI::EImageUsageFlags::Storage,         LOC("Storage"));
+        Append(RHI::EImageUsageFlags::ColorAttachment, LOC("Color"));
+        Append(RHI::EImageUsageFlags::DepthAttachment, LOC("Depth"));
+        Append(RHI::EImageUsageFlags::TransferSrc,     LOC("TSrc"));
+        Append(RHI::EImageUsageFlags::TransferDst,     LOC("TDst"));
         return Out;
     }
 
@@ -84,14 +84,14 @@ namespace Lumina
 
     void FTextureHeapEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Heap",
-            "Every texture currently registered in the global bindless heap, by sampled slot index. "
-            "This is exactly what shaders see through gTextures2D[] / SampleTexture2D.");
-        DrawHelpTextRow("Preview",
-            "Click a thumbnail (or row) to open it enlarged in the inspector panel. Cube, 3D, array "
-            "and MSAA textures can't be drawn through ImGui's 2D sampler and show no thumbnail.");
-        DrawHelpTextRow("Filter",
-            "Matches against format name, type and slot number.");
+        DrawHelpTextRow(LOC("Heap"),
+            LOC("Every texture currently registered in the global bindless heap, by sampled slot index. "
+            "This is exactly what shaders see through gTextures2D[] / SampleTexture2D."));
+        DrawHelpTextRow(LOC("Preview"),
+            LOC("Click a thumbnail (or row) to open it enlarged in the inspector panel. Cube, 3D, array "
+            "and MSAA textures can't be drawn through ImGui's 2D sampler and show no thumbnail."));
+        DrawHelpTextRow(LOC("Filter"),
+            LOC("Matches against format name, type and slot number."));
     }
 
     void FTextureHeapEditorTool::DrawStreamingStats()
@@ -105,8 +105,8 @@ namespace Lumina
         const FTextureStreamingManager::FStats Stats = Streaming->GetStats();
         if (Stats.NumTextures == 0)
         {
-            ImGui::TextDisabled("No streamable textures registered (assets saved before PACKAGE_BULK_DATA "
-                                "store every mip inline; re-save or re-cook them to enable streaming).");
+            ImGui::TextDisabled(LOC("No streamable textures registered (assets saved before PACKAGE_BULK_DATA "
+                                "store every mip inline; re-save or re-cook them to enable streaming)."));
             return;
         }
 
@@ -120,30 +120,30 @@ namespace Lumina
             : 0;
 
         ImGui::Separator();
-        ImGui::Text("Streaming pool");
+        ImGui::Text(LOC("Streaming pool"));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(220.0f);
         ImGui::ProgressBar(Fraction, ImVec2(220.0f, 0.0f),
-            Format("{} / {}",
+            Format(LOCF("{} / {}"),
                 ImGuiX::FormatSize(Stats.ResidentBytes),
                 ImGuiX::FormatSize(Stats.BudgetBytes)).c_str());
 
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::Text("%u streamable", Stats.NumTextures);
+        ImGui::Text(LOC("%u streamable"), Stats.NumTextures);
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::Text("%u pinned", Stats.NumPinned);
+        ImGui::Text(LOC("%u pinned"), Stats.NumPinned);
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), "%s saved", ImGuiX::FormatSize(Saved).c_str());
+        ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), LOC("%s saved"), ImGuiX::FormatSize(Saved).c_str());
 
         if (Stats.NumLoadsInFlight > 0 || Stats.NumPromotedLastFrame > 0 || Stats.NumDemotedLastFrame > 0)
         {
-            ImGui::TextDisabled("%u load(s) in flight, +%u promoted / -%u demoted last frame",
+            ImGui::TextDisabled(LOC("%u load(s) in flight, +%u promoted / -%u demoted last frame"),
                 Stats.NumLoadsInFlight, Stats.NumPromotedLastFrame, Stats.NumDemotedLastFrame);
         }
     }
@@ -159,16 +159,16 @@ namespace Lumina
             TotalBytes += EstimateTextureBytes(Info.Desc);
         }
 
-        ImGui::Text("%u sampled slots in use", (uint32)Textures.size());
+        ImGui::Text(LOC("%u sampled slots in use"), (uint32)Textures.size());
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::Text("~%s estimated", ImGuiX::FormatSize(TotalBytes).c_str());
+        ImGui::Text(LOC("~%s estimated"), ImGuiX::FormatSize(TotalBytes).c_str());
 
         DrawStreamingStats();
 
         ImGui::SetNextItemWidth(260.0f);
-        ImGui::InputTextWithHint("##Filter", LE_ICON_MAGNIFY " Filter (format / type / slot)", Filter, sizeof(Filter));
+        ImGui::InputTextWithHint("##Filter", LOC_ICON(LE_ICON_MAGNIFY, "Filter (format / type / slot)"), Filter, sizeof(Filter));
         ImGui::Separator();
 
         const bool bInspector = SelectedSlot != RHI::kInvalidHeapSlot;
@@ -203,13 +203,13 @@ namespace Lumina
         }
 
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Slot",    ImGuiTableColumnFlags_WidthFixed, 50.0f);
-        ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthFixed, 56.0f);
-        ImGui::TableSetupColumn("Size",    ImGuiTableColumnFlags_WidthFixed, 110.0f);
-        ImGui::TableSetupColumn("Format");
-        ImGui::TableSetupColumn("Type",    ImGuiTableColumnFlags_WidthFixed, 70.0f);
-        ImGui::TableSetupColumn("Mips",    ImGuiTableColumnFlags_WidthFixed, 44.0f);
-        ImGui::TableSetupColumn("Memory",  ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn(LOC_ID("Slot"),    ImGuiTableColumnFlags_WidthFixed, 50.0f);
+        ImGui::TableSetupColumn(LOC_ID("Preview"), ImGuiTableColumnFlags_WidthFixed, 56.0f);
+        ImGui::TableSetupColumn(LOC_ID("Size"),    ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn(LOC_ID("Format"));
+        ImGui::TableSetupColumn(LOC_ID("Type"),    ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn(LOC_ID("Mips"),    ImGuiTableColumnFlags_WidthFixed, 44.0f);
+        ImGui::TableSetupColumn(LOC_ID("Memory"),  ImGuiTableColumnFlags_WidthFixed, 80.0f);
         ImGui::TableHeadersRow();
 
         const FStringView FilterView(Filter);
@@ -308,7 +308,7 @@ namespace Lumina
 
         const RHI::FTextureDesc& Desc = Selected->Desc;
 
-        ImGui::Text(LE_ICON_IMAGE " Slot %u", Selected->Slot);
+        ImGui::Text(LOC_ICON(LE_ICON_IMAGE, "Slot %u"), Selected->Slot);
         ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20.0f);
         if (ImGui::SmallButton(LE_ICON_CLOSE))
         {
@@ -331,7 +331,7 @@ namespace Lumina
         }
         else
         {
-            ImGui::TextDisabled("No 2D preview for %s textures.", HeapTextureTypeName(Desc.Type));
+            ImGui::TextDisabled(LOC("No 2D preview for %s textures."), HeapTextureTypeName(Desc.Type));
         }
 
         ImGui::Spacing();
@@ -347,14 +347,14 @@ namespace Lumina
                 ImGui::Text(Fmt, Args...);
             };
 
-            Row("Dimensions", "%u x %u x %u", Desc.Dimension.x, Desc.Dimension.y, Desc.Dimension.z);
-            Row("Format",     "%s", RHI::Format::Info(Desc.Format).Name);
-            Row("Type",       "%s", HeapTextureTypeName(Desc.Type));
-            Row("Mips",       "%u", Desc.MipCount);
-            Row("Layers",     "%u", Desc.LayerCount);
-            Row("Samples",    "%u", Desc.SampleCount);
-            Row("Usage",      "%s", UsageString(Desc.Usage).c_str());
-            Row("Memory",     "~%s", ImGuiX::FormatSize(EstimateTextureBytes(Desc)).c_str());
+            Row(LOC("Dimensions"), "%u x %u x %u", Desc.Dimension.x, Desc.Dimension.y, Desc.Dimension.z);
+            Row(LOC("Format"),     "%s", RHI::Format::Info(Desc.Format).Name);
+            Row(LOC("Type"),       "%s", HeapTextureTypeName(Desc.Type));
+            Row(LOC("Mips"),       "%u", Desc.MipCount);
+            Row(LOC("Layers"),     "%u", Desc.LayerCount);
+            Row(LOC("Samples"),    "%u", Desc.SampleCount);
+            Row(LOC_CTX("Usage", "texture"), "%s", UsageString(Desc.Usage).c_str());
+            Row(LOC("Memory"),     "~%s", ImGuiX::FormatSize(EstimateTextureBytes(Desc)).c_str());
 
             ImGui::EndTable();
         }

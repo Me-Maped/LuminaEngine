@@ -171,7 +171,7 @@ namespace Lumina
         CAudioStream* Stream = GetAsset<CAudioStream>();
         if (Stream == nullptr || !bPeaksValid)
         {
-            ImGui::TextDisabled("No decodable audio data.");
+            ImGui::TextDisabled(LOC("No decodable audio data."));
             return;
         }
 
@@ -181,28 +181,28 @@ namespace Lumina
         {
             if (bPreviewPlaying)
             {
-                if (ImGui::Button(LE_ICON_STOP " Stop"))
+                if (ImGui::Button(LOC_ICON(LE_ICON_STOP, "Stop")))
                 {
                     StopPreview();
                 }
             }
             else
             {
-                if (ImGui::Button(LE_ICON_PLAY " Play"))
+                if (ImGui::Button(LOC_ICON(LE_ICON_PLAY, "Play")))
                 {
                     StartPreview();
                 }
             }
 
             ImGui::SameLine(0, 12);
-            if (ImGui::Checkbox("Loop", &bPreviewLoop) && bPreviewPlaying)
+            if (ImGui::Checkbox(LOC("Loop"), &bPreviewLoop) && bPreviewPlaying)
             {
                 Audio::Context().SetLooping(PreviewHandle, bPreviewLoop);
             }
 
             ImGui::SameLine(0, 12);
             ImGui::SetNextItemWidth(140);
-            if (ImGui::SliderFloat("Volume", &PreviewVolume, 0.0f, 1.0f, "%.2f") && bPreviewPlaying)
+            if (ImGui::SliderFloat(LOC("Volume"), &PreviewVolume, 0.0f, 1.0f, "%.2f") && bPreviewPlaying)
             {
                 Audio::Context().SetVolume(PreviewHandle, PreviewVolume);
             }
@@ -304,15 +304,15 @@ namespace Lumina
 
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", Stream->GetName().c_str());
-        ImGui::SeparatorText("Audio Information");
+        ImGui::SeparatorText(LOC("Audio Information"));
         ImGuiX::Font::PopFont();
 
         ImGui::Spacing();
 
         if (ImGui::BeginTable("##AudioInfo", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
         {
-            ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 130.0f);
-            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(LOC_ID("Property"), ImGuiTableColumnFlags_WidthFixed, 130.0f);
+            ImGui::TableSetupColumn(LOC_ID("Value"), ImGuiTableColumnFlags_WidthStretch);
 
             auto PropertyRow = [](const char* Label, const FString& Value)
             {
@@ -334,12 +334,12 @@ namespace Lumina
                 snprintf(DurationStr, sizeof(DurationStr), "%.2f s", Duration);
             }
 
-            PropertyRow("Duration", DurationStr);
-            PropertyRow("Sample Rate", Format("{}", Stream->SampleRate) + " Hz");
-            PropertyRow("Channels", Stream->NumChannels == 1 ? "1 (Mono)"
-                                  : Stream->NumChannels == 2 ? "2 (Stereo)"
+            PropertyRow(LOC("Duration"), DurationStr);
+            PropertyRow(LOC("Sample Rate"), Format("{}", Stream->SampleRate) + " Hz");
+            PropertyRow(LOC("Channels"), Stream->NumChannels == 1 ? FString(LOC("1 (Mono)"))
+                                  : Stream->NumChannels == 2 ? FString(LOC("2 (Stereo)"))
                                   : Format("{}", Stream->NumChannels));
-            PropertyRow("Frames", Format("{}", Stream->NumFrames));
+            PropertyRow(LOC("Frames"), Format("{}", Stream->NumFrames));
 
             const size_t SizeBytes = Stream->IsValid() ? Stream->AudioData->Bytes.size() : 0;
             char SizeStr[64];
@@ -351,7 +351,7 @@ namespace Lumina
             {
                 snprintf(SizeStr, sizeof(SizeStr), "%.1f KB", (double)SizeBytes / double(Constants::kKiB));
             }
-            PropertyRow("Source Size", SizeStr);
+            PropertyRow(LOC("Source Size"), SizeStr);
 
             ImGui::EndTable();
         }
@@ -360,21 +360,21 @@ namespace Lumina
 
         if (!Stream->SourcePath.empty())
         {
-            ImGui::TextDisabled("Source: %s", Stream->SourcePath.c_str());
+            ImGui::TextDisabled(LOC("Source: %s"), Stream->SourcePath.c_str());
         }
     }
 
     void FAudioStreamEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Preview",
-            "Play / Stop previews the clip 2D (no spatialization) through the editor's audio device. "
-            "Loop and Volume apply live to the playing preview.");
-        DrawHelpTextRow("Waveform",
-            "Each channel gets its own lane showing per-column min/max sample peaks. "
-            "The orange line is the playhead while previewing.");
-        DrawHelpTextRow("Scrubbing",
-            "Click or drag anywhere on the waveform to move the playhead. While playing, the preview "
-            "seeks live; while stopped, playback starts from the scrub position.");
+        DrawHelpTextRow(LOC("Preview"),
+            LOC("Play / Stop previews the clip 2D (no spatialization) through the editor's audio device. "
+            "Loop and Volume apply live to the playing preview."));
+        DrawHelpTextRow(LOC("Waveform"),
+            LOC("Each channel gets its own lane showing per-column min/max sample peaks. "
+            "The orange line is the playhead while previewing."));
+        DrawHelpTextRow(LOC("Scrubbing"),
+            LOC("Click or drag anywhere on the waveform to move the playhead. While playing, the preview "
+            "seeks live; while stopped, playback starts from the scrub position."));
     }
 
     void FAudioStreamEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& /*InDockspaceSize*/) const

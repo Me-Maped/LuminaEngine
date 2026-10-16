@@ -1,4 +1,5 @@
 #include "FoliageEditMode.h"
+#include "Localization/Localization.h"
 #include "World/ECS/Registry.h"
 #include "World/Scene/RenderScene/ScenePrimitiveSet.h"
 
@@ -275,7 +276,7 @@ namespace Lumina
         }
 
         ImGui::SameLine();
-        if (ImGui::Button(bShowSettings ? "Hide Brush" : "Brush", ImVec2(0, ButtonSize)))
+        if (ImGui::Button(bShowSettings ? LOC("Hide Brush") : LOC("Brush"), ImVec2(0, ButtonSize)))
         {
             bShowSettings = !bShowSettings;
         }
@@ -297,14 +298,14 @@ namespace Lumina
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_AlwaysAutoResize);
 
-        ImGui::SeparatorText("Brush");
+        ImGui::SeparatorText(LOC("Brush"));
 
         // A pair of toggles, since a combo costs two clicks and hides the current state behind a label.
         const float HalfWidth = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
         const bool  bPainting = (Mode == EFoliageBrushMode::Paint);
 
         ImGui::PushStyleColor(ImGuiCol_Button, bPainting ? IM_COL32(70, 130, 80, 255) : ImGui::GetColorU32(ImGuiCol_Button));
-        if (ImGui::Button(LE_ICON_BRUSH" Paint", ImVec2(HalfWidth, 0.0f)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_BRUSH, "Paint"), ImVec2(HalfWidth, 0.0f)))
         {
             Mode = EFoliageBrushMode::Paint;
         }
@@ -312,23 +313,23 @@ namespace Lumina
         ImGui::SameLine();
 
         ImGui::PushStyleColor(ImGuiCol_Button, !bPainting ? IM_COL32(150, 70, 70, 255) : ImGui::GetColorU32(ImGuiCol_Button));
-        if (ImGui::Button(LE_ICON_ERASER" Erase", ImVec2(HalfWidth, 0.0f)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_ERASER, "Erase"), ImVec2(HalfWidth, 0.0f)))
         {
             Mode = EFoliageBrushMode::Erase;
         }
         ImGui::PopStyleColor();
 
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::SliderFloat("##Radius",  &Radius,  16.0f, 4096.0f, "Radius  %.0f");
+        ImGui::SliderFloat("##Radius",  &Radius,  16.0f, 4096.0f, LOC("Radius  %.0f"));
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::SliderFloat("##Falloff", &Falloff, 0.0f, 1.0f, "Falloff  %.2f");
+        ImGui::SliderFloat("##Falloff", &Falloff, 0.0f, 1.0f, LOC("Falloff  %.2f"));
 
         if (SFoliageComponent* Foliage = FindOrCreateFoliage(World))
         {
             DrawTypePanel(World, *Foliage);
         }
 
-        ImGui::TextDisabled("[ / ] resize brush");
+        ImGui::TextDisabled(LOC("[ / ] resize brush"));
         ImGui::End();
     }
 
@@ -362,7 +363,7 @@ namespace Lumina
     {
         (void)World;
 
-        ImGui::SeparatorText("Foliage Types");
+        ImGui::SeparatorText(LOC("Foliage Types"));
 
         const int32 TypeCount = (int32)Foliage.Types.size();
 
@@ -383,7 +384,7 @@ namespace Lumina
 
         if (TypeCount == 0)
         {
-            ImGui::TextDisabled("No foliage types yet.");
+            ImGui::TextDisabled(LOC("No foliage types yet."));
         }
 
         for (int32 i = 0; i < TypeCount; ++i)
@@ -393,7 +394,7 @@ namespace Lumina
 
             // A type with no mesh cannot paint anything, so it is called out rather than looking ready.
             const bool bPaintable = Type.Mesh.IsValid();
-            FString Label = Type.Name.empty() ? FString("Unnamed") : Type.Name;
+            FString Label = Type.Name.empty() ? FString(LOC("Unnamed")) : Type.Name;
             if (bPaintable)
             {
                 Label += "  (";
@@ -402,7 +403,7 @@ namespace Lumina
             }
             else
             {
-                Label += "  (no mesh)";
+                Label += LOC("  (no mesh)");
             }
 
             ImGui::PushStyleColor(ImGuiCol_Text, bPaintable ? IM_COL32(225, 225, 230, 255)
@@ -424,7 +425,7 @@ namespace Lumina
 
         ImGui::EndChild();
 
-        if (ImGui::Button("Add"))
+        if (ImGui::Button(LOC("Add")))
         {
             SFoliageType& NewType = Foliage.Types.emplace_back();
             NewType.Name = Format("Type{}", TypeCount);
@@ -434,7 +435,7 @@ namespace Lumina
         ImGui::SameLine();
 
         ImGui::BeginDisabled(!Foliage.IsValidType(ActiveType));
-        if (ImGui::Button("Duplicate"))
+        if (ImGui::Button(LOC("Duplicate")))
         {
             // Copied by value first, since emplace_back can reallocate and dangle the reference.
             const SFoliageType Source = Foliage.Types[ActiveType];
@@ -446,7 +447,7 @@ namespace Lumina
         }
         ImGui::SameLine();
 
-        if (ImGui::Button("Remove"))
+        if (ImGui::Button(LOC("Remove")))
         {
             Foliage.Instances.erase(
                 Algo::RemoveIf(Foliage.Instances,
@@ -472,11 +473,11 @@ namespace Lumina
 
         if (!Foliage.IsValidType(ActiveType))
         {
-            ImGui::TextDisabled("Add a type to start painting.");
+            ImGui::TextDisabled(LOC("Add a type to start painting."));
             return;
         }
 
-        ImGui::SeparatorText("Type Settings");
+        ImGui::SeparatorText(LOC("Type Settings"));
         TypeSettings.DrawTree();
     }
 

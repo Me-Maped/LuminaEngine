@@ -1,4 +1,5 @@
 #include "EntityScriptComponentCustomization.h"
+#include "Localization/Localization.h"
 
 #include "imgui.h"
 #include "Core/Object/Class.h"
@@ -88,7 +89,7 @@ namespace Lumina
 
             const FString HeaderLabel = bValid
                 ? Lumina::Format("{} {}", GScriptIcon, FString(Short.data(), Short.size()))
-                : FString(LE_ICON_ALERT " (missing script)");
+                : FString(LOC_ICON(LE_ICON_ALERT, "(missing script)"));
 
             const float Spacing     = ImGui::GetStyle().ItemSpacing.x;
             const float HeaderRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
@@ -123,7 +124,7 @@ namespace Lumina
                 }
             }
             ImGui::EndDisabled();
-            ImGuiX::TextTooltip("{}", View.SourceFile.empty() ? FString("No source file found for this script.") : Lumina::Format("Open {}", View.SourceFile));
+            ImGuiX::TextTooltip("{}", View.SourceFile.empty() ? FString(LOC("No source file found for this script.")) : Lumina::Format(LOCF("Open {}"), View.SourceFile));
 
             ImGui::SameLine();
             ImGui::BeginDisabled(!bValid);
@@ -132,7 +133,7 @@ namespace Lumina
                 ImGui::SetClipboardText(TypeName.c_str());
             }
             ImGui::EndDisabled();
-            ImGuiX::TextTooltip("{}", "Copy the script's type name.");
+            ImGuiX::TextTooltip("{}", LOC("Copy the script's type name."));
 
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
@@ -155,7 +156,7 @@ namespace Lumina
                 };
                 bWasChanged = true;
             }
-            ImGuiX::TextTooltip("{}", "Remove this script.");
+            ImGuiX::TextTooltip("{}", LOC("Remove this script."));
 
             if (bOpen && Script != nullptr && Script->GetClass() != nullptr)
             {
@@ -233,7 +234,7 @@ namespace Lumina
 
         // Sized to its label rather than the panel: this is an action, and a full-width field reads as one
         // more empty property with the arrow stranded at the far edge.
-        const char* AddLabel = LE_ICON_PLUS " Add Script";
+        const char* AddLabel = LOC_ICON(LE_ICON_PLUS, "Add Script");
         const float AddWidth = ImGui::CalcTextSize(AddLabel).x
             + ImGui::GetFrameHeight()
             + ImGui::GetStyle().FramePadding.x * 3.0f;

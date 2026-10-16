@@ -1,4 +1,5 @@
 ﻿#include "DataTableRowHandleCustomization.h"
+#include "Localization/Localization.h"
 
 #include "Assets/AssetRegistry/AssetData.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
@@ -82,7 +83,7 @@ namespace Lumina
         ImGui::BeginGroup();
 
         ImGui::SetNextItemWidth(TextWidth);
-        FFixedString TableLabel = Table != nullptr ? Table->GetName().c_str() : "None";
+        FFixedString TableLabel = Table != nullptr ? Table->GetName().c_str() : LOC("None");
         ImGui::PushStyleColor(ImGuiCol_Text, Table != nullptr ? GMutedText : GEmptyText);
         ImGuiX::InputText("##Table", TableLabel,
             ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_AutoSelectAll);
@@ -96,7 +97,7 @@ namespace Lumina
             }
             ImGui::EndDragDropTarget();
         }
-        ImGuiX::TextTooltip("Data table to read the row from. Drop one here, or pick it from the list.");
+        ImGuiX::TextTooltip(LOCF("Data table to read the row from. Drop one here, or pick it from the list."));
 
         ImGui::SameLine(0, 0);
 
@@ -139,7 +140,7 @@ namespace Lumina
             bWasChanged = true;
         }
         ImGui::EndDisabled();
-        ImGuiX::TextTooltip("Clear the reference");
+        ImGuiX::TextTooltip(LOCF("Clear the reference"));
 
         // Row picker. Index 0 is "None" so a row can be unset without clearing the table too.
         ImGui::BeginDisabled(Table == nullptr);
@@ -155,13 +156,13 @@ namespace Lumina
             }
         }
 
-        const char* RowPreview = DisplayValue.RowName.IsNone() ? "None" : DisplayValue.RowName.c_str();
+        const char* RowPreview = DisplayValue.RowName.IsNone() ? LOC("None") : DisplayValue.RowName.c_str();
 
         ImGui::SetNextItemWidth(FullWidth);
         const int32 Picked = ImGuiX::SearchableCombo("##Row", RowPreview, RowCount + 1, CurrentIndex,
             [Table](int32 Index) -> FFixedString
             {
-                return Index == 0 ? FFixedString("None") : FFixedString(Table->Rows[Index - 1].Name.c_str());
+                return Index == 0 ? FFixedString(LOC("None")) : FFixedString(Table->Rows[Index - 1].Name.c_str());
             }, LE_ICON_TABLE_ROW);
 
         if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
@@ -178,12 +179,12 @@ namespace Lumina
 
             if (RequiredRowStruct != nullptr && RowStruct != RequiredRowStruct)
             {
-                ImGui::TextColored(GWarnText, LE_ICON_ALERT_CIRCLE_OUTLINE " Needs rows of %s, table holds %s.",
-                    RequiredRowStruct->GetName().c_str(), RowStruct != nullptr ? RowStruct->GetName().c_str() : "nothing");
+                ImGui::TextColored(GWarnText, LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "Needs rows of %s, table holds %s."),
+                    RequiredRowStruct->GetName().c_str(), RowStruct != nullptr ? RowStruct->GetName().c_str() : LOC("nothing"));
             }
             else if (!DisplayValue.RowName.IsNone() && Table->FindRowIndex(DisplayValue.RowName) == Constants::kIndexNone)
             {
-                ImGui::TextColored(GWarnText, LE_ICON_ALERT_CIRCLE_OUTLINE " '%s' is not a row in this table.",
+                ImGui::TextColored(GWarnText, LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "'%s' is not a row in this table."),
                     DisplayValue.RowName.c_str());
             }
         }

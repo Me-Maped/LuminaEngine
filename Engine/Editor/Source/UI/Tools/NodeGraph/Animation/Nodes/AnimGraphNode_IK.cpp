@@ -1,4 +1,5 @@
 #include "AnimGraphNode_IK.h"
+#include "Localization/Localization.h"
 #include "UI/Tools/NodeGraph/Animation/AnimationGraphCompiler.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/SkeletonResource.h"
@@ -11,9 +12,9 @@ namespace Lumina
         void ReportUnknownBone(FAnimationGraphCompiler& Compiler, CEdGraphNode* Node, const char* NodeName, const FName& Bone)
         {
             EdNodeGraph::FError NodeError;
-            NodeError.Name        = "Unknown IK Bone";
-            NodeError.Description = FString(NodeName) + " references '" + Bone.ToString() +
-                "', which is not a bone on the graph's skeleton.";
+            NodeError.Name        = LOC("Unknown IK Bone");
+            NodeError.Description = FString(NodeName) + LOC(" references '") + Bone.ToString() +
+                LOC("', which is not a bone on the graph's skeleton.");
             NodeError.Node        = Node;
             Compiler.AddError(NodeError);
         }
@@ -43,7 +44,7 @@ namespace Lumina
 
         if (RootIdx == Constants::kIndexNone || TipIdx == Constants::kIndexNone)
         {
-            ReportUnknownBone(Compiler, this, "FABRIK", RootIdx == Constants::kIndexNone ? RootBone : TipBone);
+            ReportUnknownBone(Compiler, this, LOC("FABRIK"), RootIdx == Constants::kIndexNone ? RootBone : TipBone);
             Compiler.SetPinRegister(PoseOutPin, SrcReg);
             return;
         }
@@ -65,9 +66,9 @@ namespace Lumina
             if (!bDescends)
             {
                 EdNodeGraph::FError NodeError;
-                NodeError.Name        = "Bad FABRIK Chain";
-                NodeError.Description = FString("'") + TipBone.ToString() + "' does not descend from '" +
-                    RootBone.ToString() + "', so there is no chain between them.";
+                NodeError.Name        = LOC("Bad FABRIK Chain");
+                NodeError.Description = FString(LOC("'")) + TipBone.ToString() + LOC("' does not descend from '") +
+                    RootBone.ToString() + LOC("', so there is no chain between them.");
                 NodeError.Node        = this;
                 Compiler.AddError(NodeError);
                 Compiler.SetPinRegister(PoseOutPin, SrcReg);
@@ -107,7 +108,7 @@ namespace Lumina
 
         if (BoneIdx == Constants::kIndexNone)
         {
-            ReportUnknownBone(Compiler, this, "Look At", Bone);
+            ReportUnknownBone(Compiler, this, LOC("Look At"), Bone);
             Compiler.SetPinRegister(PoseOutPin, SrcReg);
             return;
         }
@@ -158,7 +159,7 @@ namespace Lumina
         if (ThighIdx == Constants::kIndexNone || CalfIdx == Constants::kIndexNone || FootIdx == Constants::kIndexNone)
         {
             const FName& Missing = ThighIdx == Constants::kIndexNone ? ThighBone : (CalfIdx == Constants::kIndexNone ? CalfBone : FootBone);
-            ReportUnknownBone(Compiler, this, "Foot IK", Missing);
+            ReportUnknownBone(Compiler, this, LOC("Foot IK"), Missing);
             Compiler.SetPinRegister(PoseOutPin, SrcReg);
             return;
         }
@@ -168,8 +169,8 @@ namespace Lumina
             (Skeleton->GetBone(CalfIdx).ParentIndex != ThighIdx || Skeleton->GetBone(FootIdx).ParentIndex != CalfIdx))
         {
             EdNodeGraph::FError NodeError;
-            NodeError.Name        = "Bad Leg Chain";
-            NodeError.Description = FString("Foot IK needs the leg parented as thigh to calf to foot on the skeleton.");
+            NodeError.Name        = LOC("Bad Leg Chain");
+            NodeError.Description = FString(LOC("Foot IK needs the leg parented as thigh to calf to foot on the skeleton."));
             NodeError.Node        = this;
             Compiler.AddError(NodeError);
             Compiler.SetPinRegister(PoseOutPin, SrcReg);
@@ -215,7 +216,7 @@ namespace Lumina
 
         if (BoneIdx == Constants::kIndexNone)
         {
-            ReportUnknownBone(Compiler, this, "Translate Bone", Bone);
+            ReportUnknownBone(Compiler, this, LOC("Translate Bone"), Bone);
             Compiler.SetPinRegister(PoseOutPin, SrcReg);
             return;
         }

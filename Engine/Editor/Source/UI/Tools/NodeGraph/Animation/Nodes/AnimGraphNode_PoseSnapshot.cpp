@@ -1,4 +1,5 @@
 #include "AnimGraphNode_PoseSnapshot.h"
+#include "Localization/Localization.h"
 #include "UI/Tools/NodeGraph/Animation/AnimationGraphCompiler.h"
 
 namespace Lumina
@@ -23,7 +24,8 @@ namespace Lumina
 
     FString CAnimGraphNode_SavePoseSnapshot::GetNodeTitleText() const
     {
-        return SnapshotName.IsNone() ? FString("Save Pose Snapshot") : Format("Save {}", SnapshotName.c_str());
+        return SnapshotName.IsNone() ? FString(LOC("Save Pose Snapshot"))
+                                          : Format(LOCF("Save {}"), SnapshotName.c_str());
     }
 
     void CAnimGraphNode_PoseSnapshot::BuildNode()
@@ -38,6 +40,6 @@ namespace Lumina
 
     FString CAnimGraphNode_PoseSnapshot::GetNodeTitleText() const
     {
-        return SnapshotName.IsNone() ? FString("Pose Snapshot") : FString(SnapshotName.c_str());
+        return SnapshotName.IsNone() ? FString(LOC("Pose Snapshot")) : FString(SnapshotName.c_str());
     }
 }

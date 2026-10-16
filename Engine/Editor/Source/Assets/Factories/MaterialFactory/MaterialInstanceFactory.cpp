@@ -1,4 +1,5 @@
 ﻿#include "EditorPCH.h"
+#include "Localization/Localization.h"
 #include "MaterialInstanceFactory.h"
 
 #include "Assets/AssetRegistry/AssetRegistry.h"
@@ -24,7 +25,7 @@ namespace Lumina
             SelectedMaterialGUID.Invalidate();
         }
 
-        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LE_ICON_FORMAT_LIST_BULLETED_TYPE " Select Parent Material");
+        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LOC_ICON(LE_ICON_FORMAT_LIST_BULLETED_TYPE, "Select Parent Material"));
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
@@ -41,14 +42,14 @@ namespace Lumina
 
         bool bConfirm = false;
         ImGui::BeginDisabled(!SelectedMaterialGUID.IsValid());
-        if (ImGui::Button(LE_ICON_CHECK " Create", ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CHECK, "Create"), ImVec2(ButtonWidth, 0)))
         {
             bConfirm = true;
         }
         ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_CLOSE " Cancel", ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CLOSE, "Cancel"), ImVec2(ButtonWidth, 0)))
         {
             SelectedMaterialGUID.Invalidate();
             bShouldClose = true;

@@ -1,4 +1,5 @@
 ﻿#include "CoreTypeCustomization.h"
+#include "Localization/Localization.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "UI/Properties/NamePicker.h"
@@ -40,8 +41,8 @@ namespace Lumina
 
         void DrawUnknownPicker(FStringView Kind)
         {
-            ImGui::TextUnformatted(LE_ICON_EXCLAMATION " Unknown picker");
-            ImGuiX::TextTooltip("No picker named \"{}\" is registered", Kind);
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_EXCLAMATION, "Unknown picker"));
+            ImGuiX::TextTooltip(LOCF("No picker named \"{}\" is registered"), Kind);
         }
     }
 
@@ -187,7 +188,7 @@ namespace Lumina
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             {
-                ImGuiX::TextTooltip_Internal("Pick asset path");
+                ImGuiX::TextTooltip_Internal(LOC("Pick asset path"));
             }
 
             if (ImGui::BeginPopup("##FilePathPicker"))
@@ -250,7 +251,7 @@ namespace Lumina
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
                 {
-                    ImGuiX::TextTooltip_Internal("Open in its editor");
+                    ImGuiX::TextTooltip_Internal(LOC("Open in its editor"));
                 }
             }
         }

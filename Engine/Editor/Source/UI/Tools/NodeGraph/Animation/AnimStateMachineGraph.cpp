@@ -1,4 +1,5 @@
 ﻿#include "AnimStateMachineGraph.h"
+#include "Localization/Localization.h"
 #include "AnimGraphSchema.h"
 #include "AnimStateTransition.h"
 #include "Nodes/AnimGraphNode_State.h"
@@ -118,19 +119,19 @@ namespace Lumina
         switch (ConditionSource)
         {
         case EAnimTransitionSource::TimeInState:
-            return Format("TimeInState {} {}", SM::CompareSymbol(Compare), CompareValue);
+            return Format(LOCF("TimeInState {} {}"), SM::CompareSymbol(Compare), CompareValue);
 
         case EAnimTransitionSource::ClipFinished:
-            return Format("Finished {} {}", SM::CompareSymbol(Compare), CompareValue);
+            return Format(LOCF("Finished {} {}"), SM::CompareSymbol(Compare), CompareValue);
 
         case EAnimTransitionSource::Curve:
             return CurveName.IsNone()
-                ? FString("Always")
+                ? FString(LOC("Always"))
                 : Format("{} {} {}", CurveName.c_str(), SM::CompareSymbol(Compare), CompareValue);
 
         default:
             return ParameterName.IsNone()
-                ? FString("Always")
+                ? FString(LOC("Always"))
                 : Format("{} {} {}", ParameterName.c_str(), SM::CompareSymbol(Compare), CompareValue);
         }
     }
@@ -169,7 +170,7 @@ namespace Lumina
     {
         if (Conditions.empty())
         {
-            return FString("Always");
+            return FString(LOC("Always"));
         }
 
         // Two rules is what a badge can carry before it stops being readable next to the wire.
@@ -322,14 +323,14 @@ namespace Lumina
             }
             if (Node->IsA<CAnimGraphNode_StateAny>())
             {
-                return FString("Any State");
+                return FString(LOC("Any State"));
             }
             if (Node->IsA<CAnimGraphNode_StateEntry>())
             {
-                return FString("Entry");
+                return FString(LOC("Entry"));
             }
         }
-        return FString("(missing)");
+        return FString(LOC("(missing)"));
     }
 
     void CAnimStateMachineGraph::ValidateGraph()
@@ -562,11 +563,12 @@ namespace Lumina
                 ImGui::BeginHorizontal("sub");
                 if (Outgoing.empty())
                 {
-                    ImGui::TextColored(EditorColors::TextMuted(), "no exits");
+                    ImGui::TextColored(EditorColors::TextMuted(), LOC("no exits"));
                 }
                 else
                 {
-                    ImGui::TextColored(EditorColors::TextDim(), "%d exit%s", (int32)Outgoing.size(), Outgoing.size() == 1 ? "" : "s");
+                    ImGui::TextColored(EditorColors::TextDim(),
+                        Outgoing.size() == 1 ? LOC("%d exit") : LOC("%d exits"), (int32)Outgoing.size());
                 }
                 ImGui::Spring(1.0f, 12.0f);
                 if (State->BlendTree.IsValid())
@@ -577,11 +579,11 @@ namespace Lumina
             }
             else
             {
-                const char* Icon = LE_ICON_ARROW_EXPAND_HORIZONTAL " Any State";
+                const char* Icon = LOC_ICON(LE_ICON_ARROW_EXPAND_HORIZONTAL, "Any State");
                 FString Label;
                 if (Entry != nullptr)
                 {
-                    Icon = LE_ICON_PLAY " Entry";
+                    Icon = LOC_ICON(LE_ICON_PLAY, "Entry");
                 }
                 else if (Alias != nullptr)
                 {
@@ -704,7 +706,7 @@ namespace Lumina
             FString BadgeText;
             if (bEntryWire)
             {
-                BadgeText = "entry";
+                BadgeText = LOC("entry");
             }
             else if (Transition != nullptr)
             {
@@ -712,7 +714,7 @@ namespace Lumina
             }
             else
             {
-                BadgeText = "transition";
+                BadgeText = LOC("transition");
             }
 
             const ImVec2 TextSize = Font->CalcTextSizeA(FontSize, FLT_MAX, 0.0f, BadgeText.c_str());
@@ -834,26 +836,26 @@ namespace Lumina
             if (CAnimStateTransition* Transition = FindTransition(FromNode->GetNodeID(), ToNode->GetNodeID()))
             {
                 ImGui::Separator();
-                ImGui::Text("Condition   %s", Transition->GetConditionText().c_str());
-                ImGui::Text("Blend       %.2fs", Transition->BlendDuration);
-                ImGui::Text("Priority    %d", Transition->Priority);
-                ImGui::Text("Interrupt   %s", Transition->bCanInterrupt ? "can pre-empt an in-flight blend" : "runs to completion");
+                ImGui::Text(LOC("Condition   %s"), Transition->GetConditionText().c_str());
+                ImGui::Text(LOC("Blend       %.2fs"), Transition->BlendDuration);
+                ImGui::Text(LOC("Priority    %d"), Transition->Priority);
+                ImGui::Text(LOC("Interrupt   %s"), Transition->bCanInterrupt ? LOC("can pre-empt an in-flight blend") : LOC("runs to completion"));
                 if (FromNode->IsA<CAnimGraphNode_StateAny>())
                 {
-                    ImGui::TextColored(EditorColors::Warning(), "Checked from every state.");
+                    ImGui::TextColored(EditorColors::Warning(), LOC("Checked from every state."));
                 }
                 if (Transition == DebugTransition)
                 {
-                    ImGui::TextColored(EditorColors::Warning(), "Blending now, %.0f%% into the target.",
+                    ImGui::TextColored(EditorColors::Warning(), LOC("Blending now, %.0f%% into the target."),
                                        DebugTransitionWeight * 100.0f);
                 }
                 ImGui::Separator();
-                ImGui::TextColored(EditorColors::TextMuted(), "Click to edit. Select and press Delete to remove.");
+                ImGui::TextColored(EditorColors::TextMuted(), LOC("Click to edit. Select and press Delete to remove."));
             }
             else
             {
                 ImGui::Separator();
-                ImGui::TextColored(EditorColors::TextMuted(), "The state the machine starts in.");
+                ImGui::TextColored(EditorColors::TextMuted(), LOC("The state the machine starts in."));
             }
             ImGui::EndTooltip();
             NodeEditor::Resume();

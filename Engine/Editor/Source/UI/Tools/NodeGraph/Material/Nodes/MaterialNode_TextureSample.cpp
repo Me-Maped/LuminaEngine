@@ -1,4 +1,5 @@
 ﻿#include "MaterialNode_TextureSample.h"
+#include "Localization/Localization.h"
 #include "Renderer/RHICore.h"
 #include "Assets/AssetTypes/Textures/Texture.h"
 #include "Assets/AssetTypes/Textures/TextureArray.h"
@@ -99,9 +100,9 @@ namespace Lumina
 
             EdNodeGraph::FError NodeError;
             NodeError.Node        = this;
-            NodeError.Name        = "Texture Sample";
-            NodeError.Description = "TextureSample cannot sample a Texture Array. Use a TextureSampleArray node "
-                                "instead, which takes a Slice input to pick the layer.";
+            NodeError.Name        = LOC("Texture Sample");
+            NodeError.Description = LOC("TextureSample cannot sample a Texture Array. Use a TextureSampleArray node "
+                                        "instead, which takes a Slice input to pick the layer.");
             Compiler.AddError(NodeError);
             return;
         }
@@ -134,7 +135,7 @@ namespace Lumina
 
     void CMaterialExpression_TextureSample::DrawContextMenu()
     {
-        const char* MenuItem = bDynamic ? "Make Static Texture" : "Make Texture Parameter";
+        const char* MenuItem = bDynamic ? LOC("Make Static Texture") : LOC("Make Texture Parameter");
         if (ImGui::MenuItem(MenuItem))
         {
             bDynamic = !bDynamic;

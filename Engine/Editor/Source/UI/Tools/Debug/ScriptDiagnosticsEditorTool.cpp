@@ -1,4 +1,5 @@
 ﻿#include "ScriptDiagnosticsEditorTool.h"
+#include "Localization/Localization.h"
 
 #include <cfloat>
 
@@ -28,7 +29,7 @@ namespace Lumina
 
         void Timeline(const char* Id, const TVector<float>& History, const char* Unit, float Last)
         {
-            ImGui::TextDisabled("%s", Id + 2); // skip the "##"
+            ImGui::TextDisabled("%s", LOC_VIEW(FStringView(Id + 2))); // skip the "##"
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.66f, 0.78f, 0.95f, 1.0f), "%.1f %s", Last, Unit);
             if (!History.empty())
@@ -78,31 +79,31 @@ namespace Lumina
     void FScriptDiagnosticsEditorTool::DrawWindow(bool)
     {
         // ---- Controls -----------------------------------------------------------------------------
-        ImGui::Checkbox("Freeze", &bFrozen);
+        ImGui::Checkbox(LOC("Freeze"), &bFrozen);
         if (bFrozen)
         {
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.30f, 1.0f), LE_ICON_PAUSE " FROZEN");
+            ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.30f, 1.0f), LOC_ICON(LE_ICON_PAUSE, "FROZEN"));
         }
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
         ++DrawTicks;
         const char Spinner[] = { '|', '/', '-', '\\' };
-        ImGui::TextColored(ImVec4(0.45f, 0.80f, 0.55f, 1.0f), "live %c", Spinner[(DrawTicks / 6) % 4]);
+        ImGui::TextColored(ImVec4(0.45f, 0.80f, 0.55f, 1.0f), LOC("live %c"), Spinner[(DrawTicks / 6) % 4]);
 
         ImGui::SameLine(0.0f, 16.0f);
-        if (ImGui::Button(LE_ICON_RECYCLE " Force GC"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_RECYCLE, "Force GC")))
         {
             Refresh(true); // blocking full collect; settles a pending collectible-ALC unload
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Run a full blocking GC now. If 'Resident generations' drops back to 1, the\n"
-                              "previous reload's ALC was only pending async unload -- not a real leak.");
+            ImGui::SetTooltip(LOC("Run a full blocking GC now. If 'Resident generations' drops back to 1, the\n"
+                              "previous reload's ALC was only pending async unload -- not a real leak."));
         }
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_REFRESH " Reload Scripts"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_REFRESH, "Reload Scripts")))
         {
             DotNet::RequestScriptReload();
         }
@@ -119,29 +120,29 @@ namespace Lumina
 
         if (!bAvailable)
         {
-            ImGui::TextDisabled("C# scripting is not initialized (no managed runtime). Diagnostics unavailable.");
+            ImGui::TextDisabled(LOC("C# scripting is not initialized (no managed runtime). Diagnostics unavailable."));
             return;
         }
 
         // ALC and generation health, the hot-reload leak monitor.
-        ImGui::TextUnformatted("Resident generations");
+        ImGui::TextUnformatted(LOC("Resident generations"));
         ImGui::SameLine();
         if (Snapshot.ScriptsOnline == 0)
         {
-            ImGui::TextDisabled("no scripts loaded");
+            ImGui::TextDisabled(LOC("no scripts loaded"));
         }
         else if (Snapshot.AliveScriptAlcCount <= 1)
         {
-            ImGui::TextColored(ImVec4(0.55f, 0.86f, 0.62f, 1.0f), LE_ICON_CHECK_CIRCLE " %d  (healthy)", Snapshot.AliveScriptAlcCount);
+            ImGui::TextColored(ImVec4(0.55f, 0.86f, 0.62f, 1.0f), LOC_ICON(LE_ICON_CHECK_CIRCLE, "%d  (healthy)"), Snapshot.AliveScriptAlcCount);
         }
         else
         {
             ImGui::TextColored(ImVec4(0.96f, 0.55f, 0.35f, 1.0f),
-                LE_ICON_ALERT " %d resident (oldest Gen%d) -- possible leak, try Force GC",
+                LOC_ICON(LE_ICON_ALERT, "%d resident (oldest Gen%d) -- possible leak, try Force GC"),
                 Snapshot.AliveScriptAlcCount, Snapshot.OldestAliveGeneration);
         }
         ImGui::SameLine(0.0f, 18.0f);
-        ImGui::TextDisabled("Gen %d  |  %d type(s): %d script(s), %d system(s)",
+        ImGui::TextDisabled(LOC("Gen %d  |  %d type(s): %d script(s), %d system(s)"),
             Snapshot.Generation, Snapshot.LoadedTypeCount, Snapshot.EntityScriptCount, Snapshot.EntitySystemCount);
 
         ImGui::Separator();
@@ -150,10 +151,10 @@ namespace Lumina
         const ImGuiTableFlags Flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp;
         if (ImGui::BeginTable("##csstats", 4, Flags))
         {
-            ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch, 1.4f);
-            ImGui::TableSetupColumn("Value",  ImGuiTableColumnFlags_WidthStretch, 1.0f);
-            ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch, 1.4f);
-            ImGui::TableSetupColumn("Value",  ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn(LOC_ID("Metric"), ImGuiTableColumnFlags_WidthStretch, 1.4f);
+            ImGui::TableSetupColumn(LOC_ID("Value"),  ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn(LOC_ID("Metric"), ImGuiTableColumnFlags_WidthStretch, 1.4f);
+            ImGui::TableSetupColumn(LOC_ID("Value"),  ImGuiTableColumnFlags_WidthStretch, 1.0f);
 
             auto Cell = [](const char* Label, const FString& Value)
             {
@@ -165,25 +166,25 @@ namespace Lumina
             auto Size = [](int64 Bytes) { return ImGuiX::FormatSize((size_t)(Bytes < 0 ? 0 : Bytes)); };
 
             ImGui::TableNextRow();
-            Cell("Managed heap",      Size(Snapshot.ManagedHeapBytes));
-            Cell("GC heap size",      Size(Snapshot.HeapSizeBytes));
+            Cell(LOC("Managed heap"),      Size(Snapshot.ManagedHeapBytes));
+            Cell(LOC("GC heap size"),      Size(Snapshot.HeapSizeBytes));
 
             ImGui::TableNextRow();
-            Cell("Committed",         Size(Snapshot.CommittedBytes));
-            Cell("Fragmented",        Size(Snapshot.FragmentedBytes));
+            Cell(LOC("Committed"),         Size(Snapshot.CommittedBytes));
+            Cell(LOC("Fragmented"),        Size(Snapshot.FragmentedBytes));
 
             ImGui::TableNextRow();
-            Cell("Working set",       Size(Snapshot.WorkingSetBytes));
-            Cell("Alloc churn",       Format("{:.1f} MB/s", AllocRateMBs));
+            Cell(LOC("Working set"),       Size(Snapshot.WorkingSetBytes));
+            Cell(LOC("Alloc churn"),       Format("{:.1f} MB/s", AllocRateMBs));
 
             ImGui::TableNextRow();
-            Cell("Total allocated",   Size(Snapshot.TotalAllocatedBytes));
-            Cell("Pinned objects",    Format("{}", Snapshot.PinnedObjects));
+            Cell(LOC("Total allocated"),   Size(Snapshot.TotalAllocatedBytes));
+            Cell(LOC("Pinned objects"),    Format("{}", Snapshot.PinnedObjects));
 
             ImGui::TableNextRow();
-            Cell("GC gen0 / gen1 / gen2", Format("{} / {} / {}",
+            Cell(LOC("GC gen0 / gen1 / gen2"), Format("{} / {} / {}",
                 Snapshot.Gen0Collections, Snapshot.Gen1Collections, Snapshot.Gen2Collections));
-            Cell("GC pause",          Format("{:.2f}%", Snapshot.PauseTimePercentage));
+            Cell(LOC("GC pause"),          Format("{:.2f}%", Snapshot.PauseTimePercentage));
 
             ImGui::EndTable();
         }

@@ -9,6 +9,7 @@
 #include "Audio/Graph/AudioGraphOperator.h"
 #include "Containers/HashTable.h"
 #include "Core/Object/Cast.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -79,7 +80,7 @@ namespace Lumina
 
             if (OnStack.find(Node) != OnStack.end())
             {
-                Context.Error("Cycle in the graph at node '" + Node->GetNodeTitleText() + "'.");
+                Context.Error(LOC("Cycle in the graph at node '") + Node->GetNodeTitleText() + LOC("'."));
                 return false;
             }
 
@@ -169,10 +170,10 @@ namespace Lumina
 
             if (Inputs.size() != Operator.Signature.Inputs.size() || Outputs.size() != Operator.Signature.Outputs.size())
             {
-                Context.Error("Node '" + Label + "' declares " + Format("{}", (uint32)Inputs.size()) + " inputs and "
-                    + Format("{}", (uint32)Outputs.size()) + " outputs, but operator '" + Operator.Name.c_str()
-                    + "' takes " + Format("{}", (uint32)Operator.Signature.Inputs.size()) + " and "
-                    + Format("{}", (uint32)Operator.Signature.Outputs.size()) + ".");
+                Context.Error(LOC("Node '") + Label + LOC("' declares ") + Format("{}", (uint32)Inputs.size()) + LOC(" inputs and ")
+                    + Format("{}", (uint32)Outputs.size()) + LOC(" outputs, but operator '") + Operator.Name.c_str()
+                    + LOC("' takes ") + Format("{}", (uint32)Operator.Signature.Inputs.size()) + LOC(" and ")
+                    + Format("{}", (uint32)Operator.Signature.Outputs.size()) + LOC("."));
                 return false;
             }
 
@@ -181,8 +182,8 @@ namespace Lumina
                 const CAudioGraphPin* Pin = Cast<CAudioGraphPin>(Inputs[Index].Get());
                 if (Pin == nullptr || Pin->GetPinType() != Operator.Signature.Inputs[Index])
                 {
-                    Context.Error("Node '" + Label + "' input " + Format("{}", (uint32)Index)
-                        + " does not match the type operator '" + Operator.Name.c_str() + "' expects.");
+                    Context.Error(LOC("Node '") + Label + LOC("' input ") + Format("{}", (uint32)Index)
+                        + LOC(" does not match the type operator '") + Operator.Name.c_str() + LOC("' expects."));
                     return false;
                 }
             }
@@ -192,8 +193,8 @@ namespace Lumina
                 const CAudioGraphPin* Pin = Cast<CAudioGraphPin>(Outputs[Index].Get());
                 if (Pin == nullptr || Pin->GetPinType() != Operator.Signature.Outputs[Index])
                 {
-                    Context.Error("Node '" + Label + "' output " + Format("{}", (uint32)Index)
-                        + " does not match the type operator '" + Operator.Name.c_str() + "' expects.");
+                    Context.Error(LOC("Node '") + Label + LOC("' output ") + Format("{}", (uint32)Index)
+                        + LOC(" does not match the type operator '") + Operator.Name.c_str() + LOC("' expects."));
                     return false;
                 }
             }
@@ -208,14 +209,14 @@ namespace Lumina
 
         if (Graph == nullptr)
         {
-            Result.Errors.push_back("No graph to compile.");
+            Result.Errors.push_back(LOC("No graph to compile."));
             return Result;
         }
 
         CAudioGraphOutputNode* OutputNode = Graph->FindOutputNode();
         if (OutputNode == nullptr)
         {
-            Result.Errors.push_back("The graph has no Output node.");
+            Result.Errors.push_back(LOC("The graph has no Output node."));
             return Result;
         }
 
@@ -250,9 +251,9 @@ namespace Lumina
 
                 if (InputNode->Type == EAudioGraphType::Wave)
                 {
-                    Context.Error("Graph input '" + FString(InputNode->ParameterName.c_str())
-                        + "' is a Wave. Assign the wave on the Wave Player instead; gameplay cannot swap one on"
-                          " a playing voice, because decoding is not safe on the audio thread.");
+                    Context.Error(LOC("Graph input '") + FString(InputNode->ParameterName.c_str())
+                        + LOC("' is a Wave. Assign the wave on the Wave Player instead; gameplay cannot swap one on"
+                          " a playing voice, because decoding is not safe on the audio thread."));
                     continue;
                 }
 
@@ -261,7 +262,7 @@ namespace Lumina
 
                 if (Result.Program.FindInput(InputNode->ParameterName) != nullptr)
                 {
-                    Context.Error("Two graph inputs are named '" + FString(InputNode->ParameterName.c_str()) + "'.");
+                    Context.Error(LOC("Two graph inputs are named '") + FString(InputNode->ParameterName.c_str()) + LOC("'."));
                     continue;
                 }
 
@@ -336,7 +337,7 @@ namespace Lumina
             CAudioGraphNode* OperatorNode = Cast<CAudioGraphNode>(Node);
             if (OperatorNode == nullptr)
             {
-                Context.Error("Node '" + Node->GetNodeTitleText() + "' is not an audio graph node.");
+                Context.Error(LOC("Node '") + Node->GetNodeTitleText() + LOC("' is not an audio graph node."));
                 continue;
             }
 
@@ -345,8 +346,8 @@ namespace Lumina
 
             if (Operator == nullptr)
             {
-                Context.Error("Node '" + OperatorNode->GetNodeTitleText() + "' names operator '"
-                    + OperatorName.c_str() + "', which this build does not register.");
+                Context.Error(LOC("Node '") + OperatorNode->GetNodeTitleText() + LOC("' names operator '")
+                    + OperatorName.c_str() + LOC("', which this build does not register."));
                 continue;
             }
 
@@ -392,13 +393,13 @@ namespace Lumina
 
         if (Result.Program.Nodes.empty())
         {
-            Result.Errors.push_back("Nothing is wired to the Output node.");
+            Result.Errors.push_back(LOC("Nothing is wired to the Output node."));
         }
 
         if (Result.Program.OutputLeftSlot == kAudioGraphInvalidSlot
             && Result.Program.OutputRightSlot == kAudioGraphInvalidSlot)
         {
-            Result.Warnings.push_back("Neither output channel is wired; the graph renders silence.");
+            Result.Warnings.push_back(LOC("Neither output channel is wired; the graph renders silence."));
         }
 
         Result.bSuccess = Result.Errors.empty();

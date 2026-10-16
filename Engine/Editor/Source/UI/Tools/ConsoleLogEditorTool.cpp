@@ -1,4 +1,5 @@
 ﻿#include "ConsoleLogEditorTool.h"
+#include "Localization/Localization.h"
 #include "UI/EditorUI.h"
 
 #include <utility>
@@ -92,55 +93,55 @@ namespace Lumina
 
     void FConsoleLogEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Filtering",
-            "Use the Filter menu to hide log levels you don't care about. The text filter at the top "
-            "supports inclusive (foo) and exclusive (-bar) terms separated by commas.");
-        DrawHelpTextRow("Console Commands",
-            "Type a console variable or command at the bottom prompt; Tab/Up navigates autocomplete. "
-            "Up/Down with empty input cycles command history.");
-        DrawHelpTextRow("Autocomplete",
-            "Live-matched against registered CVars and exec commands. Description text comes from the "
-            "FAutoConsoleVariable / FAutoConsoleCommand registration site.");
-        DrawHelpTextRow("Selecting & Copying",
-            "Click a line to select it, shift-click for a range, ctrl-click to toggle one. Ctrl+C copies "
+        DrawHelpTextRow(LOC("Filtering"),
+            LOC("Use the Filter menu to hide log levels you don't care about. The text filter at the top "
+            "supports inclusive (foo) and exclusive (-bar) terms separated by commas."));
+        DrawHelpTextRow(LOC("Console Commands"),
+            LOC("Type a console variable or command at the bottom prompt; Tab/Up navigates autocomplete. "
+            "Up/Down with empty input cycles command history."));
+        DrawHelpTextRow(LOC("Autocomplete"),
+            LOC("Live-matched against registered CVars and exec commands. Description text comes from the "
+            "FAutoConsoleVariable / FAutoConsoleCommand registration site."));
+        DrawHelpTextRow(LOC("Selecting & Copying"),
+            LOC("Click a line to select it, shift-click for a range, ctrl-click to toggle one. Ctrl+C copies "
             "the selection, Ctrl+A selects everything visible, Esc clears. Right-click for the same "
-            "options plus Copy All Visible.");
-        DrawHelpTextRow("Export",
-            "Copies the currently filtered messages out to a text file.");
-        DrawHelpTextRow("Clear",
-            "Empties the engine's console message queue. The log file on disk keeps everything.");
-        DrawHelpTextRow("Max Messages",
-            "Size of that queue. The oldest messages fall off once it is full, and lowering the limit "
-            "discards them immediately. It does not affect what is written to the log file.");
+            "options plus Copy All Visible."));
+        DrawHelpTextRow(LOC("Export"),
+            LOC("Copies the currently filtered messages out to a text file."));
+        DrawHelpTextRow(LOC("Clear"),
+            LOC("Empties the engine's console message queue. The log file on disk keeps everything."));
+        DrawHelpTextRow(LOC("Max Messages"),
+            LOC("Size of that queue. The oldest messages fall off once it is full, and lowering the limit "
+            "discards them immediately. It does not affect what is written to the log file."));
     }
 
     void FConsoleLogEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)
     {
-        if (ImGui::BeginMenu(LE_ICON_FILTER " Filter"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_FILTER, "Filter")))
         {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 3));
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 4));
 
             bool bFilterChanged = false;
 
-            ImGui::SeparatorText("Log Levels");
-            bFilterChanged |= ImGui::Checkbox("Trace", &Filter.bShowTrace);
-            bFilterChanged |= ImGui::Checkbox("Debug", &Filter.bShowDebug);
-            bFilterChanged |= ImGui::Checkbox("Info", &Filter.bShowInfo);
-            bFilterChanged |= ImGui::Checkbox("Warning", &Filter.bShowWarning);
-            bFilterChanged |= ImGui::Checkbox("Error", &Filter.bShowError);
-            bFilterChanged |= ImGui::Checkbox("Critical", &Filter.bShowCritical);
+            ImGui::SeparatorText(LOC("Log Levels"));
+            bFilterChanged |= ImGui::Checkbox(LOC("Trace"), &Filter.bShowTrace);
+            bFilterChanged |= ImGui::Checkbox(LOC("Debug"), &Filter.bShowDebug);
+            bFilterChanged |= ImGui::Checkbox(LOC("Info"), &Filter.bShowInfo);
+            bFilterChanged |= ImGui::Checkbox(LOC("Warning"), &Filter.bShowWarning);
+            bFilterChanged |= ImGui::Checkbox(LOC("Error"), &Filter.bShowError);
+            bFilterChanged |= ImGui::Checkbox(LOC("Critical"), &Filter.bShowCritical);
 
             ImGui::Spacing();
 
-            if (ImGui::Button("All", ImVec2(70, 0)))
+            if (ImGui::Button(LOC("All"), ImVec2(70, 0)))
             {
                 Filter.bShowTrace = Filter.bShowDebug = Filter.bShowInfo = 
                 Filter.bShowWarning = Filter.bShowError = Filter.bShowCritical = true;
                 bFilterChanged = true;
             }
             ImGui::SameLine();
-            if (ImGui::Button("None", ImVec2(70, 0)))
+            if (ImGui::Button(LOC("None"), ImVec2(70, 0)))
             {
                 Filter.bShowTrace = Filter.bShowDebug = Filter.bShowInfo = 
                 Filter.bShowWarning = Filter.bShowError = Filter.bShowCritical = false;
@@ -148,7 +149,7 @@ namespace Lumina
             }
 
             ImGui::SameLine();
-            if (ImGui::Button("Errors Only", ImVec2(70, 0)))
+            if (ImGui::Button(LOC("Errors Only"), ImVec2(70, 0)))
             {
                 Filter.bShowTrace = Filter.bShowDebug = Filter.bShowInfo = Filter.bShowWarning = false;
                 Filter.bShowError = Filter.bShowCritical = true;
@@ -159,41 +160,41 @@ namespace Lumina
             ImGui::EndMenu();
         }
         
-        if (ImGui::BeginMenu(LE_ICON_COG " Settings"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_COG, "Settings")))
         {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 3));
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 4));
             
-            ImGui::SeparatorText("Display");
-            ImGui::Checkbox("Auto Scroll", &Settings.bAutoScroll);
-            ImGui::Checkbox("Show Timestamps", &Settings.bShowTimestamps);
-            ImGui::Checkbox("Show Logger", &Settings.bShowLogger);
-            ImGui::Checkbox("Show Icons", &Settings.bShowIcons);
-            ImGui::Checkbox("Word Wrap", &Settings.bWordWrap);
+            ImGui::SeparatorText(LOC("Display"));
+            ImGui::Checkbox(LOC("Auto Scroll"), &Settings.bAutoScroll);
+            ImGui::Checkbox(LOC("Show Timestamps"), &Settings.bShowTimestamps);
+            ImGui::Checkbox(LOC("Show Logger"), &Settings.bShowLogger);
+            ImGui::Checkbox(LOC("Show Icons"), &Settings.bShowIcons);
+            ImGui::Checkbox(LOC("Word Wrap"), &Settings.bWordWrap);
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Performance");
+            ImGui::SeparatorText(LOC("Performance"));
             
-            if (ImGui::SliderFloat("Font Scale", &Settings.FontScale, 0.7f, 2.0f, "%.1f"))
+            if (ImGui::SliderFloat(LOC("Font Scale"), &Settings.FontScale, 0.7f, 2.0f, "%.1f"))
             {
                 
             }
 
-            if (ImGui::SliderInt("Max Messages", &Settings.MaxMessageCount, 100, 2500))
+            if (ImGui::SliderInt(LOC("Max Messages"), &Settings.MaxMessageCount, 100, 2500))
             {
                 Logging::SetConsoleLogQueueCapacity((uint32)Settings.MaxMessageCount);
             }
-            ImGuiX::TextTooltip("How many messages the console keeps. Lowering it drops the oldest immediately.");
+            ImGuiX::TextTooltip(LOCF("How many messages the console keeps. Lowering it drops the oldest immediately."));
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Actions");
+            ImGui::SeparatorText(LOC("Actions"));
             
-            if (ImGui::Button("Clear Console", ImVec2(-1, 0)))
+            if (ImGui::Button(LOC("Clear Console"), ImVec2(-1, 0)))
             {
                 ClearConsole();
             }
 
-            if (ImGui::Button("Export Logs", ImVec2(-1, 0)))
+            if (ImGui::Button(LOC("Export Logs"), ImVec2(-1, 0)))
             {
                 ExportLogs("console_log.txt");
             }
@@ -203,7 +204,7 @@ namespace Lumina
         }
 
         ImGui::Separator();
-        ImGui::Text("Messages: %u / %zu", FilteredMessageCount, PreviousMessageSize);
+        ImGui::Text(LOC("Messages: %u / %zu"), FilteredMessageCount, PreviousMessageSize);
     }
 
     void FConsoleLogEditorTool::DrawLogWindow(bool bIsFocused)
@@ -268,7 +269,7 @@ namespace Lumina
 
             if (Settings.bShowTimestamps)
             {
-                ImGui::TextColored(ImVec4(0.45f, 0.45f, 0.45f, 1.0f), "[%s]", Message.Time.c_str());
+                ImGui::TextColored(ImVec4(0.45f, 0.45f, 0.45f, 1.0f), LOC("[%s]"), Message.Time.c_str());
                 ImGui::SameLine(0, 6);
             }
 
@@ -280,7 +281,7 @@ namespace Lumina
 
             if (Settings.bShowLogger)
             {
-                ImGui::TextColored(ImVec4(0.55f, 0.70f, 0.90f, 1.0f), "%s:", Message.LoggerName.data());
+                ImGui::TextColored(ImVec4(0.55f, 0.70f, 0.90f, 1.0f), LOC("%s:"), Message.LoggerName.data());
                 ImGui::SameLine(0, 6);
             }
 
@@ -315,7 +316,7 @@ namespace Lumina
                 if (bHasSource)
                 {
                     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                    ImGui::SetTooltip("Double-click to open %s at line %d", SourcePath.c_str(), SourceLine);
+                    ImGui::SetTooltip(LOC("Double-click to open %s at line %d"), SourcePath.c_str(), SourceLine);
                 }
 
                 if (bHasSource && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
@@ -388,12 +389,12 @@ namespace Lumina
         {
             const size_t SelectedCount = SelectedMessages.size();
 
-            if (ImGui::MenuItem("Copy", "Ctrl+C", false, SelectedCount > 0))
+            if (ImGui::MenuItem(LOC("Copy"), "Ctrl+C", false, SelectedCount > 0))
             {
                 CopyToClipboard(VisibleIndices, true);
             }
 
-            if (ImGui::MenuItem("Copy All Visible"))
+            if (ImGui::MenuItem(LOC("Copy All Visible")))
             {
                 CopyToClipboard(VisibleIndices, false);
             }
@@ -408,14 +409,14 @@ namespace Lumina
                 }
             }
 
-            if (ImGui::MenuItem("Open Source", nullptr, false, SourceLine > 0))
+            if (ImGui::MenuItem(LOC("Open Source"), nullptr, false, SourceLine > 0))
             {
                 FEditorUI::OpenScriptInExternalEditor(FStringView(SourcePath.c_str(), SourcePath.size()), SourceLine);
             }
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem("Select All", "Ctrl+A"))
+            if (ImGui::MenuItem(LOC("Select All"), "Ctrl+A"))
             {
                 SelectedMessages.clear();
                 for (uint32 Visible : VisibleIndices)
@@ -424,7 +425,7 @@ namespace Lumina
                 }
             }
 
-            if (ImGui::MenuItem("Clear Selection", "Esc", false, SelectedCount > 0))
+            if (ImGui::MenuItem(LOC("Clear Selection"), "Esc", false, SelectedCount > 0))
             {
                 SelectedMessages.clear();
                 SelectionAnchor = -1;
@@ -473,7 +474,7 @@ namespace Lumina
 
         const bool bExecuteCommand = ImGui::InputTextWithHint(
             "##CommandInput",
-            "enter command or console variable...",
+            LOC("enter command or console variable..."),
             InputBuffer,
             sizeof(InputBuffer),
             InputFlags,
@@ -822,7 +823,7 @@ namespace Lumina
 
         if (ImGui::Begin("##AutoComplete", nullptr, PopupFlags))
         {
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Auto-Complete (%zu matches)", AutoCompleteCandidates.size());
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), LOC("Auto-Complete (%zu matches)"), AutoCompleteCandidates.size());
             ImGui::Separator();
 
             for (int32 i = 0; i < (int32)AutoCompleteCandidates.size(); ++i)
@@ -850,7 +851,7 @@ namespace Lumina
                 if (!Candidate.CurrentValue.empty())
                 {
                     ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(0.5f, 0.7f, 1.0f, 1.0f), "= %s", Candidate.CurrentValue.c_str());
+                    ImGui::TextColored(ImVec4(0.5f, 0.7f, 1.0f, 1.0f), LOC("= %s"), Candidate.CurrentValue.c_str());
                 }
 
                 if (!Candidate.Description.empty())
@@ -869,7 +870,7 @@ namespace Lumina
             }
 
             ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), LE_ICON_ARROW_UP_DOWN " Navigate  " LE_ICON_KEYBOARD_TAB " Accept  " LE_ICON_KEYBOARD_ESC " Cancel");
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), LE_ICON_ARROW_UP_DOWN " %s  " LE_ICON_KEYBOARD_TAB " %s  " LE_ICON_KEYBOARD_ESC " %s", LOC("Navigate"), LOC("Accept"), LOC("Cancel"));
         }
         ImGui::End();
 
@@ -899,10 +900,10 @@ namespace Lumina
 
         if (ImGui::Begin("##CommandHistory", nullptr, PopupFlags))
         {
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), LE_ICON_HISTORY " Command History (%zu)", CommandHistory.size());
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), LOC_ICON(LE_ICON_HISTORY, "Command History (%zu)"), CommandHistory.size());
             
             ImGui::SameLine();
-            if (ImGui::SmallButton("Clear"))
+            if (ImGui::SmallButton(LOC("Clear")))
             {
                 CommandHistory.clear();
                 HistoryIndex = 0;
@@ -914,7 +915,7 @@ namespace Lumina
 
             if (CommandHistory.empty())
             {
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No command history");
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), LOC("No command history"));
             }
             else
             {
@@ -1114,13 +1115,13 @@ namespace Lumina
     {
         switch (Level)
         {
-            case ELogLevel::Error:      return "Error";
-            case ELogLevel::Warn:     return "Warning";
-            case ELogLevel::Info:     return "Info";
-            case ELogLevel::Debug:    return "Debug";
-            case ELogLevel::Trace:    return "Trace";
-            case ELogLevel::Critical: return "Critical";
-            default:                      return "Unknown";
+            case ELogLevel::Error:      return LOC("Error");
+            case ELogLevel::Warn:     return LOC("Warning");
+            case ELogLevel::Info:     return LOC("Info");
+            case ELogLevel::Debug:    return LOC("Debug");
+            case ELogLevel::Trace:    return LOC("Trace");
+            case ELogLevel::Critical: return LOC("Critical");
+            default:                      return LOC("Unknown");
         }
     }
 }

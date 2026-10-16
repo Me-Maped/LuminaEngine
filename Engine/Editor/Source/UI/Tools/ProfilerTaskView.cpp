@@ -77,14 +77,14 @@ namespace Lumina
     {
         FConsoleVariable* CVar = FConsoleRegistry::Get().Find("task.Profiler.Enabled");
         bool bEnabled = (CVar != nullptr) ? Containers::Get<bool>(*CVar->ValuePtr) : false;
-        if (ImGui::Checkbox("Record spans (task.Profiler.Enabled)", &bEnabled) && CVar != nullptr)
+        if (ImGui::Checkbox(LOC("Record spans (task.Profiler.Enabled)"), &bEnabled) && CVar != nullptr)
         {
             FConsoleRegistry::Get().SetAs<bool>("task.Profiler.Enabled", bEnabled);
         }
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::Checkbox("By fiber", &bByFiber);
+        ImGui::Checkbox(LOC("By fiber"), &bByFiber);
 
         // Refresh the display copies only while live, so Freeze holds a stable frame to inspect.
         if (!bFrozen)
@@ -99,27 +99,27 @@ namespace Lumina
         DrawDashboard();
 
         ImGui::Spacing();
-        if (ImGui::CollapsingHeader("CPU cores", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("CPU cores"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             DrawCores();
         }
 
         ImGui::Spacing();
-        if (ImGui::CollapsingHeader("Scheduling advisor", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Scheduling advisor"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             DrawAdvisor();
         }
 
         ImGui::Spacing();
-        if (ImGui::CollapsingHeader("Fibers", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Fibers"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             DrawFiberGrid();
         }
-        if (ImGui::CollapsingHeader("Timeline", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Timeline"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             DrawTimeline();
         }
-        if (ImGui::CollapsingHeader("Waiting counters"))
+        if (ImGui::CollapsingHeader(LOC_ID("Waiting counters")))
         {
             DrawCounters();
         }
@@ -153,64 +153,64 @@ namespace Lumina
 
         if (TotalJobs == 0)
         {
-            Col = IM_COL32(120, 122, 128, 255); Icon = LE_ICON_INFORMATION; Headline = "Awaiting data";
+            Col = IM_COL32(120, 122, 128, 255); Icon = LE_ICON_INFORMATION; Headline = LOC("Awaiting data");
             snprintf(Detail, sizeof Detail,
-                "Enable \"Record spans\" above and exercise a workload. The advisor then weighs shared-queue "
-                "contention, fiber migration and workload shape to judge whether work-stealing would help.");
+                LOC("Enable \"Record spans\" above and exercise a workload. The advisor then weighs shared-queue "
+                "contention, fiber migration and workload shape to judge whether work-stealing would help."));
         }
         else if (F.Starvations > 0)
         {
-            Col = IM_COL32(214, 72, 72, 255); Icon = LE_ICON_ALERT_OCTAGON; Headline = "Fiber pool starved";
+            Col = IM_COL32(214, 72, 72, 255); Icon = LE_ICON_ALERT_OCTAGON; Headline = LOC("Fiber pool starved");
             snprintf(Detail, sizeof Detail,
-                "%u episode(s): every one of the %u fibers (of %u max) was blocked while jobs were still pending, "
+                LOC("%u episode(s): every one of the %u fibers (of %u max) was blocked while jobs were still pending, "
                 "so the pool had to grow. Not something work-stealing would fix - it means jobs are blocking inside "
-                "jobs. Raise NumWorkFibers to skip the growth, or stop blocking in bulk-spawned work.",
+                "jobs. Raise NumWorkFibers to skip the growth, or stop blocking in bulk-spawned work."),
                 F.Starvations, LS.NumWorkFibers, LS.MaxWorkFibers);
         }
         else if (Contended && ForkJoin)
         {
-            Col = IM_COL32(224, 156, 52, 255); Icon = LE_ICON_ALERT; Headline = "Work-stealing would likely help";
+            Col = IM_COL32(224, 156, 52, 255); Icon = LE_ICON_ALERT; Headline = LOC("Work-stealing would likely help");
             snprintf(Detail, sizeof Detail,
-                "On average %.1f of %u workers dequeue the shared queue at once (peak %u), and %.0f%% of jobs are "
+                LOC("On average %.1f of %u workers dequeue the shared queue at once (peak %u), and %.0f%% of jobs are "
                 "worker-spawned (fork-join). Per-worker LIFO deques + stealing would cut that contention and keep "
-                "child jobs cache-hot.", F.AvgPoppers, LS.NumWorkers, F.MaxPoppers, WorkerFrac * 100.0f);
+                "child jobs cache-hot."), F.AvgPoppers, LS.NumWorkers, F.MaxPoppers, WorkerFrac * 100.0f);
         }
         else if (Contended)
         {
-            Col = IM_COL32(180, 168, 72, 255); Icon = LE_ICON_INFORMATION; Headline = "Work-stealing: marginal";
+            Col = IM_COL32(180, 168, 72, 255); Icon = LE_ICON_INFORMATION; Headline = LOC("Work-stealing: marginal");
             snprintf(Detail, sizeof Detail,
-                "The shared queue is contended (avg %.1f of %u workers), but %.0f%% of jobs are submitted from "
+                LOC("The shared queue is contended (avg %.1f of %u workers), but %.0f%% of jobs are submitted from "
                 "external threads and reach the global queue regardless. Work-stealing mainly helps locally "
-                "spawned work - limited upside until worker-spawned work dominates.",
+                "spawned work - limited upside until worker-spawned work dominates."),
                 F.AvgPoppers, LS.NumWorkers, (1.0f - WorkerFrac) * 100.0f);
         }
         else if (Migrating)
         {
-            Col = IM_COL32(72, 132, 214, 255); Icon = LE_ICON_INFORMATION; Headline = "Locality, not contention";
+            Col = IM_COL32(72, 132, 214, 255); Icon = LE_ICON_INFORMATION; Headline = LOC("Locality, not contention");
             snprintf(Detail, sizeof Detail,
-                "The shared queue is uncontended, but %.0f%% of resumes (%u of %u) had their original worker sitting "
+                LOC("The shared queue is uncontended, but %.0f%% of resumes (%u of %u) had their original worker sitting "
                 "idle - affinity could have kept them on their warm core for free. Resume affinity would pay off more "
-                "than work-stealing here. (Raw migration %.0f%% is near the %.0f%% baseline and not itself the issue.)",
+                "than work-stealing here. (Raw migration %.0f%% is near the %.0f%% baseline and not itself the issue.)"),
                 AffRate * 100.0f, F.AffinityOpps, F.Resumes, MigRate * 100.0f, MigBaseline * 100.0f);
         }
         else
         {
-            Col = IM_COL32(60, 175, 95, 255); Icon = LE_ICON_CHECK_CIRCLE; Headline = "Scheduler healthy";
+            Col = IM_COL32(60, 175, 95, 255); Icon = LE_ICON_CHECK_CIRCLE; Headline = LOC("Scheduler healthy");
             if (F.AffinityOpps < kMinAffinityOpps)
             {
                 // Too little park/resume activity for locality to matter, whatever the rate reads.
                 snprintf(Detail, sizeof Detail,
-                    "Shared queue is not contended (avg %.1f of %u workers at once) and only %u fiber resume(s) this "
+                    LOC("Shared queue is not contended (avg %.1f of %u workers at once) and only %u fiber resume(s) this "
                     "frame - jobs mostly run to completion without parking, so continuation locality is a non-issue. "
-                    "Neither work-stealing nor resume affinity would pay off here.",
+                    "Neither work-stealing nor resume affinity would pay off here."),
                     F.AvgPoppers, LS.NumWorkers, F.Resumes);
             }
             else
             {
                 snprintf(Detail, sizeof Detail,
-                    "Shared queue is not contended (avg %.1f of %u workers at once). Migration is %.0f%% but that is ~the "
+                    LOC("Shared queue is not contended (avg %.1f of %u workers at once). Migration is %.0f%% but that is ~the "
                     "%.0f%% baseline for a shared ready queue, and only %.0f%% of resumes could have stayed local for free "
-                    "- neither work-stealing nor resume affinity would pay off here.",
+                    "- neither work-stealing nor resume affinity would pay off here."),
                     F.AvgPoppers, LS.NumWorkers, MigRate * 100.0f, MigBaseline * 100.0f, AffRate * 100.0f);
             }
         }
@@ -234,15 +234,15 @@ namespace Lumina
         ImGui::Columns(2, "##advcols", false);
         if (ImGui::BeginTable("##advmetrics", 2, ImGuiTableFlags_SizingStretchProp))
         {
-            StatRow("Workload",       "%u worker / %u external  (%.0f%% fork-join)", F.WorkerJobs, F.ExternalJobs, WorkerFrac * 100.0f);
-            StatRow("Queue pressure", "avg %.1f / peak %u of %u workers", F.AvgPoppers, F.MaxPoppers, LS.NumWorkers);
-            StatRow("Migration",      "%.0f%%  (~%.0f%% expected)", MigRate * 100.0f, MigBaseline * 100.0f);
-            StatRow("Affinity opp.",  "%u / %u resumes  (%.0f%%)", F.AffinityOpps, F.Resumes, AffRate * 100.0f);
-            StatRow("Starvation",     "%u episodes", F.Starvations);
+            StatRow(LOC("Workload"),       LOC("%u worker / %u external  (%.0f%% fork-join)"), F.WorkerJobs, F.ExternalJobs, WorkerFrac * 100.0f);
+            StatRow(LOC("Queue pressure"), LOC("avg %.1f / peak %u of %u workers"), F.AvgPoppers, F.MaxPoppers, LS.NumWorkers);
+            StatRow(LOC("Migration"),      LOC("%.0f%%  (~%.0f%% expected)"), MigRate * 100.0f, MigBaseline * 100.0f);
+            StatRow(LOC("Affinity opp."),  LOC("%u / %u resumes  (%.0f%%)"), F.AffinityOpps, F.Resumes, AffRate * 100.0f);
+            StatRow(LOC("Starvation"),     LOC("%u episodes"), F.Starvations);
             ImGui::EndTable();
         }
         ImGui::NextColumn();
-        ImGui::TextDisabled("Shared-queue pressure (avg concurrent poppers)");
+        ImGui::TextDisabled(LOC("Shared-queue pressure (avg concurrent poppers)"));
         MiniPlot("##poppers", FJobProfiler::Get().PoppersHistory(), ImVec4(0.82f, 0.48f, 0.85f, 1.0f));
         ImGui::Columns(1);
     }
@@ -257,28 +257,28 @@ namespace Lumina
 
         if (ImGui::BeginTable("##live", 2, ImGuiTableFlags_SizingStretchProp))
         {
-            StatRow("Workers",      "%u", LS.NumWorkers);
-            StatRow("Fibers total", "%u / %u", LS.NumWorkFibers, LS.MaxWorkFibers);
-            StatRow("In use",       "%u", LS.FibersInUse);
-            StatRow("Free",         "%u", LS.FibersFree);
-            StatRow("Ready",        "%u", LS.FibersReady);
+            StatRow(LOC("Workers"),      "%u", LS.NumWorkers);
+            StatRow(LOC("Fibers total"), "%u / %u", LS.NumWorkFibers, LS.MaxWorkFibers);
+            StatRow(LOC("In use"),       "%u", LS.FibersInUse);
+            StatRow(LOC_CTX("Free", "profiler"), "%u", LS.FibersFree);
+            StatRow(LOC("Ready"),        "%u", LS.FibersReady);
             // A deep Background queue is normal, while a deep Low queue during a hitch is not.
-            StatRow("Queue H/N/L",  "%u / %u / %u", LS.QueueDepth[0], LS.QueueDepth[1], LS.QueueDepth[2]);
-            StatRow("Queue Bkgd",   "%u", LS.QueueDepth[3]);
-            StatRow("In flight",    "%lld", (long long)LS.InFlight);
-            StatRow("Jobs / frame", "%u", F.JobsRun);
-            StatRow("Parks",        "%u", F.Parks);
-            StatRow("Migrations",   "%u", F.Migrations);
+            StatRow(LOC("Queue H/N/L"),  "%u / %u / %u", LS.QueueDepth[0], LS.QueueDepth[1], LS.QueueDepth[2]);
+            StatRow(LOC("Queue Bkgd"),   "%u", LS.QueueDepth[3]);
+            StatRow(LOC("In flight"),    "%lld", (long long)LS.InFlight);
+            StatRow(LOC("Jobs / frame"), "%u", F.JobsRun);
+            StatRow(LOC("Parks"),        "%u", F.Parks);
+            StatRow(LOC("Migrations"),   "%u", F.Migrations);
             ImGui::EndTable();
         }
 
         ImGui::NextColumn();
         FJobProfiler& P = FJobProfiler::Get();
-        ImGui::TextDisabled("Jobs / frame");
+        ImGui::TextDisabled(LOC("Jobs / frame"));
         MiniPlot("##jobs", P.JobsHistory(), ImVec4(0.40f, 0.75f, 0.95f, 1.0f));
-        ImGui::TextDisabled("Fibers in use");
+        ImGui::TextDisabled(LOC("Fibers in use"));
         MiniPlot("##fibers", P.FibersInUseHistory(), ImVec4(0.40f, 0.85f, 0.50f, 1.0f));
-        ImGui::TextDisabled("Migrations / frame");
+        ImGui::TextDisabled(LOC("Migrations / frame"));
         MiniPlot("##migs", P.MigrationsHistory(), ImVec4(0.90f, 0.65f, 0.30f, 1.0f));
 
         ImGui::Columns(1);
@@ -289,7 +289,7 @@ namespace Lumina
         const Platform::FCpuTopology& Topo = Platform::GetCpuTopology();
         if (Topo.NumLogicalCores == 0)
         {
-            ImGui::TextDisabled("CPU topology unavailable.");
+            ImGui::TextDisabled(LOC("CPU topology unavailable."));
             return;
         }
 
@@ -308,29 +308,29 @@ namespace Lumina
         }
 
         // Summary line.
-        ImGui::Text("%u logical cores", Topo.NumLogicalCores);
+        ImGui::Text(LOC("%u logical cores"), Topo.NumLogicalCores);
         ImGui::SameLine(); ImGui::TextDisabled("|"); ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.40f, 0.62f, 0.92f, 1.0f), "%u P-core%s",
-            Topo.NumPerformance, Topo.NumPerformance == 1 ? "" : "s");
+        ImGui::TextColored(ImVec4(0.40f, 0.62f, 0.92f, 1.0f),
+            Topo.NumPerformance == 1 ? LOC("%u P-core") : LOC("%u P-cores"), Topo.NumPerformance);
         ImGui::SameLine();
         if (Topo.bHybrid)
         {
-            ImGui::TextColored(ImVec4(0.86f, 0.66f, 0.28f, 1.0f), "  %u E-core%s",
-                Topo.NumEfficiency, Topo.NumEfficiency == 1 ? "" : "s");
+            ImGui::TextColored(ImVec4(0.86f, 0.66f, 0.28f, 1.0f),
+                Topo.NumEfficiency == 1 ? LOC("  %u E-core") : LOC("  %u E-cores"), Topo.NumEfficiency);
         }
         else
         {
-            ImGui::TextDisabled("  (no efficiency cores)");
+            ImGui::TextDisabled(LOC("  (no efficiency cores)"));
         }
 
-        ImGui::TextDisabled("Workers running: %u on P / %u on E  (of %u workers)",
+        ImGui::TextDisabled(LOC("Workers running: %u on P / %u on E  (of %u workers)"),
             PActive, EActive, (uint32)WorkerCores.size());
         // Enough work to fill the P-cores while one sits idle and an E-core runs is scheduling waste.
         if (Topo.bHybrid && PActive < Topo.NumPerformance && (PActive + EActive) >= Topo.NumPerformance)
         {
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.90f, 0.55f, 0.30f, 1.0f),
-                LE_ICON_ALERT " work on E-cores while a P-core is idle");
+                LOC_ICON(LE_ICON_ALERT, "work on E-cores while a P-core is idle"));
         }
 
         ImGui::Spacing();
@@ -342,9 +342,9 @@ namespace Lumina
                 ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop, ImVec2(12, 12));
             ImGui::SameLine(); ImGui::TextUnformatted(Txt); ImGui::SameLine(0, 14);
         };
-        Swatch(IM_COL32(46, 62, 86, 255),  "P-core");
-        Swatch(IM_COL32(74, 66, 46, 255),  "E-core");
-        Swatch(IM_COL32(60, 175, 95, 255), "running");
+        Swatch(IM_COL32(46, 62, 86, 255),  LOC("P-core"));
+        Swatch(IM_COL32(74, 66, 46, 255),  LOC("E-core"));
+        Swatch(IM_COL32(60, 175, 95, 255), LOC("running"));
         ImGui::NewLine();
 
         // One cell per logical core, where fill encodes type and busy and the worker number shows when running.
@@ -384,16 +384,16 @@ namespace Lumina
             if (Busy)
             {
                 char Wk[12];
-                snprintf(Wk, sizeof Wk, BusyCount[c] > 1 ? "W%d+" : "W%d", BusyWorker[c]);
+                snprintf(Wk, sizeof Wk, BusyCount[c] > 1 ? LOC("W%d+") : LOC("W%d"), BusyWorker[c]);
                 DL->AddText(ImVec2(P0.x + 3, P0.y + Cell - 14), IM_COL32(16, 16, 16, 255), Wk);
             }
 
             if (ImGui::IsMouseHoveringRect(P0, P1))
             {
                 ImGui::BeginTooltip();
-                ImGui::Text("Core %u  -  %s", c, IsE ? "Efficiency (E)" : "Performance (P)");
-                if (Busy) ImGui::Text("Worker %d running%s", BusyWorker[c], BusyCount[c] > 1 ? " (+others)" : "");
-                else      ImGui::TextDisabled("idle");
+                ImGui::Text(LOC("Core %u  -  %s"), c, IsE ? LOC("Efficiency (E)") : LOC("Performance (P)"));
+                if (Busy) ImGui::Text(LOC("Worker %d running%s"), BusyWorker[c], BusyCount[c] > 1 ? LOC(" (+others)") : "");
+                else      ImGui::TextDisabled(LOC("idle"));
                 ImGui::EndTooltip();
             }
         }
@@ -406,7 +406,7 @@ namespace Lumina
     {
         if (FiberStates.empty())
         {
-            ImGui::TextDisabled("No fibers (job system not initialized).");
+            ImGui::TextDisabled(LOC("No fibers (job system not initialized)."));
             return;
         }
 
@@ -418,7 +418,7 @@ namespace Lumina
             // desc_id must be unique per swatch or ImGui collides their IDs, key on the state name.
             ImGui::ColorButton(StateName(S), ImGui::ColorConvertU32ToFloat4(StateColor(S)),
                 ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop, ImVec2(12, 12));
-            ImGui::SameLine(); ImGui::TextUnformatted(StateName(S)); ImGui::SameLine(0, 14);
+            ImGui::SameLine(); ImGui::TextUnformatted(LOC_VIEW_CTX(StateName(S), "profiler")); ImGui::SameLine(0, 14);
         }
         ImGui::NewLine();
 
@@ -455,11 +455,11 @@ namespace Lumina
         {
             const Jobs::FFiberState& FS = FiberStates[HoverIndex];
             ImGui::BeginTooltip();
-            ImGui::Text("Fiber %u", FS.Index);
-            ImGui::Text("State: %s", StateName(FS.State));
-            if (FS.State == Jobs::EFiberState::Running) ImGui::Text("Worker: %u", FS.OwnerWorker);
-            if (FS.State == Jobs::EFiberState::Parked)  ImGui::Text("Waiting counter: %u", FS.WaitCounterId);
-            ImGui::Text("Job: %s", FS.Name ? FS.Name : "-");
+            ImGui::Text(LOC("Fiber %u"), FS.Index);
+            ImGui::Text(LOC("State: %s"), LOC_VIEW_CTX(StateName(FS.State), "profiler"));
+            if (FS.State == Jobs::EFiberState::Running) ImGui::Text(LOC("Worker: %u"), FS.OwnerWorker);
+            if (FS.State == Jobs::EFiberState::Parked)  ImGui::Text(LOC("Waiting counter: %u"), FS.WaitCounterId);
+            ImGui::Text(LOC("Job: %s"), FS.Name ? FS.Name : "-");
             ImGui::EndTooltip();
         }
     }
@@ -471,15 +471,15 @@ namespace Lumina
         const double T1 = F.FrameEndMs;
         if (T1 <= T0 || F.Spans.empty())
         {
-            ImGui::TextDisabled("Enable span recording to capture the per-worker timeline.");
+            ImGui::TextDisabled(LOC("Enable span recording to capture the per-worker timeline."));
             return;
         }
 
-        ImGui::SetNextItemWidth(160); ImGui::SliderFloat("Zoom", &ZoomT, 0.05f, 1.0f, "%.2f");
+        ImGui::SetNextItemWidth(160); ImGui::SliderFloat(LOC("Zoom"), &ZoomT, 0.05f, 1.0f, "%.2f");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(160); ImGui::SliderFloat("Pan", &PanT, 0.0f, 1.0f, "%.2f");
+        ImGui::SetNextItemWidth(160); ImGui::SliderFloat(LOC("Pan"), &PanT, 0.0f, 1.0f, "%.2f");
         ImGui::SameLine();
-        ImGui::Text("Frame: %.2f ms", T1 - T0);
+        ImGui::Text(LOC("Frame: %.2f ms"), T1 - T0);
 
         const double WinDur  = T1 - T0;
         const double ViewDur = WinDur * ZoomT;
@@ -502,7 +502,7 @@ namespace Lumina
         {
             RowFor(bByFiber ? S.Fiber : S.Worker);
         }
-        if (RowCount == 0) { ImGui::TextDisabled("No spans."); return; }
+        if (RowCount == 0) { ImGui::TextDisabled(LOC("No spans.")); return; }
 
         const float LabelW = 52.0f;
         const float RowH   = ProfilerView::RowHeight(RowHeight);
@@ -528,7 +528,7 @@ namespace Lumina
             if (RowOf[Id] < 0) continue;
             const float Y = Origin.y + RowOf[Id] * RowH;
             char Lbl[16];
-            snprintf(Lbl, sizeof(Lbl), bByFiber ? "F%u" : "W%u", Id);
+            snprintf(Lbl, sizeof(Lbl), bByFiber ? LOC("F%u") : LOC("W%u"), Id);
             DL->AddText(ImVec2(Origin.x + 4, ProfilerView::LabelY(Y, RowH)), IM_COL32(180, 180, 185, 255), Lbl);
         }
 
@@ -571,10 +571,10 @@ namespace Lumina
         if (Hover)
         {
             ImGui::BeginTooltip();
-            ImGui::Text("%s", Hover->Kind == (uint8)EJobSpanKind::Idle ? "idle" : (Hover->Name ? Hover->Name : "job"));
-            ImGui::Text("Worker %u  Fiber %u", Hover->Worker, Hover->Fiber);
-            ImGui::Text("%.4f ms", Hover->EndMs - Hover->StartMs);
-            if (Hover->Kind == (uint8)EJobSpanKind::RanThenParked) ImGui::TextDisabled("ran, then parked");
+            ImGui::Text("%s", Hover->Kind == (uint8)EJobSpanKind::Idle ? LOC("idle") : (Hover->Name ? Hover->Name : LOC("job")));
+            ImGui::Text(LOC("Worker %u  Fiber %u"), Hover->Worker, Hover->Fiber);
+            ImGui::Text(LOC("%.4f ms"), Hover->EndMs - Hover->StartMs);
+            if (Hover->Kind == (uint8)EJobSpanKind::RanThenParked) ImGui::TextDisabled(LOC("ran, then parked"));
             ImGui::EndTooltip();
         }
 
@@ -585,14 +585,14 @@ namespace Lumina
     {
         if (Counters.empty())
         {
-            ImGui::TextDisabled("No counters with parked waiters right now.");
+            ImGui::TextDisabled(LOC("No counters with parked waiters right now."));
             return;
         }
         if (ImGui::BeginTable("##counters", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
         {
-            ImGui::TableSetupColumn("Counter");
-            ImGui::TableSetupColumn("Remaining");
-            ImGui::TableSetupColumn("Parked fibers");
+            ImGui::TableSetupColumn(LOC_ID("Counter"));
+            ImGui::TableSetupColumn(LOC_ID("Remaining"));
+            ImGui::TableSetupColumn(LOC_ID("Parked fibers"));
             ImGui::TableHeadersRow();
             for (const Jobs::FCounterState& C : Counters)
             {

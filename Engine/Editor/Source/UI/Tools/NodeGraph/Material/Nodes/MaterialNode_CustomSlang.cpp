@@ -1,4 +1,5 @@
 #include "MaterialNode_CustomSlang.h"
+#include "Localization/Localization.h"
 
 #include "imgui.h"
 #include "Core/Math/Hash/Hash.h"
@@ -168,33 +169,33 @@ namespace Lumina
 
                 if (Braces < 0)
                 {
-                    return FBalanceResult{ false, "Unmatched '}' -- it would close the generated block early and break the rest of the shader." };
+                    return FBalanceResult{ false, LOC("Unmatched '}' -- it would close the generated block early and break the rest of the shader.") };
                 }
                 if (Parens < 0)
                 {
-                    return FBalanceResult{ false, "Unmatched ')'." };
+                    return FBalanceResult{ false, LOC("Unmatched ')'.") };
                 }
                 if (Brackets < 0)
                 {
-                    return FBalanceResult{ false, "Unmatched ']'." };
+                    return FBalanceResult{ false, LOC("Unmatched ']'.") };
                 }
             }
 
             if (bInBlockComment)
             {
-                return FBalanceResult{ false, "Unterminated block comment ('/*' with no '*/')." };
+                return FBalanceResult{ false, LOC("Unterminated block comment ('/*' with no '*/').") };
             }
             if (Braces != 0)
             {
-                return FBalanceResult{ false, "Unbalanced braces -- a '{' is never closed." };
+                return FBalanceResult{ false, LOC("Unbalanced braces -- a '{' is never closed.") };
             }
             if (Parens != 0)
             {
-                return FBalanceResult{ false, "Unbalanced parentheses." };
+                return FBalanceResult{ false, LOC("Unbalanced parentheses.") };
             }
             if (Brackets != 0)
             {
-                return FBalanceResult{ false, "Unbalanced brackets." };
+                return FBalanceResult{ false, LOC("Unbalanced brackets.") };
             }
             return FBalanceResult{};
         }
@@ -397,13 +398,15 @@ namespace Lumina
         TVector<FString> Problems;
         const bool bValid = Validate(Problems);
 
-        ImGui::TextColored(ImVec4(0.55f, 0.58f, 0.64f, 1.0f), "%d in / %d out - %d line%s",
-                           (int32)Inputs.size(), (int32)Outputs.size(), Lines, Lines == 1 ? "" : "s");
+        ImGui::TextColored(ImVec4(0.55f, 0.58f, 0.64f, 1.0f),
+                           Lines == 1 ? LOC("%d in / %d out - %d line") : LOC("%d in / %d out - %d lines"),
+                           (int32)Inputs.size(), (int32)Outputs.size(), Lines);
 
         if (!bValid)
         {
-            ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.0f), "%d problem%s",
-                               (int32)Problems.size(), Problems.size() == 1 ? "" : "s");
+            ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.0f),
+                               Problems.size() == 1 ? LOC("%d problem") : LOC("%d problems"),
+                               (int32)Problems.size());
             if (ImGui::IsItemHovered() && !Problems.empty())
             {
                 ImGui::SetTooltip("%s", Problems[0].c_str());
@@ -422,32 +425,32 @@ namespace Lumina
                 const FString Name = Pin.Name.ToString();
                 if (!IsValidIdentifier(Name.c_str()))
                 {
-                    OutProblems.push_back(FString(Direction) + " name '" + Name + "' is not a valid Slang identifier (letters, digits, underscore; cannot start with a digit).");
+                    OutProblems.push_back(Format(LOCF("{} name '{}' is not a valid Slang identifier (letters, digits, underscore; cannot start with a digit)."), Direction, Name));
                     continue;
                 }
                 if (IsReservedWord(Name))
                 {
-                    OutProblems.push_back(FString(Direction) + " name '" + Name + "' is a reserved Slang keyword.");
+                    OutProblems.push_back(Format(LOCF("{} name '{}' is a reserved Slang keyword."), Direction, Name));
                     continue;
                 }
                 if (!Seen.insert(Name).second)
                 {
-                    OutProblems.push_back(FString("Duplicate pin name '") + Name + "' -- input and output names must all be distinct.");
+                    OutProblems.push_back(Format(LOCF("Duplicate pin name '{}' -- input and output names must all be distinct."), Name));
                 }
             }
         };
-        CheckNames(Inputs, "Input");
-        CheckNames(Outputs, "Output");
+        CheckNames(Inputs, LOC("Input"));
+        CheckNames(Outputs, LOC("Output"));
 
         if (Outputs.empty())
         {
-            OutProblems.push_back("No outputs declared -- add at least one output for this node to produce a value.");
+            OutProblems.push_back(LOC("No outputs declared -- add at least one output for this node to produce a value."));
         }
 
         FString Directive;
         if (FindPreprocessorDirective(Code, Directive))
         {
-            OutProblems.push_back(FString("Preprocessor directives are not allowed ('") + Directive + "'). They escape this node's scope.");
+            OutProblems.push_back(Format(LOCF("Preprocessor directives are not allowed ('{}'). They escape this node's scope."), Directive));
         }
 
         const FBalanceResult Balance = CheckBalance(Code);
@@ -467,7 +470,7 @@ namespace Lumina
         auto EmitError = [&](const FString& Description)
         {
             EdNodeGraph::FError NodeError;
-            NodeError.Name        = "Custom Slang";
+            NodeError.Name        = LOC("Custom Slang");
             NodeError.Description = Description;
             NodeError.Node        = this;
             Compiler.AddError(NodeError);
@@ -504,7 +507,7 @@ namespace Lumina
 
         if (Code.empty())
         {
-            EmitError("Node has no code; its outputs stay at zero.");
+            EmitError(LOC("Node has no code; its outputs stay at zero."));
             return;
         }
 

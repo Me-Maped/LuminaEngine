@@ -42,22 +42,22 @@ namespace Lumina
 
     void FPluginBrowserEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Plugins",
-            "Each row is one discovered .lplugin under Engine/Plugins/ or "
+        DrawHelpTextRow(LOC("Plugins"),
+            LOC("Each row is one discovered .lplugin under Engine/Plugins/ or "
             "<Project>/Plugins/. Engine plugins ship with the engine; project "
-            "plugins live next to the .lproject.");
-        DrawHelpTextRow("Enable / Disable",
-            "Toggle the checkbox to stage a change. Click 'Apply & Restart' to "
+            "plugins live next to the .lproject."));
+        DrawHelpTextRow(LOC("Enable / Disable"),
+            LOC("Toggle the checkbox to stage a change. Click 'Apply & Restart' to "
             "save the override into the .lproject and restart. Module hot-reload "
-            "isn't implemented, so changes only take effect on next launch.");
-        DrawHelpTextRow("Scope",
-            "Overrides are per-project: disabling a plugin here only disables it "
+            "isn't implemented, so changes only take effect on next launch."));
+        DrawHelpTextRow(LOC("Scope"),
+            LOC("Overrides are per-project: disabling a plugin here only disables it "
             "for the loaded project. Other projects keep using the descriptor "
-            "default. With no project loaded the view is read-only.");
-        DrawHelpTextRow("Modules",
-            "The detail panel lists each module's type (Runtime / Editor / "
+            "default. With no project loaded the view is read-only."));
+        DrawHelpTextRow(LOC("Modules"),
+            LOC("The detail panel lists each module's type (Runtime / Editor / "
             "Developer) and loading phase. Editor modules are silently skipped "
-            "in non-editor builds; Developer modules are skipped in Shipping.");
+            "in non-editor builds; Developer modules are skipped in Shipping."));
     }
 
 
@@ -157,20 +157,20 @@ namespace Lumina
         const size_t Len = Math::Min(SearchFilter.size(), sizeof(Buf) - 1);
         memcpy(Buf, SearchFilter.c_str(), Len);
         Buf[Len] = '\0';
-        if (ImGui::InputTextWithHint("##search", LE_ICON_MAGNIFY "  Search plugins", Buf, sizeof(Buf)))
+        if (ImGui::InputTextWithHint("##search", LOC_ICON(LE_ICON_MAGNIFY, "Search plugins"), Buf, sizeof(Buf)))
         {
             SearchFilter.assign(Buf);
         }
         ImGui::SameLine();
-        ImGui::Checkbox("Engine", &bShowEngine);
+        ImGui::Checkbox(LOC("Engine"), &bShowEngine);
         ImGui::SameLine();
-        ImGui::Checkbox("Project", &bShowProject);
+        ImGui::Checkbox(LOC("Project"), &bShowProject);
 
         ImGui::SameLine();
         const bool bHasProject = GEngine && !GEngine->GetProjectName().empty();
         const bool bCanCreate = bHasProject && !Paths::IsInstalledBuild();
         if (!bCanCreate) ImGui::BeginDisabled();
-        if (ImGui::Button(LE_ICON_PUZZLE_PLUS " New Plugin"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PUZZLE_PLUS, "New Plugin")))
         {
             OpenCreatePluginDialog();
         }
@@ -179,14 +179,14 @@ namespace Lumina
         {
             // A new plugin is a pair of C++ modules, which an installed build cannot compile.
             ImGui::SetTooltip(Paths::IsInstalledBuild()
-                ? "Creating a plugin needs a source build of the engine."
-                : "Load a project to create a plugin.");
+                ? LOC("Creating a plugin needs a source build of the engine.")
+                : LOC("Load a project to create a plugin."));
         }
 
         // Right-aligned scope hint.
         const char* ScopeHint = GEngine && !GEngine->GetProjectName().empty()
-            ? "Scope: project (per-.lproject)"
-            : "Scope: read-only (no project loaded)";
+            ? LOC("Scope: project (per-.lproject)")
+            : LOC("Scope: read-only (no project loaded)");
         const float ScopeWidth = ImGui::CalcTextSize(ScopeHint).x;
         ImGui::SameLine(ImGui::GetWindowWidth() - ScopeWidth - 16.0f);
         ImGui::TextDisabled("%s", ScopeHint);
@@ -197,7 +197,7 @@ namespace Lumina
     {
         if (Plugins.empty())
         {
-            ImGui::TextDisabled("No plugins match the current filter.");
+            ImGui::TextDisabled(LOC("No plugins match the current filter."));
             return;
         }
 
@@ -211,10 +211,10 @@ namespace Lumina
         }
 
         ImGui::TableSetupColumn("",         ImGuiTableColumnFlags_WidthFixed, 28.0f);
-        ImGui::TableSetupColumn("Name",     ImGuiTableColumnFlags_WidthStretch, 0.40f);
-        ImGui::TableSetupColumn("Type",     ImGuiTableColumnFlags_WidthFixed, 70.0f);
-        ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthStretch, 0.30f);
-        ImGui::TableSetupColumn("Version",  ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn(LOC_ID("Name"),     ImGuiTableColumnFlags_WidthStretch, 0.40f);
+        ImGui::TableSetupColumn(LOC_ID("Type"),     ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn(LOC_ID("Category"), ImGuiTableColumnFlags_WidthStretch, 0.30f);
+        ImGui::TableSetupColumn(LOC_ID("Version"),  ImGuiTableColumnFlags_WidthFixed, 80.0f);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
@@ -252,7 +252,7 @@ namespace Lumina
 
             // Type.
             ImGui::TableSetColumnIndex(2);
-            ImGui::TextUnformatted(Plugin->IsEnginePlugin() ? "Engine" : "Project");
+            ImGui::TextUnformatted(Plugin->IsEnginePlugin() ? LOC("Engine") : LOC("Project"));
 
             // Category.
             ImGui::TableSetColumnIndex(3);
@@ -282,7 +282,7 @@ namespace Lumina
     {
         if (!Plugin)
         {
-            ImGui::TextDisabled("Select a plugin to see its details.");
+            ImGui::TextDisabled(LOC("Select a plugin to see its details."));
             return;
         }
 
@@ -295,7 +295,7 @@ namespace Lumina
         if (!Desc.Author.empty())
         {
             ImGui::SameLine();
-            ImGui::TextDisabled("by %s", Desc.Author.c_str());
+            ImGui::TextDisabled(LOC("by %s"), Desc.Author.c_str());
         }
 
         ImGui::Spacing();
@@ -317,32 +317,32 @@ namespace Lumina
                 ImGui::TextUnformatted(Value && *Value ? Value : "-");
             };
 
-            Row("Path",     Plugin->GetDescriptorPath().data());
-            Row("Category", Desc.Category.c_str());
-            Row("Version",  Desc.VersionName.empty()
+            Row(LOC("Path"),     Plugin->GetDescriptorPath().data());
+            Row(LOC("Category"), Desc.Category.c_str());
+            Row(LOC("Version"),  Desc.VersionName.empty()
                                 ? Format("{}", Desc.Version).c_str()
                                 : Desc.VersionName.c_str());
-            Row("Type",     Plugin->IsEnginePlugin() ? "Engine plugin" : "Project plugin");
-            Row("Editor-only", Desc.bEditorOnly ? "Yes" : "No");
-            Row("Has content", Desc.bContainsContent ? "Yes" : "No");
+            Row(LOC("Type"),     Plugin->IsEnginePlugin() ? LOC("Engine plugin") : LOC("Project plugin"));
+            Row(LOC("Editor-only"), Desc.bEditorOnly ? LOC("Yes") : LOC("No"));
+            Row(LOC("Has content"), Desc.bContainsContent ? LOC("Yes") : LOC("No"));
 
             ImGui::EndTable();
         }
 
         ImGui::Spacing();
-        if (ImGui::CollapsingHeader("Modules", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Modules"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             if (Desc.Modules.empty())
             {
-                ImGui::TextDisabled("No native modules, content-only plugin.");
+                ImGui::TextDisabled(LOC("No native modules, content-only plugin."));
             }
             else if (ImGui::BeginTable("##Modules", 3,
                         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                         ImGuiTableFlags_SizingStretchProp))
             {
-                ImGui::TableSetupColumn("Name");
-                ImGui::TableSetupColumn("Type");
-                ImGui::TableSetupColumn("Loading Phase");
+                ImGui::TableSetupColumn(LOC_ID("Name"));
+                ImGui::TableSetupColumn(LOC_ID("Type"));
+                ImGui::TableSetupColumn(LOC_ID("Loading Phase"));
                 ImGui::TableHeadersRow();
 
                 for (const FPluginModuleDescriptor& Mod : Desc.Modules)
@@ -351,9 +351,9 @@ namespace Lumina
                     ImGui::TableSetColumnIndex(0);
                     ImGui::TextUnformatted(Mod.Name.c_str());
                     ImGui::TableSetColumnIndex(1);
-                    ImGui::TextUnformatted(LexToString(Mod.Type).data());
+                    ImGui::TextUnformatted(LOC_VIEW(LexToString(Mod.Type)));
                     ImGui::TableSetColumnIndex(2);
-                    ImGui::TextUnformatted(LexToString(Mod.LoadingPhase).data());
+                    ImGui::TextUnformatted(LOC_VIEW(LexToString(Mod.LoadingPhase)));
                 }
                 ImGui::EndTable();
             }
@@ -361,18 +361,18 @@ namespace Lumina
 
         if (!Desc.Dependencies.empty())
         {
-            if (ImGui::CollapsingHeader("Dependencies", ImGuiTreeNodeFlags_DefaultOpen))
+            if (ImGui::CollapsingHeader(LOC_ID("Dependencies"), ImGuiTreeNodeFlags_DefaultOpen))
             {
                 for (const FPluginDependency& Dep : Desc.Dependencies)
                 {
                     const FPlugin* DepPlugin = FPluginManager::Get().FindPlugin(Dep.Name);
-                    const char* Status = !DepPlugin   ? "missing"
-                                      : !DepPlugin->IsEnabled() ? "disabled"
-                                      :                            "ok";
+                    const char* Status = !DepPlugin   ? LOC("missing")
+                                      : !DepPlugin->IsEnabled() ? LOC("disabled")
+                                      :                            LOC("ok");
                     ImGui::BulletText("%s (v>=%d)%s%s",
                         Dep.Name.c_str(), Dep.Version,
-                        Dep.bOptional ? "  [optional]" : "",
-                        Status[0] == 'o' ? "" : (FString("  -- ") + Status).c_str());
+                        Dep.bOptional ? LOC("  [optional]") : "",
+                        (DepPlugin != nullptr && DepPlugin->IsEnabled()) ? "" : (FString("  -- ") + Status).c_str());
                 }
             }
         }
@@ -387,19 +387,19 @@ namespace Lumina
         if (bChangesSavedBanner)
         {
             ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.55f, 1.0f),
-                LE_ICON_CHECK " Changes saved. Restart the editor to apply.");
+                LOC_ICON(LE_ICON_CHECK, "Changes saved. Restart the editor to apply."));
             ImGui::SameLine();
         }
         else if (NumPending > 0)
         {
             ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.30f, 1.0f),
-                LE_ICON_CIRCLE_MEDIUM " %d pending change%s",
-                NumPending, NumPending == 1 ? "" : "s");
+                LOC_ICON(LE_ICON_CIRCLE_MEDIUM, "%d pending change%s"),
+                NumPending, NumPending == 1 ? "" : LOC_S);
             ImGui::SameLine();
         }
         else
         {
-            ImGui::TextDisabled("No pending changes.");
+            ImGui::TextDisabled(LOC("No pending changes."));
             ImGui::SameLine();
         }
 
@@ -407,7 +407,7 @@ namespace Lumina
         ImGui::SameLine(ImGui::GetWindowWidth() - ButtonWidth - 16.0f);
 
         if (!bCanApply) ImGui::BeginDisabled();
-        if (ImGui::Button(LE_ICON_REFRESH " Apply & Restart", ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_REFRESH, "Apply & Restart"), ImVec2(ButtonWidth, 0)))
         {
             FString Error;
             if (ApplyAndPersist(Error))
@@ -518,15 +518,15 @@ namespace Lumina
 
     void FPluginBrowserEditorTool::PromptRestart()
     {
-        ToolContext->PushModal("Restart Required", ImVec2(420, 160),
+        ToolContext->PushModal(LOC("Restart Required"), ImVec2(420, 160),
             []() -> bool
             {
-                ImGui::TextWrapped("Plugin changes were saved to the .lproject. "
-                                   "Restart the editor to load the new module set.");
+                ImGui::TextWrapped(LOC("Plugin changes were saved to the .lproject. "
+                                   "Restart the editor to load the new module set."));
                 ImGui::Spacing();
 
-                const char* RestartLabel = LE_ICON_POWER " Restart Now";
-                const char* LaterLabel   = "Later";
+                const char* RestartLabel = LOC_ICON(LE_ICON_POWER, "Restart Now");
+                const char* LaterLabel   = LOC("Later");
 
                 const ImGuiStyle& Style = ImGui::GetStyle();
 
@@ -561,7 +561,7 @@ namespace Lumina
         NewPluginError.clear();
         CreatePluginResult.clear();
 
-        ToolContext->PushModal("Create Plugin", ImVec2(480, 290),
+        ToolContext->PushModal(LOC("Create Plugin"), ImVec2(480, 290),
             [this]() -> bool
             {
                 // Confirmation view, shown after a successful create.
@@ -570,7 +570,7 @@ namespace Lumina
                     ImGui::TextWrapped("%s", CreatePluginResult.c_str());
                     ImGui::Spacing();
                     ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 120.0f) * 0.5f);
-                    if (ImGui::Button("OK", ImVec2(120, 0)))
+                    if (ImGui::Button(LOC("OK"), ImVec2(120, 0)))
                     {
                         CreatePluginResult.clear();
                         return true;
@@ -578,16 +578,16 @@ namespace Lumina
                     return false;
                 }
 
-                ImGui::TextDisabled("Creates <Project>/Plugins/<Name>/ with a Runtime + Editor module pair.");
+                ImGui::TextDisabled(LOC("Creates <Project>/Plugins/<Name>/ with a Runtime + Editor module pair."));
                 ImGui::Spacing();
 
-                ImGui::TextUnformatted("Plugin name");
+                ImGui::TextUnformatted(LOC("Plugin name"));
                 ImGui::SetNextItemWidth(-1.0f);
-                ImGui::InputTextWithHint("##pluginname", "e.g. Combat", NewPluginNameBuf, sizeof(NewPluginNameBuf));
+                ImGui::InputTextWithHint("##pluginname", LOC("e.g. Combat"), NewPluginNameBuf, sizeof(NewPluginNameBuf));
 
-                ImGui::TextUnformatted("Description");
+                ImGui::TextUnformatted(LOC("Description"));
                 ImGui::SetNextItemWidth(-1.0f);
-                ImGui::InputTextWithHint("##plugindesc", "Optional", NewPluginDescBuf, sizeof(NewPluginDescBuf));
+                ImGui::InputTextWithHint("##plugindesc", LOC("Optional"), NewPluginDescBuf, sizeof(NewPluginDescBuf));
 
                 if (!NewPluginError.empty())
                 {
@@ -602,7 +602,7 @@ namespace Lumina
 
                 const bool bNameEmpty = NewPluginNameBuf[0] == '\0';
                 if (bNameEmpty) ImGui::BeginDisabled();
-                if (ImGui::Button(LE_ICON_PUZZLE_PLUS " Create", ImVec2(ButtonWidth, 0)))
+                if (ImGui::Button(LOC_ICON(LE_ICON_PUZZLE_PLUS, "Create"), ImVec2(ButtonWidth, 0)))
                 {
                     FFixedString OutDir;
                     FString Error;
@@ -613,10 +613,10 @@ namespace Lumina
                         // Regenerates so the new modules join the project, then prompts a rebuild and restart.
                         GEditorEngine->GenerateProjectFiles(GEngine->GetProjectPath());
 
-                        CreatePluginResult = "Created plugin '";
+                        CreatePluginResult = LOC("Created plugin '");
                         CreatePluginResult += NewPluginNameBuf;
-                        CreatePluginResult += "'.\n\nProject files are regenerating. Rebuild the solution "
-                                              "and restart the editor to load the new modules.";
+                        CreatePluginResult += LOC("'.\n\nProject files are regenerating. Rebuild the solution "
+                                              "and restart the editor to load the new modules.");
                         NewPluginError.clear();
                     }
                     else
@@ -627,7 +627,7 @@ namespace Lumina
                 if (bNameEmpty) ImGui::EndDisabled();
 
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel", ImVec2(ButtonWidth, 0)))
+                if (ImGui::Button(LOC("Cancel"), ImVec2(ButtonWidth, 0)))
                 {
                     NewPluginError.clear();
                     return true;

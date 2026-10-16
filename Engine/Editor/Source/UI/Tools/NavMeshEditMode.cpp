@@ -1,4 +1,5 @@
 #include "NavMeshEditMode.h"
+#include "Localization/Localization.h"
 #include "World/ECS/Registry.h"
 
 #include "AI/Navigation/NavMesh.h"
@@ -118,7 +119,7 @@ namespace Lumina
             }
             if (ImGui::IsItemHovered())
             {
-                ImGui::SetTooltip(bShow ? "Hide nav-mesh overlay" : "Show nav-mesh overlay");
+                ImGui::SetTooltip(bShow ? LOC("Hide nav-mesh overlay") : LOC("Show nav-mesh overlay"));
             }
         }
 
@@ -134,7 +135,7 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Rebuild navigation");
+            ImGui::SetTooltip(LOC("Rebuild navigation"));
         }
 
         // Compact state readout for the first nav volume.
@@ -146,22 +147,22 @@ namespace Lumina
             ImGui::SameLine();
             if (bBaking)
             {
-                ImGui::TextColored(ImVec4(kBakingColor.x, kBakingColor.y, kBakingColor.z, 1.0f), "Baking...");
+                ImGui::TextColored(ImVec4(kBakingColor.x, kBakingColor.y, kBakingColor.z, 1.0f), LOC("Baking..."));
             }
             else if (Nav.Runtime.State == ENavBakeState::Failed)
             {
-                ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "bake failed");
+                ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), LOC("bake failed"));
             }
             else if (Nav.Runtime.Mesh && Nav.Runtime.Mesh->IsReady())
             {
                 const FNavDebugStats Stats = Nav.Runtime.Mesh->GetDebugStats();
                 if (Stats.OffMeshLinks > 0)
                 {
-                    ImGui::TextDisabled("%d tiles | %d tris | %d links", Stats.LoadedTiles, Stats.Triangles, Stats.OffMeshLinks);
+                    ImGui::TextDisabled(LOC("%d tiles | %d tris | %d links"), Stats.LoadedTiles, Stats.Triangles, Stats.OffMeshLinks);
                 }
                 else
                 {
-                    ImGui::TextDisabled("%d tiles | %d tris", Stats.LoadedTiles, Stats.Triangles);
+                    ImGui::TextDisabled(LOC("%d tiles | %d tris"), Stats.LoadedTiles, Stats.Triangles);
                 }
             }
             break;

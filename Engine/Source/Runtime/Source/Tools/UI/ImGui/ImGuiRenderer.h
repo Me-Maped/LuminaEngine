@@ -52,5 +52,8 @@ namespace Lumina
 
         ImGuiContext* Context = nullptr;
         ImPlotContext* PlotContext = nullptr;
+
+        // Shared by the atlas' merged CJK sources until Deinitialize destroys the context.
+        TVector<uint8> CJKFontData;
     };
 }

@@ -1,4 +1,5 @@
 #include "SlowTaskModal.h"
+#include "Localization/Localization.h"
 
 #include <cfloat>
 #include <cmath>
@@ -130,7 +131,7 @@ namespace Lumina::SlowTaskModal
         if (ImGui::BeginPopupModal(GPopupID, nullptr, Flags))
         {
             ImGui::PushStyleColor(ImGuiCol_Text, GHeaderText);
-            ImGui::TextUnformatted(LE_ICON_TIMER_SAND "  WORKING");
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_TIMER_SAND, "WORKING"));
             ImGui::PopStyleColor();
             ImGui::Spacing();
 

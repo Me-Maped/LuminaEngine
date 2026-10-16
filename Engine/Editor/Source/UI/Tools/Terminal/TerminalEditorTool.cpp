@@ -1,5 +1,6 @@
 #include "EditorPCH.h"
 #include "TerminalEditorTool.h"
+#include "Localization/Localization.h"
 
 #include "Core/Engine/Engine.h"
 #include "Core/Math/Scalar.h"
@@ -457,7 +458,7 @@ namespace Lumina
     {
         if (!Platform::IsPtySupported())
         {
-            ImGui::TextColored(EditorColors::TextMuted(), "No pseudo-terminal support on this platform.");
+            ImGui::TextColored(EditorColors::TextMuted(), LOC("No pseudo-terminal support on this platform."));
             return;
         }
 
@@ -470,7 +471,7 @@ namespace Lumina
         }
         else
         {
-            ImGui::TextColored(EditorColors::TextMuted(), "No open terminals. Use the + button to start one.");
+            ImGui::TextColored(EditorColors::TextMuted(), LOC("No open terminals. Use the + button to start one."));
         }
     }
 
@@ -482,7 +483,7 @@ namespace Lumina
         {
             OpenTab(GetStartDirectory());
         }
-        ImGuiX::TextTooltip("New terminal");
+        ImGuiX::TextTooltip(LOCF("New terminal"));
 
         FTerminalTab* Tab = GetActiveTab();
 
@@ -493,7 +494,7 @@ namespace Lumina
         {
             RestartTab(*Tab);
         }
-        ImGuiX::TextTooltip("Restart the shell in this tab");
+        ImGuiX::TextTooltip(LOCF("Restart the shell in this tab"));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_BROOM "##ClearTerminal") && Tab != nullptr)
@@ -501,21 +502,21 @@ namespace Lumina
             Tab->Screen.ClearScrollback();
             Tab->ScrollOffset = 0;
         }
-        ImGuiX::TextTooltip("Clear scrollback");
+        ImGuiX::TextTooltip(LOCF("Clear scrollback"));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_CONTENT_COPY "##CopyTerminal") && Tab != nullptr)
         {
             CopySelection(*Tab);
         }
-        ImGuiX::TextTooltip("Copy selection (Ctrl+Shift+C)");
+        ImGuiX::TextTooltip(LOCF("Copy selection (Ctrl+Shift+C)"));
 
         ImGui::SameLine();
         if (ImGui::Button(LE_ICON_CONTENT_PASTE "##PasteTerminal") && Tab != nullptr)
         {
             PasteClipboard(*Tab);
         }
-        ImGuiX::TextTooltip("Paste (Ctrl+Shift+V)");
+        ImGuiX::TextTooltip(LOCF("Paste (Ctrl+Shift+V)"));
 
         ImGui::EndDisabled();
 
@@ -548,7 +549,7 @@ namespace Lumina
         {
             FTerminalTab& Tab = *TabPtr;
 
-            const FString Label = Lumina::Format("{}###TerminalTab{}", Tab.Label.empty() ? FString("shell") : Tab.Label, Tab.Id);
+            const FString Label = Lumina::Format("{}###TerminalTab{}", Tab.Label.empty() ? FString(LOC("shell")) : Tab.Label, Tab.Id);
 
             bool bOpen = true;
             if (ImGui::BeginTabItem(Label.c_str(), &bOpen))
@@ -917,29 +918,29 @@ namespace Lumina
 
     void FTerminalEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)
     {
-        if (ImGui::BeginMenu(LE_ICON_CONSOLE_LINE " Terminal"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_CONSOLE_LINE, "Terminal")))
         {
-            if (ImGui::MenuItem("New Terminal"))
+            if (ImGui::MenuItem(LOC("New Terminal")))
             {
                 OpenTab(GetStartDirectory());
             }
 
-            if (ImGui::MenuItem("New Terminal at Engine Directory"))
+            if (ImGui::MenuItem(LOC("New Terminal at Engine Directory")))
             {
                 OpenTab(Paths::GetEngineDirectory());
             }
 
             ImGui::Separator();
 
-            ImGui::SliderFloat("Font Scale", &Settings.FontScale, 0.7f, 2.0f, "%.1f");
+            ImGui::SliderFloat(LOC("Font Scale"), &Settings.FontScale, 0.7f, 2.0f, "%.1f");
 
-            if (ImGui::SliderInt("Scrollback", &Settings.ScrollbackLimit, 500, 50000))
+            if (ImGui::SliderInt(LOC("Scrollback"), &Settings.ScrollbackLimit, 500, 50000))
             {
                 // Existing tabs keep their current limit until they restart, which is cheap and predictable.
             }
 
-            ImGui::Checkbox("Blink Cursor", &Settings.bCursorBlink);
-            ImGui::Checkbox("Copy On Select", &Settings.bCopyOnSelect);
+            ImGui::Checkbox(LOC("Blink Cursor"), &Settings.bCursorBlink);
+            ImGui::Checkbox(LOC("Copy On Select"), &Settings.bCopyOnSelect);
 
             ImGui::EndMenu();
         }
@@ -947,9 +948,9 @@ namespace Lumina
 
     void FTerminalEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Copy / Paste", "Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes. Right-click also pastes.");
-        DrawHelpTextRow("Interrupt", "Ctrl+C sends an interrupt to the running program, as in any terminal.");
-        DrawHelpTextRow("Scrollback", "The mouse wheel scrolls history. Programs drawing a full-screen view get arrow keys instead.");
-        DrawHelpTextRow("Sizing", "The shell is told the grid size, so wrapping and full-screen programs follow the panel.");
+        DrawHelpTextRow(LOC("Copy / Paste"), LOC("Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes. Right-click also pastes."));
+        DrawHelpTextRow(LOC("Interrupt"), LOC("Ctrl+C sends an interrupt to the running program, as in any terminal."));
+        DrawHelpTextRow(LOC("Scrollback"), LOC("The mouse wheel scrolls history. Programs drawing a full-screen view get arrow keys instead."));
+        DrawHelpTextRow(LOC("Sizing"), LOC("The shell is told the grid size, so wrapping and full-screen programs follow the panel."));
     }
 }

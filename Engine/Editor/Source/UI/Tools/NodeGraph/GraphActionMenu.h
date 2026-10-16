@@ -2,6 +2,7 @@
 
 #include "Containers/Vector.h"
 #include "Containers/String.h"
+#include "GraphActionMenuSearch.h"
 
 namespace Lumina
 {
@@ -55,7 +56,4 @@ namespace Lumina
         bool                    bPendingScrollToSelected = false;
     };
 
-    // Case-insensitive fuzzy subsequence match; OutScore valid only on match (higher is better),
-    // OutMatchIndices receives the matched Target positions for highlighting.
-    bool FuzzyMatch(const char* Query, const char* Target, int32& OutScore, TVector<uint16>& OutMatchIndices);
 }

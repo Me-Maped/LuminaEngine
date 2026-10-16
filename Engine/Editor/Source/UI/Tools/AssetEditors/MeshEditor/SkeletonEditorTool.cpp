@@ -38,17 +38,17 @@ namespace Lumina
             SkeletonCtx.Skeleton = SkeletonResource;
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Asset Details");
+            ImGui::SeparatorText(LOC("Asset Details"));
             ImGuiX::Font::PopFont();
             
             ImGui::Spacing();
 
-            ImGui::Text("Number of Bones: %i", SkeletonResource->GetNumBones());
-            ImGui::Text("Skeleton Name: %s", SkeletonResource->Name.ToString().c_str());
+            ImGui::Text(LOC("Number of Bones: %i"), SkeletonResource->GetNumBones());
+            ImGui::Text(LOC("Skeleton Name: %s"), SkeletonResource->Name.ToString().c_str());
             
             ImGui::Spacing();
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Statistics");
+            ImGui::SeparatorText(LOC("Statistics"));
             ImGuiX::Font::PopFont();
             
             int32 NumRootBones = 0;
@@ -75,9 +75,9 @@ namespace Lumina
             
             float AvgDepth = SkeletonResource->GetNumBones() > 0 ? (float)TotalDepth / SkeletonResource->GetNumBones() : 0.0f;
             
-            ImGui::Text("Root Bones: %i", NumRootBones);
-            ImGui::Text("Maximum Hierarchy Depth: %i", MaxDepth);
-            ImGui::Text("Average Bone Depth: %.2f", AvgDepth);
+            ImGui::Text(LOC("Root Bones: %i"), NumRootBones);
+            ImGui::Text(LOC("Maximum Hierarchy Depth: %i"), MaxDepth);
+            ImGui::Text(LOC("Average Bone Depth: %.2f"), AvgDepth);
             
             ImGui::Spacing();
             PropertyTable.DrawTree();
@@ -86,7 +86,7 @@ namespace Lumina
         CreateToolWindow(BoneHierarchyName, [&](bool bFocused)
         {
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Bone Hierarchy");
+            ImGui::SeparatorText(LOC("Bone Hierarchy"));
             ImGuiX::Font::PopFont();
             ImGui::Spacing();
             
@@ -104,7 +104,7 @@ namespace Lumina
 
             const FName BoneName = Tree.Get<FTreeNodeDisplay>(Item).DisplayName;
 
-            if (ImGui::MenuItem(LE_ICON_PLUS " Add Socket"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_PLUS, "Add Socket")))
             {
                 CSkeleton* Skeleton = GetAsset<CSkeleton>();
 
@@ -295,18 +295,18 @@ namespace Lumina
 
     void FSkeletonEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Hierarchy",
-            "Bone tree on the left mirrors the import. Click a bone to select; transforms come from the "
-            "bind pose. Multi-select extends sockets/constraints across bones.");
-        DrawHelpTextRow("Sockets",
-            "Sockets are named transforms relative to a bone. Add via the bone context menu. Runtime code "
-            "looks them up by name (e.g. 'WeaponR' for an attachment).");
-        DrawHelpTextRow("Retargeting",
-            "Two skeletons with identical bone names auto-retarget animations between them. Otherwise, "
-            "set up a per-bone mapping table on the asset.");
-        DrawHelpTextRow("Preview",
-            "Drop a skeletal mesh into the viewport to see the skeleton applied. Useful for verifying "
-            "socket positions.");
+        DrawHelpTextRow(LOC("Hierarchy"),
+            LOC("Bone tree on the left mirrors the import. Click a bone to select; transforms come from the "
+            "bind pose. Multi-select extends sockets/constraints across bones."));
+        DrawHelpTextRow(LOC("Sockets"),
+            LOC("Sockets are named transforms relative to a bone. Add via the bone context menu. Runtime code "
+            "looks them up by name (e.g. 'WeaponR' for an attachment)."));
+        DrawHelpTextRow(LOC("Retargeting"),
+            LOC("Two skeletons with identical bone names auto-retarget animations between them. Otherwise, "
+            "set up a per-bone mapping table on the asset."));
+        DrawHelpTextRow(LOC("Preview"),
+            LOC("Drop a skeletal mesh into the viewport to see the skeleton applied. Useful for verifying "
+            "socket positions."));
     }
 
     void FSkeletonEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)
@@ -314,9 +314,9 @@ namespace Lumina
         FAssetEditorTool::DrawToolMenu(UpdateContext);
         
         // Gizmo Control Dropdown
-        if (ImGui::BeginMenu(LE_ICON_MOVE_RESIZE " Gizmo Control"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_MOVE_RESIZE, "Gizmo Control")))
         {
-            const char* operations[] = { "Translate", "Rotate", "Scale" };
+            const char* operations[] = { LOC("Translate"), LOC("Rotate"), LOC("Scale") };
             static int currentOp = 0;
 
             if (ImGui::Combo("##", &currentOp, operations, IM_ARRAYSIZE(operations)))
@@ -332,7 +332,7 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(LE_ICON_BONE " Skeleton"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_BONE, "Skeleton")))
         {
             DrawSkeletonDebugMenuItems();
             ImGui::EndMenu();

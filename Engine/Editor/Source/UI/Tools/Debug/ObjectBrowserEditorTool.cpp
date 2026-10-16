@@ -1,4 +1,5 @@
 #include "ObjectBrowserEditorTool.h"
+#include "Localization/Localization.h"
 
 
 #include "Core/Object/Cast.h"
@@ -60,23 +61,23 @@ namespace Lumina
 
     void FObjectBrowserEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("What this is",
-            "Every live CObject: loaded assets, class defaults, transient runtime objects. The tool to reach "
+        DrawHelpTextRow(LOC("What this is"),
+            LOC("Every live CObject: loaded assets, class defaults, transient runtime objects. The tool to reach "
             "for when something is still alive that should not be, or when you want to know what a package "
-            "actually holds.");
-        DrawHelpTextRow("Snapshots",
-            "The list is a snapshot, not a live view. Auto-refresh re-takes it on an interval; switch it off "
+            "actually holds."));
+        DrawHelpTextRow(LOC("Snapshots"),
+            LOC("The list is a snapshot, not a live view. Auto-refresh re-takes it on an interval; switch it off "
             "and use Refresh to hold a moment still while you read it. Nothing walks the object array in "
-            "between, so the tool costs the same whether there are a hundred objects or a million.");
-        DrawHelpTextRow("Refs",
-            "Strong refs keep the object alive. Weak refs observe without keeping alive. An object sitting at "
-            "0 strong that is still listed is either rooted or waiting on the next destroy pass.");
-        DrawHelpTextRow("Filters",
-            "Class defaults are hidden by default -- one per class, and rarely what you are looking for. "
-            "'Pending Destroy' shows objects already marked for teardown, which is where a leak hunt starts.");
-        DrawHelpTextRow("Details",
-            "Selecting a row inspects that object's live properties, read-only. The selection is held weakly, "
-            "so it reports the object as destroyed rather than showing stale values.");
+            "between, so the tool costs the same whether there are a hundred objects or a million."));
+        DrawHelpTextRow(LOC("Refs"),
+            LOC("Strong refs keep the object alive. Weak refs observe without keeping alive. An object sitting at "
+            "0 strong that is still listed is either rooted or waiting on the next destroy pass."));
+        DrawHelpTextRow(LOC("Filters"),
+            LOC("Class defaults are hidden by default -- one per class, and rarely what you are looking for. "
+            "'Pending Destroy' shows objects already marked for teardown, which is where a leak hunt starts."));
+        DrawHelpTextRow(LOC("Details"),
+            LOC("Selecting a row inspects that object's live properties, read-only. The selection is held weakly, "
+            "so it reports the object as destroyed rather than showing stale values."));
     }
 
     void FObjectBrowserEditorTool::Update(const FUpdateContext& UpdateContext)
@@ -231,17 +232,17 @@ namespace Lumina
 
     void FObjectBrowserEditorTool::DrawToolbar()
     {
-        if (ImGui::Button(LE_ICON_REFRESH " Refresh"))
+        if (ImGui::Button(LOC_ICON(LE_ICON_REFRESH, "Refresh")))
         {
             bSnapshotDirty = true;
         }
 
         ImGui::SameLine();
-        if (ImGui::Checkbox("Auto", &bAutoRefresh))
+        if (ImGui::Checkbox(LOC("Auto"), &bAutoRefresh))
         {
             TimeSinceRefresh = 0.0f;
         }
-        ImGuiX::TextTooltip("Re-take the snapshot on an interval. Switch it off to hold the list still.");
+        ImGuiX::TextTooltip(LOCF("Re-take the snapshot on an interval. Switch it off to hold the list still."));
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(90.0f);
@@ -253,39 +254,39 @@ namespace Lumina
         // Counts come from the snapshot, so they describe what is actually on screen.
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("%d shown", (int32)VisibleRows.size());
+        ImGui::Text(LOC("%d shown"), (int32)VisibleRows.size());
         ImGui::SameLine();
-        ImGui::TextDisabled("of %d live / %d slots", TotalAlive, TotalSlots);
+        ImGui::TextDisabled(LOC("of %d live / %d slots"), TotalAlive, TotalSlots);
 
         // A filter change invalidates the visible SET, never the snapshot, so no re-walk per keystroke.
         bool bFilterChanged = false;
 
         ImGui::SetNextItemWidth(200.0f);
         bFilterChanged |= NameFilter.Draw("##NameFilter");
-        if (!NameFilter.IsActive()) { DrawFilterHint(LE_ICON_MAGNIFY " Name..."); }
+        if (!NameFilter.IsActive()) { DrawFilterHint(LOC_ICON(LE_ICON_MAGNIFY, "Name...")); }
 
         ImGui::SameLine();
         ImGui::SetNextItemWidth(200.0f);
         bFilterChanged |= ClassFilter.Draw("##ClassFilter");
-        if (!ClassFilter.IsActive()) { DrawFilterHint(LE_ICON_MAGNIFY " Class..."); }
+        if (!ClassFilter.IsActive()) { DrawFilterHint(LOC_ICON(LE_ICON_MAGNIFY, "Class...")); }
 
         ImGui::SameLine();
-        bFilterChanged |= ImGui::Checkbox("Defaults", &Filter.bShowDefaults);
-        ImGuiX::TextTooltip("Show class default objects. One per class, so they dominate the list.");
+        bFilterChanged |= ImGui::Checkbox(LOC("Defaults"), &Filter.bShowDefaults);
+        ImGuiX::TextTooltip(LOCF("Show class default objects. One per class, so they dominate the list."));
 
         ImGui::SameLine();
-        bFilterChanged |= ImGui::Checkbox("Transient", &Filter.bShowTransient);
+        bFilterChanged |= ImGui::Checkbox(LOC("Transient"), &Filter.bShowTransient);
 
         ImGui::SameLine();
-        bFilterChanged |= ImGui::Checkbox("Pending Destroy", &Filter.bShowPendingDestroy);
-        ImGuiX::TextTooltip("Objects already marked for teardown -- where a leak hunt usually starts.");
+        bFilterChanged |= ImGui::Checkbox(LOC("Pending Destroy"), &Filter.bShowPendingDestroy);
+        ImGuiX::TextTooltip(LOCF("Objects already marked for teardown -- where a leak hunt usually starts."));
 
         ImGui::SameLine();
-        bFilterChanged |= ImGui::Checkbox("Assets", &Filter.bAssetsOnly);
+        bFilterChanged |= ImGui::Checkbox(LOC("Assets"), &Filter.bAssetsOnly);
 
         ImGui::SameLine();
-        bFilterChanged |= ImGui::Checkbox("Rooted", &Filter.bRootedOnly);
-        ImGuiX::TextTooltip("GC roots only -- what is holding the rest of the object graph alive.");
+        bFilterChanged |= ImGui::Checkbox(LOC("Rooted"), &Filter.bRootedOnly);
+        ImGuiX::TextTooltip(LOCF("GC roots only -- what is holding the rest of the object graph alive."));
 
         if (bFilterChanged)
         {
@@ -311,11 +312,11 @@ namespace Lumina
             return;
         }
 
-        ImGui::TableSetupColumn("Name",    ImGuiTableColumnFlags_DefaultSort, 0.28f, Column_Name);
-        ImGui::TableSetupColumn("Class",   ImGuiTableColumnFlags_None,        0.22f, Column_Class);
-        ImGui::TableSetupColumn("Package", ImGuiTableColumnFlags_None,        0.26f, Column_Package);
-        ImGui::TableSetupColumn("Strong",  ImGuiTableColumnFlags_WidthFixed,  56.0f, Column_StrongRefs);
-        ImGui::TableSetupColumn("Flags",   ImGuiTableColumnFlags_None,        0.24f, Column_Flags);
+        ImGui::TableSetupColumn(LOC_ID("Name"),    ImGuiTableColumnFlags_DefaultSort, 0.28f, Column_Name);
+        ImGui::TableSetupColumn(LOC_ID("Class"),   ImGuiTableColumnFlags_None,        0.22f, Column_Class);
+        ImGui::TableSetupColumn(LOC_ID("Package"), ImGuiTableColumnFlags_None,        0.26f, Column_Package);
+        ImGui::TableSetupColumn(LOC_ID("Strong"),  ImGuiTableColumnFlags_WidthFixed,  56.0f, Column_StrongRefs);
+        ImGui::TableSetupColumn(LOC_ID("Flags"),   ImGuiTableColumnFlags_None,        0.24f, Column_Flags);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
@@ -361,18 +362,18 @@ namespace Lumina
 
                 if (ImGui::BeginPopupContextItem("##RowMenu"))
                 {
-                    if (ImGui::MenuItem(LE_ICON_CONTENT_COPY " Copy Name"))
+                    if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_COPY, "Copy Name")))
                     {
                         ImGui::SetClipboardText(Row.Name.c_str());
                     }
-                    if (ImGui::MenuItem(LE_ICON_CONTENT_COPY " Copy Class"))
+                    if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_COPY, "Copy Class")))
                     {
                         ImGui::SetClipboardText(Row.ClassName.c_str());
                     }
                     // Resolved on demand, since the GUID is not worth a string per row per snapshot.
                     if (CObject* Live = Row.Object.Get())
                     {
-                        if (ImGui::MenuItem(LE_ICON_CONTENT_COPY " Copy GUID"))
+                        if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_COPY, "Copy GUID")))
                         {
                             ImGui::SetClipboardText(Live->GetGUID().ToString().c_str());
                         }
@@ -416,11 +417,11 @@ namespace Lumina
             // Nothing picked and what you picked has died are different answers, which is the point here.
             if (SelectedObject.IsStale())
             {
-                ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.45f, 1.0f), "The selected object has been destroyed.");
+                ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.45f, 1.0f), LOC("The selected object has been destroyed."));
             }
             else
             {
-                ImGui::TextDisabled("Select an object to inspect it.");
+                ImGui::TextDisabled(LOC("Select an object to inspect it."));
             }
 
             DetailsTable.reset();
@@ -446,12 +447,12 @@ namespace Lumina
 
         if (CPackage* Package = Object->GetPackage())
         {
-            ImGui::TextColored(EditorColors::TextMuted(), "Package: %s", Package->GetName().c_str());
+            ImGui::TextColored(EditorColors::TextMuted(), LOC("Package: %s"), Package->GetName().c_str());
         }
 
-        ImGui::TextColored(EditorColors::TextMuted(), "GUID: %s", Object->GetGUID().ToString().c_str());
+        ImGui::TextColored(EditorColors::TextMuted(), LOC("GUID: %s"), Object->GetGUID().ToString().c_str());
         ImGui::TextColored(FlagsTint(Object->GetFlags()), "%s", ObjectFlagsToString(Object->GetFlags()).c_str());
-        ImGui::TextColored(EditorColors::TextMuted(), "Strong: %d", Object->GetStrongRefCount());
+        ImGui::TextColored(EditorColors::TextMuted(), LOC("Strong: %d"), Object->GetStrongRefCount());
 
         ImGui::Separator();
         ImGui::Spacing();

@@ -12,6 +12,8 @@
 #include "Config/Config.h"
 #include "Config/EngineSettings.h"
 #include "Config/GameUserSettings.h"
+#include "Localization/Localization.h"
+#include "Localization/LocalizationSettings.h"
 #include "Core/Application/Application.h"
 #include "Core/Console/ConsoleVariable.h"
 #include "Core/Threading/Thread.h"
@@ -326,7 +328,11 @@ namespace Lumina
         // An engine-lifetime subscription, so the handle is intentionally not retained.
         (void)FCoreDelegates::OnSettingsSaved.AddLambda([](CClass* Class)
         {
-            if (Class == CInputSettings::StaticClass())
+            if (Class == CLocalizationSettings::StaticClass())
+            {
+                FLocalization::Get().Initialize();
+            }
+            else if (Class == CInputSettings::StaticClass())
             {
                 FInputActionMap::Get().RebuildFromSettings();
             }
@@ -434,6 +440,10 @@ namespace Lumina
 
         #if USING(WITH_EDITOR)
         GConfig->DiscoverAndLoadSettings();
+
+        // After settings so the saved language wins, and before the developer UI is built so the
+        // first frame the editor draws is already localized.
+        FLocalization::Get().Initialize();
 
         // Applied as soon as the setting is readable, so a crash during startup still carries it.
         if (const CEditorSettings* EditorSettings = GetDefault<CEditorSettings>();
@@ -598,6 +608,7 @@ namespace Lumina
     bool FEngine::Update(bool bApplicationWantsExit)
     {
         LUMINA_PROFILE_SCOPE();
+        FLocalizationFrameScope LocalizationFrame;
 
         bEngineReadyToClose = true;
         bCloseRequested = bApplicationWantsExit;
@@ -1032,6 +1043,9 @@ namespace Lumina
     void FEngine::StartProject()
     {
         GConfig->DiscoverAndLoadSettings();
+
+        // A project may ship its own language choice; re-read it now that its settings are loaded.
+        FLocalization::Get().Initialize();
 
         CProjectSettings* ProjectSettings = GetMutableDefault<CProjectSettings>();
         if (ProjectSettings->CookRoots.empty() && !LegacyCookRoots.empty())
@@ -1671,6 +1685,9 @@ namespace Lumina
 
         // Without this a cooked game sees empty project settings and finds no startup map.
         GConfig->DiscoverAndLoadSettings();
+
+        // Cooked runtimes read the same tables; the game's own choice now applies to its UI too.
+        FLocalization::Get().Initialize();
 
         FInputActionMap::Get().RebuildFromSettings();
 

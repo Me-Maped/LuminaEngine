@@ -21,6 +21,7 @@
 #include "World/Entity/Components/ParticleSystemComponent.h"
 #include "World/Entity/Components/TransformComponent.h"
 #include "Containers/StringFormat.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -183,41 +184,41 @@ namespace Lumina
 
     void FParticleSystemEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Emitters",
-            "A system is a list of emitters shown side by side, each simulating and drawing on its own. "
+        DrawHelpTextRow(LOC("Emitters"),
+            LOC("A system is a list of emitters shown side by side, each simulating and drawing on its own. "
             "An explosion is typically a flash, smoke, sparks and debris as four emitters. Use the "
-            "checkbox to mute one while tuning the others.");
-        DrawHelpTextRow("Stack",
-            "Each emitter is built from a Spawn stack (runs once per particle) and an Update stack "
-            "(runs every frame). Add modules with the + buttons and reorder them, order matters.");
-        DrawHelpTextRow("Modules",
-            "Each module is one behavior (shape, velocity, gravity, color over life, ...). Select a "
-            "module to edit its inputs in the Details panel. Toggle the checkbox to disable it.");
-        DrawHelpTextRow("Compile",
-            "Compile bakes the stacks into the asset's compute shader. Save also compiles. "
-            "Place 'Solve Forces and Velocity' last in Update so all forces are applied first.");
-        DrawHelpTextRow("Preview",
-            "The viewport spawns the system at the origin. Select an emitter's header for its spawn "
-            "rate, particle budget and render settings; select System Settings for user parameters.");
+            "checkbox to mute one while tuning the others."));
+        DrawHelpTextRow(LOC("Stack"),
+            LOC("Each emitter is built from a Spawn stack (runs once per particle) and an Update stack "
+            "(runs every frame). Add modules with the + buttons and reorder them, order matters."));
+        DrawHelpTextRow(LOC("Modules"),
+            LOC("Each module is one behavior (shape, velocity, gravity, color over life, ...). Select a "
+            "module to edit its inputs in the Details panel. Toggle the checkbox to disable it."));
+        DrawHelpTextRow(LOC("Compile"),
+            LOC("Compile bakes the stacks into the asset's compute shader. Save also compiles. "
+            "Place 'Solve Forces and Velocity' last in Update so all forces are applied first."));
+        DrawHelpTextRow(LOC("Preview"),
+            LOC("The viewport spawns the system at the origin. Select an emitter's header for its spawn "
+            "rate, particle budget and render settings; select System Settings for user parameters."));
     }
 
     void FParticleSystemEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)
     {
-        if (ImGui::MenuItem(LE_ICON_RECEIPT_TEXT" Compile"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_RECEIPT_TEXT, "Compile")))
         {
             Compile();
         }
 
-        if (ImGui::MenuItem(LE_ICON_REPLAY" Replay"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_REPLAY, "Replay")))
         {
             ReplayPreview();
         }
 
-        ImGui::MenuItem(LE_ICON_REPEAT" Loop Preview", nullptr, &bLoopPreview);
-        ImGui::MenuItem(LE_ICON_SHAPE_OUTLINE" Gizmos", nullptr, &bShowGizmos);
+        ImGui::MenuItem(LOC_ICON(LE_ICON_REPEAT, "Loop Preview"), nullptr, &bLoopPreview);
+        ImGui::MenuItem(LOC_ICON(LE_ICON_SHAPE_OUTLINE, "Gizmos"), nullptr, &bShowGizmos);
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Re-fire a one-shot system once its particles have expired. Streaming emitters are left alone.");
+            ImGui::SetTooltip(LOC("Re-fire a one-shot system once its particles have expired. Streaming emitters are left alone."));
         }
     }
 
@@ -336,7 +337,7 @@ namespace Lumina
 
         // System header selects the asset so its user parameters show in Details.
         const bool bSystemSelected = (SelectedObject == nullptr);
-        if (ImGui::Selectable(LE_ICON_COG" System Settings", bSystemSelected))
+        if (ImGui::Selectable(LOC_ICON(LE_ICON_COG, "System Settings"), bSystemSelected))
         {
             SelectObject(nullptr);
         }
@@ -353,7 +354,7 @@ namespace Lumina
             ImGui::Spacing();
         }
 
-        if (ImGui::Button(LE_ICON_PLUS" Add Emitter", ImVec2(-FLT_MIN, 0.0f)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Add Emitter"), ImVec2(-FLT_MIN, 0.0f)))
         {
             if (CParticleEmitter* Added = PS->AddEmitter())
             {
@@ -449,7 +450,7 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Mute this emitter. Disabled emitters do not simulate or draw.");
+            ImGui::SetTooltip(LOC("Mute this emitter. Disabled emitters do not simulate or draw."));
         }
 
         ImGui::SameLine();
@@ -552,7 +553,12 @@ namespace Lumina
             const bool bSelected = (SelectedModule == Module);
             const float Remaining = ImGui::GetContentRegionAvail().x - Cluster;
             const float RowWidth = Remaining > 40.0f ? Remaining : 40.0f;
-            if (ImGui::Selectable(Module->GetDisplayName().c_str(), bSelected, 0, ImVec2(RowWidth, 0)))
+            // The English display name doubles as the row's ImGui id, so the visible text is
+            // translated around it rather than replacing it.
+            const FString ModuleDisplayName = Module->GetDisplayName();
+            const FFixedString ModuleRowLabel = FormatAs<FFixedString>("{}###{}",
+                LOC(ModuleDisplayName.c_str()), ModuleDisplayName.c_str());
+            if (ImGui::Selectable(ModuleRowLabel.c_str(), bSelected, 0, ImVec2(RowWidth, 0)))
             {
                 SelectedEmitter = EmitterIndex;
                 SelectModule(Module);
@@ -560,7 +566,7 @@ namespace Lumina
             ImGui::PopStyleColor();
             if (ImGui::IsItemHovered() && !Module->GetTooltip().empty())
             {
-                ImGui::SetTooltip("%s", Module->GetTooltip().c_str());
+                ImGui::SetTooltip("%s", LOC(Module->GetTooltip().c_str()));
             }
 
             ImGui::SameLine();
@@ -614,7 +620,7 @@ namespace Lumina
 
         if (ImGui::BeginPopup("##AddModule"))
         {
-            ImGui::TextDisabled("Add Module");
+            ImGui::TextDisabled(LOC("Add Module"));
             ImGui::Separator();
 
             // Reflection returns registration order, and the header is emitted on category change.
@@ -652,7 +658,7 @@ namespace Lumina
 
             if (Entries.empty())
             {
-                ImGui::TextDisabled("No modules for this stage.");
+                ImGui::TextDisabled(LOC("No modules for this stage."));
             }
 
             FString CurrentCategory;
@@ -662,12 +668,16 @@ namespace Lumina
                 {
                     CurrentCategory = Entry.Category;
                     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(150, 150, 155, 255));
-                    ImGui::TextUnformatted(CurrentCategory.c_str());
+                    // Grouping and sorting still run on the English category; only the header is
+                    // translated, so the palette order does not depend on the active language.
+                    ImGui::TextUnformatted(LOC(CurrentCategory.c_str()));
                     ImGui::PopStyleColor();
                 }
 
                 ImGui::Indent(10.0f);
-                if (ImGui::Selectable(Entry.Name.c_str()))
+                const FFixedString PaletteLabel = FormatAs<FFixedString>("{}###{}",
+                    LOC(Entry.Name.c_str()), Entry.Name.c_str());
+                if (ImGui::Selectable(PaletteLabel.c_str()))
                 {
                     CParticleModule* Added = Emitter->AddModule(Entry.Class);
                     if (Added != nullptr)
@@ -680,7 +690,7 @@ namespace Lumina
                 }
                 if (ImGui::IsItemHovered() && !Entry.CDO->GetTooltip().empty())
                 {
-                    ImGui::SetTooltip("%s", Entry.CDO->GetTooltip().c_str());
+                    ImGui::SetTooltip("%s", LOC(Entry.CDO->GetTooltip().c_str()));
                 }
                 ImGui::Unindent(10.0f);
             }

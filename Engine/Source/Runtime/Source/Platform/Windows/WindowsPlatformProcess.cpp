@@ -6,6 +6,7 @@
 #include "Containers/String.h"
 #include "Paths/Paths.h"
 #include "Platform/Process/PlatformProcess.h"
+#include "Localization/Localization.h"
 #include "Core/Threading/Thread.h"
 // The lean-and-mean macro is already defined workspace-wide, so guarding on it would skip the include.
 #ifndef WIN32_LEAN_AND_MEAN
@@ -869,6 +870,14 @@ namespace Lumina::Platform
 
     bool OpenFileDialogue(FFixedString& OutFile, const char* Title, const char* Filter, const char* InitialDir)
     {
+        // The filter's display names are resource strings, so they are translated here rather than at
+        // every call site. Null still means "no filter", which is how a folder picker is requested.
+        FString LocalizedFilter;
+        if (Filter != nullptr)
+        {
+            LocalizedFilter = Localization::LocalizeFileDialogFilter(Filter);
+            Filter = LocalizedFilter.c_str();
+        }
 
         IFileDialog* FileDialog = nullptr;
         HRESULT Result = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_ALL, IID_IFileDialog, reinterpret_cast<void**>(&FileDialog));
@@ -972,6 +981,13 @@ namespace Lumina::Platform
     bool OpenFileDialogueMulti(TVector<FFixedString>& OutFiles, const char* Title, const char* Filter, const char* InitialDir)
     {
         OutFiles.clear();
+
+        FString LocalizedFilter;
+        if (Filter != nullptr)
+        {
+            LocalizedFilter = Localization::LocalizeFileDialogFilter(Filter);
+            Filter = LocalizedFilter.c_str();
+        }
 
         IFileOpenDialog* Dialog = nullptr;
         if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_ALL, IID_IFileOpenDialog, reinterpret_cast<void**>(&Dialog))))

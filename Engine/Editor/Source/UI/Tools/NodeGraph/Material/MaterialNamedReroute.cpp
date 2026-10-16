@@ -1,4 +1,5 @@
 ﻿#include "MaterialNamedReroute.h"
+#include "Localization/Localization.h"
 
 #include "MaterialInput.h"
 #include "MaterialOutput.h"
@@ -73,7 +74,7 @@ namespace Lumina
 
             if (MatchCount > 1)
             {
-                ImGui::TextColored(ImVec4(0.96f, 0.55f, 0.30f, 1.0f), "Duplicate name");
+                ImGui::TextColored(ImVec4(0.96f, 0.55f, 0.30f, 1.0f), LOC("Duplicate name"));
             }
         }
     }
@@ -120,7 +121,7 @@ namespace Lumina
     {
         CEdNodeGraph* Graph = GetOwningGraph();
 
-        const char* Preview = Name.empty() ? "(none)" : Name.c_str();
+        const char* Preview = Name.empty() ? LOC("(none)") : Name.c_str();
 
         ImGui::PushID(this);
 
@@ -159,7 +160,7 @@ namespace Lumina
         // An unresolved usage compiles as if unconnected, which is silent, so flag it on the node.
         if (FindDeclaration() == nullptr)
         {
-            ImGui::TextColored(ImVec4(0.96f, 0.36f, 0.38f, 1.0f), "Unresolved");
+            ImGui::TextColored(ImVec4(0.96f, 0.36f, 0.38f, 1.0f), LOC("Unresolved"));
         }
     }
 }

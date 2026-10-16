@@ -1,4 +1,5 @@
 #include "ParticleCustomModules.h"
+#include "Localization/Localization.h"
 #include "Containers/String.h"
 #include "UI/Tools/NodeGraph/Particle/ParticleCompiler.h"
 
@@ -47,7 +48,7 @@ namespace Lumina
             const FString Name(Input.Name.ToString().c_str());
             if (!IsIdentifier(Name))
             {
-                Compiler.AddError({ "Custom Code", "Input '" + Name + "' is not a valid identifier." });
+                Compiler.AddError({ LOC("Custom Code"), FString(LOC("Input '")) + Name + LOC("' is not a valid identifier.") });
                 continue;
             }
             Compiler.Emit(Context, FString("\tconst ") + SlangTypeFor(Input.Value.Type) + " " + Name + " = " + Compiler.Param(Name.c_str(), Input.Value) + ";");
@@ -58,7 +59,7 @@ namespace Lumina
             const FString Name(Attribute.ToString().c_str());
             if (!IsIdentifier(Name))
             {
-                Compiler.AddError({ "Custom Code", "Attribute '" + Name + "' is not a valid identifier." });
+                Compiler.AddError({ LOC("Custom Code"), FString(LOC("Attribute '")) + Name + LOC("' is not a valid identifier.") });
                 continue;
             }
             Compiler.Emit(Context, FString(Directive) + "define " + Name + " " + Compiler.Attribute(Name.c_str()));

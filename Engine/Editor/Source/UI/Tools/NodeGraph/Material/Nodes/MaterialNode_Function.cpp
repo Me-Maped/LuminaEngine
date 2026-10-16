@@ -1,4 +1,5 @@
 ﻿#include "MaterialNode_Function.h"
+#include "Localization/Localization.h"
 
 #include "imgui.h"
 #include "Core/Object/Cast.h"
@@ -48,7 +49,7 @@ namespace Lumina
             case EMaterialValueType::Float2:        return "float2";
             case EMaterialValueType::Float3:        return "float3";
             case EMaterialValueType::Float4:        return "float4";
-            case EMaterialValueType::TextureHandle: return "texture handle";
+            case EMaterialValueType::TextureHandle: return LOC("texture handle");
             default:                                return "float";
         }
     }
@@ -288,7 +289,7 @@ namespace Lumina
 
     void CMaterialExpression_MaterialFunctionCall::DrawNodeBody()
     {
-        const char* Label = Function.IsValid() ? Function->GetName().c_str() : "(no function)";
+        const char* Label = Function.IsValid() ? Function->GetName().c_str() : LOC("(no function)");
         ImGui::Text("%s", Label);
     }
 
@@ -320,14 +321,14 @@ namespace Lumina
         CMaterialFunction* Fn = Function.Get();
         if (Fn == nullptr)
         {
-            EmitError("Material Function", "No material function is assigned to this node.");
+            EmitError(LOC("Material Function"), LOC("No material function is assigned to this node."));
             EmitNeutralOutputs();
             return;
         }
 
         if (!Compiler.BeginInlineFunction(Fn))
         {
-            EmitError("Recursive Function", FString("Material function '") + Fn->GetName().c_str() + "' calls itself (directly or indirectly).");
+            EmitError(LOC("Recursive Function"), Format(LOCF("Material function '{}' calls itself (directly or indirectly)."), Fn->GetName()));
             EmitNeutralOutputs();
             return;
         }
@@ -335,7 +336,7 @@ namespace Lumina
         CMaterialNodeGraph* FnGraph = Cast<CMaterialNodeGraph>(Fn->GetPackage()->LoadObjectByName(FName(GMaterialFunctionGraphObjectName)));
         if (FnGraph == nullptr)
         {
-            EmitError("Material Function", FString("Material function '") + Fn->GetName().c_str() + "' has no graph to inline.");
+            EmitError(LOC("Material Function"), Format(LOCF("Material function '{}' has no graph to inline."), Fn->GetName()));
             EmitNeutralOutputs();
             Compiler.EndInlineFunction(Fn);
             return;
@@ -428,7 +429,7 @@ namespace Lumina
 
         if (CyclicNode != nullptr)
         {
-            EmitError("Material Function", FString("Material function '") + Fn->GetName().c_str() + "' contains a cycle.");
+            EmitError(LOC("Material Function"), Format(LOCF("Material function '{}' contains a cycle."), Fn->GetName()));
             for (CMaterialOutput* Bound : BoundInputOutputs)
             {
                 Bound->ResolvedVar.clear();

@@ -1,4 +1,5 @@
 #include "EditorPCH.h"
+#include "Localization/Localization.h"
 #include "PhysicsAssetFactory.h"
 
 #include "Assets/AssetTypes/Mesh/Skeleton/Skeleton.h"
@@ -21,7 +22,7 @@ namespace Lumina
             SelectedSkeletonGUID.Invalidate();
         }
 
-        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LE_ICON_BONE " Select Skeleton");
+        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), LOC_ICON(LE_ICON_BONE, "Select Skeleton"));
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
@@ -38,14 +39,14 @@ namespace Lumina
 
         bool bConfirm = false;
         ImGui::BeginDisabled(!SelectedSkeletonGUID.IsValid());
-        if (ImGui::Button(LE_ICON_CHECK " Create", ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CHECK, "Create"), ImVec2(ButtonWidth, 0)))
         {
             bConfirm = true;
         }
         ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_CLOSE " Cancel", ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON(LE_ICON_CLOSE, "Cancel"), ImVec2(ButtonWidth, 0)))
         {
             SelectedSkeletonGUID.Invalidate();
             bShouldClose = true;

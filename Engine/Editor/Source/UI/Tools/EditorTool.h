@@ -7,11 +7,13 @@
 
 #include "imgui.h"
 #include "imgui_internal.h"
+#include <cstring>
 #include "EditorAction.h"
 #include "ToolFlags.h"
 #include "Transactions/EditorTransaction.h"
 #include "Containers/Vector.h"
 #include "Containers/Function.h"
+#include "Localization/Localization.h"
 #include "Containers/String.h"
 #include "Events/EventProcessor.h"
 #include "Memory/SmartPtr.h"
@@ -430,10 +432,31 @@ namespace Lumina
         FORCEINLINE ImGuiID GetPrevDockspaceID() const   { return PrevDockspaceID; }
         
 
+        // ImGui name for one of this tool's windows.
+        //
+        // The form is "<display>###<identity>##<dockspace>". Everything after ### is what hashes into
+        // the window id, so the display half is free to be localized -- and to change at runtime when
+        // the language does -- while the id, and with it the dock node, sizes and tab order ImGui.ini
+        // stores, stay put. The identity is the name the tool declares, which is also exactly what the
+        // previous "<name>##<dockspace>" form hashed, so layouts written before this change still
+        // resolve to the right window.
+        //
+        // A name that already carries its own identity ("##ViewportToolbar", "Foo###Bar") is left in
+        // the plain form: it is language-independent already, and rewriting it would change its id.
+        //
+        // Note ImGui reuses a window by id and keeps the name string it was created with, so a language
+        // switch retitles a window only once that tool is reopened (or the editor restarts). Everything
+        // drawn per frame -- menus, labels, panel contents -- switches immediately.
         static FFixedString GetToolWindowName(char const* ToolWindowName, ImGuiID InDockspaceID)
         {
             DEBUG_ASSERT(ToolWindowName != nullptr);
-            return FormatAs<FFixedString>("{}##{:08X}", ToolWindowName, InDockspaceID);
+
+            if (strchr(ToolWindowName, '#') != nullptr)
+            {
+                return FormatAs<FFixedString>("{}##{:08X}", ToolWindowName, InDockspaceID);
+            }
+
+            return FormatAs<FFixedString>("{}###{}##{:08X}", LOC(ToolWindowName), ToolWindowName, InDockspaceID);
         }
 
     public:
