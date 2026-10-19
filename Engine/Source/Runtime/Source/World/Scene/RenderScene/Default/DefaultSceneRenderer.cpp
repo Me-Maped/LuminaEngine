@@ -74,7 +74,7 @@ namespace Lumina
 
         if (World != nullptr)
         {
-            ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+            ECS::FRegistry& Registry = World->GetEntityRegistry();
 
             MovedTransformConsumer = ECS::Utils::AddMovedTransformConsumer(Registry);
 
@@ -234,7 +234,7 @@ namespace Lumina
 
         if (World != nullptr)
         {
-            ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+            ECS::FRegistry& Registry = World->GetEntityRegistry();
             ECS::Utils::RemoveMovedTransformConsumer(Registry, MovedTransformConsumer);
             MovedTransformConsumer = Constants::kIndexNoneU32;
 
@@ -337,6 +337,7 @@ namespace Lumina
             MeshletCullDispatchArgsRing[Slot].Release();
             SkinDispatchArgsRing[Slot].Release();
             SkinWorkBaseRing[Slot].Release();
+            SkinWorkEntryRing[Slot].Release();
             InstanceViewRangeRing[Slot].Release();
             MaterialClassifyRing[Slot].Release();
             VisibleInstanceRing[Slot].Release();
@@ -408,12 +409,9 @@ namespace Lumina
         #if USING(WITH_EDITOR)
         for (FPickerReadbackSlot& Slot : PickerReadbackRing)
         {
-            if (Slot.Readback.Gpu != 0)
-            {
-                RHI::Retire(Slot.Readback);
-                Slot.Readback = {};
-            }
+            ReleasePickerSlot(Slot);
         }
+        ReleasePickerSlot(SurfaceSnapshot);
         #endif
 
     }
@@ -654,7 +652,7 @@ namespace Lumina
                 }
 
                 // Before the pyramid, so custom geometry occludes the late cull like terrain does.
-                CustomDepthPass(CL);
+                CallbackDepthPass(CL);
                 
                 if (!FrameSettings.bFreezeCulling)
                 {
@@ -667,6 +665,11 @@ namespace Lumina
                 {
                     SCENE_GPU_SCOPE(CL, "VisBuffer Late");
                     VisBufferPass(CL, CurrentCameraEarlyView, /*bClear*/ false, ECullPhase::Late);
+                }
+
+                {
+                    SCENE_GPU_SCOPE(CL, "Custom Depth");
+                    CustomDepthStencilPass(CL);
                 }
 
                 // Near cascades cull only now, against everything the finished depth shows the camera can see, and ahead of GTAO so it cannot starve them.
@@ -1381,15 +1384,9 @@ namespace Lumina
         // Drop old readback slots; sized to previous extent so pixel grid no longer matches clicks.
         for (FPickerReadbackSlot& Slot : PickerReadbackRing)
         {
-            if (Slot.Readback.Gpu != 0)
-            {
-                RHI::Retire(Slot.Readback);
-                Slot.Readback = {};
-            }
-            Slot.Width = 0;
-            Slot.Height = 0;
-            Slot.bPending = false;
+            ReleasePickerSlot(Slot);
         }
+        ReleasePickerSlot(SurfaceSnapshot);
         #endif
     }
 
@@ -1637,6 +1634,7 @@ namespace Lumina
             RenderBucketRing[Slot].Allocate(sizeof(FRenderBucketGPU));
             MeshletBlockRing[Slot].Allocate(sizeof(uint32) * 2);
             SkinWorkBaseRing[Slot].Allocate(sizeof(uint32) * 2);
+            SkinWorkEntryRing[Slot].Allocate(sizeof(uint32) * 2);
             VisibleInstanceRing[Slot].Allocate(sizeof(FGPUInstance));
 
             // Fixed size, one grid each, rewritten every frame.
@@ -1723,6 +1721,7 @@ namespace Lumina
         case ENamedImage::DepthAttachment:    return "Scene.DepthAttachment";
         case ENamedImage::DepthPyramid:       return "Scene.DepthPyramid";
         case ENamedImage::Picker:             return "Scene.Picker";
+        case ENamedImage::PickerFoliage:      return "Scene.PickerFoliage";
         case ENamedImage::VisBuffer:          return "Scene.VisBuffer";
         case ENamedImage::GBufferA:           return "Scene.GBufferA";
         case ENamedImage::GBufferB:           return "Scene.GBufferB";
@@ -1756,6 +1755,9 @@ namespace Lumina
         case ENamedImage::TemporalHistoryA:   return "Scene.TemporalHistoryA";
         case ENamedImage::TemporalHistoryB:   return "Scene.TemporalHistoryB";
         case ENamedImage::UpscaledHDR:        return "Scene.UpscaledHDR";
+        case ENamedImage::CustomDepth:        return "Scene.CustomDepth";
+        case ENamedImage::CustomDepthVis:     return "Scene.CustomDepthVis";
+        case ENamedImage::CustomStencil:      return "Scene.CustomStencil";
 
         #if USING(WITH_EDITOR)
         case ENamedImage::PointLightIcon:       return "Scene.PointLightIcon";
@@ -1813,6 +1815,9 @@ namespace Lumina
         case ENamedImage::SSRMipLevel:
         case ENamedImage::FogShaft:
         case ENamedImage::FogShaftDepth:
+        case ENamedImage::CustomDepth:
+        case ENamedImage::CustomDepthVis:
+        case ENamedImage::CustomStencil:
             return true;
         default:
             return false;
@@ -1932,6 +1937,21 @@ namespace Lumina
             OutDesc.Usage     = RHI::EImageUsageFlags::Sampled | RHI::EImageUsageFlags::Storage;
             return true;
 
+        // Reverse-Z like the scene depth, so the two compare directly.
+        case ENamedImage::CustomDepth:
+            OutDesc.Format = EFormat::D32;
+            OutDesc.Usage  = RHI::EImageUsageFlags::DepthAttachment | RHI::EImageUsageFlags::Sampled;
+            return true;
+
+        // The visibility ids the custom depth geometry drew, which the stencil resolve turns into stencil values.
+        case ENamedImage::CustomDepthVis:
+            OutDesc.Format = EFormat::R32_UINT;
+            return true;
+
+        case ENamedImage::CustomStencil:
+            OutDesc.Format = EFormat::R8_UINT;
+            return true;
+
         case ENamedImage::GTAOWorkingDepth:
         {
             const FUIntVector2 Size = GetGTAOTraceExtent(Extent);
@@ -2032,6 +2052,11 @@ namespace Lumina
         const bool bFogShafts = Frame.Volumetrics.bHasFog && Frame.Volumetrics.FarShaftSteps > 0u;
         Want(ENamedImage::FogShaft,         bFogShafts, /*bMipUAVs*/ true);
         Want(ENamedImage::FogShaftDepth,    bFogShafts, /*bMipUAVs*/ true);
+
+        const bool bCustomDepth = View.bIsPrimary && Frame.Views.CustomDepthCullView != Constants::kIndexNoneU32;
+        Want(ENamedImage::CustomDepth,      bCustomDepth);
+        Want(ENamedImage::CustomDepthVis,   bCustomDepth);
+        Want(ENamedImage::CustomStencil,    bCustomDepth);
 
         // A freshly created pair holds whatever the allocator handed back, which is not a previous frame.
         if (bTemporal && !bHadTemporalTargets)
@@ -2158,6 +2183,10 @@ namespace Lumina
         Desc.Format = EFormat::R32_UINT;
         Desc.Usage  = RHI::EImageUsageFlags::ColorAttachment | RHI::EImageUsageFlags::Sampled | RHI::EImageUsageFlags::TransferSrc;
         View.Images[(int)ENamedImage::Picker] = CreateSceneImage(Desc);
+
+        // Marks the picker texels whose front surface is foliage, which placement reads through.
+        Desc.Format = EFormat::R8_UINT;
+        View.Images[(int)ENamedImage::PickerFoliage] = CreateSceneImage(Desc);
         #endif
 
         Desc.Format = EFormat::R32_UINT;

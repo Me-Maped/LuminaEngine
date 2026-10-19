@@ -1134,16 +1134,22 @@ namespace Lumina::Reflection
                 }
                 case EBind::Delegate:
                 {
+                    // An event, so scripts subscribe with += and -=; the view underneath does the native binding.
+                    const std::string ViewName = "__delegate_" + Member;
                     if (B.CSharp.empty())
                     {
-                        Writer.Linef("public global::LuminaSharp.ScriptDelegate %s => new global::LuminaSharp.ScriptDelegate((void*)(global::LuminaSharp.NativeBindings.FieldAt(Self, %s)));",
-                            PropName.c_str(), OffName.c_str());
+                        Writer.Linef("public event global::System.Action %s { add => %s.Bind(value); remove => %s.Remove(value); }",
+                            PropName.c_str(), ViewName.c_str(), ViewName.c_str());
+                        Writer.Linef("private global::LuminaSharp.ScriptDelegate %s => new global::LuminaSharp.ScriptDelegate((void*)(global::LuminaSharp.NativeBindings.FieldAt(Self, %s)));",
+                            ViewName.c_str(), OffName.c_str());
                     }
                     else
                     {
                         // The property token is what the argument slots are resolved from, once per signature.
-                        Writer.Linef("public global::LuminaSharp.ScriptDelegate<%s> %s => new global::LuminaSharp.ScriptDelegate<%s>((void*)(global::LuminaSharp.NativeBindings.FieldAt(Self, %s)), %s);",
-                            CS, PropName.c_str(), CS, OffName.c_str(), PropFieldName.c_str());
+                        Writer.Linef("public event global::System.Action<%s> %s { add => %s.Bind(value); remove => %s.Remove(value); }",
+                            CS, PropName.c_str(), ViewName.c_str(), ViewName.c_str());
+                        Writer.Linef("private global::LuminaSharp.ScriptDelegate<%s> %s => new global::LuminaSharp.ScriptDelegate<%s>((void*)(global::LuminaSharp.NativeBindings.FieldAt(Self, %s)), %s);",
+                            CS, ViewName.c_str(), CS, OffName.c_str(), PropFieldName.c_str());
                         EmitTokenField(Writer, PropFieldName, TypeName, Member);
                     }
                     EmitOffsetField(Writer, OffName, Prop, TypeName);
@@ -1822,8 +1828,22 @@ namespace Lumina::Reflection
                 Writer.Linef("[global::LuminaSharp.NativeCall(Module = \"%s\", EntryPoint = \"%s\")]",
                     Module.c_str(), CallThunk.c_str());
             }
-            Writer.Linef("%s %spartial %s %s(%s);", FunctionHasMetadata(Fn, "ScriptInternal") ? "internal" : "public",
+            // A getter that takes nothing reads as a property, so World.Physics stands for World.GetPhysics().
+            const std::string* PropertyName = FindMetadata(Fn.Metadata, "ScriptProperty");
+            const bool bProperty = PropertyName != nullptr && SigParams.empty() && !FB.bVoid && VectorOutCS.empty();
+            Writer.Linef("%s %spartial %s %s(%s);", (bProperty || FunctionHasMetadata(Fn, "ScriptInternal")) ? "internal" : "public",
                 bStatic ? "static " : "", RetCS.c_str(), Name.c_str(), SigParams.c_str());
+
+            if (bProperty)
+            {
+                std::string Property = *PropertyName;
+                if (Property.empty() || Property == "true")
+                {
+                    Property = Name.rfind("Get", 0) == 0 && Name.size() > 3 ? Name.substr(3) : Name;
+                }
+                EmitDocSummary(Writer, Fn.Metadata);
+                Writer.Linef("public %s%s %s => %s();", bStatic ? "static " : "", RetCS.c_str(), Property.c_str(), Name.c_str());
+            }
         }
 
         // A C# Span arrives as (T* pinned, int Length); a TVector param is rebuilt from that pair for the call.
@@ -2051,7 +2071,7 @@ namespace Lumina::Reflection
             if (A.bEntity) { return true; }
             switch (A.Kind)
             {
-            case EBind::Number: case EBind::Bool: case EBind::Enum: case EBind::StructValue: case EBind::Object: return true;
+            case EBind::Number: case EBind::Bool: case EBind::Enum: case EBind::StructValue: case EBind::StructOpaque: case EBind::Object: return true;
             default: return false;
             }
         }
@@ -2123,7 +2143,7 @@ namespace Lumina::Reflection
         std::string SeArgAbiCS(const FArg& A)
         {
             if (A.bEntity) { return "uint"; }
-            switch (A.Kind) { case EBind::Bool: return "byte"; case EBind::Enum: return "int"; case EBind::Object: return "global::System.IntPtr"; default: return A.CSharp; }
+            switch (A.Kind) { case EBind::Bool: return "byte"; case EBind::Enum: return "int"; case EBind::Object: case EBind::StructOpaque: return "global::System.IntPtr"; default: return A.CSharp; }
         }
         std::string SeArgFromAbiCS(const FArg& A, const std::string& N)
         {
@@ -2136,6 +2156,8 @@ namespace Lumina::Reflection
             case EBind::Object: return A.bCObject
                 ? "global::LuminaSharp.NativeObjectMarshal.FromHandle<" + A.CSharp + ">(" + N + ")"
                 : "global::LuminaSharp.NativeStructs.FromAddressOrNull<" + StripNullable(A.CSharp) + ">(" + N + ")";
+            // Passed by reference, so the handle views the caller's value for the length of the call.
+            case EBind::StructOpaque: return "global::LuminaSharp.NativeStructs.FromAddress<" + A.CSharp + ">(" + N + ")";
             default:            return N;
             }
         }
@@ -2163,17 +2185,17 @@ namespace Lumina::Reflection
         std::string SeArgCppParam(const FArg& A)
         {
             if (A.bEntity) { return "Lumina::ECS::FEntity"; }
-            switch (A.Kind) { case EBind::Bool: return "bool"; case EBind::Enum: return A.TargetCpp; case EBind::StructValue: return A.TargetCpp; case EBind::Object: return A.TargetCpp + "*"; default: return A.Cpp; }
+            switch (A.Kind) { case EBind::Bool: return "bool"; case EBind::Enum: return A.TargetCpp; case EBind::StructValue: return A.TargetCpp; case EBind::StructOpaque: return "const " + A.TargetCpp + "&"; case EBind::Object: return A.TargetCpp + "*"; default: return A.Cpp; }
         }
         std::string SeArgAbiCpp(const FArg& A)
         {
             if (A.bEntity) { return "uint32"; }
-            switch (A.Kind) { case EBind::Bool: return "unsigned char"; case EBind::Enum: return "int"; case EBind::StructValue: return A.TargetCpp; case EBind::Object: return "void*"; default: return A.Cpp; }
+            switch (A.Kind) { case EBind::Bool: return "unsigned char"; case EBind::Enum: return "int"; case EBind::StructValue: return A.TargetCpp; case EBind::Object: case EBind::StructOpaque: return "void*"; default: return A.Cpp; }
         }
         std::string SeArgCppToAbi(const FArg& A, const std::string& N)
         {
             if (A.bEntity) { return "(uint32)" + N; }
-            switch (A.Kind) { case EBind::Bool: return "(unsigned char)(" + N + " ? 1 : 0)"; case EBind::Enum: return "(int)" + N; case EBind::Object: return "(void*)" + N; default: return N; }
+            switch (A.Kind) { case EBind::Bool: return "(unsigned char)(" + N + " ? 1 : 0)"; case EBind::Enum: return "(int)" + N; case EBind::Object: return "(void*)" + N; case EBind::StructOpaque: return "(void*)&" + N; default: return N; }
         }
         // A parms field for an object is a TStrongObjectPtr, where the shim's own parameter is already a raw pointer.
         std::string SeParmsField(const FArg& A, const std::string& N)
@@ -2301,6 +2323,7 @@ namespace Lumina::Reflection
                     else if (A.Kind == EBind::Bool)  { CallArgs += "(" + An + " != 0)"; }
                     else if (A.Kind == EBind::Enum)  { CallArgs += "(" + A.TargetCpp + ")" + An; }
                     else if (A.Kind == EBind::Object){ CallArgs += "static_cast<" + A.TargetCpp + "*>(" + An + ")"; }
+                    else if (A.Kind == EBind::StructOpaque) { CallArgs += "*static_cast<const " + A.TargetCpp + "*>(" + An + ")"; }
                     else                             { CallArgs += An; }
                 }
                 const std::string Call = std::string("Self->") + Qualified + "::" + E.Fn->Name + "(" + CallArgs + ")";
@@ -2547,8 +2570,9 @@ namespace Lumina::Reflection
             const char* Name = Struct.DisplayName.c_str();
             EmitDocSummary(Writer, Struct.Metadata);
             Writer.Linef("[global::LuminaSharp.NativeType(\"%s\")]", Name);
-            Writer.Linef("public readonly unsafe partial struct %s : global::LuminaSharp.%s<%s>", Name,
-                bComponent ? "IComponent" : "INativeStruct", Name);
+            // An event view also carries the marker the world's event queues are read and sent through.
+            Writer.Linef("public readonly unsafe partial struct %s : global::LuminaSharp.%s<%s>%s", Name,
+                bComponent ? "IComponent" : "INativeStruct", Name, Struct.HasMetadata("Event") ? ", global::LuminaSharp.IEvent" : "");
             Writer.BeginBlock();
             if (bComponent)
             {
@@ -2741,7 +2765,7 @@ namespace Lumina::Reflection
             EmitDocSummary(Writer, Struct.Metadata);
             Writer.Linef("[global::LuminaSharp.NativeType(\"%s\")]", Struct.DisplayName.c_str());
             Writer.Line("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]");
-            Writer.Linef("public partial struct %s", Struct.DisplayName.c_str());
+            Writer.Linef("public partial struct %s%s", Struct.DisplayName.c_str(), Struct.HasMetadata("Event") ? " : global::LuminaSharp.IEvent" : "");
             Writer.BeginBlock();
             for (const auto& Prop : Struct.Props)
             {

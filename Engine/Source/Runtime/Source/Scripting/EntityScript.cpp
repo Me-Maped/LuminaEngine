@@ -38,6 +38,11 @@
 #include "Log/Log.h"
 #include "TaskSystem/TaskSystem.h"
 
+#if USING(WITH_DEV_UI)
+#include <imgui.h>
+#include <imgui_internal.h>
+#endif
+
 namespace Lumina
 {
     namespace
@@ -1282,6 +1287,179 @@ namespace Lumina
             }
         }
 
+        // Owner, managed instance and component references, then OnAttach. False for a script this world's realm leaves out.
+        bool AttachScript(CEntityScript* Script, ECS::FEntity Entity, CWorld* World)
+        {
+            if (IsOutsideRealm(Script, World))
+            {
+                return false;
+            }
+            Script->SetOwner(Entity, World);
+
+            // A loaded C# script with no callbacks would otherwise never get its instance, and lookups would wrap it as the base class.
+            if (Cast<CScriptClass>(Script->GetClass()) != nullptr)
+            {
+                Scriptable::GetOrCreateInstance(Script);
+            }
+
+            LUMINA_PROFILE_SECTION_NAMED(Script->GetClass()->GetName().c_str());
+            Script->BindComponentRefs();
+            Script->OnAttach();
+            return true;
+        }
+
+        void ReadyScript(CEntityScript* Script)
+        {
+            Script->MarkReady();
+
+            // Once per script, so naming it by class costs nothing per frame and splits the script system's time.
+            LUMINA_PROFILE_SECTION_NAMED(Script->GetClass()->GetName().c_str());
+
+            // Before OnReady, so a UI script's document, bound values and elements are already there.
+            UIScripts::Open(Script);
+
+            // Bound again, since a Get reference made at attach misses a component added before this first tick.
+            Script->BindComponentRefs();
+            Script->OnReady();
+        }
+
+        NODISCARD bool NeedsAttach(const CEntityScript* Script)
+        {
+            return Script != nullptr && Script->GetOwningEntity() == ECS::NullEntity;
+        }
+
+        NODISCARD bool NeedsReady(const CEntityScript* Script)
+        {
+            return Script != nullptr && Script->GetOwningEntity() != ECS::NullEntity && !Script->IsReady() && !Script->IsFaulted();
+        }
+
+        // Where an entity sits in the scene tree, as a sort key. An entity outside any hierarchy is a tree of its own.
+        struct FTreePosition
+        {
+            ECS::FEntity Entity;
+            uint32       Root       = 0;
+            uint32       Slot       = 0;
+            uint32       SubtreeEnd = 1;
+
+            NODISCARD bool Contains(const FTreePosition& Other) const
+            {
+                return Root == Other.Root && Slot < Other.Slot && Other.Slot < SubtreeEnd;
+            }
+        };
+
+        // Gathers the entities owing a lifecycle callback, placed in the tree so they can be sorted.
+        template <typename TPredicate>
+        void GatherPending(ECS::FRegistry& Registry, TVector<ECS::FEntity>& Scratch, TVector<FTreePosition>& Out, TPredicate&& IsPending)
+        {
+            Out.clear();
+            SnapshotScriptedEntities(Registry, Scratch);
+
+            const ECS::FHierarchy& Hierarchy = Registry.GetHierarchy();
+            bool bOrdered = false;
+            for (const ECS::FEntity Entity : Scratch)
+            {
+                const SEntityScriptComponent* Component = Registry.TryGet<SEntityScriptComponent>(Entity);
+                if (Component == nullptr)
+                {
+                    continue;
+                }
+
+                bool bPending = false;
+                for (const TStrongObjectPtr<CEntityScript>& Held : Component->Scripts)
+                {
+                    bPending = bPending || IsPending(Held.Get());
+                }
+                if (!bPending)
+                {
+                    continue;
+                }
+
+                if (!bOrdered)
+                {
+                    Hierarchy.EnsureOrder();
+                    bOrdered = true;
+                }
+
+                FTreePosition& Position = Out.emplace_back();
+                Position.Entity = Entity;
+                Position.Root   = Entity.GetIndex();
+                const uint32 Slot = Hierarchy.GetSlot(Entity);
+                if (Slot != ECS::FHierarchy::NoSlot)
+                {
+                    Position.Root       = Hierarchy.GetRoot(Entity).GetIndex();
+                    Position.Slot       = Slot;
+                    Position.SubtreeEnd = Slot + Hierarchy.GetSubtreeSizes()[Slot];
+                }
+            }
+        }
+
+        // Godot's order. Parents attach before their children, children ready before their parents, and every attach precedes every ready.
+        void DrainLifecycle(ECS::FRegistry& Registry, CWorld* World)
+        {
+            TVector<ECS::FEntity>  Scratch;
+            TVector<FTreePosition> Pending;
+            FScriptSnapshot        Scripts;
+
+            // A callback that spawns scripted entities queues another round, so they join this frame in the same order.
+            constexpr int32 kMaxRounds = 8;
+            for (int32 Round = 0; Round < kMaxRounds; ++Round)
+            {
+                bool bAnyWork = false;
+
+                GatherPending(Registry, Scratch, Pending, NeedsAttach);
+                Algo::Sort(Pending.begin(), Pending.end(), [](const FTreePosition& A, const FTreePosition& B)
+                {
+                    return A.Root != B.Root ? A.Root < B.Root : A.Slot < B.Slot;
+                });
+                for (const FTreePosition& Position : Pending)
+                {
+                    SnapshotScripts(Registry, Position.Entity, Scripts);
+                    for (TStrongObjectPtr<CEntityScript>& Held : Scripts)
+                    {
+                        CEntityScript* Script = Held.Get();
+                        if (NeedsAttach(Script) && IsStillAttached(Registry, Position.Entity, Script))
+                        {
+                            AttachScript(Script, Position.Entity, World);
+                            bAnyWork = true;
+                        }
+                    }
+                }
+
+                GatherPending(Registry, Scratch, Pending, NeedsReady);
+                Algo::Sort(Pending.begin(), Pending.end(), [](const FTreePosition& A, const FTreePosition& B)
+                {
+                    if (A.Root != B.Root)
+                    {
+                        return A.Root < B.Root;
+                    }
+                    if (A.Contains(B))
+                    {
+                        return false;
+                    }
+                    return B.Contains(A) || A.Slot < B.Slot;
+                });
+                for (const FTreePosition& Position : Pending)
+                {
+                    SnapshotScripts(Registry, Position.Entity, Scripts);
+                    for (TStrongObjectPtr<CEntityScript>& Held : Scripts)
+                    {
+                        CEntityScript* Script = Held.Get();
+                        if (NeedsReady(Script) && IsStillAttached(Registry, Position.Entity, Script))
+                        {
+                            ReadyScript(Script);
+                            bAnyWork = true;
+                        }
+                    }
+                }
+
+                if (!bAnyWork)
+                {
+                    break;
+                }
+            }
+            Scripts.clear();
+        }
+
         void FClassFacts::See(const CEntityScript* Script)
         {
             if (Script->GetClass() != Class)
@@ -1434,10 +1612,12 @@ namespace Lumina
         }
     }
 
-    namespace EntityScripts
+    #if USING(WITH_DEV_UI)
+    namespace
     {
-        #if USING(WITH_EDITOR)
-        void DebugDraw(ECS::FRegistry& Registry)
+        // Every live script in the world, with an owner lent for the call to one that has none, as in a prefab editor's preview.
+        template<typename TFunc>
+        void ForEachLiveScript(ECS::FRegistry& Registry, TFunc&& Func)
         {
             CWorld** WorldPtr = Registry.Ctx().Find<CWorld*>();
             if (WorldPtr == nullptr || *WorldPtr == nullptr)
@@ -1468,7 +1648,7 @@ namespace Lumina
                         Script->SetOwner(Entity, World);
                     }
 
-                    Script->OnDebugDraw(Registry.HasAll<FSelectedInEditorComponent>(Entity));
+                    Func(Script, Entity);
 
                     if (bNeedsOwner)
                     {
@@ -1476,6 +1656,44 @@ namespace Lumina
                     }
                 }
             }
+        }
+    }
+    #endif
+
+    namespace EntityScripts
+    {
+        #if USING(WITH_EDITOR)
+        void DebugDraw(ECS::FRegistry& Registry)
+        {
+            ForEachLiveScript(Registry, [&Registry](CEntityScript* Script, ECS::FEntity Entity)
+            {
+                Script->OnDebugDraw(Registry.HasAll<FSelectedInEditorComponent>(Entity));
+            });
+        }
+        #endif
+
+        #if USING(WITH_DEV_UI)
+        void DebugGui(ECS::FRegistry& Registry)
+        {
+            if (ImGui::GetCurrentContext() == nullptr)
+            {
+                return;
+            }
+
+            // A script's unbalanced Begin is recovered rather than asserted on, then the host's own setting comes back.
+            ImGuiIO& IO = ImGui::GetIO();
+            const bool bAssertOnRecovery = IO.ConfigErrorRecoveryEnableAssert;
+            IO.ConfigErrorRecoveryEnableAssert = false;
+
+            ForEachLiveScript(Registry, [](CEntityScript* Script, ECS::FEntity)
+            {
+                ImGuiErrorRecoveryState Recovery;
+                ImGui::ErrorRecoveryStoreState(&Recovery);
+                Script->OnDebugGui();
+                ImGui::ErrorRecoveryTryToRecoverState(&Recovery);
+            });
+
+            IO.ConfigErrorRecoveryEnableAssert = bAssertOnRecovery;
         }
         #endif
 
@@ -1552,6 +1770,11 @@ namespace Lumina
             CWorld** WorldPtr = Registry.Ctx().Find<CWorld*>();
             CWorld* World = WorldPtr != nullptr ? *WorldPtr : nullptr;
 
+            if (bDrainLifecycle)
+            {
+                DrainLifecycle(Registry, World);
+            }
+
             FTickScratchGuard      ScratchGuard;
             FTickScratch&          Scratch       = ScratchGuard.Get();
             TVector<ECS::FEntity>& Entities      = Scratch.Entities;
@@ -1583,24 +1806,12 @@ namespace Lumina
                     const EScriptUpdatePhase ScriptUpdatePhase = ScriptPhase(Script);
                     PostPhysicsScripts += (ScriptUpdatePhase == EScriptUpdatePhase::PostPhysics) ? 1u : 0u;
 
-                    // The one place entity and registry are both in hand, and it runs before OnReady.
+                    // The ordered drain has run by now, so this only catches a script that arrived after its last round.
                     if (bDrainLifecycle && Script->GetOwningEntity() == ECS::NullEntity)
                     {
-                        if (IsOutsideRealm(Script, World))
+                        if (!AttachScript(Script, Entity, World))
                         {
                             continue;
-                        }
-                        Script->SetOwner(Entity, World);
-
-                        // A loaded C# script with no callbacks would otherwise never get its instance, and lookups would wrap it as the base class.
-                        if (Cast<CScriptClass>(Script->GetClass()) != nullptr)
-                        {
-                            Scriptable::GetOrCreateInstance(Script);
-                        }
-                        {
-                            LUMINA_PROFILE_SECTION_NAMED(Script->GetClass()->GetName().c_str());
-                            Script->BindComponentRefs();
-                            Script->OnAttach();
                         }
                         bUserCodeRan = true;
 
@@ -1618,15 +1829,7 @@ namespace Lumina
 
                     if (bDrainLifecycle && !Script->IsReady())
                     {
-                        Script->MarkReady();
-                        {
-                            // Once per script, so naming it by class costs nothing per frame and splits the script system's time.
-                            LUMINA_PROFILE_SECTION_NAMED(Script->GetClass()->GetName().c_str());
-
-                            // Before OnReady, so a UI script's document, bound values and elements are already there.
-                            UIScripts::Open(Script);
-                            Script->OnReady();
-                        }
+                        ReadyScript(Script);
                         bUserCodeRan = true;
 
                         if (!IsStillAttached(Registry, Entity, Script))
@@ -2275,7 +2478,7 @@ namespace Lumina
 
             GWorldManager->ForEachWorld([&](CWorld& World)
             {
-                ECS::FRegistry& Registry = ECS::GetWorldRegistry(World);
+                ECS::FRegistry& Registry = World.GetEntityRegistry();
 
                 // Anything held back by a failed or late load comes in first, so it sees this reload too.
                 RestoreHeldValues(Registry);

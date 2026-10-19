@@ -7,15 +7,14 @@
 #include "Core/Object/ObjectCore.h"
 #include "Core/Object/ScriptClass.h"
 #include "Log/Log.h"
+#include "World/ECS/EventQueue.h"
 #include "World/Entity/Components/Component.h"
 #include "World/World.h"
 
 namespace Lumina
 {
-    const FSystemContext& CEntitySystem::GetContext() const
-    {
-        return OwningWorld->GetSystemContext();
-    }
+    // LuminaSharp's SSystemContext partial reads the world at offset zero.
+    static_assert(offsetof(SSystemContext, World) == 0);
 
     void CEntitySystem::RequireUpdate(EUpdateStage Stage, int32 Priority)
     {
@@ -32,10 +31,15 @@ namespace Lumina
         {
             Access.Writes.push_back((uint32)Ops->TypeId);
             Access.Pools.push_back(Ops->GetTypeID());
+            Access.bDeclaresComponents = true;
+        }
+        else if (const ECS::FComponentTypeID Event = ECS::FindEventType(Component); Event != ECS::InvalidComponentTypeID)
+        {
+            Access.Writes.push_back((uint32)Event);
         }
         else
         {
-            LOG_WARN("Entity system '{}' declares a write of unknown component '{}'.", GetClass()->GetName(), Component);
+            LOG_WARN("Entity system '{}' declares a write of unknown component or event '{}'.", GetClass()->GetName(), Component);
         }
     }
 
@@ -45,10 +49,15 @@ namespace Lumina
         {
             Access.Reads.push_back((uint32)Ops->TypeId);
             Access.Pools.push_back(Ops->GetTypeID());
+            Access.bDeclaresComponents = true;
+        }
+        else if (const ECS::FComponentTypeID Event = ECS::FindEventType(Component); Event != ECS::InvalidComponentTypeID)
+        {
+            Access.Reads.push_back((uint32)Event);
         }
         else
         {
-            LOG_WARN("Entity system '{}' declares a read of unknown component '{}'.", GetClass()->GetName(), Component);
+            LOG_WARN("Entity system '{}' declares a read of unknown component or event '{}'.", GetClass()->GetName(), Component);
         }
     }
 
@@ -59,10 +68,10 @@ namespace Lumina
 
         Configure();
 
-        // Declaring nothing means the system is not honest about what it touches, so it runs alone.
-        if (Access.Writes.empty() && Access.Reads.empty())
+        // Declaring no components means the system is not honest about what it touches, so it runs alone, its events kept for interest.
+        if (!Access.bDeclaresComponents)
         {
-            Access = FSystemAccess::Exclusive();
+            Access.bExclusive = true;
         }
     }
 
@@ -149,7 +158,7 @@ namespace Lumina
 
         namespace
         {
-            void DropWhere(TVector<TStrongObjectPtr<CEntitySystem>>& Systems, TFunctionRef<bool(const CEntitySystem&)> Predicate)
+            void DropWhere(const SSystemContext& Context, TVector<TStrongObjectPtr<CEntitySystem>>& Systems, TFunctionRef<bool(const CEntitySystem&)> Predicate)
             {
                 // Back to front, so a system created later can still reach an earlier one while it tears down.
                 for (size_t Index = Systems.size(); Index > 0; --Index)
@@ -163,7 +172,7 @@ namespace Lumina
                     // Paired with OnStartup, so a system dropped before the world started never sees one.
                     if (System->HasStarted())
                     {
-                        System->OnTeardown();
+                        System->OnTeardown(Context);
                     }
                     System->SetOwningWorld(nullptr);
                     Systems.erase(Systems.begin() + (int64)(Index - 1));
@@ -171,38 +180,38 @@ namespace Lumina
             }
         }
 
-        void DropScripted(TVector<TStrongObjectPtr<CEntitySystem>>& Systems)
+        void DropScripted(const SSystemContext& Context, TVector<TStrongObjectPtr<CEntitySystem>>& Systems)
         {
-            DropWhere(Systems, [](const CEntitySystem& System)
+            DropWhere(Context, Systems, [](const CEntitySystem& System)
             {
                 return Cast<CScriptClass>(System.GetClass()) != nullptr;
             });
         }
 
-        void DropOutsideRealm(CWorld& World, TVector<TStrongObjectPtr<CEntitySystem>>& Systems)
+        void DropOutsideRealm(const SSystemContext& Context, CWorld& World, TVector<TStrongObjectPtr<CEntitySystem>>& Systems)
         {
-            DropWhere(Systems, [&World](const CEntitySystem& System)
+            DropWhere(Context, Systems, [&World](const CEntitySystem& System)
             {
                 return !NetRealm::Allows(System.GetClass(), &World);
             });
         }
 
-        void DropDisabled(const THashSet<FName>& Disabled, TVector<TStrongObjectPtr<CEntitySystem>>& Systems)
+        void DropDisabled(const SSystemContext& Context, const THashSet<FName>& Disabled, TVector<TStrongObjectPtr<CEntitySystem>>& Systems)
         {
-            DropWhere(Systems, [&Disabled](const CEntitySystem& System)
+            DropWhere(Context, Systems, [&Disabled](const CEntitySystem& System)
             {
                 return Disabled.count(System.GetClass()->GetName()) != 0;
             });
         }
 
-        void StartupPending(TVector<TStrongObjectPtr<CEntitySystem>>& Systems)
+        void StartupPending(const SSystemContext& Context, TVector<TStrongObjectPtr<CEntitySystem>>& Systems)
         {
             for (TStrongObjectPtr<CEntitySystem>& System : Systems)
             {
                 if (System != nullptr && !System->HasStarted())
                 {
                     System->MarkStarted();
-                    System->OnStartup();
+                    System->OnStartup(Context);
                 }
             }
         }
@@ -225,7 +234,7 @@ namespace Lumina
             return nullptr;
         }
 
-        void DestroyAll(TVector<TStrongObjectPtr<CEntitySystem>>& Systems)
+        void DestroyAll(const SSystemContext& Context, TVector<TStrongObjectPtr<CEntitySystem>>& Systems)
         {
             // Back to front, so a system created later can still reach an earlier one while it tears down.
             for (size_t Index = Systems.size(); Index > 0; --Index)
@@ -234,7 +243,7 @@ namespace Lumina
                 {
                     if (System->HasStarted())
                     {
-                        System->OnTeardown();
+                        System->OnTeardown(Context);
                     }
                     System->SetOwningWorld(nullptr);
                 }

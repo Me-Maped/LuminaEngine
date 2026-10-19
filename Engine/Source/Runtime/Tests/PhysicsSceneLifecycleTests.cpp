@@ -2,8 +2,10 @@
 #include "Core/Object/ObjectCore.h"
 #include "Physics/API/Box3D/Box3DPhysicsScene.h"
 #include "Physics/API/Box3D/Box3DRagdollHandle.h"
+#include "Physics/API/Box3D/Box3DCharacterHandle.h"
+#include "Renderer/SkeletonResource.h"
 #include "World/World.h"
-#include "World/ECS/EventDispatcher.h"
+#include "World/Entity/Components/CharacterComponent.h"
 #include "World/Entity/Components/PhysicsComponent.h"
 #include "World/Entity/Components/TransformComponent.h"
 #include "World/Subsystems/WorldSettings.h"
@@ -19,8 +21,7 @@ namespace
         {
             RegisterPendingTypes();
             World = NewObject<CWorld>(nullptr, NAME_None, FGuid::New(), OF_Transient);
-            Registry = &ECS::GetWorldRegistry(*World);
-            Registry->Ctx().Emplace<ECS::FEventDispatcher*>(&Dispatcher);
+            Registry = &World->GetEntityRegistry();
             Scene = MakeUnique<Physics::FBox3DPhysicsScene>(World);
             Scene->Simulate();
             Dt = 1.0f / Math::Max(10.0f, World->GetDefaultWorldSettings().PhysicsHz);
@@ -30,7 +31,6 @@ namespace
         {
             Scene->StopSimulate();
             Scene.reset();
-            Registry->Ctx().Erase<ECS::FEventDispatcher*>();
         }
 
         ECS::FEntity Spawn(float X = 0.0f, bool bCollider = true)
@@ -57,7 +57,6 @@ namespace
 
         CWorld* World = nullptr;
         ECS::FRegistry* Registry = nullptr;
-        ECS::FEventDispatcher Dispatcher;
         TUniquePtr<Physics::FBox3DPhysicsScene> Scene;
         float Dt = 0.0f;
     };
@@ -242,6 +241,69 @@ TEST_F(PhysicsSceneLifecycle, RagdollRequestsOwnTemporaryPoseDataAndFilterByOwne
 }
 
 
+// Entity calls reach every limb of a simulating ragdoll, and one limb can be driven alone through its bone's body target.
+TEST_F(PhysicsSceneLifecycle, RagdollTakesEntityVelocityAndPerLimbTargets)
+{
+    const ECS::FEntity Owner = Registry->Create();
+    TSharedPtr<FPhysicsRagdollHandle> Handle;
+    {
+        FSkeletonResource Skeleton;
+        const FMatrix4 ChildGlobal = Math::Translate(FMatrix4(1.0f), FVector3(0.0f, 1.0f, 0.0f));
+        const char* Names[] = { "root", "child" };
+        const FMatrix4 Globals[] = { FMatrix4(1.0f), ChildGlobal };
+        for (int32 Index = 0; Index < 2; ++Index)
+        {
+            FSkeletonResource::FBoneInfo Bone;
+            Bone.Name = FName(Names[Index]);
+            Bone.ParentIndex = Index == 0 ? Constants::kIndexNone : 0;
+            Bone.LocalTransform = Globals[Index];
+            Bone.InvBindMatrix = Math::Inverse(Globals[Index]);
+            Skeleton.Bones.push_back(Bone);
+            Skeleton.BoneNameToIndex[Bone.Name] = Index;
+        }
+        TVector<FMatrix4> BoneGlobals{ Globals[0], Globals[1] };
+        Physics::FRagdollDesc Desc;
+        Desc.Entity = Owner;
+        Desc.Skeleton = &Skeleton;
+        Desc.ComponentBoneGlobals = &BoneGlobals;
+        Desc.EntityToWorld = FMatrix4(1.0f);
+        Handle = Scene->CreateRagdoll(Desc);
+    }
+    ASSERT_TRUE(Handle);
+    EXPECT_FALSE(Scene->GetRagdollBoneTarget(Owner, FName("child")).IsSet());
+    Scene->Update(0.0);
+    ASSERT_TRUE(Scene->IsRagdollReady(*Handle));
+
+    const SPhysicsBodyTarget Root = Scene->GetRagdollBoneTarget(Owner, FName("root"));
+    const SPhysicsBodyTarget Child = Scene->GetRagdollBoneTarget(Owner, FName("child"));
+    ASSERT_TRUE(Root.IsSet());
+    ASSERT_TRUE(Child.IsSet());
+    EXPECT_NE(Root.Slot, Child.Slot);
+    EXPECT_FALSE(Scene->GetRagdollBoneTarget(Owner, FName("missing")).IsSet());
+    EXPECT_GT(Scene->GetBodyMass(Owner), 0.0f);
+
+    Scene->SetLinearVelocity(Owner, FVector3(3.0f, 0.0f, 0.0f));
+    Scene->Update(Dt);
+    Physics::FPhysicsBodyState RootState, ChildState;
+    ASSERT_TRUE(Scene->TryGetTargetState(Root, RootState));
+    ASSERT_TRUE(Scene->TryGetTargetState(Child, ChildState));
+    EXPECT_NEAR(RootState.LinearVelocity.x, 3.0f, 0.05f);
+    EXPECT_NEAR(ChildState.LinearVelocity.x, 3.0f, 0.05f);
+    EXPECT_NEAR(Scene->GetLinearVelocity(Owner).x, 3.0f, 0.05f);
+
+    // The joint shares the limb's push with the rest of the ragdoll, so only the momentum it added is conserved.
+    const float ChildMass = ChildState.Mass;
+    Scene->SetTargetLinearVelocity(Child, FVector3(0.0f, 0.0f, 5.0f));
+    Scene->Update(Dt);
+    EXPECT_NEAR(Scene->GetLinearVelocity(Owner).z * Scene->GetBodyMass(Owner), ChildMass * 5.0f, ChildMass * 0.25f);
+    EXPECT_NEAR(Scene->GetLinearVelocity(Owner).x, 3.0f, 0.05f);
+
+    Scene->DestroyRagdoll(Handle);
+    Scene->Update(0.0);
+    EXPECT_FALSE(Scene->GetRagdollBoneTarget(Owner, FName("root")).IsSet());
+    EXPECT_FALSE(Scene->TryGetTargetState(Root, RootState));
+}
+
 // A sweep's radius reaches bodies the bare ray along the same line misses.
 TEST_F(PhysicsSceneLifecycle, ShapeSweepsReachPastTheRayLine)
 {
@@ -321,4 +383,235 @@ TEST_F(PhysicsSceneLifecycle, ClosestPointAndBoundsMeasureTheColliders)
     EXPECT_NEAR(Bounds.Max.y, 0.5f, 0.05f);
 
     EXPECT_FALSE(Scene->GetBodyBounds(ECS::NullEntity, Bounds));
+}
+
+namespace
+{
+    // What a system draining the queues sees, checked against the character's own delegates.
+    struct FCharacterEventCounter
+    {
+        ECS::TEventReader<SCharacterLandedEvent> LandedReader;
+        ECS::TEventReader<SCharacterJumpedEvent> JumpedReader;
+        int32 Landings = 0;
+        int32 Jumps = 0;
+        float LastImpactSpeed = 0.0f;
+        int32 LastJumpCount = 0;
+
+        void Drain(ECS::FEventQueues& Queues)
+        {
+            for (const SCharacterLandedEvent& Event : ECS::ReadEvents(Queues, LandedReader))
+            {
+                ++Landings;
+                LastImpactSpeed = Event.ImpactSpeed;
+            }
+            for (const SCharacterJumpedEvent& Event : ECS::ReadEvents(Queues, JumpedReader))
+            {
+                ++Jumps;
+                LastJumpCount = Event.JumpCount;
+            }
+        }
+    };
+}
+
+TEST_F(PhysicsSceneLifecycle, CharacterLandingAndJumpReachTheDelegateAndTheQueue)
+{
+    const ECS::FEntity Floor = Registry->Create();
+    Registry->Emplace<STransformComponent>(Floor).SetLocation(FVector3(0.0f, -0.5f, 0.0f));
+    Registry->Emplace<SRigidBodyComponent>(Floor).BodyType = EBodyType::Static;
+    Registry->Emplace<SBoxColliderComponent>(Floor).HalfExtent = FVector3(20.0f, 0.5f, 20.0f);
+
+    const ECS::FEntity Character = Registry->Create();
+    Registry->Emplace<STransformComponent>(Character).SetLocation(FVector3(0.0f, 3.0f, 0.0f));
+    Registry->Emplace<SCharacterPhysicsComponent>(Character);
+    SCharacterMovementComponent& Movement = Registry->Emplace<SCharacterMovementComponent>(Character);
+
+    int32 DelegateLandings = 0;
+    int32 DelegateJumps = 0;
+    Movement.OnLanded.AddLambda([&](const SCharacterLandedEvent& Event)
+    {
+        ++DelegateLandings;
+        EXPECT_EQ(Event.Entity, Character);
+        EXPECT_GT(Event.GroundNormal.y, 0.9f);
+    });
+    Movement.OnJumped.AddLambda([&](const SCharacterJumpedEvent& Event)
+    {
+        ++DelegateJumps;
+        EXPECT_EQ(Event.Entity, Character);
+        EXPECT_GT(Event.Velocity.y, 0.0f);
+    });
+
+    FCharacterEventCounter Counter;
+    auto Step = [&](int32 Steps)
+    {
+        for (int32 Index = 0; Index < Steps; ++Index)
+        {
+            Scene->Update(Dt);
+            World->FlushCommands();
+            Counter.Drain(World->GetEvents());
+            World->GetEvents().Advance();
+        }
+    };
+
+    Step(120);
+    EXPECT_TRUE(Registry->Get<SCharacterMovementComponent>(Character).bGrounded);
+    EXPECT_EQ(DelegateLandings, 1) << "falling three meters onto the floor is one landing";
+    EXPECT_EQ(Counter.Landings, 1);
+    EXPECT_GT(Counter.LastImpactSpeed, 1.0f) << "the fall carries real speed into the landing";
+    EXPECT_EQ(Counter.Jumps, 0);
+
+    Registry->Get<SCharacterMovementComponent>(Character).bPendingJump = true;
+    Step(1);
+    EXPECT_EQ(DelegateJumps, 1);
+    EXPECT_EQ(Counter.Jumps, 1);
+    EXPECT_EQ(Counter.LastJumpCount, 1) << "the jump off the ground is the first since landing";
+
+    Step(120);
+    EXPECT_EQ(DelegateLandings, 2) << "coming back down from the jump is the second landing";
+    EXPECT_EQ(Counter.Landings, 2);
+    EXPECT_EQ(Counter.Jumps, 1) << "standing still afterwards raises nothing further";
+}
+
+TEST_F(PhysicsSceneLifecycle, CharacterSpawnedOnTheFloorDoesNotReportALanding)
+{
+    const ECS::FEntity Floor = Registry->Create();
+    Registry->Emplace<STransformComponent>(Floor).SetLocation(FVector3(0.0f, -0.5f, 0.0f));
+    Registry->Emplace<SRigidBodyComponent>(Floor).BodyType = EBodyType::Static;
+    Registry->Emplace<SBoxColliderComponent>(Floor).HalfExtent = FVector3(20.0f, 0.5f, 20.0f);
+
+    const ECS::FEntity Character = Registry->Create();
+    Registry->Emplace<STransformComponent>(Character).SetLocation(FVector3(0.0f, 0.0f, 0.0f));
+    Registry->Emplace<SCharacterPhysicsComponent>(Character);
+    Registry->Emplace<SCharacterMovementComponent>(Character);
+
+    FCharacterEventCounter Counter;
+    for (int32 Index = 0; Index < 60; ++Index)
+    {
+        Scene->Update(Dt);
+        World->FlushCommands();
+        Counter.Drain(World->GetEvents());
+        World->GetEvents().Advance();
+    }
+
+    EXPECT_TRUE(Registry->Get<SCharacterMovementComponent>(Character).bGrounded);
+    EXPECT_EQ(Counter.Landings, 0) << "a character placed on the ground never arrived there";
+}
+
+namespace
+{
+    // The lowest point of the character's capsule, which crouching and standing must leave where it is.
+    float CapsuleBottom(const SCharacterPhysicsComponent& Physics)
+    {
+        const FPhysicsCharacterHandle& Character = *Physics.Character;
+        return Character.Position.y + Character.TranslationOffset.y - Character.CrouchDrop - Character.HalfHeight - Character.Radius;
+    }
+}
+
+// Crouching keeps the feet down, and standing waits under a low ceiling until the ceiling is gone.
+TEST_F(PhysicsSceneLifecycle, CrouchKeepsTheFeetAndWaitsForRoomToStand)
+{
+    const ECS::FEntity Floor = Registry->Create();
+    Registry->Emplace<STransformComponent>(Floor).SetLocation(FVector3(0.0f, -0.5f, 0.0f));
+    Registry->Emplace<SRigidBodyComponent>(Floor).BodyType = EBodyType::Static;
+    Registry->Emplace<SBoxColliderComponent>(Floor).HalfExtent = FVector3(20.0f, 0.5f, 20.0f);
+
+    const ECS::FEntity Character = Registry->Create();
+    Registry->Emplace<STransformComponent>(Character).SetLocation(FVector3(0.0f, 1.0f, 0.0f));
+    Registry->Emplace<SCharacterPhysicsComponent>(Character);
+    Registry->Emplace<SCharacterMovementComponent>(Character);
+
+    int32 Crouches = 0;
+    int32 Stands = 0;
+    Registry->Get<SCharacterMovementComponent>(Character).OnCrouchChanged.AddLambda([&](const SCharacterCrouchEvent& Event)
+    {
+        EXPECT_EQ(Event.Entity, Character);
+        (Event.bCrouched ? Crouches : Stands) += 1;
+    });
+
+    auto Step = [&](int32 Steps)
+    {
+        for (int32 Index = 0; Index < Steps; ++Index)
+        {
+            Scene->Update(Dt);
+            World->FlushCommands();
+            World->GetEvents().Advance();
+        }
+    };
+
+    Step(90);
+    const SCharacterPhysicsComponent& Physics = Registry->Get<SCharacterPhysicsComponent>(Character);
+    ASSERT_TRUE(Physics.Character);
+    const float Feet = CapsuleBottom(Physics);
+    const float StandingTop = Feet + 2.0f * (Physics.HalfHeight + Physics.Radius);
+
+    Registry->Get<SCharacterMovementComponent>(Character).bWantsToCrouch = true;
+    Step(2);
+    const SCharacterMovementComponent& Movement = Registry->Get<SCharacterMovementComponent>(Character);
+    EXPECT_TRUE(Movement.bIsCrouched);
+    EXPECT_FLOAT_EQ(Physics.Character->HalfHeight, Movement.CrouchHalfHeight);
+    EXPECT_NEAR(CapsuleBottom(Physics), Feet, 0.01f) << "the capsule shrinks from the top, so the feet stay on the floor";
+    EXPECT_EQ(Crouches, 1);
+
+    // A ceiling between the crouched head and where a standing head would be.
+    const float CrouchedTop = Feet + 2.0f * (Movement.CrouchHalfHeight + Physics.Radius);
+    const ECS::FEntity Ceiling = Registry->Create();
+    Registry->Emplace<STransformComponent>(Ceiling).SetLocation(FVector3(0.0f, (CrouchedTop + StandingTop) * 0.5f + 0.25f, 0.0f));
+    Registry->Emplace<SRigidBodyComponent>(Ceiling).BodyType = EBodyType::Static;
+    Registry->Emplace<SBoxColliderComponent>(Ceiling).HalfExtent = FVector3(5.0f, 0.25f, 5.0f);
+    Step(2);
+
+    Registry->Get<SCharacterMovementComponent>(Character).bWantsToCrouch = false;
+    Step(10);
+    EXPECT_TRUE(Movement.bIsCrouched) << "there is no room to stand under the ceiling";
+    EXPECT_EQ(Stands, 0);
+
+    Registry->Destroy(Ceiling);
+    Step(10);
+    EXPECT_FALSE(Movement.bIsCrouched) << "with the ceiling gone the character stands";
+    EXPECT_FLOAT_EQ(Physics.Character->HalfHeight, Physics.HalfHeight);
+    EXPECT_NEAR(CapsuleBottom(Physics), Feet, 0.01f);
+    EXPECT_EQ(Stands, 1);
+}
+
+// A runtime resize reaches the running character and its proxy shape without rebuilding it.
+TEST_F(PhysicsSceneLifecycle, ResizingACharacterAppliesInPlace)
+{
+    const ECS::FEntity Character = Registry->Create();
+    Registry->Emplace<STransformComponent>(Character).SetLocation(FVector3(0.0f, 2.0f, 0.0f));
+    Registry->Emplace<SCharacterPhysicsComponent>(Character);
+    Registry->Emplace<SCharacterMovementComponent>(Character);
+    Scene->Update(Dt);
+
+    const SCharacterPhysicsComponent& Physics = Registry->Get<SCharacterPhysicsComponent>(Character);
+    ASSERT_TRUE(Physics.Character);
+    const FPhysicsCharacterHandle* Before = Physics.Character.Handle.get();
+
+    World->GetPhysics()->SetCapsuleSize(Character, 0.5f, 0.8f);
+    Scene->Update(Dt);
+
+    EXPECT_EQ(Physics.Character.Handle.get(), Before) << "the same character carries on, only resized";
+    EXPECT_FLOAT_EQ(Physics.Character->Radius, 0.5f);
+    EXPECT_FLOAT_EQ(Physics.Character->HalfHeight, 0.8f);
+
+    // Above the old capsule's top but inside the new one, so only the resized proxy can stop this ray.
+    const FVector3 Center = Physics.Character->Position + Physics.Character->TranslationOffset;
+    SRayCastSettings Query;
+    Query.Start = Center + FVector3(-3.0f, 1.1f, 0.0f);
+    Query.End   = Center + FVector3(3.0f, 1.1f, 0.0f);
+    const TOptional<SRayResult> Hit = Scene->CastRay(Query);
+    ASSERT_TRUE(Hit.has_value()) << "the proxy body other queries see is still the old size";
+    EXPECT_EQ(Hit->Entity, (uint32)Character);
+}
+
+// Rebuilding a moving body for a new size keeps it moving rather than stopping it dead.
+TEST_F(PhysicsSceneLifecycle, ARebuiltBodyKeepsItsVelocity)
+{
+    const ECS::FEntity Ball = Spawn();
+    Scene->Update(Dt);
+    Scene->SetLinearVelocity(Ball, FVector3(3.0f, 0.0f, 0.0f));
+    Scene->Update(Dt);
+
+    World->GetPhysics()->SetSphereRadius(Ball, 1.0f);
+    Scene->Update(Dt);
+
+    EXPECT_NEAR(Scene->GetLinearVelocity(Ball).x, 3.0f, 0.05f);
 }

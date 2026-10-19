@@ -12,9 +12,7 @@
 
 namespace Lumina
 {
-    class CWorld;
-
-    /** Polling input for a world. Everything returns the neutral value when the world is not receiving input. */
+    // Input settings shared by every world, such as rebinding, while polling a world's input lives on CWorld.
     REFLECT()
     class RUNTIME_API CInputLibrary : public CFunctionLibrary
     {
@@ -22,104 +20,41 @@ namespace Lumina
 
     public:
 
-        /** False when the world has no viewport, is not the active one, or the editor holds input focus. */
-        FUNCTION()
-        static bool IsReceivingInput(CWorld* World);
-
-        //~ Authored actions, the rebindable surface.
-
-        /** This frame's evaluated state, zeroed when the name is not an authored action. */
-        FUNCTION()
-        static SInputActionState GetActionState(CWorld* World, const FName& Action);
-
-        FUNCTION()
-        static bool IsActionDown(CWorld* World, const FName& Action);
-
-        FUNCTION()
-        static bool WasActionPressed(CWorld* World, const FName& Action);
-
-        FUNCTION()
-        static bool WasActionReleased(CWorld* World, const FName& Action);
-
-        FUNCTION()
-        static bool IsActionHeld(CWorld* World, const FName& Action);
-
-        FUNCTION()
-        static bool WasActionTapped(CWorld* World, const FName& Action);
-
-        FUNCTION()
-        static float GetActionAxis(CWorld* World, const FName& Action);
-
-        FUNCTION()
-        static FVector2 GetActionAxis2D(CWorld* World, const FName& Action);
-
-        FUNCTION()
-        static float GetActionHeldTime(CWorld* World, const FName& Action);
-
-        /** Plus one while Positive is down and minus one while Negative is, so holding both cancels. */
-        FUNCTION()
-        static float GetAxisPair(CWorld* World, const FName& Positive, const FName& Negative);
-
         /** Row of the action in the per-frame state table, or Constants::kIndexNone. Resolve once per settings serial. */
         FUNCTION()
         static int32 FindActionIndex(const FName& Action);
 
-        //~ Mapping layers, per world. A blocking layer stops any action it does not list.
+        FUNCTION()
+        static EGamepadFamily GetGamepadFamily();
+
+        //~ Rebinding, for a controls menu. A rebind applies at once and SaveSettings keeps it.
 
         FUNCTION()
-        static void PushLayer(CWorld* World, const FName& Layer);
-
-        /** False when the layer was not on the stack. */
-        FUNCTION()
-        static bool PopLayer(CWorld* World, const FName& Layer);
+        static int32 GetBindingCount(const FName& Action);
 
         FUNCTION()
-        static bool HasLayer(CWorld* World, const FName& Layer);
+        static FString GetBindingDisplayName(const FName& Action, int32 BindingIndex);
+
+        /** Only key bindings rebind, so a continuous source such as Mouse X reports false. */
+        FUNCTION()
+        static bool IsBindingRebindable(const FName& Action, int32 BindingIndex);
+
+        /** Captures the next key, mouse button or pad button pressed, where Escape cancels. */
+        FUNCTION()
+        static bool BeginRebind(const FName& Action, int32 BindingIndex);
 
         FUNCTION()
-        static void ClearLayers(CWorld* World);
-
-        //~ Raw device state, shared by every entity in the world and not rebindable.
+        static void CancelRebind();
 
         FUNCTION()
-        static bool IsKeyDown(CWorld* World, EKey Key);
+        static bool IsRebinding();
 
+        /** Another action already bound to the key the last rebind captured, or none. */
         FUNCTION()
-        static bool WasKeyPressed(CWorld* World, EKey Key);
+        static FName GetRebindConflict();
 
+        /** Back to the authored keys for Action, or for every action when it is none. */
         FUNCTION()
-        static bool WasKeyReleased(CWorld* World, EKey Key);
-
-        FUNCTION()
-        static bool IsMouseButtonDown(CWorld* World, EMouseKey Button);
-
-        FUNCTION()
-        static bool WasMouseButtonPressed(CWorld* World, EMouseKey Button);
-
-        FUNCTION()
-        static bool WasMouseButtonReleased(CWorld* World, EMouseKey Button);
-
-        FUNCTION()
-        static FVector2 GetMousePosition(CWorld* World);
-
-        FUNCTION()
-        static FVector2 GetMouseDelta(CWorld* World);
-
-        FUNCTION()
-        static float GetMouseWheel(CWorld* World);
-
-        //~ Cursor and routing, which act on the world's own viewport rather than the receiving one.
-
-        FUNCTION()
-        static void SetInputMode(CWorld* World, EInputMode Mode);
-
-        FUNCTION()
-        static EInputMode GetInputMode(CWorld* World);
-
-        FUNCTION()
-        static void SetMouseMode(CWorld* World, EMouseMode Mode);
-
-        FUNCTION()
-        static EMouseMode GetMouseMode(CWorld* World);
+        static void ResetBindings(const FName& Action);
     };
 }

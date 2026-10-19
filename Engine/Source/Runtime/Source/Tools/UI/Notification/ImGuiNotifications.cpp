@@ -12,6 +12,8 @@
 #include "Core/Windows/GLFWInclude.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 
+#if USING(WITH_DEV_UI)
+
 namespace Lumina::ImGuiX::Notifications
 {
     
@@ -360,3 +362,17 @@ namespace Lumina::ImGuiX::Notifications
     }
     
 }
+
+#else
+
+// Toasts draw with the developer UI's ImGui, so a build without it drops them.
+namespace Lumina::ImGuiX::Notifications
+{
+    void Initialize() {}
+    void Shutdown() {}
+    void Render() {}
+    void SetBottomInset(float Pixels) {}
+    void NotifyInternal(EType Type, FStringView Msg) {}
+}
+
+#endif

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "World/ECS/Registry.h"
+#include "World/ECS/EventMeta.h"
 #include "Core/Delegates/ScriptDelegate.h"
 #include "Core/Math/Math.h"
 #include "Core/Object/ObjectMacros.h"
@@ -9,9 +10,8 @@
 
 namespace Lumina
 {
-    // Broadcast by SProjectileComponent::OnHit when a projectile strikes something. Blittable so C#
-    // listeners receive it by value.
-    REFLECT()
+    // A projectile struck something, queued for systems and fanned out to the projectile's OnHit.
+    REFLECT(Event)
     struct RUNTIME_API SProjectileHitEvent
     {
         GENERATED_BODY()
@@ -34,7 +34,7 @@ namespace Lumina
 
     // A moving projectile. SProjectileSystem sweeps it forward each frame (continuous, so it can't tunnel
     // through thin geometry), reports the first hit through OnHit, and optionally destroys it. Spawn one
-    // with CWorld::SpawnProjectile, or add this component to any entity.
+    // with CSpawnSubsystem::SpawnProjectile, or add this component to any entity.
     REFLECT(Component, Category = "Gameplay")
     struct RUNTIME_API SProjectileComponent
     {
@@ -75,4 +75,7 @@ namespace Lumina
         // Transient: set once a hit registers, so the system stops sweeping a resting projectile.
         bool bHasHit = false;
     };
+
+    template<>
+    struct TEventFanOut<SProjectileHitEvent> : TEntityDelegateFanOut<SProjectileHitEvent, &SProjectileComponent::OnHit, &SProjectileHitEvent::Projectile> {};
 }

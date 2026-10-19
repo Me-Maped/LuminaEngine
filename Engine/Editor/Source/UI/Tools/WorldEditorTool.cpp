@@ -1,6 +1,5 @@
 ﻿#include <string>
 #include "Tools/Import/ImportPaths.h"
-#include "Animation/SkeletalMeshLibrary.h"
 #include "World/ECS/Registry.h"
 #include "WorldEditorTool.h"
 #include "Core/CoreEditorDelegates.h"
@@ -30,9 +29,8 @@
 #include "Paths/Paths.h"
 #include "Core/Serialization/ObjectArchiver.h"
 #include "Input/InputContext.h"
-#include "Input/InputProcessor.h"
-#include "UI/RmlUiBridge.h"
 #include "Input/InputViewport.h"
+#include "UI/RmlUiBridge.h"
 #include "Memory/SmartPtr.h"
 #include "Core/Math/Math.h"
 #include "Scripting/DotNet/DotNetHost.h"
@@ -74,6 +72,7 @@
 #include "Log/Log.h"
 #include "Renderer/MeshQuantization.h"
 #include "Containers/StringFormat.h"
+#include "UI/Widgets/ComponentPicker.h"
 #include "UI/Widgets/EntityScriptPicker.h"
 #include "World/Entity/Systems/SystemAccess.h"
 
@@ -396,7 +395,7 @@ namespace Lumina
                 return;
             }
 
-            ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+            ECS::FRegistry& Registry = World->GetEntityRegistry();
             const bool bLocked = IsLockedPrefabChild(Registry, Data.Entity);
 
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
@@ -426,12 +425,8 @@ namespace Lumina
             ImGui::Separator();
 
             // --- Components & scripts ---
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_PUZZLE, "Add Component...")))
-            {
-                PushAddComponentModal(Data.Entity);
-            }
-            ImGuiX::TextTooltip("{}", LOC("Add a new component to the entity"));
-
+            DrawAddComponentMenu(Data.Entity);
+            DrawAddCollisionMenuItem(Data.Entity);
             DrawScriptAttachMenuItems(Data.Entity);
 
             ImGui::Separator();
@@ -490,7 +485,7 @@ namespace Lumina
                         {
                             const ECS::FEntity Parent = Registry.GetHierarchy().GetParent(Data.Entity);
                             BeginRelationshipTransaction({ Data.Entity }, Parent);
-                            CSkeletalMeshLibrary::AttachEntityToSocket(World.Get(), Data.Entity, Parent, Socket);
+                            World->GetAnimation()->AttachEntityToSocket(Data.Entity, Parent, Socket);
                             EndTransaction("Attach to Socket");
                             if (Data.Entity == DetailsEntity)
                             {
@@ -619,11 +614,11 @@ namespace Lumina
             BeginComponentTransaction({ Data.Entity }, SDisabledTag::StaticStruct());
             if (State.bDisabled)
             {
-                ECS::GetWorldRegistry(*World).Emplace<SDisabledTag>(Data.Entity);
+                World->GetEntityRegistry().Emplace<SDisabledTag>(Data.Entity);
             }
             else
             {
-                ECS::GetWorldRegistry(*World).Remove<SDisabledTag>(Data.Entity);
+                World->GetEntityRegistry().Remove<SDisabledTag>(Data.Entity);
             }
             EndTransaction(State.bDisabled ? "Disable Entity" : "Enable Entity");
         };
@@ -640,11 +635,11 @@ namespace Lumina
             // Tag presence stops the script ticking while leaving the entity itself active.
             if (State.bSecondaryToggled)
             {
-                ECS::GetWorldRegistry(*World).EmplaceOrReplace<SScriptDisabledTag>(Data.Entity);
+                World->GetEntityRegistry().EmplaceOrReplace<SScriptDisabledTag>(Data.Entity);
             }
             else
             {
-                ECS::GetWorldRegistry(*World).Remove<SScriptDisabledTag>(Data.Entity);
+                World->GetEntityRegistry().Remove<SScriptDisabledTag>(Data.Entity);
             }
 
             if (World->GetPackage() != nullptr)
@@ -656,7 +651,7 @@ namespace Lumina
         OutlinerContext.HoveredFunction = [this](FTreeListView& Tree, FTreeNodeID Item)
         {
             FEntityListViewItemData& Data = Tree.Get<FEntityListViewItemData>(Item);
-            ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+            ECS::FRegistry& Registry = World->GetEntityRegistry();
             if (!Registry.IsValid(Data.Entity))
             {
                 return;
@@ -701,7 +696,7 @@ namespace Lumina
 
 			Tree.Get<FTreeNodeDisplay>(Item).DisplayName = Name;
 
-            SNameComponent& NameComponent = ECS::GetWorldRegistry(*World).Get<SNameComponent>(Data.Entity);
+            SNameComponent& NameComponent = World->GetEntityRegistry().Get<SNameComponent>(Data.Entity);
             NameComponent.Name = NewName;
 		};
         
@@ -783,7 +778,7 @@ namespace Lumina
                 
                 if (const FComponentOps* Ops = FindComponentOps(ComponentFilter.c_str()))
                 {
-                    if (Ops->Has(ECS::GetWorldRegistry(*World), Entity) == 0)
+                    if (Ops->Has(World->GetEntityRegistry(), Entity) == 0)
                     {
                         bPasses = false;
                     }
@@ -875,7 +870,13 @@ namespace Lumina
 
         if (World != nullptr && !bGameViewMode)
         {
-            EntityScripts::DebugDraw(ECS::GetWorldRegistry(*World));
+            EntityScripts::DebugDraw(World->GetEntityRegistry());
+        }
+
+        // Scripts' debug windows join the editor's own while playing, as a game build's overlay shows them.
+        if (World != nullptr && HasSimulatingWorld())
+        {
+            EntityScripts::DebugGui(World->GetEntityRegistry());
         }
 
         ProcessComponentEditRequests();
@@ -895,7 +896,7 @@ namespace Lumina
             bool bDestroyed = false;
             for (ECS::FEntity Entity : Doomed)
             {
-                if (!ECS::GetWorldRegistry(*World).IsValid(Entity))
+                if (!World->GetEntityRegistry().IsValid(Entity))
                 {
                     LOG_WARN("Attempted to delete an invalid entity! {}", (Entity).Value);
                     continue;
@@ -919,9 +920,9 @@ namespace Lumina
             bSelectionTransformRefreshPending = false;
             for (ECS::FEntity Selected : SelectedEntities)
             {
-                if (ECS::GetWorldRegistry(*World).IsValid(Selected))
+                if (World->GetEntityRegistry().IsValid(Selected))
                 {
-                    ECS::GetWorldRegistry(*World).EmplaceOrReplace<FNeedsTransformUpdate>(Selected);
+                    World->GetEntityRegistry().EmplaceOrReplace<FNeedsTransformUpdate>(Selected);
                 }
             }
         }
@@ -973,38 +974,19 @@ namespace Lumina
             CurrentSelection.reserve(SelectedEntities.size());
             for (ECS::FEntity Selected : SelectedEntities)
             {
-                if (ECS::GetWorldRegistry(*World).IsValid(Selected))
+                if (World->GetEntityRegistry().IsValid(Selected))
                 {
                     CurrentSelection.push_back(Selected);
                 }
             }
 
-            TFixedVector<ECS::FEntity, 64> NewlyDuplicated;
-
-            // Snapshot once so a Ctrl+D batch is a single undo.
-            const bool bWantDuplicateTransaction = bDuplicatePressed;
-            if (bWantDuplicateTransaction)
-            {
-                BeginCreationTransaction();
-            }
-
             for (ECS::FEntity SelectedEntity : CurrentSelection)
             {
-                const bool bLocked = IsLockedPrefabChild(ECS::GetWorldRegistry(*World), SelectedEntity);
+                const bool bLocked = IsLockedPrefabChild(World->GetEntityRegistry(), SelectedEntity);
 
                 if (bCopyPressed)
                 {
                     AddEntityToCopies(SelectedEntity);
-                }
-
-                if (bDuplicatePressed && !bLocked)
-                {
-                    ECS::FEntity New = ECS::NullEntity;
-                    CopyEntity(New, SelectedEntity);
-                    if (New != ECS::NullEntity)
-                    {
-                        NewlyDuplicated.push_back(New);
-                    }
                 }
 
                 if (bDeletePressed && !bLocked)
@@ -1013,26 +995,9 @@ namespace Lumina
                 }
             }
 
-            // Select the duplicates so Ctrl+D twice keeps moving the new copies.
-            if (bDuplicatePressed && !NewlyDuplicated.empty())
+            if (bDuplicatePressed)
             {
-                ClearSelectedEntities();
-                for (ECS::FEntity New : NewlyDuplicated)
-                {
-                    AddSelectedEntity(New, false);
-                }
-            }
-
-            if (bWantDuplicateTransaction)
-            {
-                if (!NewlyDuplicated.empty())
-                {
-                    EndTransaction("Duplicate");
-                }
-                else
-                {
-                    AbortTransaction();
-                }
+                DuplicateAndSelect(TSpan<const ECS::FEntity>(CurrentSelection.data(), CurrentSelection.size()));
             }
         }
         
@@ -1042,7 +1007,7 @@ namespace Lumina
         {
             for (ECS::FEntity Entity : SelectedEntities)
             {
-                if (!ECS::GetWorldRegistry(*World).IsValid(Entity))
+                if (!World->GetEntityRegistry().IsValid(Entity))
                 {
                     continue;
                 }
@@ -1060,9 +1025,9 @@ namespace Lumina
         {
             // Snapshot sources first; CopyEntity adds rows the view would otherwise re-paste.
             TFixedVector<ECS::FEntity, 64> CopySources;
-            ECS::GetWorldRegistry(*World).View<FCopiedTag>().ForEach([&](ECS::FEntity Entity)
+            World->GetEntityRegistry().View<FCopiedTag>().ForEach([&](ECS::FEntity Entity)
             {
-                if (!IsLockedPrefabChild(ECS::GetWorldRegistry(*World), Entity))
+                if (!IsLockedPrefabChild(World->GetEntityRegistry(), Entity))
                 {
                     CopySources.push_back(Entity);
                 }
@@ -1140,7 +1105,7 @@ namespace Lumina
         DefaultScene::PopulateShadowRangeDemo(DemoWorld);
 
         const DefaultScene::FCameraPose Pose = DefaultScene::GetShadowRangeCameraPose();
-        const ECS::FEntity Camera = DemoWorld->GetActiveCameraEntity();
+        const ECS::FEntity Camera = DemoWorld->GetCamera()->GetActiveCameraEntity();
         STransformComponent* Transform = Camera != ECS::NullEntity && DemoWorld->IsValidEntity(Camera)
             ? DemoWorld->TryGetComponent<STransformComponent>(Camera) : nullptr;
         if (Transform != nullptr)
@@ -1152,43 +1117,24 @@ namespace Lumina
 
     void FWorldEditorTool::ToggleGameViewMode()
     {
-        FSceneRenderSettings* Settings = nullptr;
-        if (IRenderScene* RenderScene = World ? World->GetRenderer() : nullptr)
-        {
-            Settings = &RenderScene->GetSceneRenderSettings();
-        }
-
         if (!bGameViewMode)
         {
             bSavedWorldGridEnabled = bWorldGridEnabled;
             bSavedShowComponentVisualizers = bShowComponentVisualizers;
-            if (Settings)
-            {
-                bSavedDrawBillboards = Settings->bDrawBillboards;
-                bSavedDrawAABB = Settings->bDrawAABB;
-            }
-
             bWorldGridEnabled = false;
             bShowComponentVisualizers = false;
-            if (Settings)
-            {
-                Settings->bDrawBillboards = false;
-                Settings->bDrawAABB = false;
-            }
-
             bGameViewMode = true;
         }
         else
         {
             bWorldGridEnabled = bSavedWorldGridEnabled;
             bShowComponentVisualizers = bSavedShowComponentVisualizers;
-            if (Settings)
-            {
-                Settings->bDrawBillboards = bSavedDrawBillboards;
-                Settings->bDrawAABB = bSavedDrawAABB;
-            }
-
             bGameViewMode = false;
+        }
+
+        if (World != nullptr && World->GetRenderer() != nullptr)
+        {
+            World->GetRenderSettings().bHideEditorOverlays = bGameViewMode;
         }
     }
 
@@ -1297,6 +1243,12 @@ namespace Lumina
         
         RegisterAction({LOC("Duplicate Entities"), "Selection", LOC("Duplicate the selection in place"),
             FInputChord{ImGuiKey_D, true}, nullptr});
+
+        RegisterAction({"Drag a Copy", "Selection", "Alt-drag the transform gizmo to drag a duplicate of the selection",
+            FInputChord{}, nullptr});
+
+        RegisterAction({"Camera Follows Drag", "Selection", "Hold Shift while moving the selection with the gizmo to bring the camera along",
+            FInputChord{}, nullptr});
         
         RegisterAction({LOC("Paste Entities"), "Selection", LOC("Paste previously-copied entities"),
             FInputChord{ImGuiKey_V, true}, nullptr});
@@ -1459,6 +1411,11 @@ namespace Lumina
         return EditorModes[Idx].get();
     }
 
+    bool FWorldEditorTool::CanDuplicateEntity(ECS::FEntity Entity) const
+    {
+        return !IsLockedPrefabChild(World->GetEntityRegistry(), Entity);
+    }
+
     void FWorldEditorTool::SetActiveMode(int32 NewIndex)
     {
         if (EditorModes.empty()) return;
@@ -1609,7 +1566,7 @@ namespace Lumina
             return;
         }
         
-        SCameraComponent& CameraComponent = ECS::GetWorldRegistry(*World).Get<SCameraComponent>(EditorEntity);
+        SCameraComponent& CameraComponent = World->GetEntityRegistry().Get<SCameraComponent>(EditorEntity);
 
         FMatrix4 ViewMatrix = CameraComponent.GetViewMatrix();
         FMatrix4 ProjectionMatrix = CameraComponent.GetProjectionMatrix();
@@ -1621,19 +1578,7 @@ namespace Lumina
         ImGuizmo::SetDrawlist(ImGui::GetCurrentWindow()->DrawList);
         ImGuizmo::SetRect(ViewportOrigin.x, ViewportOrigin.y, ViewportSize.x, ViewportSize.y);
 
-        {
-            const ImRect ViewportRect(ViewportOrigin, ImVec2(ViewportOrigin.x + ViewportSize.x, ViewportOrigin.y + ViewportSize.y));
-            if (ImGui::BeginDragDropTargetCustom(ViewportRect, ImGui::GetCurrentWindow()->ID))
-            {
-                // Passing null unconditionally made every target-only handler dead in the viewport.
-                FVector3     TracedLocation(0.0f);
-                ECS::FEntity HitEntity = ECS::NullEntity;
-                TraceViewportPlacement(ImGui::GetMousePos(), TracedLocation, &HitEntity);
-
-                AcceptContentBrowserPrefabPayload(HitEntity, /*bAttachToTarget*/ false);
-                ImGui::EndDragDropTarget();
-            }
-        }
+        const bool bDropHovering = DrawViewportDropTarget();
 
         if (IWorldEditorMode* ActiveMode = GetActiveMode())
         {
@@ -1650,10 +1595,12 @@ namespace Lumina
         // TickEditorCamera runs in Update before this draw, so the flag is current-frame.
         const bool bCameraOwnsInput = ShouldSuppressViewportClickInput();
 
-        auto SelectionView = ECS::GetWorldRegistry(*World).View<FSelectedInEditorComponent, STransformComponent>();
+        const bool bAltGrabsGizmo = HandleAltDragCopy(bModeOwnsInput);
+
+        auto SelectionView = World->GetEntityRegistry().View<FSelectedInEditorComponent, STransformComponent>();
 
         const ECS::FEntity PivotEntityForGizmo = GetLastSelectedEntity();
-        const bool bGizmoTargetValid = SelectionView.Num() && ECS::GetWorldRegistry(*World).IsValid(PivotEntityForGizmo);
+        const bool bGizmoTargetValid = SelectionView.Num() && World->GetEntityRegistry().IsValid(PivotEntityForGizmo);
 
         // ImGuizmo never sees the release, so end the transaction and reset or clicks stay blocked.
         if (!bGizmoTargetValid && bImGuizmoUsedOnce)
@@ -1668,7 +1615,7 @@ namespace Lumina
         {
             {
                 ECS::FEntity PivotEntity = PivotEntityForGizmo;
-                STransformComponent& PivotTransformComponent = ECS::GetWorldRegistry(*World).Get<STransformComponent>(PivotEntity);
+                STransformComponent& PivotTransformComponent = World->GetEntityRegistry().Get<STransformComponent>(PivotEntity);
 
                 // Padded AABB so the gizmo stays visible when the pivot is just outside the frustum but handles aren't.
                 const FVector3 PivotWorld = PivotTransformComponent.GetWorldLocation();
@@ -1733,7 +1680,7 @@ namespace Lumina
                     bool bPreviewAnchorValid = false;
                     if (bVertexSnapArmed)
                     {
-                        const SStaticMeshComponent* PivotMC = ECS::GetWorldRegistry(*World).TryGet<SStaticMeshComponent>(PivotEntity);
+                        const SStaticMeshComponent* PivotMC = World->GetEntityRegistry().TryGet<SStaticMeshComponent>(PivotEntity);
                         if (PivotMC && PivotMC->StaticMesh)
                         {
                             const ImVec2 MP = ImGui::GetMousePos();
@@ -1746,11 +1693,14 @@ namespace Lumina
                     }
 
                     // Never applied mid-drag, since clearing the using state without a release strands the transaction.
-                    const bool bGizmoInert = bCameraOwnsInput && !bImGuizmoUsedOnce;
+                    const bool bGizmoInert = bCameraOwnsInput && !bImGuizmoUsedOnce && !bAltGrabsGizmo;
                     if (bGizmoInert)
                     {
                         ImGuizmo::Enable(false);
                     }
+
+                    // The camera's ride so far, which the follow below put into the cursor ray and the drag must not count again.
+                    ImGuizmo::SetTranslationOffset(&GizmoFollowOffset.x);
 
                     FMatrix4 GizmoDeltaMatrix(1.0f);
                     ImGuizmo::Manipulate(Math::ValuePtr(ViewMatrix), Math::ValuePtr(ProjectionMatrix),
@@ -1760,6 +1710,7 @@ namespace Lumina
                     {
                         ImGuizmo::Enable(true);
                     }
+                    GetCameraState().bGizmoHovered = ImGuizmo::IsOver();
 
                     if (ImGuizmo::IsUsing())
                     {
@@ -1775,6 +1726,7 @@ namespace Lumina
                             BeginTransformTransaction(Dragged);
 
                             bImGuizmoUsedOnce = true;
+                            GizmoFollowOffset = FVector3(0.0f);
                             // Click landed on the gizmo, not empty space, kill the marquee armed by IsMouseClicked.
                             SelectionBox.bActive = false;
                         }
@@ -1799,7 +1751,7 @@ namespace Lumina
 
                             if (bVertexSnapAnchorValid)
                             {
-                                ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+                                ECS::FRegistry& Registry = World->GetEntityRegistry();
                                 const FVector3 AnchorPreWorld = FVector3(PreManipulateMatrix * FVector4(VertexSnapAnchorLocal, 1.0f));
                                 const FVector3 AnchorCandidateWorld = AnchorPreWorld + DeltaTranslation;
 
@@ -1972,9 +1924,9 @@ namespace Lumina
                                     break;
                                 }
 
-                                if (const ECS::FEntity Parent = ECS::GetWorldRegistry(*World).GetHierarchy().GetParent(Entity); Parent != ECS::NullEntity)
+                                if (const ECS::FEntity Parent = World->GetEntityRegistry().GetHierarchy().GetParent(Entity); Parent != ECS::NullEntity)
                                 {
-                                    STransformComponent& ParentTransform = ECS::GetWorldRegistry(*World).Get<STransformComponent>(Parent);
+                                    STransformComponent& ParentTransform = World->GetEntityRegistry().Get<STransformComponent>(Parent);
                                     FMatrix4 LocalMatrix = Math::Inverse(ParentTransform.GetWorldMatrix()) * DesiredWorldMatrix;
 
                                     FVector3 LocalTranslation, LocalScale, LocalSkew;
@@ -2010,7 +1962,17 @@ namespace Lumina
                         // The cached dirty signal can fail in a duplicated world.
                         for (ECS::FEntity Selected : SelectionView)
                         {
-                            ECS::GetWorldRegistry(*World).EmplaceOrReplace<FNeedsTransformUpdate>(Selected);
+                            World->GetEntityRegistry().EmplaceOrReplace<FNeedsTransformUpdate>(Selected);
+                        }
+
+                        // Shift keeps the camera with the moved selection, so a long drag never leaves the view.
+                        if (GuizmoOp == ImGuizmo::TRANSLATE && ImGui::GetIO().KeyShift)
+                        {
+                            const FVector3 PivotDelta = GuizmoMode == ImGuizmo::LOCAL
+                                ? FVector3(EntityMatrix[3]) - FVector3(PreManipulateMatrix[3])
+                                : DeltaTranslation;
+                            MoveEditorCameraBy(PivotDelta);
+                            GizmoFollowOffset += PivotDelta;
                         }
                     }
                     else if (bImGuizmoUsedOnce)
@@ -2132,7 +2094,7 @@ namespace Lumina
                 else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 {
                     ECS::FEntity Hit = World->GetRenderer()->GetEntityAtPixel(TexX, TexY);
-                    Hit = ResolveSelectionRootForViewportPick(ECS::GetWorldRegistry(*World), Hit);
+                    Hit = ResolveSelectionRootForViewportPick(World->GetEntityRegistry(), Hit);
                     if (Hit != ECS::NullEntity)
                     {
                         PickCtx.Broker->Fulfill(static_cast<uint32>((Hit).Value));
@@ -2152,7 +2114,7 @@ namespace Lumina
                     if (bRightWasShortClick)
                     {
                         ECS::FEntity EntityHandle = World->GetRenderer()->GetEntityAtPixel(TexX, TexY);
-                        EntityHandle = ResolveSelectionRootForViewportPick(ECS::GetWorldRegistry(*World), EntityHandle);
+                        EntityHandle = ResolveSelectionRootForViewportPick(World->GetEntityRegistry(), EntityHandle);
 
                         // On a picker miss keep existing selection so the menu still has something to act on.
                         if (EntityHandle != ECS::NullEntity && !IsEntitySelected(EntityHandle))
@@ -2165,7 +2127,7 @@ namespace Lumina
                             ? EntityHandle
                             : GetLastSelectedEntity();
 
-                        if (ECS::GetWorldRegistry(*World).IsValid(MenuTarget))
+                        if (World->GetEntityRegistry().IsValid(MenuTarget))
                         {
                             ImGui::OpenPopup("EntityContextMenu");
                         }
@@ -2209,7 +2171,7 @@ namespace Lumina
                     if (!bLeftDragging)
                     {
                         ECS::FEntity EntityHandle = World->GetRenderer()->GetEntityAtPixel(TexX, TexY);
-                        EntityHandle = ResolveSelectionRootForViewportPick(ECS::GetWorldRegistry(*World), EntityHandle);
+                        EntityHandle = ResolveSelectionRootForViewportPick(World->GetEntityRegistry(), EntityHandle);
 
                         // Ctrl+click toggles picked entity in selection; plain click replaces.
                         if (ImGui::GetIO().KeyCtrl)
@@ -2236,7 +2198,7 @@ namespace Lumina
                         const ImVec2 RectMax(Math::Max(Start.x, End.x), Math::Max(Start.y, End.y));
                         const FMatrix4 ViewProj = ProjectionMatrix * ViewMatrix;
 
-                        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+                        ECS::FRegistry& Registry = World->GetEntityRegistry();
 
                         THashSet<ECS::FEntity> Hits;
                         Registry.View<STransformComponent>().ForEach([&](ECS::FEntity Entity, STransformComponent& Transform)
@@ -2302,7 +2264,7 @@ namespace Lumina
                 }
             }
         }
-        else
+        else if (!bDropHovering)
         {
             // Not a pick target this frame, so tell the renderer to skip the picker readback.
             World->GetRenderer()->SetPickerCursor(0, 0, false);
@@ -2312,9 +2274,9 @@ namespace Lumina
         {
             const ECS::FEntity LastSelected = GetLastSelectedEntity();
 
-            if (ECS::GetWorldRegistry(*World).IsValid(LastSelected))
+            if (World->GetEntityRegistry().IsValid(LastSelected))
             {
-                ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+                ECS::FRegistry& Registry = World->GetEntityRegistry();
                 const bool bLastSelectedLocked = IsLockedPrefabChild(Registry, LastSelected);
                 const size_t NumSelected = SelectedEntities.size();
                 const bool bMultiSelected = NumSelected > 1;
@@ -2388,12 +2350,8 @@ namespace Lumina
                 ImGui::Spacing();
 
                 // Components.
-                if (ImGui::MenuItem(LOC("Add Component...")))
-                {
-                    PushAddComponentModal(LastSelected);
-                    ImGui::CloseCurrentPopup();
-                }
-
+                DrawAddComponentMenu(LastSelected);
+                DrawAddCollisionMenuItem(LastSelected);
                 DrawScriptAttachMenuItems(LastSelected);
 
                 if (ImGui::BeginMenu(LOC("Remove Component")))
@@ -2646,101 +2604,50 @@ namespace Lumina
         }
     }
 
-    void FWorldEditorTool::PushAddComponentModal(ECS::FEntity Entity)
+    void FWorldEditorTool::DrawAddComponentMenu(ECS::FEntity Entity)
     {
-        TUniquePtr<ImGuiTextFilter> Filter = MakeUnique<ImGuiTextFilter>();
-        ToolContext->PushModal(LOC("Add Component"), ImVec2(500.0f, 600.0f), [this, Entity, Filter = Move(Filter)] () -> bool
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
+        if (!Registry.IsValid(Entity))
         {
-            bool bComponentAdded = false;
+            return;
+        }
 
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
-            if (SelectedEntities.size() > 1 && IsEntitySelected(Entity))
+        ComponentAttachPicker.SearchHint = LOC("Search components...");
+        ComponentAttachPicker.ItemNoun   = LOC("components");
+        ComponentAttachPicker.TrailingCategory = EntityScriptPicker::NativeCategory;
+        if (!ImGui::BeginMenu(LOC_ICON(LE_ICON_PUZZLE, "Add Component")))
+        {
+            return;
+        }
+
+        // A multi-selection adds to every selected entity, so a component counts as present only once all of them have it.
+        const TVector<ECS::FEntity> Targets = GetComponentEditTargets(Entity);
+        auto IsOnEveryTarget = [&Registry, &Targets](CStruct* Struct)
+        {
+            return !Targets.empty() && Algo::AllOf(Targets, [&](ECS::FEntity Target)
             {
-                ImGui::Text(LOC("Select a component to add to %llu selected entities"), (unsigned long long)SelectedEntities.size());
-            }
-            else
+                return ECS::Utils::HasComponent(Registry, Target, Struct);
+            });
+        };
+
+        if (const FPickerItem* Picked = ComponentAttachPicker.DrawContents([&](TVector<FPickerItem>& Out) { ComponentPicker::GatherItems(Out, IsOnEveryTarget); }))
+        {
+            if (CStruct* Component = ComponentPicker::FindComponent(Picked->Key))
             {
-                ImGui::TextUnformatted(LOC("Select a component to add to the entity"));
-            }
-            ImGui::PopStyleColor();
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 8));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.16f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.18f, 0.18f, 0.19f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.2f, 0.2f, 0.21f, 1.0f));
-
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-            Filter->DrawWithHint(LOC_ICON(LE_ICON_BRIEFCASE_SEARCH, "Search Components..."), LOC("Search..."));
-
-            ImGui::PopStyleColor(3);
-            ImGui::PopStyleVar(2);
-
-            ImGui::Spacing();
-
-            const float ListHeight = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2;
-
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 16.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 4.0f));
-
-            if (ImGui::BeginChild("##ComponentsList", ImVec2(0, ListHeight), true))
-            {
-                CStruct* PickedMetaType = nullptr;
-                CStruct* PickedStruct    = nullptr;
-
-                // Resolved before the list is drawn so it can gray out what these targets already have.
-                TVector<ECS::FEntity> Targets = GetComponentEditTargets(Entity);
-
-                if (DrawAddableComponentList(*Filter, Targets, PickedMetaType, PickedStruct))
+                ApplyAddComponentToTargets(Targets, Component);
+                if (Entity == DetailsEntity)
                 {
-                    ApplyAddComponentToTargets(Targets, PickedMetaType);
-
-                    bComponentAdded = true;
+                    bDetailsDirty = true;
                 }
             }
-            ImGui::EndChild();
-
-            ImGui::PopStyleVar(2);
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            const float ButtonWidth = 120.0f;
-            const float AvailWidth = ImGui::GetContentRegionAvail().x;
-            ImGui::SetCursorPosX((AvailWidth - ButtonWidth) * 0.5f);
-
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(20, 8));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.2f, 0.22f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.25f, 0.27f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.3f, 0.32f, 1.0f));
-
-            bool bShouldClose = false;
-            if (ImGui::Button(LOC("Cancel"), ImVec2(ButtonWidth, 0)))
-            {
-                bShouldClose = true;
-            }
-
-            ImGui::PopStyleColor(3);
-            ImGui::PopStyleVar(2);
-
-            if (bComponentAdded && Entity == DetailsEntity)
-            {
-                bDetailsDirty = true;
-            }
-
-            return bComponentAdded || bShouldClose;
-        });
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndMenu();
     }
 
     void FWorldEditorTool::DrawScriptAttachMenuItems(ECS::FEntity Entity)
     {
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
 
         if (!Registry.IsValid(Entity))
         {
@@ -2778,7 +2685,7 @@ namespace Lumina
 
     void FWorldEditorTool::AttachScriptToEntity(ECS::FEntity Entity, const FString& ScriptClass)
     {
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         if (!Registry.IsValid(Entity) || ScriptClass.empty())
         {
             return;
@@ -2802,7 +2709,7 @@ namespace Lumina
 
     void FWorldEditorTool::RemoveScriptFromEntity(ECS::FEntity Entity)
     {
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         if (!Registry.IsValid(Entity) || !Registry.HasAll<SEntityScriptComponent>(Entity))
         {
             return;
@@ -2834,6 +2741,11 @@ namespace Lumina
         }
 
         if (!World->GetPackage()->IsDirty())
+        {
+            return;
+        }
+
+        if (!ToolContext->ConfirmWritable({ FString(World->GetPackage()->GetPackagePath().c_str()) }, [this] { OnSave(); }))
         {
             return;
         }
@@ -3026,7 +2938,7 @@ namespace Lumina
 
     TVector<ECS::FEntity> FWorldEditorTool::GatherPrefabSelectionRoots() const
     {
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
 
         // Drops invalid handles and prefab-instance children whose hierarchy is locked.
         THashSet<ECS::FEntity> Filtered;
@@ -3077,7 +2989,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         FCreatePrefabRequest Req = BuildCreatePrefabRequest(Registry, std::move(Roots));
 
         ToolContext->PushModal(LOC("Create Prefab From Selection"), ImVec2(560.0f, 290.0f),
@@ -3147,7 +3059,7 @@ namespace Lumina
         if (Name.empty()) { OutError = LOC("Name cannot be empty."); return nullptr; }
         if (Folder.empty()) { OutError = LOC("Folder cannot be empty."); return nullptr; }
 
-        ECS::FRegistry& WorkingRegistry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& WorkingRegistry = World->GetEntityRegistry();
         for (ECS::FEntity Entity : Roots)
         {
             if (!WorkingRegistry.IsValid(Entity))
@@ -3272,7 +3184,7 @@ namespace Lumina
             OutError = LOC("Nothing selected that a prefab can capture.");
             return nullptr;
         }
-        const FCreatePrefabRequest Req = BuildCreatePrefabRequest(ECS::GetWorldRegistry(*World), Move(Roots));
+        const FCreatePrefabRequest Req = BuildCreatePrefabRequest(World->GetEntityRegistry(), Move(Roots));
         return CreatePrefabFromRoots(Req.Roots, Req.Pivot, Folder, Name, OutError);
     }
 
@@ -3284,7 +3196,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         if (!Registry.IsValid(Entity) || IsLockedPrefabChild(Registry, Entity))
         {
             ImGuiX::Notifications::NotifyWarning(LOCF("Cannot create a prefab from this entity."));
@@ -3307,7 +3219,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         const SPrefabInstanceComponent* Instance = Registry.TryGet<SPrefabInstanceComponent>(InstanceRoot);
         if (Instance == nullptr || !Instance->bIsRoot)
         {
@@ -3377,7 +3289,7 @@ namespace Lumina
         UnbindRegistryObservers();
         if (World)
         {
-            ECS::FRegistry& OldRegistry = ECS::GetWorldRegistry(*World);
+            ECS::FRegistry& OldRegistry = World->GetEntityRegistry();
             OldRegistry.ClearComponent<FSelectedInEditorComponent>();
             OldRegistry.ClearComponent<FLastSelectedTag>();
         }
@@ -3634,7 +3546,7 @@ namespace Lumina
             }
 
             // Captured BEFORE SetupWorldForTool, whose last step makes the editor entity active.
-            PossessedCameraEntity = World->GetActiveCameraEntity();
+            PossessedCameraEntity = World->GetCamera()->GetActiveCameraEntity();
 
             FTransform CameraPose;
             bool bHasPose = false;
@@ -3671,14 +3583,14 @@ namespace Lumina
 
             // Set last, since HasEditorCameraControl flips with it and the refocus handler reads it next draw.
             bEjectedFromPlay = true;
-            SetInputFocus(EInputFocus::Editor);
+            FInputViewportRegistry::Get().SetGameInputFocused(false);
         }
         else
         {
             // Re-activated first, so the world is never left with a resolved view on a dead entity.
             if (PossessedCameraEntity != ECS::NullEntity && World->IsValidEntity(PossessedCameraEntity))
             {
-                World->SetActiveCamera(PossessedCameraEntity);
+                World->GetCamera()->SetActiveCamera(PossessedCameraEntity);
             }
             else
             {
@@ -3702,12 +3614,12 @@ namespace Lumina
             if (bHasPossessedInputModes && InputViewport)
             {
                 InputViewport->GetContext().SetInputMode(PossessedInputMode);
-                FInputProcessor::Get().SetMouseMode(PossessedMouseMode, World.Get());
+                FInputViewportRegistry::Get().SetMouseMode(PossessedMouseMode, World.Get());
             }
             bHasPossessedInputModes = false;
 
             bEjectedFromPlay = false;
-            SetInputFocus(EInputFocus::Game);
+            FInputViewportRegistry::Get().SetGameInputFocused(true);
         }
     }
 
@@ -3884,10 +3796,10 @@ namespace Lumina
         // Terrain GPU mirrors are transient, so a restore needs a full re-upload and chunk rebuild.
         if (World)
         {
-            auto TerrainView = ECS::GetWorldRegistry(*World).View<STerrainComponent>();
+            auto TerrainView = World->GetEntityRegistry().View<STerrainComponent>();
             for (ECS::FEntity Entity : TerrainView)
             {
-                FTerrainCPUState& State = ECS::GetWorldRegistry(*World).Get<STerrainComponent>(Entity).CPUState;
+                FTerrainCPUState& State = World->GetEntityRegistry().Get<STerrainComponent>(Entity).CPUState;
                 State.bFullHeightmapDirty = true;
                 State.bFullWeightsDirty   = true;
                 State.bChunksDirty        = true;
@@ -3938,7 +3850,7 @@ namespace Lumina
     {
         UnbindRegistryObservers();
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*GetObservedWorld());
+        ECS::FRegistry& Registry = GetObservedWorld()->GetEntityRegistry();
         Registry.OnEntityCreated().Connect<&FWorldEditorTool::OnEntityCreated>(this);
         Registry.OnEntityDestroyed().Connect<&FWorldEditorTool::OnEntityDestroyed>(this);
         Registry.GetSignals<SNameComponent>().OnConstruct.Connect<&FSceneEditorTool::OnOutlinerEntityConstructed>(this);
@@ -4148,8 +4060,8 @@ namespace Lumina
             bDetailsDirty = true;
 
             // Leftover tags on ProxyWorld confuse the outliner rebuild on PIE-exit.
-            ECS::GetWorldRegistry(*World).ClearComponent<FSelectedInEditorComponent>();
-            ECS::GetWorldRegistry(*World).ClearComponent<FLastSelectedTag>();
+            World->GetEntityRegistry().ClearComponent<FSelectedInEditorComponent>();
+            World->GetEntityRegistry().ClearComponent<FLastSelectedTag>();
 
             World->SetActive(false);
             ProxyWorld = World;
@@ -4193,7 +4105,7 @@ namespace Lumina
             RebindRegistryObservers();
 
             // Play starts in Game focus, so ImGui stands down and input goes to the game and its UI.
-            SetInputFocus(EInputFocus::Game);
+            FInputViewportRegistry::Get().SetGameInputFocused(true);
 
             // FEditorUI spawns the other players' PIE worlds and pop-ups through a deferred tool create.
             OnGamePreviewStartRequested.Broadcast();
@@ -4229,17 +4141,17 @@ namespace Lumina
             bGameViewMode = false; // back to the editor view on stop
 
             // Hand input back to the editor on stop.
-            SetInputFocus(EInputFocus::Editor);
+            FInputViewportRegistry::Get().SetGameInputFocused(false);
 
             // SetupWorldForTool builds a fresh editor entity at origin, so stash the pre-Play camera pose.
             bool bHasSavedCamera = false;
             FTransform SavedCameraTransform;
             SCameraComponent SavedCamera;
             // Use ProxyEditorEntity (captured at PIE entry); EditorEntity may be null if Travel swapped worlds mid-PIE.
-            if (ProxyEditorEntity != ECS::NullEntity && ECS::GetWorldRegistry(*ProxyWorld).IsValid(ProxyEditorEntity))
+            if (ProxyEditorEntity != ECS::NullEntity && ProxyWorld->GetEntityRegistry().IsValid(ProxyEditorEntity))
             {
-                SavedCameraTransform = ECS::GetWorldRegistry(*ProxyWorld).Get<STransformComponent>(ProxyEditorEntity).GetWorldTransform();
-                SavedCamera = ECS::GetWorldRegistry(*ProxyWorld).Get<SCameraComponent>(ProxyEditorEntity);
+                SavedCameraTransform = ProxyWorld->GetEntityRegistry().Get<STransformComponent>(ProxyEditorEntity).GetWorldTransform();
+                SavedCamera = ProxyWorld->GetEntityRegistry().Get<SCameraComponent>(ProxyEditorEntity);
                 bHasSavedCamera = true;
 
                 ProxyWorld->DestroyEntity(ProxyEditorEntity);
@@ -4250,10 +4162,10 @@ namespace Lumina
             SetWorld(ProxyWorld.Get());
             ProxyWorld->SetActive(true);
 
-            if (bHasSavedCamera && ECS::GetWorldRegistry(*World).IsValid(EditorEntity))
+            if (bHasSavedCamera && World->GetEntityRegistry().IsValid(EditorEntity))
             {
-                ECS::GetWorldRegistry(*World).Get<STransformComponent>(EditorEntity).SetLocalTransform(SavedCameraTransform);
-                ECS::GetWorldRegistry(*World).Patch<SCameraComponent>(EditorEntity, [SavedCamera](SCameraComponent& Patch)
+                World->GetEntityRegistry().Get<STransformComponent>(EditorEntity).SetLocalTransform(SavedCameraTransform);
+                World->GetEntityRegistry().Patch<SCameraComponent>(EditorEntity, [SavedCamera](SCameraComponent& Patch)
                 {
                     Patch = SavedCamera;
                 });
@@ -4270,13 +4182,13 @@ namespace Lumina
 
             if (InputViewport)
             {
-                // Activate editor viewport first so FInputProcessor routes the mode change against the right context.
+                // Activate the editor viewport first so the mode change lands on the right context.
                 FInputViewportRegistry::Get().SetActiveViewport(InputViewport.get());
 
                 InputViewport->GetContext().SetInputMode(EInputMode::Game);
 
-                // Route through FInputProcessor so ImGuiConfigFlags_NoMouse clears; direct context-field set would leave ImGui ignoring the mouse.
-                FInputProcessor::Get().SetMouseMode(EMouseMode::Normal);
+                // Through the registry so ImGuiConfigFlags_NoMouse clears, which a direct context write would leave set.
+                FInputViewportRegistry::Get().SetMouseMode(EMouseMode::Normal);
             }
         }
     }
@@ -4304,11 +4216,11 @@ namespace Lumina
             bSimulatingWorld = true;
 
             // Leftover tags on ProxyWorld confuse the outliner rebuild on Simulate-exit.
-            ECS::GetWorldRegistry(*World).ClearComponent<FSelectedInEditorComponent>();
-            ECS::GetWorldRegistry(*World).ClearComponent<FLastSelectedTag>();
+            World->GetEntityRegistry().ClearComponent<FSelectedInEditorComponent>();
+            World->GetEntityRegistry().ClearComponent<FLastSelectedTag>();
 
-            FTransform TransformCopy = ECS::GetWorldRegistry(*World).Get<STransformComponent>(EditorEntity).GetWorldTransform();
-            SCameraComponent CameraCopy = ECS::GetWorldRegistry(*World).Get<SCameraComponent>(EditorEntity);
+            FTransform TransformCopy = World->GetEntityRegistry().Get<STransformComponent>(EditorEntity).GetWorldTransform();
+            SCameraComponent CameraCopy = World->GetEntityRegistry().Get<SCameraComponent>(EditorEntity);
 
             World->SetActive(false);
             ProxyWorld = World;
@@ -4328,7 +4240,7 @@ namespace Lumina
             }
             RebindToWorld(SimWorld);
 
-            if (ProxyEditorEntity != ECS::NullEntity && ECS::GetWorldRegistry(*ProxyWorld).IsValid(ProxyEditorEntity))
+            if (ProxyEditorEntity != ECS::NullEntity && ProxyWorld->GetEntityRegistry().IsValid(ProxyEditorEntity))
             {
                 ProxyWorld->DestroyEntity(ProxyEditorEntity);
             }
@@ -4336,13 +4248,13 @@ namespace Lumina
             EditorEntity = ECS::NullEntity;
 
             SetupWorldForTool();
-            ASSERT(ECS::GetWorldRegistry(*World).IsValid(EditorEntity));
+            ASSERT(World->GetEntityRegistry().IsValid(EditorEntity));
 
             WorldSettingsPropertyTable = MakeUnique<FPropertyTable>(&World->GetDefaultWorldSettings(), SDefaultWorldSettings::StaticStruct());
 
-            ECS::GetWorldRegistry(*World).Get<STransformComponent>(EditorEntity).SetLocalTransform(TransformCopy);
+            World->GetEntityRegistry().Get<STransformComponent>(EditorEntity).SetLocalTransform(TransformCopy);
 
-            ECS::GetWorldRegistry(*World).Patch<SCameraComponent>(EditorEntity, [CameraCopy](SCameraComponent& Patch)
+            World->GetEntityRegistry().Patch<SCameraComponent>(EditorEntity, [CameraCopy](SCameraComponent& Patch)
             {
                 Patch = CameraCopy;
             });
@@ -4360,10 +4272,10 @@ namespace Lumina
             bDetailsDirty = true;
             bSimulatingWorld = false;
 
-            FTransform TransformCopy = ECS::GetWorldRegistry(*World).Get<STransformComponent>(EditorEntity).GetWorldTransform();
-            SCameraComponent CameraCopy = ECS::GetWorldRegistry(*World).Get<SCameraComponent>(EditorEntity);
+            FTransform TransformCopy = World->GetEntityRegistry().Get<STransformComponent>(EditorEntity).GetWorldTransform();
+            SCameraComponent CameraCopy = World->GetEntityRegistry().Get<SCameraComponent>(EditorEntity);
 
-            if (EditorEntity != ECS::NullEntity && ECS::GetWorldRegistry(*World).IsValid(EditorEntity))
+            if (EditorEntity != ECS::NullEntity && World->GetEntityRegistry().IsValid(EditorEntity))
             {
                 World->DestroyEntity(EditorEntity);
             }
@@ -4372,13 +4284,13 @@ namespace Lumina
 
             SetWorld(ProxyWorld.Get());
             ProxyWorld->SetActive(true);
-            ASSERT(ECS::GetWorldRegistry(*World).IsValid(EditorEntity));
+            ASSERT(World->GetEntityRegistry().IsValid(EditorEntity));
 
             WorldSettingsPropertyTable = MakeUnique<FPropertyTable>(&World->GetDefaultWorldSettings(), SDefaultWorldSettings::StaticStruct());
 
-            ECS::GetWorldRegistry(*World).Get<STransformComponent>(EditorEntity).SetLocalTransform(TransformCopy);
+            World->GetEntityRegistry().Get<STransformComponent>(EditorEntity).SetLocalTransform(TransformCopy);
 
-            ECS::GetWorldRegistry(*World).Patch<SCameraComponent>(EditorEntity, [CameraCopy](SCameraComponent& Patch)
+            World->GetEntityRegistry().Patch<SCameraComponent>(EditorEntity, [CameraCopy](SCameraComponent& Patch)
             {
                 Patch = CameraCopy;
             });
@@ -4392,31 +4304,9 @@ namespace Lumina
             {
                 FInputViewportRegistry::Get().SetActiveViewport(InputViewport.get());
                 InputViewport->GetContext().SetInputMode(EInputMode::Game);
-                FInputProcessor::Get().SetMouseMode(EMouseMode::Normal);
+                FInputViewportRegistry::Get().SetMouseMode(EMouseMode::Normal);
             }
         }
-    }
-
-    void FWorldEditorTool::ApplyInputFocus()
-    {
-        ImGuiIO& IO = ImGui::GetIO();
-        const ImGuiConfigFlags Mask = ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoKeyboard;
-        if (InputFocus == EInputFocus::Game)
-        {
-            IO.ConfigFlags |= Mask;
-        }
-        else
-        {
-            IO.ConfigFlags &= ~Mask;
-        }
-    }
-
-    void FWorldEditorTool::SetInputFocus(EInputFocus NewFocus)
-    {
-        InputFocus = NewFocus;
-
-        // One global state, so handing the cursor back reaches every PIE preview window at once.
-        FInputViewportRegistry::Get().SetGameInputFocused(NewFocus == EInputFocus::Game);
     }
 
     bool FWorldEditorTool::OnEvent(FEvent& Event)
@@ -4458,7 +4348,7 @@ namespace Lumina
             return;
         }
 
-        AcceptContentBrowserPrefabPayload(DropItem, /*bAttachToTarget*/ true);
+        AcceptContentBrowserPayload(DropItem, /*bAttachToTarget*/ true);
     }
 
     void FWorldEditorTool::HandleFolderDragDrop(uint32 FolderID)
@@ -4493,42 +4383,20 @@ namespace Lumina
         }
 
         PendingAssetDropFolder = FolderID;
-        AcceptContentBrowserPrefabPayload(ECS::NullEntity, /*bAttachToTarget*/ false);
+        AcceptContentBrowserPayload(ECS::NullEntity, /*bAttachToTarget*/ false);
         PendingAssetDropFolder = 0;
     }
 
-    void FWorldEditorTool::AcceptContentBrowserPrefabPayload(ECS::FEntity DropTarget, bool bAttachToTarget)
+    void FWorldEditorTool::HandlePrefabContentDrop(FStringView VirtualPath, ECS::FEntity DropTarget, bool bAttachToTarget, const FTransform* SpawnTransform)
     {
-        const DragDrop::FPayload* Peek = DragDrop::PeekPayload();
-        if (Peek == nullptr || Peek->Kind != DragDrop::EPayloadKind::Asset)
-        {
-            return;
-        }
-        if (!DragDrop::IsDelivered())
-        {
-            return;
-        }
-        HandlePrefabContentDrop(FStringView(Peek->AssetPath.c_str(), Peek->AssetPath.size()), DropTarget, bAttachToTarget);
-    }
-
-    void FWorldEditorTool::HandlePrefabContentDrop(FStringView VirtualPath, ECS::FEntity DropTarget, bool bAttachToTarget)
-    {
-        // Dispatches every asset class via the editor drop registry. Spawn transform comes from the camera.
-        const uint32 DropFolder = PendingAssetDropFolder;
-        PendingAssetDropFolder = 0;
-
         BeginTransaction();
-        ECS::FEntity Spawned = HandleContentBrowserAssetDrop(VirtualPath, DropTarget, bAttachToTarget);
+        ECS::FEntity Spawned = HandleContentBrowserAssetDrop(VirtualPath, DropTarget, bAttachToTarget, SpawnTransform);
         if (Spawned != ECS::NullEntity)
         {
             // Filed inside the same transaction so the drop is one undo step, not two.
-            if (DropFolder != 0)
+            if (Spawned != DropTarget)
             {
-                if (SSceneFolderComponent* Folders = GetEditableSceneFolders())
-                {
-                    Folders->AssignEntity(Spawned, DropFolder);
-                    EntityFolderCache[Spawned] = DropFolder;
-                }
+                OnDropSpawnedEntity(Spawned);
             }
 
             EndTransaction("Drop Asset");
@@ -4540,6 +4408,19 @@ namespace Lumina
             AbortTransaction();
             ImGuiX::Notifications::NotifyWarning(LOCF("Could not add \"{0}\" to the world (see log for details)."),
                 FString(VirtualPath.data(), VirtualPath.size()).c_str());
+        }
+    }
+
+    void FWorldEditorTool::OnDropSpawnedEntity(ECS::FEntity Entity)
+    {
+        if (PendingAssetDropFolder == 0)
+        {
+            return;
+        }
+        if (SSceneFolderComponent* Folders = GetEditableSceneFolders())
+        {
+            Folders->AssignEntity(Entity, PendingAssetDropFolder);
+            EntityFolderCache[Entity] = PendingAssetDropFolder;
         }
     }
 
@@ -4798,7 +4679,7 @@ namespace Lumina
                         bool bEnabled = Info.bEnabled;
                         if (ImGui::Checkbox("##Enabled", &bEnabled))
                         {
-                            World->SetSystemEnabled(Info.Name, bEnabled);
+                            World->SetSystemEnabled(Info.Class, bEnabled);
                             MarkSceneDirty();
                             bToggled = true;
                         }
@@ -5020,7 +4901,7 @@ namespace Lumina
             return;
         }
 
-        AcceptContentBrowserPrefabPayload(ECS::NullEntity, /*bAttachToTarget*/ false);
+        AcceptContentBrowserPayload(ECS::NullEntity, /*bAttachToTarget*/ false);
     }
 
     bool FWorldEditorTool::IsUnsavedDocument()
@@ -5037,7 +4918,7 @@ namespace Lumina
 
         TFixedVector<ECS::FEntity, 64> Targets;
         Targets.reserve(SelectedEntities.size());
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         for (ECS::FEntity Entity : SelectedEntities)
         {
             if (!Registry.IsValid(Entity) || IsLockedPrefabChild(Registry, Entity))
@@ -5164,7 +5045,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
 
         TVector<ECS::FEntity> Targets;
         Targets.reserve(GetSelectedEntities().size());
@@ -5223,7 +5104,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         if (!Registry.IsValid(EditorEntity))
         {
             return;
@@ -5277,7 +5158,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         if (!Registry.HasAll<STransformComponent>(Entity))
         {
             return;
@@ -5301,7 +5182,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
 
         TFixedVector<ECS::FEntity, 64> Targets;
         Targets.reserve(SelectedEntities.size());
@@ -5416,7 +5297,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         if (!Registry.IsValid(EditorEntity))
         {
             return;
@@ -5467,7 +5348,7 @@ namespace Lumina
         }
 
         const ECS::FEntity Entity = GetLastSelectedEntity();
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         if (!Registry.IsValid(Entity))
         {
             return;
@@ -5484,7 +5365,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
 
         TFixedVector<ECS::FEntity, 64> Targets;
         Targets.reserve(SelectedEntities.size());
@@ -5536,7 +5417,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         if (!Registry.IsValid(EditorEntity))
         {
             return;
@@ -5553,7 +5434,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         if (!Registry.IsValid(EditorEntity))
         {
             return;
@@ -5637,7 +5518,7 @@ namespace Lumina
         FFrustum Frustum = Camera.GetViewVolume().GetFrustum();
         const FVector3 CameraPos = Camera.GetPosition();
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         auto View = Registry.View<STransformComponent>(ECS::TExclude<FEditorComponent>{});
 
         struct FCandidate
@@ -5759,7 +5640,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         auto SelView = Registry.View<FSelectedInEditorComponent, STransformComponent>();
         if (SelView.Num() == 0)
         {

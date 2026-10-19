@@ -36,19 +36,19 @@ namespace Lumina
 
         // Runs once when the world starts, after every system has been created and configured.
         FUNCTION()
-        virtual void OnStartup() {}
+        virtual void OnStartup(const SSystemContext& Context) {}
 
         // Runs every frame on each stage this system required, possibly on a worker thread.
         FUNCTION()
-        virtual void OnUpdate() {}
+        virtual void OnUpdate(const SSystemContext& Context) {}
 
         // Asked on the main thread as each stage starts. False leaves this system out of that frame, so it neither runs nor separates the systems around it.
         FUNCTION()
-        virtual bool HasWork(EUpdateStage Stage) { return true; }
+        virtual bool HasWork(const SSystemContext& Context) { return true; }
 
         // Runs once when the world tears down, or when this system is disabled.
         FUNCTION()
-        virtual void OnTeardown() {}
+        virtual void OnTeardown(const SSystemContext& Context) {}
 
         // The world is about to be captured into SaveGame, so state kept outside SaveGame fields can be folded in.
         FUNCTION()
@@ -61,9 +61,6 @@ namespace Lumina
         // The owning world, valid from Configure onwards.
         FUNCTION()
         CWorld* GetWorld() const { return OwningWorld; }
-
-        // The tick context for the stage currently running. Only meaningful inside the callbacks above.
-        const FSystemContext& GetContext() const;
 
         //~ Begin Configure declarations.
 
@@ -85,6 +82,18 @@ namespace Lumina
 
         template<typename... Ts>
         void Reads() { Access.Read<Ts...>(); }
+
+        // Declares the read and hands back the reader that OnUpdate drains with Context.ReadEvents.
+        template<typename T>
+        NODISCARD ECS::TEventReader<T> ReadsEvent()
+        {
+            Access.Reads.push_back(static_cast<uint32>(ECS::GetComponentTypeID<T>()));
+            return {};
+        }
+
+        // Declares that OnUpdate sends T with Context.SendEvent, so readers of T run after this system's batch.
+        template<typename... Ts>
+        void SendsEvent() { (Access.Writes.push_back(static_cast<uint32>(ECS::GetComponentTypeID<Ts>())), ...); }
 
         //~ End Configure declarations.
 
@@ -115,22 +124,22 @@ namespace Lumina
         RUNTIME_API int32 CreateMissing(CWorld& World, const THashSet<FName>& Disabled, TVector<TStrongObjectPtr<CEntitySystem>>& Out);
 
         // Tears down the systems backed by a script class, so a hot reload can rebuild them.
-        RUNTIME_API void DropScripted(TVector<TStrongObjectPtr<CEntitySystem>>& Systems);
+        RUNTIME_API void DropScripted(const SSystemContext& Context, TVector<TStrongObjectPtr<CEntitySystem>>& Systems);
 
         // Tears down the systems whose HostOnly, ClientOnly or Cosmetic no longer fits the world, after its net mode changed.
-        RUNTIME_API void DropOutsideRealm(CWorld& World, TVector<TStrongObjectPtr<CEntitySystem>>& Systems);
+        RUNTIME_API void DropOutsideRealm(const SSystemContext& Context, CWorld& World, TVector<TStrongObjectPtr<CEntitySystem>>& Systems);
 
         // Tears down the systems the editor just disabled.
-        RUNTIME_API void DropDisabled(const THashSet<FName>& Disabled, TVector<TStrongObjectPtr<CEntitySystem>>& Systems);
+        RUNTIME_API void DropDisabled(const SSystemContext& Context, const THashSet<FName>& Disabled, TVector<TStrongObjectPtr<CEntitySystem>>& Systems);
 
         // Runs OnStartup on every system that has not had it yet.
-        RUNTIME_API void StartupPending(TVector<TStrongObjectPtr<CEntitySystem>>& Systems);
+        RUNTIME_API void StartupPending(const SSystemContext& Context, TVector<TStrongObjectPtr<CEntitySystem>>& Systems);
 
         // Every system class in the process, for the editor's system list. Includes disabled ones.
         RUNTIME_API void ForEachSystemClass(TFunctionRef<void(CClass*)> Visitor);
 
         // Runs OnTeardown on each and empties the list.
-        RUNTIME_API void DestroyAll(TVector<TStrongObjectPtr<CEntitySystem>>& Systems);
+        RUNTIME_API void DestroyAll(const SSystemContext& Context, TVector<TStrongObjectPtr<CEntitySystem>>& Systems);
 
         // The first system whose class derives from Class, or null.
         RUNTIME_API CEntitySystem* Find(const TVector<TStrongObjectPtr<CEntitySystem>>& Systems, const CClass* Class);

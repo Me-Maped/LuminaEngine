@@ -2,6 +2,7 @@
 
 #include "World/ECS/Registry.h"
 #include "SceneRenderTypes.h"
+#include "WorldRenderSettings.h"
 #include "RenderCallbacks.h"
 #include "Platform/GenericPlatform.h"
 #include "Renderer/PrimitiveDrawInterface.h"
@@ -65,6 +66,14 @@ namespace Lumina
 
         virtual ECS::FEntity GetEntityAtPixel(uint32 X, uint32 Y) const { return ECS::NullEntity; }
 
+        // The world-space surface and its normal under a pixel, read through foliage and Ignored. False when nothing near it counts.
+        virtual bool GetSurfaceAtPixel(uint32 X, uint32 Y, TSpan<const ECS::FEntity> Ignored, FVector3& OutPosition, FVector3& OutNormal) const { return false; }
+
+        // Copies the whole picker, depth and foliage images back once, which GetSurfaceAtPixel prefers while the camera holds still.
+        virtual void RequestSurfaceSnapshot() {}
+        virtual void ReleaseSurfaceSnapshot() {}
+        virtual bool IsSurfaceSnapshotReady() const { return false; }
+
         virtual void SetPickerCursor(uint32 X, uint32 Y, bool bOverViewport) {}
 
         //~ Scene-capture views -------------------------------------------------------------
@@ -92,9 +101,6 @@ namespace Lumina
 
         const FSceneRenderStats&  GetRenderStats() const        { return RenderStats; }
 
-        // The world's copy, which is what a UI edit must write; the scene reads FrameSettings instead.
-        RUNTIME_API FSceneRenderSettings& GetSceneRenderSettings();
-
         // The scene's shadow atlas, or null if the scene has none.
         virtual const FShadowAtlas* GetShadowAtlas() const { return nullptr; }
 
@@ -107,7 +113,7 @@ namespace Lumina
 
         CWorld*                 World = nullptr;
         FSceneRenderStats       RenderStats;
-        FSceneRenderSettings    FrameSettings;
+        SWorldRenderSettings    FrameSettings;
         FSceneFrameFlags        FrameFlags;
     };
 }

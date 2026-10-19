@@ -43,7 +43,7 @@ namespace Lumina
         {
             Scene->Resize(FUIntVector2(RTSize, RTSize));
 
-            FSceneRenderSettings& Settings = Scene->GetSceneRenderSettings();
+            SWorldRenderSettings& Settings = World->GetRenderSettings();
             Settings.bDrawBillboards = false;
             
             Settings.bOcclusionCull       = false;
@@ -53,7 +53,7 @@ namespace Lumina
         CameraEntity = World->ConstructEntity("ThumbnailCamera");
         SCameraComponent& Camera = World->EmplaceComponent<SCameraComponent>(CameraEntity);
         Camera.SetAspectRatio(1.0f);
-        World->SetActiveCamera(CameraEntity);
+        World->GetCamera()->SetActiveCamera(CameraEntity);
 
         bInitialized = true;
     }
@@ -128,7 +128,7 @@ namespace Lumina
         Camera.SetView(Position, Forward, Up);
 
         // Extract reads FResolvedSceneView, and an unticked world leaves it default, culling the subject.
-        FResolvedSceneView& Resolved = ECS::GetWorldRegistry(*World).Ctx().Get<FResolvedSceneView>();
+        FResolvedSceneView& Resolved = World->GetEntityRegistry().Ctx().Get<FResolvedSceneView>();
         Resolved.ViewVolume      = Camera.GetViewVolume();
         Resolved.bHasView        = true;
         Resolved.bHasPostProcess = false;

@@ -45,7 +45,6 @@
 #include "Core/Serialization/MemoryArchiver.h"
 #include "Core/Serialization/ObjectArchiver.h"
 #include "Scripting/ScriptableObject.h"
-#include "Input/InputProcessor.h"
 #include "nlohmann/json.hpp"
 #include "Paths/Paths.h"
 #include "Physics/Physics.h"
@@ -59,6 +58,7 @@
 #include "Tools/PrimitiveManager/PrimitiveManager.h"
 #include "Tools/FontManager/FontManager.h"
 #include "Tools/UI/DevelopmentToolUI.h"
+#include "Tools/UI/DevUI/GameDevUI.h"
 #include "World/WorldManager.h"
 #include "World/World.h"
 #include "World/WorldContext.h"
@@ -240,6 +240,31 @@ namespace Lumina
         }
     }
     
+    #if USING(WITH_DEV_UI)
+    IDevelopmentToolUI* FEngine::CreateDevelopmentTools()
+    {
+        return Memory::New<FGameDevUI>();
+    }
+    #endif
+
+    void FEngine::StartDevelopmentTools(EInputLayer Layer)
+    {
+        #if USING(WITH_DEV_UI)
+        DeveloperToolUI.Reset(CreateDevelopmentTools());
+        DeveloperToolUI->Initialize(UpdateContext);
+        GApp->GetEventProcessor().RegisterEventHandler(DeveloperToolUI.Get(), (int32)Layer);
+        #endif
+    }
+
+    IDevelopmentToolUI* FEngine::GetActiveDevelopmentTools() const
+    {
+        #if USING(WITH_DEV_UI)
+        return DeveloperToolUI.Get();
+        #else
+        return nullptr;
+        #endif
+    }
+
     bool FEngine::Init()
     {
         LUMINA_PROFILE_SCOPE();
@@ -451,9 +476,7 @@ namespace Lumina
             CrashReporting::SetUser("", EditorSettings->CrashReportContactEmail);
         }
 
-        DeveloperToolUI.Reset(CreateDevelopmentTools());
-        DeveloperToolUI->Initialize(UpdateContext);
-        GApp->GetEventProcessor().RegisterEventHandler(DeveloperToolUI.Get(), (int32)EInputLayer::EditorChrome);
+        StartDevelopmentTools(EInputLayer::EditorChrome);
         BootMark("DeveloperToolUI");
 
         FPluginManager::Get().LoadModulesForPhase(EPluginLoadingPhase::EditorInit);
@@ -466,6 +489,15 @@ namespace Lumina
             RmlUi::Initialize();
         BootMark("RmlUi::Initialize");
         }
+
+        // The editor built its UI above; a game build has no window to draw an overlay into when headless.
+        #if USING(WITH_DEV_UI) && !USING(WITH_EDITOR)
+        if (!GIsHeadless)
+        {
+            StartDevelopmentTools(EInputLayer::DevOverlay);
+            BootMark("DeveloperToolUI");
+        }
+        #endif
 
         FPluginManager::Get().LoadModulesForPhase(EPluginLoadingPhase::PostEngineInit);
         RegisterPendingTypes();
@@ -495,9 +527,12 @@ namespace Lumina
             RmlUi::Shutdown();
         }
 
-        #if USING(WITH_EDITOR)
-        DeveloperToolUI->Deinitialize(UpdateContext);
-        DeveloperToolUI.Reset();
+        #if USING(WITH_DEV_UI)
+        if (DeveloperToolUI)
+        {
+            DeveloperToolUI->Deinitialize(UpdateContext);
+            DeveloperToolUI.Reset();
+        }
         #endif
 
         Memory::Delete(GWorldManager);
@@ -682,10 +717,11 @@ namespace Lumina
                     }
                 }
 
-                #if USING(WITH_EDITOR)
-                DeveloperToolUI->StartFrame(UpdateContext);
-                DeveloperToolUI->Update(UpdateContext);
-                #endif
+                if (IDevelopmentToolUI* DevTools = GetActiveDevelopmentTools())
+                {
+                    DevTools->StartFrame(UpdateContext);
+                    DevTools->Update(UpdateContext);
+                }
 
                 if (!GIsHeadless)
                 {
@@ -704,9 +740,10 @@ namespace Lumina
                 LUMINA_PROFILE_SECTION_COLORED("Paused", tracy::Color::Purple);
                 UpdateContext.UpdateStage = EUpdateStage::Paused;
 
-                #if USING(WITH_EDITOR)
-                DeveloperToolUI->Update(UpdateContext);
-                #endif
+                if (IDevelopmentToolUI* DevTools = GetActiveDevelopmentTools())
+                {
+                    DevTools->Update(UpdateContext);
+                }
 
                 GWorldManager->UpdateWorlds(UpdateContext);
 
@@ -717,9 +754,10 @@ namespace Lumina
                 LUMINA_PROFILE_SECTION_COLORED("Pre-Physics", tracy::Color::Green);
                 UpdateContext.UpdateStage = EUpdateStage::PrePhysics;
 
-                #if USING(WITH_EDITOR)
-                DeveloperToolUI->Update(UpdateContext);
-                #endif
+                if (IDevelopmentToolUI* DevTools = GetActiveDevelopmentTools())
+                {
+                    DevTools->Update(UpdateContext);
+                }
 
                 GWorldManager->UpdateWorlds(UpdateContext);
 
@@ -730,9 +768,10 @@ namespace Lumina
                 LUMINA_PROFILE_SECTION_COLORED("During-Physics", tracy::Color::Blue);
                 UpdateContext.UpdateStage = EUpdateStage::DuringPhysics;
 
-                #if USING(WITH_EDITOR)
-                DeveloperToolUI->Update(UpdateContext);
-                #endif
+                if (IDevelopmentToolUI* DevTools = GetActiveDevelopmentTools())
+                {
+                    DevTools->Update(UpdateContext);
+                }
 
                 GWorldManager->UpdateWorlds(UpdateContext);
 
@@ -749,9 +788,10 @@ namespace Lumina
                 LUMINA_PROFILE_SECTION_COLORED("Post-Physics", tracy::Color::Yellow);
                 UpdateContext.UpdateStage = EUpdateStage::PostPhysics;
 
-                #if USING(WITH_EDITOR)
-                DeveloperToolUI->Update(UpdateContext);
-                #endif
+                if (IDevelopmentToolUI* DevTools = GetActiveDevelopmentTools())
+                {
+                    DevTools->Update(UpdateContext);
+                }
 
                 GWorldManager->UpdateWorlds(UpdateContext);
 
@@ -762,16 +802,18 @@ namespace Lumina
                 LUMINA_PROFILE_SECTION_COLORED("Frame-End", tracy::Color::Coral);
                 UpdateContext.UpdateStage = EUpdateStage::FrameEnd;
 
-                #if USING(WITH_EDITOR)
-                DeveloperToolUI->Update(UpdateContext);
-                #endif
+                if (IDevelopmentToolUI* DevTools = GetActiveDevelopmentTools())
+                {
+                    DevTools->Update(UpdateContext);
+                }
 
                 // Final world update stage runs on the main thread.
                 GWorldManager->UpdateWorlds(UpdateContext);
 
-                #if USING(WITH_EDITOR)
-                DeveloperToolUI->EndFrame(UpdateContext);
-                #endif
+                if (IDevelopmentToolUI* DevTools = GetActiveDevelopmentTools())
+                {
+                    DevTools->EndFrame(UpdateContext);
+                }
                 
                 if (!GIsHeadless)
                 {
@@ -798,7 +840,13 @@ namespace Lumina
 
         int32 MaxFrameRate = GetMaxFrameRate();
         
-        if (!GIsHeadless && Windowing::GetPrimaryWindowHandle()->IsWindowMinimized())
+        // The editor also slows down when another app has focus, while a game only slows down minimized, since two game windows side by side are a normal way to test.
+        bool bInBackground = !GIsHeadless && Windowing::GetPrimaryWindowHandle()->IsWindowMinimized();
+        #if USING(WITH_EDITOR)
+        bInBackground |= !GIsHeadless && !Platform::IsProcessForeground();
+        #endif
+        // A capture or benchmark set its own rate on purpose, so it keeps it with the window in the background.
+        if (bInBackground && FrameRateCapOverride < 0)
         {
             const int32 BackgroundFrameRate = GetDefault<CEditorSettings>()->MaxBackgroundFPS;
 

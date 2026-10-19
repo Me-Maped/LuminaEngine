@@ -26,6 +26,7 @@ namespace Lumina
         void PostPropertyChange(FProperty* ChangedProperty) override;
         bool IsAsset() const override { return true; }
         bool IsSkinned() const override { return true; }
+        SAABB GetCullBounds() const override;
 
         // Rewrites the joint indices into Skeleton's bone order, matching by name, after Skeleton is reassigned.
         void RemapJointIndicesToSkeleton();

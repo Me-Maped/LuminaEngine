@@ -1,7 +1,7 @@
 #include "RuntimePCH.h"
 #include "TweenSystem.h"
 
-#include "World/Subsystems/TweenManager.h"
+#include "World/Subsystems/TweenSubsystem.h"
 #include "World/World.h"
 
 namespace Lumina
@@ -9,25 +9,22 @@ namespace Lumina
     void STweenSystem::Configure()
     {
         RequireUpdate(EUpdateStage::FrameStart, EUpdatePriority::Highest);
+
+        // While the world is paused only the tweens that ignore time scale move, which keeps pause menus animated.
+        RequireUpdate(EUpdateStage::Paused, EUpdatePriority::Highest);
     }
 
-    bool STweenSystem::HasWork(EUpdateStage)
+    bool STweenSystem::HasWork(const SSystemContext& Context)
     {
-        const FTweenManager* Tweens = GetWorld() != nullptr ? ECS::GetWorldRegistry(*GetWorld()).Ctx().Find<FTweenManager>() : nullptr;
-        return Tweens != nullptr && Tweens->HasTweens();
+        return GetWorld() != nullptr && GetWorld()->GetTweens()->GetTweenManager().HasTweens();
     }
 
-    void STweenSystem::OnUpdate()
+    void STweenSystem::OnUpdate(const SSystemContext& Context)
     {
-        const FSystemContext& Context = GetContext();
-
         LUMINA_PROFILE_SCOPE();
 
-        ECS::FRegistry& Registry = Context.GetRegistry();
-
-        FTweenManager& Tweens = Registry.Ctx().Get<FTweenManager>();
-        Tweens.SetWorldRegistry(&Registry);
-
-        Tweens.Tick((float)Context.GetDeltaTime());
+        CWorld* World = Context.GetWorld();
+        const bool bPaused = Context.GetUpdateStage() == EUpdateStage::Paused;
+        World->GetTweens()->GetTweenManager().Tick(bPaused ? 0.0f : (float)Context.GetDeltaTime(), (float)World->GetRealDeltaTime());
     }
 }

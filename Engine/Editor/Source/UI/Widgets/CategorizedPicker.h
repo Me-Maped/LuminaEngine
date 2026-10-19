@@ -19,6 +19,8 @@ namespace Lumina
         // Owned untranslated search aliases. Display names and user data remain caller-controlled.
         FString     SourceName;
         FString     SourceCategory;
+        // Listed but not pickable, such as a component every target already has.
+        bool        bDisabled = false;
     };
 
     // A searchable list filed into expandable categories, where a search opens every category holding a match and preselects the best one.

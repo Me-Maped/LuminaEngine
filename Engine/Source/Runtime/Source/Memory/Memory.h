@@ -132,6 +132,10 @@ namespace Lumina::Memory
 
     RUNTIME_API void Free(void*& Memory);
 
+    // Skips the per-allocation tracking ledger, for an owner that counts its own allocations as a category.
+    NODISCARD RUNTIME_API LUMINA_ALLOCATION LUMINA_RESTRICT_RETURN void* MallocUntracked(size_t Size, size_t Alignment = DEFAULT_ALIGNMENT) LUMINA_ALLOC_SIZE(1);
+    RUNTIME_API void FreeUntracked(void* Memory);
+
     // The calling thread's scratch arena, reachable without Allocator.h, which the containers cannot include.
     NODISCARD RUNTIME_API LUMINA_ALLOCATION LUMINA_RESTRICT_RETURN void* ScratchAllocate(size_t Size, size_t Alignment) LUMINA_ALLOC_SIZE(1);
 

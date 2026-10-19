@@ -9,6 +9,7 @@
 #include "Core/Reflection/Type/LuminaTypes.h"
 #include "Lumina.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
+#include "Tools/UI/ImGui/ImGuiDragDrop.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "UI/Properties/PropertyEditContexts.h"
 #include "World/World.h"
@@ -76,7 +77,7 @@ namespace Lumina
             bChanged = true;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
 
         // Index 0 is always "None"; the rest are the same named entities the outliner shows.
         TVector<ECS::FEntity> Candidates;
@@ -102,6 +103,8 @@ namespace Lumina
         const float Spacing    = ImGui::GetStyle().ItemInnerSpacing.x;
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - LineHeight - Spacing);
 
+        // Grouped so the whole combo is one drop target for an entity dragged from the outliner.
+        ImGui::BeginGroup();
         const int32 Picked = ImGuiX::SearchableCombo("##entity", Preview.c_str(), static_cast<int32>(Candidates.size()), CurrentIndex,
             [&Registry, &Candidates](int32 Index) -> FFixedString
             {
@@ -111,6 +114,19 @@ namespace Lumina
                 }
                 return MakeEntityLabel(Registry, Candidates[Index]);
             }, LE_ICON_CUBE, nullptr, [](int32 Index) { return Index == 0 ? FFixedString("None") : FFixedString(); });
+        ImGui::EndGroup();
+
+        if (ImGui::BeginDragDropTarget())
+        {
+            CWorld* SourceWorld = nullptr;
+            ECS::FEntity Dropped = ECS::NullEntity;
+            if (DragDrop::AcceptEntity(&SourceWorld, &Dropped) && SourceWorld == World)
+            {
+                CachedValue = Dropped;
+                bChanged = true;
+            }
+            ImGui::EndDragDropTarget();
+        }
 
         ImGui::PopItemWidth();
 

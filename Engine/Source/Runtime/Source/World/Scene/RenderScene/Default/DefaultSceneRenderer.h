@@ -358,6 +358,8 @@ namespace Lumina
                 TVector<uint32>                  PointShadowCullViewBases;
                 TVector<uint32>                  SpotShadowCullViewBases;
                 TVector<FCaptureViewData>        CaptureViews;
+                // The camera again, holding only custom depth instances, and kIndexNoneU32 while none exist.
+                uint32                           CustomDepthCullView = Constants::kIndexNoneU32;
             } Views;
 
             struct FLighting
@@ -562,6 +564,7 @@ namespace Lumina
             DepthAttachment,
             DepthPyramid,
             Picker,
+            PickerFoliage,
             VisBuffer,
             GBufferA,
             GBufferB,
@@ -595,6 +598,9 @@ namespace Lumina
             TemporalHistoryA,
             TemporalHistoryB,
             UpscaledHDR,
+            CustomDepth,
+            CustomDepthVis,
+            CustomStencil,
 
             #if USING(WITH_EDITOR)
             PointLightIcon,
@@ -711,7 +717,11 @@ namespace Lumina
         const FSceneImage& GetPrimaryNamedImage(ENamedImage Image) const { return SceneViews[0].Images[(int)Image]; }
         FUIntVector2 GetRenderExtent() const override;
         ECS::FEntity GetEntityAtPixel(uint32 X, uint32 Y) const override;
+        bool GetSurfaceAtPixel(uint32 X, uint32 Y, TSpan<const ECS::FEntity> Ignored, FVector3& OutPosition, FVector3& OutNormal) const override;
         #if USING(WITH_EDITOR)
+        void RequestSurfaceSnapshot() override;
+        void ReleaseSurfaceSnapshot() override;
+        bool IsSurfaceSnapshotReady() const override;
         void SetPickerCursor(uint32 X, uint32 Y, bool bOverViewport) override;
         #endif
         const FShadowAtlas* GetShadowAtlas() const override { return &ShadowAtlas; }
@@ -755,7 +765,7 @@ namespace Lumina
 
         FRenderContext MakeRenderContext(RHI::FCmdListH CL, ERenderStage Stage);
         void RunRenderCallbacks(RHI::FCmdListH CL, ERenderStage Stage);
-        void CustomDepthPass(RHI::FCmdListH CL);
+        void CallbackDepthPass(RHI::FCmdListH CL);
         void RunShadowRenderCallbacks(RHI::FCmdListH CL, EShadowViewType Type, uint32 Index, const FMatrix4& ViewProjection,
                                       const RHI::FRect& Tile, EFormat DepthFormat);
         bool HasRenderCallbacks(ERenderStage Stage) const;
@@ -828,6 +838,12 @@ namespace Lumina
         void DecalPass(RHI::FCmdListH CL);
         void VisBufferPass(RHI::FCmdListH CL, uint32 ViewIndex, bool bClear,
                            ECullPhase::Type Phase = ECullPhase::Early);
+
+        // Custom depth instances drawn again from the camera with nothing occluding them, then their stencil values resolved.
+        void CustomDepthStencilPass(RHI::FCmdListH CL);
+        void DrawVisBufferBatches(RHI::FCmdListH CL, uint32 ViewIndex, EMeshletSlice Slice, const FUIntVector2& Extent, EFormat VisFormat);
+        static FShaderH GetVisBufferPixelShader();
+        const char* FindMissingMeshletDrawBuffer() const;
         void VisBufferClassifyPass(RHI::FCmdListH CL);
         void MaterialGBufferPass(RHI::FCmdListH CL);
         void DeferredLightingPass(RHI::FCmdListH CL);
@@ -1059,7 +1075,7 @@ namespace Lumina
         // Frames a slice survives ungathered, so a mesh flicking through the cull does not thrash its base.
         static constexpr uint32                kBoneSliceGraceFrames = 300;
         uint32                                 BoneSliceFrameNumber = 0;
-        TVector<FUIntVector2>                  BoneUploadScratch;
+        TVector<uint64>                        BoneDirtyChunks;
 
         // Lights one parallel range builds, committed with one reservation so the ranges never contend per light.
         struct FLightBatch
@@ -1085,6 +1101,7 @@ namespace Lumina
         void ResolveLightFunctions();
         
         void BuildCullViews(const FViewVolume& ViewVolume);
+        bool HasCustomDepthPrimitives() const { return ScenePrimitives.GetCustomDepthPrimitiveCount() > 0u; }
         
         uint32 PrepareBatchedLines(FLineBatcherComponent& Batcher);
         void   BatchLineChunks(const Task::FParallelRange& Range);
@@ -1339,6 +1356,7 @@ namespace Lumina
 
             uint32             CascadeViewBase  = Constants::kIndexNoneU32;
             uint32             NumCascadeViews  = 0;
+            uint32             CustomDepthCullView = Constants::kIndexNoneU32;
             uint32             NumNearCascadeViews = 0;
             bool               bValid           = false;
         };
@@ -1516,6 +1534,7 @@ namespace Lumina
         TArray<FSceneBuffer, RHI::kFramesInFlight> MeshletBlockRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.MeshletBlocks", 1.2f);
         TArray<FSceneBuffer, RHI::kFramesInFlight> BlockDispatchArgsRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.BlockDispatchArgs", 1.0f);
         TArray<FSceneBuffer, RHI::kFramesInFlight> SkinWorkBaseRing = MakeSceneRing<RHI::kFramesInFlight>("Skinning.WorkBase", 1.5f);
+        TArray<FSceneBuffer, RHI::kFramesInFlight> SkinWorkEntryRing = MakeSceneRing<RHI::kFramesInFlight>("Skinning.WorkEntry", 1.5f);
         TArray<FSceneBuffer, RHI::kFramesInFlight> SkinDispatchArgsRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.SkinDispatchArgs", 1.0f);
         TArray<FSceneBuffer, RHI::kFramesInFlight> MeshletCullDispatchArgsRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.MeshletCullDispatchArgs", 1.0f);
         TArray<FSceneBuffer, RHI::kFramesInFlight> InstanceViewRangeRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.InstanceViewRanges", 1.25f);
@@ -1576,6 +1595,9 @@ namespace Lumina
         uint32                                              SkinnedMeshletBoundsCapacity = 0;
         // Longest per-slot meshlet range, which is the x extent of the bounds dispatch.
         uint32                                              SkinnedBoundsMaxRange = 0;
+
+        // Every gathered slot's surface meshlets, which bounds the skinning dispatch and sizes its work-entry map.
+        uint32                                              SkinWorkCapacity = 0;
         // Slots the retained static buffer actually holds, which bounds the header lookup in that pass.
         uint32                                              RetainedStaticCapacity = 0;
         uint32                                              UploadedSurfaceDescs = 0;
@@ -1921,6 +1943,14 @@ namespace Lumina
         struct FPickerReadbackSlot
         {
             RHI::FGPUAllocation Readback = {};       // CPURead buffer, Width*Height*4 bytes
+            RHI::FGPUAllocation DepthReadback = {};  // the same window of scene depth, one float per texel
+            RHI::FGPUAllocation FoliageReadback = {}; // one byte per texel, set where the front surface is foliage
+            FMatrix4            InverseViewProjection = FMatrix4(1.0f);
+            // Unjittered, so two copies taken from a camera that never moved compare equal.
+            FMatrix4            InverseView = FMatrix4(1.0f);
+            FVector3            CameraLocation = FVector3(0.0f);
+            uint32              ImageWidth = 0;     // the picker image the window came from
+            uint32              ImageHeight = 0;
             uint32              OriginX = 0;        // top-left of the copied region, in picker texels
             uint32              OriginY = 0;
             uint32              Width = 0;          // region dimensions
@@ -1934,7 +1964,23 @@ namespace Lumina
 
         TAtomic<uint64>                         PickerCursorPacked = 0;
 
+        // Requests bump the serial on the game thread, and the render thread copies once per serial it has not served.
+        FPickerReadbackSlot                     SurfaceSnapshot;
+        TAtomic<uint32>                         SurfaceSnapshotRequest = 0;
+        TAtomic<bool>                           bSurfaceSnapshotWanted = false;
+        uint32                                  SurfaceSnapshotServed = 0;
+        // Latched by the picker resolve, so the resolve that runs unclipped and the copy that follows agree on one request.
+        bool                                    bSurfaceSnapshotThisFrame = false;
+
         void IssuePickerReadback(RHI::FCmdListH CL);
+
+        // Copies Width by Height texels at Origin of the picker, foliage and depth images into Slot, stamped with this frame's camera.
+        void CopyPickerRegion(RHI::FCmdListH CL, FPickerReadbackSlot& Slot, uint32 OriginX, uint32 OriginY, uint32 Width, uint32 Height);
+
+        static void ReleasePickerSlot(FPickerReadbackSlot& Slot);
+
+        // The newest finished slot whose window covers the picker texel, or null.
+        const FPickerReadbackSlot* FindPickerReadbackSlot(FUIntVector2 Texel) const;
 #endif
 
     };

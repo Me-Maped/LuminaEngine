@@ -160,6 +160,21 @@ namespace Lumina
         return pMemory;
     }
 
+    void* Memory::MallocUntracked(size_t Size, size_t Alignment)
+    {
+        FMalloc& Allocator = (GMalloc != nullptr) ? *GMalloc : EnsureAllocator();
+        void* pMemory = Allocator.Malloc(Size, Align<size_t>(Alignment, 16));
+        TracyCAllocS(pMemory, Size, GAllocCallstackDepth);
+        return pMemory;
+    }
+
+    void Memory::FreeUntracked(void* Memory)
+    {
+        TracyCFreeS(Memory, GAllocCallstackDepth);
+        FMalloc& Allocator = (GMalloc != nullptr) ? *GMalloc : EnsureAllocator();
+        Allocator.Free(Memory);
+    }
+
     void* Memory::Realloc(void* Memory, size_t NewSize, size_t Alignment)
     {
         FMalloc& Allocator = (GMalloc != nullptr) ? *GMalloc : EnsureAllocator();

@@ -16,6 +16,7 @@
 #include "World/Entity/Components/TransformComponent.h"
 #include "World/Entity/EntityUtils.h"
 #include "World/World.h"
+#include "WorldTestAccess.h"
 
 // Namespaced because the unity build merges this file with others that do "using namespace Lumina".
 namespace LuminaSaveGameTests
@@ -39,7 +40,7 @@ namespace LuminaSaveGameTests
         ECS::FEntity   Wizard;
         ECS::FEntity   Machine;
 
-        ECS::FRegistry& Registry() const { return ECS::GetWorldRegistry(*World); }
+        ECS::FRegistry& Registry() const { return World->GetEntityRegistry(); }
     };
 
     ECS::FEntity Spawn(ECS::FRegistry& Registry, const char* Name, ECS::FEntity Parent = ECS::NullEntity)
@@ -321,51 +322,47 @@ namespace LuminaSaveGameTests
 {
     struct FEventLog
     {
-        int32 Saving = 0;
-        int32 Restored = 0;
+        ECS::TEventReader<SSaveGameCompletedEvent> Reader;
         TVector<SSaveGameCompletedEvent> Completed;
-
-        void OnSaving(const SWorldSavingEvent&) { ++Saving; }
-        void OnRestored(const SWorldRestoredEvent&) { ++Restored; }
-        void OnCompleted(const SSaveGameCompletedEvent& Event) { Completed.push_back(Event); }
     };
 
-    // The parts of InitializeWorld the save path leans on, a dispatcher in the context and running systems.
+    // The parts of InitializeWorld the save path leans on, its event queues and running systems.
     struct FRunningWorld
     {
         FLevel                 Level = LoadLevel();
-        ECS::FEventDispatcher  Dispatcher;
         FEventLog              Log;
         CSaveGameTestSystem*   Listener = nullptr;
         SSaveGameSystem*       Saver = nullptr;
 
         FRunningWorld()
         {
-            Level.Registry().Ctx().Emplace<ECS::FEventDispatcher*>(&Dispatcher);
-            Dispatcher.Sink<SWorldSavingEvent>().Connect<&FEventLog::OnSaving>(&Log);
-            Dispatcher.Sink<SWorldRestoredEvent>().Connect<&FEventLog::OnRestored>(&Log);
-            Dispatcher.Sink<SSaveGameCompletedEvent>().Connect<&FEventLog::OnCompleted>(&Log);
-
             Listener = NewObject<CSaveGameTestSystem>(nullptr, NAME_None, FGuid::New(), OF_Transient);
             Saver = NewObject<SSaveGameSystem>(nullptr, NAME_None, FGuid::New(), OF_Transient);
             for (CEntitySystem* System : { (CEntitySystem*)Listener, (CEntitySystem*)Saver })
             {
                 System->SetOwningWorld(Level.World);
                 Level.World->Systems.push_back(System);
-                System->OnStartup();
+                System->OnStartup(FWorldTestAccess::SystemContext(*Level.World));
             }
         }
 
         ~FRunningWorld()
         {
-            Saver->OnTeardown();
+            Saver->OnTeardown(FWorldTestAccess::SystemContext(*Level.World));
         }
 
+        // Requests commit at a sync point before the system can see them, and the completions it sends at the next.
         void EndFrame()
         {
-            if (Saver->HasWork(EUpdateStage::FrameEnd))
+            Level.World->FlushCommands();
+            if (Saver->HasWork(FWorldTestAccess::SystemContext(*Level.World)))
             {
-                Saver->OnUpdate();
+                Saver->OnUpdate(FWorldTestAccess::SystemContext(*Level.World));
+            }
+            Level.World->FlushCommands();
+            for (const SSaveGameCompletedEvent& Event : ECS::ReadEvents(Level.World->GetEvents(), Log.Reader))
+            {
+                Log.Completed.push_back(Event);
             }
         }
     };
@@ -380,13 +377,13 @@ TEST(SaveGame, RequestsRunAtTheSystemUpdateAndReportThroughEventsAndSystems)
     CSaveGameTest* Game = NewObject<CSaveGameTest>(nullptr, NAME_None, FGuid::New(), OF_Transient);
     Game->Score = 77;
 
-    CSaveGameLibrary::RequestSaveGame(Session.Level.World, Game, Slot, 0);
-    EXPECT_EQ(Session.Log.Saving, 0);
-    EXPECT_TRUE(Session.Saver->HasWork(EUpdateStage::FrameEnd));
+    Session.Level.World->GetSaveGames()->RequestSaveGame(Game, Slot, 0);
+    EXPECT_EQ(Session.Listener->SavingCount, 0);
+    Session.Level.World->FlushCommands();
+    EXPECT_TRUE(Session.Saver->HasWork(FWorldTestAccess::SystemContext(*Session.Level.World)));
     Session.EndFrame();
-    EXPECT_FALSE(Session.Saver->HasWork(EUpdateStage::FrameEnd));
+    EXPECT_FALSE(Session.Saver->HasWork(FWorldTestAccess::SystemContext(*Session.Level.World)));
 
-    EXPECT_EQ(Session.Log.Saving, 1);
     EXPECT_EQ(Session.Listener->SavingCount, 1);
     EXPECT_EQ(Session.Listener->LastSaveGame, Game);
     EXPECT_EQ(WizardScript(Session.Level)->SavingCount, 1);
@@ -396,7 +393,7 @@ TEST(SaveGame, RequestsRunAtTheSystemUpdateAndReportThroughEventsAndSystems)
     EXPECT_TRUE(CSaveGameLibrary::DoesSaveGameExist(Slot, 0));
 
     FRunningWorld Fresh;
-    CSaveGameLibrary::RequestLoadGame(Fresh.Level.World, Slot, 0);
+    Fresh.Level.World->GetSaveGames()->RequestLoadGame(Slot, 0);
     Fresh.EndFrame();
     ASSERT_EQ(Fresh.Log.Completed.size(), 1u);
     const SSaveGameCompletedEvent& Loaded = Fresh.Log.Completed[0];
@@ -404,7 +401,6 @@ TEST(SaveGame, RequestsRunAtTheSystemUpdateAndReportThroughEventsAndSystems)
     EXPECT_EQ(Loaded.Action, ESaveGameAction::Load);
     ASSERT_NE(Loaded.SaveGame.Get(), nullptr);
     EXPECT_EQ(static_cast<CSaveGameTest*>(Loaded.SaveGame.Get())->Score, 77);
-    EXPECT_EQ(Fresh.Log.Restored, 1);
     EXPECT_EQ(Fresh.Listener->RestoredCount, 1);
     EXPECT_EQ(Fresh.Listener->LastSaveGame, Loaded.SaveGame.Get());
     EXPECT_EQ(Fresh.Level.Registry().Get<SSaveGameTestComponent>(Fresh.Level.Chest).Coins, 50);
@@ -412,7 +408,7 @@ TEST(SaveGame, RequestsRunAtTheSystemUpdateAndReportThroughEventsAndSystems)
     EXPECT_TRUE(CSaveGameLibrary::DeleteGameInSlot(Slot, 0));
     EXPECT_FALSE(CSaveGameLibrary::DoesSaveGameExist(Slot, 0));
 
-    CSaveGameLibrary::RequestLoadGame(Fresh.Level.World, Slot, 0);
+    Fresh.Level.World->GetSaveGames()->RequestLoadGame(Slot, 0);
     Fresh.EndFrame();
     ASSERT_EQ(Fresh.Log.Completed.size(), 2u);
     EXPECT_FALSE(Fresh.Log.Completed[1].bSucceeded);

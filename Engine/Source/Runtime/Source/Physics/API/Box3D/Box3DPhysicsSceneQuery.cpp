@@ -226,7 +226,7 @@ namespace Lumina::Physics
             return Constants::kIndexNone;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         const SRagdollComponent* RagdollComp = Registry.TryGet<SRagdollComponent>(Entity);
         if (RagdollComp == nullptr || !RagdollComp->Ragdoll)
         {
@@ -248,6 +248,16 @@ namespace Lumina::Physics
 
     // Queries carry no zone, since gameplay runs thousands a frame on every worker and fiber builds serialize Tracy events.
     TOptional<SRayResult> FBox3DPhysicsScene::CastRay(const SRayCastSettings& Settings)
+    {
+        TOptional<SRayResult> Hit = CastRayClosest(Settings);
+        if (Settings.bDrawDebug)
+        {
+            DrawRayDebug(Settings, Hit ? TSpan<const SRayResult>(&*Hit, 1) : TSpan<const SRayResult>());
+        }
+        return Hit;
+    }
+
+    TOptional<SRayResult> FBox3DPhysicsScene::CastRayClosest(const SRayCastSettings& Settings)
     {
         const FVector3 Delta = Settings.End - Settings.Start;
         const float Length = Math::Length(Delta);
@@ -287,8 +297,32 @@ namespace Lumina::Physics
         {
             return {};
         }
-
         return Result;
+    }
+
+    void FBox3DPhysicsScene::DrawRayDebug(const SRayCastSettings& Settings, TSpan<const SRayResult> Hits) const
+    {
+        FWorldDebugInterface* Debug = World ? World->GetDebugInterface() : nullptr;
+        if (Debug == nullptr)
+        {
+            return;
+        }
+
+        const FVector4 HitColor = FColor(Settings.DebugHitColor);
+        const FVector4 MissColor = FColor(Settings.DebugMissColor);
+        if (Hits.empty())
+        {
+            Debug->DrawLine(Settings.Start, Settings.End, MissColor, 3.0f, true, Settings.DebugDuration);
+            return;
+        }
+
+        Debug->DrawLine(Settings.Start, Hits[0].Location, HitColor, 3.0f, true, Settings.DebugDuration);
+        Debug->DrawLine(Hits[0].Location, Settings.End, MissColor, 3.0f, true, Settings.DebugDuration);
+        for (const SRayResult& Hit : Hits)
+        {
+            Debug->DrawLine(Hit.Location, Hit.Location + Hit.Normal * 0.5f, FColor::Blue, 3.0f, true, Settings.DebugDuration);
+            Debug->DrawBox(Hit.Location, FVector3(0.05f), FQuat(1.0f, 0.0f, 0.0f, 0.0f), FColor::Yellow, 3.0f, true, Settings.DebugDuration);
+        }
     }
 
     void FBox3DPhysicsScene::CastRayAll(const SRayCastSettings& Settings, TVector<SRayResult>& OutHits)
@@ -313,6 +347,10 @@ namespace Lumina::Physics
         b3World_CastRay(WorldId, Box3DUtils::ToB3Vec3(Settings.Start), Box3DUtils::ToB3Vec3(Delta),
                         MakeLayerFilter(Settings.LayerMask), &AllHitsCastCallback, &Query);
         SortNearToFar(OutHits);
+        if (Settings.bDrawDebug)
+        {
+            DrawRayDebug(Settings, TSpan<const SRayResult>(OutHits.data(), OutHits.size()));
+        }
     }
 
     bool FBox3DPhysicsScene::CastRayAny(const SRayCastSettings& Settings)

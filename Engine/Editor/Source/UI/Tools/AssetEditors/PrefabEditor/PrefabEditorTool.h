@@ -71,6 +71,7 @@ namespace Lumina
         // The details panel is shared (FSceneEditorTool::DrawDetailsPanel); the prefab only guards
         // root deletion and hides its internal SPrefabComponent.
         bool CanDeleteEntity(ECS::FEntity Entity) const override;
+        bool CanDuplicateEntity(ECS::FEntity Entity) const override { return CanDeleteEntity(Entity); }
         bool IsComponentHiddenInDetails(const CStruct* Type) const override;
 
         // Restrict the shared outliner to prefab-owned entities (hides preview lights/floor/camera).
@@ -80,7 +81,7 @@ namespace Lumina
         void DrawVariantBanner();
 
         void HandleOutlinerDragDrop(FTreeListView& Tree, ECS::FEntity DropItem);
-        void HandlePrefabContentDrop(FStringView VirtualPath, ECS::FEntity DropTarget, bool bAttachToTarget) override;
+        void HandlePrefabContentDrop(FStringView VirtualPath, ECS::FEntity DropTarget, bool bAttachToTarget, const FTransform* SpawnTransform = nullptr) override;
 
         // Tags one entity as this prefab's own and strips the instance tracking a dropped prefab brings.
         void AdoptIntoPrefab(ECS::FEntity Entity);

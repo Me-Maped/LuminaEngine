@@ -8,7 +8,7 @@
 #include "Box3DUtils.h"
 
 #include "Assets/AssetTypes/Mesh/Mesh.h"
-#include "Assets/AssetTypes/Physics/CollisionShape.h"
+#include "Assets/AssetTypes/Mesh/MeshCollision.h"
 #include "Assets/AssetTypes/PhysicsMaterial/PhysicsMaterial.h"
 #include "Log/Log.h"
 #include "World/Entity/Components/PhysicsComponent.h"
@@ -468,8 +468,9 @@ namespace Lumina::Physics
         Desc.Type = Component->Type;
         Desc.BodyA = TargetEntity;
         Desc.BodyB = Entity;
-        Desc.Anchor = Transform->GetLocation() + Component->PivotOffset;
-        Desc.Axis = Math::Rotate(Transform->GetRotation(), Component->Axis);
+        const FTransform JointPose = Transform->ComputeWorldTransform();
+        Desc.Anchor = JointPose.GetLocation() + Component->PivotOffset;
+        Desc.Axis = Math::Rotate(JointPose.GetRotation(), Component->Axis);
         Desc.AnchorB = Desc.Anchor;
         Desc.MinLimit = Component->LowerLimit;
         Desc.MaxLimit = Component->UpperLimit;
@@ -524,7 +525,7 @@ namespace Lumina::Physics
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
 
         // Compacted in place, so an entity whose bodies are not ready is retried next frame without a copy.
         size_t Write = 0;
@@ -571,9 +572,9 @@ namespace Lumina::Physics
                 Build.ShapeDef.baseMaterial.friction = Instance.Material->Friction;
                 Build.ShapeDef.baseMaterial.restitution = Instance.Material->Restitution;
             }
-            if (Instance.Shape)
+            if (Instance.Collision)
             {
-                BuildCollisionShapeAsset(*Instance.Shape, Instance.Scale, Build.Shapes);
+                BuildMeshCollision(*Instance.Collision, Instance.Scale, Build.Shapes);
             }
             else if (Instance.Mesh && Instance.bConvex)
             {

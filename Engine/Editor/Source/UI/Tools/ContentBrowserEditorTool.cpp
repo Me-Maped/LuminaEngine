@@ -29,6 +29,7 @@
 #include "Tools/UI/ImGui/ImGuiFonts.h"
 #include "Tools/UI/ImGui/EditorColors.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
+#include "Tools/Export/AssetExport.h"
 #include "World/WorldManager.h"
 #include <string.h>
 #include <cstdarg>
@@ -79,8 +80,6 @@ namespace Lumina
     namespace
     {
 
-        constexpr ImVec4 kMenuBg            = ImVec4(0.10f, 0.10f, 0.12f, 0.98f);
-        constexpr ImVec4 kMenuBorder        = ImVec4(0.22f, 0.23f, 0.27f, 1.00f);
         constexpr ImVec4 kMenuText          = ImVec4(0.90f, 0.90f, 0.93f, 1.00f);
         constexpr ImVec4 kMenuTextDim       = ImVec4(0.55f, 0.56f, 0.62f, 1.00f);
         constexpr ImVec4 kMenuTextSection   = ImVec4(0.50f, 0.58f, 0.72f, 1.00f);
@@ -89,47 +88,7 @@ namespace Lumina
         constexpr ImVec4 kMenuAccentScript  = ImVec4(0.52f, 0.85f, 0.55f, 1.00f);
         constexpr ImVec4 kMenuDanger        = ImVec4(0.96f, 0.36f, 0.38f, 1.00f);
         constexpr ImVec4 kMenuDangerHover   = ImVec4(0.85f, 0.22f, 0.24f, 0.45f);
-        constexpr ImVec4 kMenuHeaderHover   = ImVec4(0.24f, 0.46f, 0.78f, 0.55f);
-        constexpr ImVec4 kMenuHeader        = ImVec4(0.24f, 0.46f, 0.78f, 0.30f);
-        constexpr ImVec4 kMenuHeaderActive  = ImVec4(0.24f, 0.46f, 0.78f, 0.85f);
-        constexpr ImVec4 kMenuSeparator     = ImVec4(0.24f, 0.25f, 0.30f, 0.65f);
         constexpr ImVec4 kMenuHeaderBg      = ImVec4(0.16f, 0.17f, 0.20f, 1.00f);
-
-        // Popup-window-level styles. Push BEFORE BeginPopup* so the popup window picks them up.
-        void PushContextMenuWindowStyle()
-        {
-            ImGui::PushStyleColor(ImGuiCol_PopupBg, kMenuBg);
-            ImGui::PushStyleColor(ImGuiCol_Border,  kMenuBorder);
-            ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding,   8.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 1.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,   ImVec2(6.0f, 6.0f));
-        }
-
-        void PopContextMenuWindowStyle()
-        {
-            ImGui::PopStyleVar(3);
-            ImGui::PopStyleColor(2);
-        }
-
-        // Per-item styles. Push inside BeginPopup..EndPopup for consistent menu items.
-        void PushContextMenuItemStyle()
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text,          kMenuText);
-            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kMenuHeaderHover);
-            ImGui::PushStyleColor(ImGuiCol_Header,        kMenuHeader);
-            ImGui::PushStyleColor(ImGuiCol_HeaderActive,  kMenuHeaderActive);
-            ImGui::PushStyleColor(ImGuiCol_Separator,     kMenuSeparator);
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,    4.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,      ImVec2(8.0f, 3.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,     ImVec2(10.0f, 5.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(8.0f, 4.0f));
-        }
-
-        void PopContextMenuItemStyle()
-        {
-            ImGui::PopStyleVar(4);
-            ImGui::PopStyleColor(5);
-        }
 
         void DrawMenuSection(const char* Label)
         {
@@ -292,6 +251,8 @@ namespace Lumina
             ImU32       Accent;
         };
 
+        constexpr const char* kMissingTypeTag = "MISSING TYPE";
+
         FTypeStyle StyleForType(FStringView TypeTag)
         {
             struct FEntry { const char* Tag; const char* Glyph; ImU32 Accent; };
@@ -315,6 +276,7 @@ namespace Lumina
                 { "CS",               LE_ICON_LANGUAGE_CSHARP,     IM_COL32(160, 200, 130, 255) },
                 { "RML",              LE_ICON_XML,                 IM_COL32(200, 180, 140, 255) },
                 { "RCSS",             LE_ICON_LANGUAGE_CSS3,       IM_COL32(150, 190, 230, 255) },
+                { kMissingTypeTag,    LE_ICON_FILE_ALERT_OUTLINE,  IM_COL32(235, 95, 90, 255) },
             };
 
             for (const FEntry& Entry : kEntries)
@@ -786,6 +748,12 @@ namespace Lumina
             ImGui::TextUnformatted(Data->AssetClass.IsNone() ? LOC("Asset") : Data->AssetClass.c_str());
             ImGui::PopStyleColor();
 
+            if (Data->IsClassMissing())
+            {
+                ImGui::TextColored(EditorColors::Danger(), LE_ICON_FILE_ALERT_OUTLINE " The type '%s' no longer exists.", Data->AssetClass.c_str());
+                ImGui::TextColored(kMenuTextDim, "This asset cannot be loaded or opened. Delete it, or restore the type or the plugin that defines it.");
+            }
+
             if (!Data->OwningPlugin.IsNone())
             {
                 ImGui::TextColored(kMenuTextDim, LOC("Plugin: %s"), Data->OwningPlugin.c_str());
@@ -828,6 +796,10 @@ namespace Lumina
         ImGui::PushStyleColor(ImGuiCol_Text, kMenuAccent);
         ImGui::TextUnformatted(FileInfo.Name.c_str());
         ImGui::PopStyleColor();
+        if (FileInfo.IsReadOnly())
+        {
+            ImGui::TextColored(EditorColors::Warning(), LE_ICON_LOCK " Read-only on disk, so it cannot be saved, renamed, moved or deleted until it is made writable.");
+        }
         ImGui::Separator();
 
         switch (IconKind)
@@ -1126,6 +1098,11 @@ namespace Lumina
                 }
             case EIconKind::Asset:
                 {
+                    if (ContentItem->IsMissingType())
+                    {
+                        break;
+                    }
+
                     // RESIDENT ONLY, since loading here would race the editor's loader on a non-atomic object.
                     FStringView AssetPath = ContentItem->GetVirtualPath();
                     if (const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(AssetPath))
@@ -1192,6 +1169,23 @@ namespace Lumina
             {
                 DrawTypeCard(*DrawList, BodyMin, BodyMax, ContentItem->GetTypeLabel(),
                     TypeTagDisplayText(ContentItem->GetTypeLabel()));
+            }
+
+            if (ContentItem->GetFileInfo().IsReadOnly())
+            {
+                constexpr float LockInset = 8.0f;
+                constexpr float LockPad   = 4.0f;
+                const float LockSize = ImGui::GetFontSize();
+                const ImVec2 LockPos(BodyMax.x - LockInset - LockPad - LockSize, BodyMin.y + LockInset + LockPad);
+                DrawList->AddRectFilled(ImVec2(LockPos.x - LockPad, LockPos.y - LockPad), ImVec2(LockPos.x + LockSize + LockPad, LockPos.y + LockSize + LockPad),
+                    IM_COL32(0, 0, 0, 140), 4.0f);
+                DrawList->AddText(ImGui::GetFont(), LockSize, LockPos, ImGui::ColorConvertFloat4ToU32(EditorColors::Warning()), LE_ICON_LOCK);
+            }
+
+            if (ContentItem->IsMissingType())
+            {
+                DrawList->AddRect(Pos, ImVec2(Pos.x + Size.x + 8, Pos.y + Size.y + 8),
+                    ImGui::ColorConvertFloat4ToU32(EditorColors::Danger()), 8.0f, 1.5f);
             }
 
             if (ImGui::IsItemHovered())
@@ -1370,6 +1364,7 @@ namespace Lumina
                 }
 
                 // A folder repeats a handful of classes thousands of times, so each label is built and interned once.
+                const FName MissingTypeLabel(kMissingTypeTag);
                 THashMap<FName, FName> ClassLabels;
                 for (FListingEntry& Entry : Listing)
                 {
@@ -1386,10 +1381,16 @@ namespace Lumina
                     auto Cached = ClassLabels.find(Entry.AssetClass);
                     if (Cached == ClassLabels.end())
                     {
-                        const FFixedString Label = UpperTypeTag(Entry.AssetClass);
-                        Cached = ClassLabels.emplace(Entry.AssetClass, Label.empty() ? NAME_None : FName(Label.c_str())).first;
+                        FName ClassLabel = MissingTypeLabel;
+                        if (FindObject<CClass>(Entry.AssetClass) != nullptr)
+                        {
+                            const FFixedString Label = UpperTypeTag(Entry.AssetClass);
+                            ClassLabel = Label.empty() ? NAME_None : FName(Label.c_str());
+                        }
+                        Cached = ClassLabels.emplace(Entry.AssetClass, ClassLabel).first;
                     }
                     Entry.TypeLabel = Cached->second;
+                    Entry.bMissingType = Cached->second == MissingTypeLabel;
                 }
 
                 Task::ParallelSort(Listing.begin(), Listing.end(), [](const FListingEntry& LHS, const FListingEntry& RHS)
@@ -1438,7 +1439,7 @@ namespace Lumina
                 }
 
                 const bool bProtected = AssetOps::IsProtectedRoot(FStringView(Entry.Info.VirtualPath.c_str(), Entry.Info.VirtualPath.size()));
-                FContentBrowserTileViewItem* NewItem = ContentBrowserTileView.AddItemToTree<FContentBrowserTileViewItem>(nullptr, Entry.Info, bProtected, Entry.TypeLabel);
+                FContentBrowserTileViewItem* NewItem = ContentBrowserTileView.AddItemToTree<FContentBrowserTileViewItem>(nullptr, Entry.Info, bProtected, Entry.TypeLabel, Entry.bMissingType);
 
                 const FStringView ItemPath = VFS::RemoveExtension(NewItem->GetVirtualPath());
                 if (!BrowseTarget.empty() && ItemPath == BrowseTarget)
@@ -1537,9 +1538,9 @@ namespace Lumina
         // The tree selects on right-click first, so SelectedPath already names the folder under the cursor.
         DirectoryContext.ItemContextMenuFunction = [this](FTreeListView&, FTreeNodeID)
         {
-            PushContextMenuItemStyle();
+            ImGuiX::PushMenuItemStyle();
             DrawContentDirectoryContextMenu();
-            PopContextMenuItemStyle();
+            ImGuiX::PopMenuItemStyle();
         };
 
         DirectoryContext.DragDropFunction = [this](FTreeListView& Tree, FTreeNodeID Item)
@@ -1764,6 +1765,16 @@ namespace Lumina
                 return;
             }
 
+            // Read-only files stay as they are until made writable, and then the same delete runs again.
+            if (TVector<FString> ReadOnly = AssetOps::FindReadOnlyFiles(Destroy.PendingDestroy); !ReadOnly.empty())
+            {
+                ToolContext->ConfirmWritable(Move(ReadOnly), [this, Path = Destroy.PendingDestroy]
+                {
+                    ActionRegistry.EnqueueAction<FPendingDestroy>(FPendingDestroy{ Path });
+                }, false);
+                return;
+            }
+
             if (VFS::IsDirectory(Destroy.PendingDestroy))
             {
                 TVector<FFixedString> LoadedPaths;
@@ -1856,6 +1867,15 @@ namespace Lumina
         
         ActionRegistry.ProcessAllOf<FPendingRename>([&](FPendingRename& Rename)
         {
+            if (TVector<FString> ReadOnly = AssetOps::FindReadOnlyFiles(Rename.OldName); !ReadOnly.empty())
+            {
+                ToolContext->ConfirmWritable(Move(ReadOnly), [this, Retry = Rename]
+                {
+                    ActionRegistry.EnqueueAction<FPendingRename>(FPendingRename(Retry));
+                }, false);
+                return;
+            }
+
             const AssetOps::FPathOpResult Result = AssetOps::MovePath(Rename.OldName, Rename.NewName);
 
             if (!Result.bSucceeded)
@@ -2718,7 +2738,7 @@ namespace Lumina
         ImGui::BeginChild("Directories", Size, ImGuiChildFlags_ResizeX, ImGuiWindowFlags_HorizontalScrollbar);
 
         // The widget owns the popup, so pushing here is the only way it picks up the same styling.
-        PushContextMenuWindowStyle();
+        ImGuiX::PushMenuWindowStyle();
 
         DirectoryListView.Draw(DirectoryContext);
 
@@ -2731,14 +2751,14 @@ namespace Lumina
 
         if (ImGui::BeginPopup("DirectoryPaneContextMenu"))
         {
-            PushContextMenuItemStyle();
+            ImGuiX::PushMenuItemStyle();
             DrawContentDirectoryContextMenu();
-            PopContextMenuItemStyle();
+            ImGuiX::PopMenuItemStyle();
 
             ImGui::EndPopup();
         }
 
-        PopContextMenuWindowStyle();
+        ImGuiX::PopMenuWindowStyle();
 
         // After Draw, so the nodes exist, and the scroll request lands on the next Draw.
         RevealPendingDirectory();
@@ -2843,18 +2863,18 @@ namespace Lumina
             ImGui::SetNextWindowSizeConstraints(ImVec2(240.0f, 0.0f), ImVec2(360.0f, FLT_MAX));
         }
 
-        PushContextMenuWindowStyle();
+        ImGuiX::PushMenuWindowStyle();
 
         if (ImGui::BeginPopup("ContentContextMenu"))
         {
-            PushContextMenuItemStyle();
+            ImGuiX::PushMenuItemStyle();
             DrawContentDirectoryContextMenu();
-            PopContextMenuItemStyle();
+            ImGuiX::PopMenuItemStyle();
 
             ImGui::EndPopup();
         }
 
-        PopContextMenuWindowStyle();
+        ImGuiX::PopMenuWindowStyle();
         
         if (ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
@@ -2941,9 +2961,9 @@ namespace Lumina
         ImGui::Separator();
 
         // The tile view opens item popups inside Draw(), so the styles have to be pushed around it.
-        PushContextMenuWindowStyle();
+        ImGuiX::PushMenuWindowStyle();
         ContentBrowserTileView.Draw(ContentBrowserTileViewContext);
-        PopContextMenuWindowStyle();
+        ImGuiX::PopMenuWindowStyle();
 
         ImVec2 ChildMin = ImGui::GetWindowPos();
         ImVec2 ChildMax = ImVec2(ChildMin.x + ImGui::GetWindowWidth(), ChildMin.y + ImGui::GetWindowHeight());
@@ -2995,6 +3015,35 @@ namespace Lumina
         }
 
         return FFixedString(Item->GetVirtualPath().data(), Item->GetVirtualPath().size());
+    }
+
+    void FContentBrowserEditorTool::ExportAssets(const TVector<FGuid>& Assets)
+    {
+        FFixedString Directory;
+        if (Assets.empty() || !Platform::OpenFileDialogue(Directory, "Export To Folder", nullptr, LastExportDirectory.empty() ? nullptr : LastExportDirectory.c_str()))
+        {
+            return;
+        }
+        LastExportDirectory = FString(Directory.c_str());
+
+        int32 Exported = 0;
+        for (const FGuid& AssetGUID : Assets)
+        {
+            CObject* Asset = LoadObject<CObject>(AssetGUID);
+            FString Written;
+            FString Error;
+            if (AssetExport::Export(Asset, FStringView(Directory.c_str(), Directory.size()), Written, Error))
+            {
+                ++Exported;
+                continue;
+            }
+            ImGuiX::Notifications::NotifyWarning("'{0}' {1}", Asset != nullptr ? Asset->GetName().c_str() : "An asset", Error);
+        }
+
+        if (Exported > 0)
+        {
+            ImGuiX::Notifications::NotifySuccess("Exported {0} of {1} asset(s) to {2}", Exported, Assets.size(), Directory.c_str());
+        }
     }
 
     void FContentBrowserEditorTool::DrawReimportAssetMenuItem(const FContentBrowserTileViewItem* ContentItem, bool bIsProtected)
@@ -3382,7 +3431,7 @@ namespace Lumina
         FFixedString SubtitleBuf(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size());
         (void)TypeLabel;
 
-        PushContextMenuItemStyle();
+        ImGuiX::PushMenuItemStyle();
 
         DrawMenuHeader(HeaderIcon, TitleBuf.c_str(), SubtitleBuf.c_str(), HeaderTint);
 
@@ -3471,6 +3520,17 @@ namespace Lumina
             DrawCreateVariantMenuItem(ContentItem);
             DrawReimportAssetMenuItem(ContentItem, bIsProtected);
 
+            const FFixedString ExportPath(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size());
+            const FAssetData* ExportData = FAssetRegistry::Get().GetAssetByPath(ExportPath);
+            if (ExportData != nullptr && AssetExport::CanExport(FindObject<CClass>(ExportData->AssetClass)))
+            {
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_EXPORT, "Export...")))
+                {
+                    ExportAssets({ ExportData->AssetGUID });
+                }
+                ImGuiX::TextTooltip(LOCF("Write the file this asset was imported from to a folder on disk."));
+            }
+
             bReplaceReferencesClicked = ImGui::MenuItem(LOC_ICON(LE_ICON_LINK_VARIANT, "Replace References..."));
             ImGuiX::TextTooltip(LOCF("Point everything that references this asset at a different one, or null them."));
         }
@@ -3478,6 +3538,16 @@ namespace Lumina
         if (ImGui::MenuItem(LOC_ICON(LE_ICON_RENAME, "Rename"), "F2", false, !bIsProtected))
         {
             ContentBrowserTileView.BeginInlineRename(ContentItem);
+        }
+
+        if (ContentItem->GetFileInfo().IsReadOnly())
+        {
+            if (ImGui::MenuItem(LE_ICON_LOCK_OPEN_VARIANT " Make Writable"))
+            {
+                ToolContext->ConfirmWritable({ FString(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size()) },
+                    [this] { RefreshContentBrowser(); }, false);
+            }
+            ImGuiX::TextTooltip("{}", "Clear the read-only flag so it can be saved, renamed, moved or deleted.");
         }
 
         DrawMenuSection("CLIPBOARD");
@@ -3548,7 +3618,7 @@ namespace Lumina
             OpenReplaceReferencesModal(ContentItem);
         }
 
-        PopContextMenuItemStyle();
+        ImGuiX::PopMenuItemStyle();
     }
 
     void FContentBrowserEditorTool::DrawMultiSelectionContextMenu(const TVector<FTileViewItem*>& Items)
@@ -3589,7 +3659,7 @@ namespace Lumina
         AppendPart(AssetCount,  LOC("asset(s)"));
         AppendPart(FileCount,   LOC("file(s)"));
 
-        PushContextMenuItemStyle();
+        ImGuiX::PushMenuItemStyle();
 
         DrawMenuHeader(LE_ICON_SELECT_MULTIPLE, Title.c_str(), Subtitle.c_str(), kMenuAccent);
 
@@ -3611,6 +3681,32 @@ namespace Lumina
             ImGui::SetClipboardText(Clipboard.c_str());
             ImGuiX::Notifications::NotifyInfo(LOCF("{0} paths copied to clipboard"), Items.size());
         }
+
+        // Decided from the registry's class names, so drawing the menu never loads an asset.
+        TVector<FGuid> Exportable;
+        for (FTileViewItem* Item : Items)
+        {
+            const auto* ContentItem = static_cast<const FContentBrowserTileViewItem*>(Item);
+            if (!ContentItem->IsAsset())
+            {
+                continue;
+            }
+            const FFixedString AssetPath(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size());
+            const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(AssetPath);
+            if (Data != nullptr && AssetExport::CanExport(FindObject<CClass>(Data->AssetClass)))
+            {
+                Exportable.push_back(Data->AssetGUID);
+            }
+        }
+
+        DrawMenuSection("EXPORT");
+
+        const FFixedString ExportLabel(Format(LE_ICON_EXPORT " Export {} Asset{}...", Exportable.size(), Exportable.size() == 1 ? "" : "s").c_str());
+        if (ImGui::MenuItem(ExportLabel.c_str(), nullptr, false, !Exportable.empty()))
+        {
+            ExportAssets(Exportable);
+        }
+        ImGuiX::TextTooltip("Write each texture, sound and font back out as the file it was imported from. Other selected items are skipped.");
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -3653,7 +3749,7 @@ namespace Lumina
             ImGuiX::Font::PopFont();
         }
 
-        PopContextMenuItemStyle();
+        ImGuiX::PopMenuItemStyle();
 
         // Last, after every read of Items, since deleting clears the selection and queues the tiles.
         if (bDeleteClicked)

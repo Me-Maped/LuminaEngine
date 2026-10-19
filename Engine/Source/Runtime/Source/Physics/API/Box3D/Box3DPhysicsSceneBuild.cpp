@@ -9,7 +9,6 @@
 #include "Box3DUtils.h"
 
 #include "Assets/AssetTypes/Mesh/StaticMesh/StaticMesh.h"
-#include "Assets/AssetTypes/Physics/CollisionShape.h"
 #include "Assets/AssetTypes/PhysicsMaterial/PhysicsMaterial.h"
 #include "Log/Log.h"
 #include "TaskSystem/TaskSystem.h"
@@ -89,9 +88,11 @@ namespace Lumina::Physics
         bool bColliderIsTrigger = false;
         const CPhysicsMaterial* ResolvedMaterial = nullptr;
 
-        const FVector3 Scale = Transform->GetScale();
-        const float UniformScale = Transform->MaxScale();
-        if (!Box3DUtils::IsSafePose(Transform->GetLocation(), Transform->GetRotation()) || !Box3DUtils::IsWithin(Scale, Box3DUtils::MaxSafeCoordinate))
+        // A body lives in world space, so a parented entity is placed and sized by its world transform.
+        const FTransform BodyPose = Transform->ComputeWorldTransform();
+        const FVector3 Scale = BodyPose.GetScale();
+        const float UniformScale = Math::Max(Scale.x, Math::Max(Scale.y, Scale.z));
+        if (!Box3DUtils::IsSafePose(BodyPose.GetLocation(), BodyPose.GetRotation()) || !Box3DUtils::IsWithin(Scale, Box3DUtils::MaxSafeCoordinate))
         {
             LOG_ERROR("Entity {} has a NaN, infinite or out of range transform, so its rigid body is not created", Entity.Value);
             return EBodyBuildStatus::Error;
@@ -199,29 +200,6 @@ namespace Lumina::Physics
             Out.Shapes.push_back(MakeHullShape(Hull, FVector3(0.0f, -PlaneThickness, 0.0f), FQuat::Identity()));
             bMustBeStatic = true;
         }
-        else if (const SCollisionShapeComponent* CSC = Registry.TryGet<SCollisionShapeComponent>(Entity))
-        {
-            ColliderTranslationOffset = CSC->TranslationOffset;
-            ColliderRotationOffset = CSC->RotationOffset;
-            bColliderIsTrigger = CSC->bIsTrigger;
-
-            const CCollisionShape* Asset = CSC->CollisionShape.Get();
-            if (Asset == nullptr || !Asset->HasCollision())
-            {
-                LOG_WARN("CollisionShape on Entity {} is missing or empty; no body was built.", (Entity).Value);
-                return EBodyBuildStatus::Error;
-            }
-
-            ResolvedMaterial = CSC->PhysicsMaterial.IsValid() ? CSC->PhysicsMaterial.Get() : Asset->PhysicsMaterial.Get();
-
-            if (!BuildCollisionShapeAsset(*Asset, Scale, Out.Shapes))
-            {
-                LOG_ERROR("Failed to build collision shape for Entity: {}", (Entity).Value);
-                return EBodyBuildStatus::Error;
-            }
-
-            bMustBeStatic = Asset->IsConcave();
-        }
         else if (const SCompoundColliderComponent* CompC = Registry.TryGet<SCompoundColliderComponent>(Entity))
         {
             bColliderIsTrigger = CompC->bIsTrigger;
@@ -249,24 +227,23 @@ namespace Lumina::Physics
                 }
             }
 
-            if (Mesh == nullptr || Mesh->HasAnyFlag(OF_NeedsLoad) || Mesh->GetMeshResource().MeshletData.IsEmpty() ||
-                Mesh->IsDefaultCollisionShapeLoading())
+            if (Mesh == nullptr || Mesh->HasAnyFlag(OF_NeedsLoad) || Mesh->GetMeshResource().MeshletData.IsEmpty())
             {
                 return EBodyBuildStatus::Defer;
             }
 
-            if (const CCollisionShape* Asset = Mesh->GetDefaultCollisionShape())
+            if (const SMeshCollision* Collision = Mesh->GetCollision())
             {
                 if (ResolvedMaterial == nullptr)
                 {
-                    ResolvedMaterial = Asset->PhysicsMaterial.Get();
+                    ResolvedMaterial = Collision->PhysicsMaterial.Get();
                 }
-                if (!BuildCollisionShapeAsset(*Asset, Scale, Out.Shapes))
+                if (!BuildMeshCollision(*Collision, Scale, Out.Shapes))
                 {
-                    LOG_ERROR("Failed to build the default collision shape of the MeshCollider on Entity: {}", (Entity).Value);
+                    LOG_ERROR("Failed to build the mesh collision of the MeshCollider on Entity: {}", (Entity).Value);
                     return EBodyBuildStatus::Error;
                 }
-                bMustBeStatic = Asset->IsConcave();
+                bMustBeStatic = Collision->IsConcave();
             }
             else if (MC->bConvex)
             {
@@ -426,8 +403,8 @@ namespace Lumina::Physics
             }
         }
 
-        const FVector3 Position = Transform->GetLocation();
-        const FQuat Rotation = Transform->GetRotation();
+        const FVector3 Position = BodyPose.GetLocation();
+        const FQuat Rotation = BodyPose.GetRotation();
 
         Out.BodyDef = b3DefaultBodyDef();
         Out.BodyDef.type = Box3DUtils::ToBox3DBodyType(BodyType);
@@ -663,7 +640,7 @@ namespace Lumina::Physics
                 continue;
             }
 
-            const FVector3 Scale   = Transform->GetScale();
+            const FVector3 Scale   = Transform->ComputeWorldTransform().GetScale();
             const bool     bConvex = DMC->bConvex;
 
             FDynamicMeshCookEntry& Entry = DynamicMeshCooks[Entity];

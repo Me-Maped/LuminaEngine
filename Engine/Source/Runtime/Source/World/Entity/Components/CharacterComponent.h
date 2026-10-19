@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Core/Delegates/ScriptDelegate.h"
+#include "World/ECS/EventMeta.h"
 #include "Core/Object/ObjectMacros.h"
 #include "World/ECS/Entity.h"
 #include "Core/Templates/LuminaTemplate.h"
@@ -33,6 +35,8 @@ namespace Lumina
         void reset() { Handle.reset(); }
     };
     
+    struct SCharacterMovementComponent;
+
     REFLECT(Component, Category = "Character")
     struct RUNTIME_API SCharacterPhysicsComponent
     {
@@ -46,6 +50,9 @@ namespace Lumina
         SCharacterPhysicsComponent& operator=(SCharacterPhysicsComponent&&) noexcept;
         
         FCharacterHandleRef Character;
+
+        // The capsule physics uses right now, crouch included, so debug drawing and the mover never disagree about its size.
+        void GetActiveCapsule(const SCharacterMovementComponent* Movement, float& OutHalfHeight, float& OutCenterDrop) const;
 
         // Snapshots for interpolation.
         FVector3 LastBodyPosition;
@@ -103,6 +110,59 @@ namespace Lumina
         /** When false, the mover passes through the capsules of other characters instead of being blocked. */
         PROPERTY(Editable, Category = "Physics")
         bool bCollideWithCharacters = true;
+    };
+
+    // A character touched down, queued for systems and fanned out to its movement component's OnLanded.
+    REFLECT(Event)
+    struct RUNTIME_API SCharacterLandedEvent
+    {
+        GENERATED_BODY()
+
+        PROPERTY(Hidden)
+        ECS::FEntity Entity = ECS::NullEntity;
+
+        // How fast it was falling at touchdown in m/s, for landing effects and fall damage.
+        PROPERTY(Hidden)
+        float ImpactSpeed = 0.0f;
+
+        PROPERTY(Hidden)
+        FVector3 GroundNormal = FVector3(0.0f, 1.0f, 0.0f);
+
+        // Null for world geometry that has no entity.
+        PROPERTY(Hidden)
+        ECS::FEntity GroundEntity = ECS::NullEntity;
+    };
+
+    // A character jumped, queued for systems and fanned out to its movement component's OnJumped.
+    REFLECT(Event)
+    struct RUNTIME_API SCharacterJumpedEvent
+    {
+        GENERATED_BODY()
+
+        PROPERTY(Hidden)
+        ECS::FEntity Entity = ECS::NullEntity;
+
+        // Which jump since the last landing, 1 for the jump off the ground and 2 or more for air jumps.
+        PROPERTY(Hidden)
+        int32 JumpCount = 0;
+
+        // The velocity it leaves with, jump speed included.
+        PROPERTY(Hidden)
+        FVector3 Velocity = FVector3(0.0f);
+    };
+
+    // A character crouched or stood back up, queued for systems and fanned out to its movement component's OnCrouchChanged.
+    REFLECT(Event)
+    struct RUNTIME_API SCharacterCrouchEvent
+    {
+        GENERATED_BODY()
+
+        PROPERTY(Hidden)
+        ECS::FEntity Entity = ECS::NullEntity;
+
+        // True when it crouched, false when it stood up.
+        PROPERTY(Hidden)
+        bool bCrouched = false;
     };
 
     REFLECT(Component, Category = "Character")
@@ -184,6 +244,34 @@ namespace Lumina
         PROPERTY(ReadOnly, Category = "Movement")
         int JumpCount = 0;
 
+        PROPERTY(Editable, Category = "Crouch")
+        bool bCanCrouch = true;
+
+        // Capsule cylinder half height while crouched in meters, measured like the physics component's HalfHeight.
+        PROPERTY(Editable, ClampMin = 0.0f, Category = "Crouch", Units = "m")
+        float CrouchHalfHeight = 0.2f;
+
+        // MoveSpeed and SprintSpeed are multiplied by this while crouched.
+        PROPERTY(Editable, ClampMin = 0.0f, ClampMax = 1.0f, Category = "Crouch")
+        float CrouchSpeedScale = 0.5f;
+
+        PROPERTY(ReadOnly, Category = "Crouch")
+        bool bIsCrouched = false;
+
+        // Set by the controller's Crouch and UnCrouch, or directly by a script that drives the character itself.
+        PROPERTY(Hidden)
+        bool bWantsToCrouch = false;
+
+        // Systems that hear every character read the SCharacterLandedEvent queue instead.
+        PROPERTY(Hidden)
+        TScriptDelegate<SCharacterLandedEvent> OnLanded;
+
+        PROPERTY(Hidden)
+        TScriptDelegate<SCharacterJumpedEvent> OnJumped;
+
+        PROPERTY(Hidden)
+        TScriptDelegate<SCharacterCrouchEvent> OnCrouchChanged;
+
         // Internal staging: input is latched from the controller once per
         // frame in PrePhysics, then consumed at fixed-step rate in physics.
         FVector3 PendingMoveDirection = FVector3(0.0f);
@@ -207,6 +295,15 @@ namespace Lumina
         FVector3 PendingTeleportLocation = FVector3(0.0f);
         bool      bPendingTeleport        = false;
     };
+
+    template<>
+    struct TEventFanOut<SCharacterLandedEvent> : TEntityDelegateFanOut<SCharacterLandedEvent, &SCharacterMovementComponent::OnLanded> {};
+
+    template<>
+    struct TEventFanOut<SCharacterJumpedEvent> : TEntityDelegateFanOut<SCharacterJumpedEvent, &SCharacterMovementComponent::OnJumped> {};
+
+    template<>
+    struct TEventFanOut<SCharacterCrouchEvent> : TEntityDelegateFanOut<SCharacterCrouchEvent, &SCharacterMovementComponent::OnCrouchChanged> {};
 
     
 }

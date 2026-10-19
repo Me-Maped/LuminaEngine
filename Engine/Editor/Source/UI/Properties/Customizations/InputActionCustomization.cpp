@@ -38,27 +38,7 @@ namespace Lumina
             FString Result;
             for (const SInputActionBinding& Binding : Action.Bindings)
             {
-                FString Token;
-                switch (Binding.Source)
-                {
-                case EInputAxisSource::MouseX:     Token = LOC("Mouse X"); break;
-                case EInputAxisSource::MouseY:     Token = LOC("Mouse Y"); break;
-                case EInputAxisSource::MouseWheel: Token = LOC("Mouse Wheel"); break;
-                default:
-                    if (Binding.Key.IsMouse())
-                    {
-                        Token = LOC("Mouse ") + FInputActionMap::MouseButtonToString(Binding.Key.MouseButton);
-                    }
-                    else if (Binding.Key.IsKeyboard())
-                    {
-                        if (Binding.Key.bCtrl)  { Token += "Ctrl+"; }
-                        if (Binding.Key.bShift) { Token += "Shift+"; }
-                        if (Binding.Key.bAlt)   { Token += "Alt+"; }
-                        Token += FInputActionMap::KeyToString(Binding.Key.Key);
-                    }
-                    break;
-                }
-
+                const FString Token = LOC_VIEW(Binding.GetDisplayName());
                 if (Token.empty())
                 {
                     continue;

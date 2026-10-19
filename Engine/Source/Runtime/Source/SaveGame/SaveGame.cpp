@@ -15,8 +15,7 @@ namespace Lumina
             return FString(World->GetName().c_str());
         }
 
-        // Systems hear it through a virtual, which a C# system can override, and anything else through the event.
-        template<typename TEvent>
+        // Runs inline rather than queued, since a system folds its state in before the capture reads it.
         void Notify(CWorld* World, CSaveGame* SaveGame, void (CEntitySystem::*Hook)(CSaveGame*))
         {
             for (const TStrongObjectPtr<CEntitySystem>& System : World->Systems)
@@ -25,12 +24,6 @@ namespace Lumina
                 {
                     (System.Get()->*Hook)(SaveGame);
                 }
-            }
-            if (ECS::FEventDispatcher* const* Dispatcher = ECS::GetWorldRegistry(*World).Ctx().Find<ECS::FEventDispatcher*>())
-            {
-                TEvent Event;
-                Event.SaveGame = SaveGame;
-                (*Dispatcher)->Trigger<TEvent>(Event);
             }
         }
     }
@@ -42,8 +35,8 @@ namespace Lumina
             LOG_WARN("CSaveGame::CaptureWorld was given no world.");
             return false;
         }
-        Notify<SWorldSavingEvent>(World, this, &CEntitySystem::OnWorldSaving);
-        return CaptureRegistry(WorldKey(World), ECS::GetWorldRegistry(*World));
+        Notify(World, this, &CEntitySystem::OnWorldSaving);
+        return CaptureRegistry(WorldKey(World), World->GetEntityRegistry());
     }
 
     bool CSaveGame::RestoreWorld(CWorld* World)
@@ -53,11 +46,11 @@ namespace Lumina
             LOG_WARN("CSaveGame::RestoreWorld was given no world.");
             return false;
         }
-        if (!RestoreRegistry(WorldKey(World), ECS::GetWorldRegistry(*World)))
+        if (!RestoreRegistry(WorldKey(World), World->GetEntityRegistry()))
         {
             return false;
         }
-        Notify<SWorldRestoredEvent>(World, this, &CEntitySystem::OnWorldRestored);
+        Notify(World, this, &CEntitySystem::OnWorldRestored);
         return true;
     }
 

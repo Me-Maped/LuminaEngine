@@ -1,4 +1,5 @@
 ﻿
+#include "FileSystem/FileSystem.h"
 #include "Containers/StringFormat.h"
 #include "Renderer/RHICore.h"
 #include "World/ECS/Registry.h"
@@ -34,7 +35,6 @@
 #include "Core/Application/Application.h"
 #include "Core/UpdateContext.h"
 #include "Input/InputContext.h"
-#include "Input/InputProcessor.h"
 #include "Input/InputViewport.h"
 #include "Renderer/RHI.h"
 #include "Renderer/ImmediateLineRenderer.h"
@@ -47,6 +47,7 @@
 #include "World/Entity/Components/EntityTags.h"
 #include "World/Entity/Components/InputComponent.h"
 #include "World/Entity/Components/SocketAttachmentComponent.h"
+#include "Assets/AssetTypes/Mesh/Mesh.h"
 #include "World/Entity/Components/SkeletalMeshComponent.h"
 #include "World/Entity/Components/StaticMeshComponent.h"
 #include "World/Entity/Components/TerrainComponent.h"
@@ -244,7 +245,7 @@ namespace Lumina
             return;
         }
 
-        SCameraComponent* Camera = World->GetActiveCamera();
+        SCameraComponent* Camera = World->GetCamera()->GetActiveCamera();
         if (Camera == nullptr)
         {
             return;
@@ -519,7 +520,7 @@ namespace Lumina
         CameraTransform.SetLocation(CameraLocation);
         CameraTransform.SetRotation(Math::FindLookAtRotation(CameraTarget, CameraLocation));
 
-        World->SetActiveCamera(EditorEntity);
+        World->GetCamera()->SetActiveCamera(EditorEntity);
     }
 
     void FEditorTool::GetDefaultCameraPose(FVector3& OutLocation, FVector3& OutTarget) const
@@ -574,6 +575,22 @@ namespace Lumina
             }
 
             ImGuiX::TextTooltip(LOCF("Browse to asset in Content Browser"));
+
+            // Polled, since another program can flip the flag without touching the file.
+            if (ImGui::GetFrameCount() % 30 == 0)
+            {
+                bAssetReadOnlyOnDisk = VFS::IsReadOnlyOnDisk(FStringView(AssetVirtualPath.c_str(), AssetVirtualPath.size()));
+            }
+            if (bAssetReadOnlyOnDisk)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::Warning());
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LOCK, "Read-only")))
+                {
+                    ToolContext->ConfirmWritable({ FString(AssetVirtualPath.c_str()) }, {}, false);
+                }
+                ImGui::PopStyleColor();
+                ImGuiX::TextTooltip("{}", LOC("Read-only on disk, so saving will fail. Click to make it writable."));
+            }
         }
 
         ImGui::BeginDisabled(!AllowsUndoRedo() || !CanUndo());
@@ -609,7 +626,10 @@ namespace Lumina
         {
             ImGuiX::TextTooltip(LOCF("Nothing to redo"));
         }
-        
+
+        // In a menu bar this draws upright, parting the document actions from the menus.
+        ImGui::Separator();
+
 
         if (ImGui::BeginMenu(LOC_ICON(LE_ICON_HELP_CIRCLE_OUTLINE, "Help")))
         {
@@ -878,12 +898,12 @@ namespace Lumina
         t = Math::Clamp(t, 0.0f, 1.0f);
         const float NewFOV = Math::Mix(120.0f, 50.0f, t);
 
-        if (SCameraComponent* CameraComponent = World->GetActiveCamera())
+        if (SCameraComponent* CameraComponent = World->GetCamera()->GetActiveCamera())
         {
             CameraComponent->SetAspectRatio(AspectRatio);
 
             // Only the editor's own camera takes the width-derived FOV, since a game or cinematic camera authors its own lens.
-            if (World->GetActiveCameraEntity() == EditorEntity)
+            if (World->GetCamera()->GetActiveCameraEntity() == EditorEntity)
             {
                 CameraComponent->SetFOV(NewFOV);
             }
@@ -944,43 +964,15 @@ namespace Lumina
 
         if (World != nullptr)
         {
-            RmlUi::SetWorldDisplaySize(World.Get(), FUIntVector2(uint32(Math::Max(ViewportSize.x, 1.0f)), uint32(Math::Max(ViewportSize.y, 1.0f))));
+            uint32 RecordingWidth = 0;
+            uint32 RecordingHeight = 0;
+            const bool bRecording = MovieCapture::GetRecordingSize(World->GetRenderer(), RecordingWidth, RecordingHeight);
+            RmlUi::SetWorldDisplaySize(World.Get(), bRecording
+                ? FUIntVector2(RecordingWidth, RecordingHeight)
+                : FUIntVector2(uint32(Math::Max(ViewportSize.x, 1.0f)), uint32(Math::Max(ViewportSize.y, 1.0f))));
         }
 
-        InputViewport->SetHovered(bViewportHovered);
-        InputViewport->SetFocused(bViewportFocused);
-
-        FInputViewportRegistry& Reg = FInputViewportRegistry::Get();
-
-        if (bViewportHovered)
-        {
-            Reg.SetHoveredViewport(InputViewport.get());
-        }
-        else if (Reg.GetHoveredViewport() == InputViewport.get())
-        {
-            Reg.SetHoveredViewport(nullptr);
-        }
-
-        if (Reg.IsGameInputFocused())
-        {
-            void* const ThisWindow = InputViewport->GetNativeWindowHandle();
-            if (Windowing::IsNativeWindowFocused(ThisWindow))
-            {
-                FInputViewport* Active = Reg.GetActiveViewport();
-                const bool bActiveWindowFocused = Active != nullptr
-                    && Windowing::IsNativeWindowFocused(Active->GetNativeWindowHandle());
-                if (!bActiveWindowFocused)
-                {
-                    Reg.SetActiveViewport(InputViewport.get());
-                    Reg.SetFocusedViewport(InputViewport.get());
-                }
-            }
-        }
-        else if (bViewportFocused)
-        {
-            Reg.SetFocusedViewport(InputViewport.get());
-            Reg.SetActiveViewport(InputViewport.get());
-        }
+        FInputViewportRegistry::Get().UpdateViewportFocus(InputViewport.get(), bViewportHovered, bViewportFocused);
     }
 
     bool FEditorTool::DrawViewport(const FUpdateContext& UpdateContext, ImTextureRef ViewportTexture)
@@ -1050,13 +1042,9 @@ namespace Lumina
             && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
             && !ImGui::IsAnyItemHovered())
         {
-            FInputViewportRegistry& Reg = FInputViewportRegistry::Get();
-            if (!Reg.IsGameInputFocused())
+            if (!FInputViewportRegistry::Get().IsGameInputFocused())
             {
-                // Keys go to the focused viewport first, so it moves with the click or they stay with the last player.
-                Reg.SetActiveViewport(InputViewport.get());
-                Reg.SetFocusedViewport(InputViewport.get());
-                Reg.SetGameInputFocused(true);
+                FInputViewportRegistry::Get().TakeGameFocus(InputViewport.get());
             }
         }
 
@@ -1206,7 +1194,10 @@ namespace Lumina
 
         if (ImGui::BeginMenu(LOC("Rendering")))
         {
-            FSceneRenderSettings& Settings = RenderScene->GetSceneRenderSettings();
+            SWorldRenderSettings& Settings = World->GetRenderSettings();
+
+            // The toggles save with the world, so a change dirties its package. The debug views do not.
+            bool bSavedSettingChanged = false;
 
             if (ImGui::BeginMenu(LOC("View Mode")))
             {
@@ -1299,7 +1290,6 @@ namespace Lumina
             // Each entry says what it costs to disable, so nobody leaves one off and reports a frame-rate bug.
             if (ImGui::BeginMenu(LOC("Culling")))
             {
-                // Spelled out per entry, since these are bitfields and there is no pointer to one.
                 static const char* const kNames[] =
                 {
                     "Frustum Cull",
@@ -1321,52 +1311,38 @@ namespace Lumina
                     "Distance-based LOD selection.\nOff: always LOD 0, full detail.",
                 };
 
-                bool bValues[] =
+                bool* const Toggles[] =
                 {
-                    (bool)Settings.bFrustumCull,
-                    (bool)Settings.bConeCull,
-                    (bool)Settings.bOcclusionCull,
-                    (bool)Settings.bMeshletOcclusionCull,
-                    (bool)Settings.bShadowOcclusionCull,
-                    (bool)Settings.bCPUInstanceCull,
-                    (bool)Settings.bUseLODs,
+                    &Settings.bFrustumCull,
+                    &Settings.bConeCull,
+                    &Settings.bOcclusionCull,
+                    &Settings.bMeshletOcclusionCull,
+                    &Settings.bShadowOcclusionCull,
+                    &Settings.bCPUInstanceCull,
+                    &Settings.bUseLODs,
                 };
-                static_assert(std::size(kNames) == std::size(kTooltips), "Cull toggle names and tooltips must pair up.");
+                static_assert(std::size(kNames) == std::size(kTooltips) && std::size(kNames) == std::size(Toggles), "Cull toggle names, tooltips and fields must pair up.");
 
-                bool bChanged[std::size(kNames)] = {};
                 for (size_t i = 0; i < std::size(kNames); ++i)
                 {
-                    bChanged[i] = ImGui::MenuItem(LOC(kNames[i]), nullptr, &bValues[i]);
+                    bSavedSettingChanged |= ImGui::MenuItem(LOC(kNames[i]), nullptr, Toggles[i]);
                     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                     {
                         ImGui::SetTooltip("%s", LOC(kTooltips[i]));
                     }
                 }
 
-                if (bChanged[0]) { Settings.bFrustumCull          = bValues[0]; }
-                if (bChanged[1]) { Settings.bConeCull             = bValues[1]; }
-                if (bChanged[2]) { Settings.bOcclusionCull        = bValues[2]; }
-                if (bChanged[3]) { Settings.bMeshletOcclusionCull = bValues[3]; }
-                if (bChanged[4]) { Settings.bShadowOcclusionCull  = bValues[4]; }
-                if (bChanged[5]) { Settings.bCPUInstanceCull      = bValues[5]; }
-                if (bChanged[6]) { Settings.bUseLODs              = bValues[6]; }
-
                 ImGui::Separator();
 
                 // Whatever is still missing with all of these off was not culled, which beats any single toggle.
-                const bool bAllOff = !Settings.bFrustumCull && !Settings.bConeCull && !Settings.bOcclusionCull
-                                  && !Settings.bMeshletOcclusionCull && !Settings.bShadowOcclusionCull
-                                  && !Settings.bCPUInstanceCull && !Settings.bUseLODs;
+                const bool bAllOff = Algo::NoneOf(Toggles, [](const bool* Toggle) { return *Toggle; });
                 if (ImGui::MenuItem(LOC("Disable All Culling"), nullptr, bAllOff))
                 {
-                    const uint8 bEnable = bAllOff ? 1u : 0u;
-                    Settings.bFrustumCull          = bEnable;
-                    Settings.bConeCull             = bEnable;
-                    Settings.bOcclusionCull        = bEnable;
-                    Settings.bMeshletOcclusionCull = bEnable;
-                    Settings.bShadowOcclusionCull  = bEnable;
-                    Settings.bCPUInstanceCull      = bEnable;
-                    Settings.bUseLODs              = bEnable;
+                    for (bool* Toggle : Toggles)
+                    {
+                        *Toggle = bAllOff;
+                    }
+                    bSavedSettingChanged = true;
                 }
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 {
@@ -1377,11 +1353,7 @@ namespace Lumina
                 ImGui::Separator();
 
                 // This pins every stage's inputs rather than turning one off, so you can fly out and look.
-                bool bFrozen = (bool)Settings.bFreezeCulling;
-                if (ImGui::MenuItem(LOC("Freeze Culling"), nullptr, &bFrozen))
-                {
-                    Settings.bFreezeCulling = bFrozen;
-                }
+                ImGui::MenuItem(LOC("Freeze Culling"), nullptr, &Settings.bFreezeCulling);
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 {
                     ImGui::SetTooltip(LOC("Pins the cull to the camera, frustums and depth pyramid as they are now, "
@@ -1395,22 +1367,13 @@ namespace Lumina
 
             ImGui::Separator();
 
-            bool bWireframe = Settings.bWireframe;
-            if (ImGui::MenuItem(LOC("Wireframe"), nullptr, &bWireframe))
-            {
-                Settings.bWireframe = bWireframe;
-            }
+            ImGui::MenuItem(LOC("Wireframe"), nullptr, &Settings.bWireframe);
 
-            bool bDrawBillboards = Settings.bDrawBillboards;
-            if (ImGui::MenuItem(LOC("Draw Billboards"), nullptr, &bDrawBillboards))
-            {
-                Settings.bDrawBillboards = bDrawBillboards;
-            }
+            bSavedSettingChanged |= ImGui::MenuItem(LOC("Draw Billboards"), nullptr, &Settings.bDrawBillboards);
 
-            bool bDrawAABB = Settings.bDrawAABB;
-            if (ImGui::MenuItem(LOC("Draw Bounds"), nullptr, &bDrawAABB))
+            if (bSavedSettingChanged && World->GetPackage() != nullptr)
             {
-                Settings.bDrawAABB = bDrawAABB;
+                World->GetPackage()->MarkDirty();
             }
 
             // Tool-specific view-mode items, such as the world's Entity Debug Info and Game View.
@@ -1546,7 +1509,7 @@ namespace Lumina
         // UpdateViewportInput rebuilds the projection per frame, so a non-drawing tool keeps a stale one.
         if (!bOrthographic && HasEditorCameraControl())
         {
-            if (SCameraComponent* Camera = World->GetActiveCamera())
+            if (SCameraComponent* Camera = World->GetCamera()->GetActiveCamera())
             {
                 Camera->SetPerspectiveProjection();
             }
@@ -1602,6 +1565,27 @@ namespace Lumina
         {
             ApplyOrbitTransform();
         }
+    }
+
+    void FEditorTool::MoveEditorCameraBy(const FVector3& Delta)
+    {
+        if (!HasWorld() || EditorEntity == ECS::NullEntity || !World->IsValidEntity(EditorEntity))
+        {
+            return;
+        }
+
+        CameraState.bFocusInterp = false;
+        if (CameraState.Mode == EEditorCameraMode::Orbit)
+        {
+            // The anchor rides along too, so Reset Pan returns to the dragged object rather than where the drag began.
+            CameraState.OrbitTarget += Delta;
+            CameraState.OrbitAnchor += Delta;
+            ApplyOrbitTransform();
+            return;
+        }
+
+        STransformComponent& Transform = World->GetComponent<STransformComponent>(EditorEntity);
+        Transform.SetLocation(Transform.GetLocation() + Delta);
     }
 
     void FEditorTool::ApplyOrbitTransform()
@@ -1705,7 +1689,7 @@ namespace Lumina
         // Latched out until release, so adding Alt mid-gizmo-drag cannot also start a camera gesture.
         if (bLeftDown && !CameraState.bLeftMouseDownPrev)
         {
-            CameraState.bLeftGestureBlocked = !bAltDown && !bRightDown;
+            CameraState.bLeftGestureBlocked = (!bAltDown && !bRightDown) || (bAltDown && CameraState.bGizmoHovered);
         }
         else if (!bLeftDown)
         {
@@ -2007,6 +1991,26 @@ namespace Lumina
         return (bViewportFocused || bViewportHovered) && ImGui::GetIO().KeyAlt;
     }
 
+    void SyncImGuiInputFlags()
+    {
+        const FInputViewportRegistry& Reg = FInputViewportRegistry::Get();
+        const bool bGameOwnsInput = Reg.IsGameOwningInput();
+
+        // A hidden or captured cursor belongs to the viewport, so ImGui must neither hover under it nor warp it.
+        const bool bViewportOwnsCursor = bGameOwnsInput || Reg.GetActiveEffectiveMouseMode() != EMouseMode::Normal;
+
+        ImGuiIO& IO = ImGui::GetIO();
+        IO.ConfigFlags &= ~(ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoKeyboard | ImGuiConfigFlags_NoMouseCursorChange);
+        if (bViewportOwnsCursor)
+        {
+            IO.ConfigFlags |= ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoMouseCursorChange;
+        }
+        if (bGameOwnsInput)
+        {
+            IO.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
+        }
+    }
+
     void FEditorTool::BeginEditorLookCapture()
     {
         if (InputViewport == nullptr)
@@ -2014,8 +2018,8 @@ namespace Lumina
             return;
         }
         InputViewport->GetContext().SetMouseMode(EMouseMode::Captured);
-        ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoMouseCursorChange;
-        FInputViewportRegistry::Get().ReapplyActiveCursorMode();
+        FInputViewportRegistry::Get().ApplyActiveCursorMode();
+        SyncImGuiInputFlags();
     }
 
     void FEditorTool::EndEditorLookCapture()
@@ -2025,8 +2029,8 @@ namespace Lumina
             return;
         }
         InputViewport->GetContext().SetMouseMode(EMouseMode::Normal);
-        ImGui::GetIO().ConfigFlags &= ~(ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoMouseCursorChange);
-        FInputViewportRegistry::Get().ReapplyActiveCursorMode();
+        FInputViewportRegistry::Get().ApplyActiveCursorMode();
+        SyncImGuiInputFlags();
     }
 
     void FEditorTool::DrawWorldGrid()
@@ -2306,7 +2310,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
 
         TVector<ECS::FEntity> Affected;
         FEntityRelationshipCommand::CollectAffected(Registry, Seeds, NewParent, Affected);
@@ -2329,7 +2333,7 @@ namespace Lumina
             return;
         }
 
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
 
         TVector<ECS::FEntity> Candidates;
         FEntityDestroyCommand::CollectCandidates(Registry, Doomed, Candidates);
@@ -2453,7 +2457,7 @@ namespace Lumina
         }
 
         // Falls back to the EditorEntity, since asset editors often own the camera there directly.
-        const SCameraComponent* Camera = World->GetActiveCamera();
+        const SCameraComponent* Camera = World->GetCamera()->GetActiveCamera();
         if (Camera == nullptr && EditorEntity != ECS::NullEntity && World->IsValidEntity(EditorEntity))
         {
             Camera = World->TryGetComponent<SCameraComponent>(EditorEntity);
@@ -2469,6 +2473,70 @@ namespace Lumina
         return Result;
     }
 
+    namespace
+    {
+        // How far along Normal a mesh's origin sits when its bounds just touch a surface facing Normal.
+        float RestingOffset(const SAABB& Bounds, const FVector3& Normal)
+        {
+            const FVector3 Center = (Bounds.Min + Bounds.Max) * 0.5f;
+            const FVector3 Half   = (Bounds.Max - Bounds.Min) * 0.5f;
+            return Math::Abs(Normal.x) * Half.x + Math::Abs(Normal.y) * Half.y + Math::Abs(Normal.z) * Half.z - Math::Dot(Center, Normal);
+        }
+
+        FVector3 AbsComponents(const FVector3& Value)
+        {
+            return FVector3(Math::Abs(Value.x), Math::Abs(Value.y), Math::Abs(Value.z));
+        }
+
+        // The box about the origin that holds Bounds once turned by Rotation and scaled by Scale.
+        SAABB OrientBounds(const SAABB& Bounds, const FQuat& Rotation, float Scale)
+        {
+            const FVector3 Center = Rotation * ((Bounds.Min + Bounds.Max) * (0.5f * Scale));
+            const FVector3 Half   = (Bounds.Max - Bounds.Min) * (0.5f * Scale);
+            const FVector3 Extent = AbsComponents(Rotation * FVector3(Half.x, 0.0f, 0.0f))
+                                  + AbsComponents(Rotation * FVector3(0.0f, Half.y, 0.0f))
+                                  + AbsComponents(Rotation * FVector3(0.0f, 0.0f, Half.z));
+            SAABB Oriented;
+            Oriented.Min = Center - Extent;
+            Oriented.Max = Center + Extent;
+            return Oriented;
+        }
+    }
+
+    FTransform FEditorTool::GetDropSpawnTransform(CObject* Placed) const
+    {
+        // A drop outside the viewport, such as on the outliner, has no surface under it and lands in front of the camera.
+        FViewportHit Hit;
+        return TraceViewportPlacement(ImGui::GetMousePos(), Hit) ? PlaceOnHit(Hit, Placed) : GetCameraSpawnTransform();
+    }
+
+    FTransform FEditorTool::PlaceOnHit(const FViewportHit& Hit, CObject* Placed, const FQuat& Rotation, float Scale) const
+    {
+        FTransform Placement = GetCameraSpawnTransform();
+        FVector3   Location  = Hit.Location;
+        if (const CMesh* Mesh = Cast<CMesh>(Placed))
+        {
+            Location += Hit.Normal * RestingOffset(OrientBounds(Mesh->GetAABB(), Rotation, Scale), Hit.Normal);
+        }
+        Placement.SetLocation(Location);
+        Placement.SetRotation(Rotation);
+        Placement.SetScale(FVector3(Scale));
+        return Placement;
+    }
+
+    void FEditorTool::DrawDropPlacementMarker(const FViewportHit& Hit) const
+    {
+        if (World == nullptr)
+        {
+            return;
+        }
+
+        const FVector4 Color(0.35f, 0.85f, 1.0f, 1.0f);
+        IPrimitiveDrawInterface* Draw = World->GetDebugInterface();
+        Draw->DrawCircle(Hit.Location, Hit.Normal, 0.25f, Color, 32, 2.0f, false);
+        Draw->DrawArrow(Hit.Location, Hit.Normal, 0.4f, Color, 2.0f, false, 0.0f, 0.08f);
+    }
+
     bool FEditorTool::BuildViewportRay(ImVec2 ScreenPos, FVector3& OutOrigin, FVector3& OutDirection) const
     {
         if (World == nullptr)
@@ -2476,7 +2544,7 @@ namespace Lumina
             return false;
         }
 
-        const SCameraComponent* Camera = World->GetActiveCamera();
+        const SCameraComponent* Camera = World->GetCamera()->GetActiveCamera();
         if (Camera == nullptr && EditorEntity != ECS::NullEntity && World->IsValidEntity(EditorEntity))
         {
             Camera = World->TryGetComponent<SCameraComponent>(EditorEntity);
@@ -2518,19 +2586,59 @@ namespace Lumina
         return true;
     }
 
-    bool FEditorTool::TraceViewportPlacement(ImVec2 ScreenPos, FVector3& OutLocation, ECS::FEntity* OutHitEntity) const
+    bool FEditorTool::ScreenToPickerPixel(ImVec2 ScreenPos, uint32& OutX, uint32& OutY) const
     {
-        if (OutHitEntity != nullptr)
-        {
-            *OutHitEntity = ECS::NullEntity;
-        }
-
-        if (World == nullptr)
+        IRenderScene* Renderer = World != nullptr ? World->GetRenderer() : nullptr;
+        if (Renderer == nullptr || ViewportScreenSize.x < 1.0f || ViewportScreenSize.y < 1.0f)
         {
             return false;
         }
 
-        const SCameraComponent* Camera = World->GetActiveCamera();
+        const float LocalX = ScreenPos.x - ViewportScreenMin.x;
+        const float LocalY = ScreenPos.y - ViewportScreenMin.y;
+        if (LocalX < 0.0f || LocalY < 0.0f || LocalX >= ViewportScreenSize.x || LocalY >= ViewportScreenSize.y)
+        {
+            return false;
+        }
+
+        // The same scale the viewport click uses, so a drop reads the window its cursor published.
+        const FUIntVector2 Extent = Renderer->GetRenderExtent();
+        OutX = (uint32)(LocalX * (float)Extent.x / ViewportScreenSize.x);
+        OutY = (uint32)(LocalY * (float)Extent.y / ViewportScreenSize.y);
+        return true;
+    }
+
+    bool FEditorTool::TraceViewportPlacement(ImVec2 ScreenPos, FViewportHit& OutHit, TSpan<const ECS::FEntity> Ignored) const
+    {
+        OutHit = FViewportHit{};
+        ECS::FEntity* OutHitEntity = &OutHit.Entity;
+        FVector3      OutLocation(0.0f);
+        FVector3      HitNormal(0.0f, 1.0f, 0.0f);
+        auto Hit = [&](const FVector3& Location)
+        {
+            OutHit.Location = Location;
+            OutHit.Normal   = HitNormal;
+            return true;
+        };
+
+        uint32 PixelX = 0;
+        uint32 PixelY = 0;
+        if (World == nullptr || !ScreenToPickerPixel(ScreenPos, PixelX, PixelY))
+        {
+            return false;
+        }
+
+        // The rendered depth is the real surface, skinned meshes included, where the fallbacks below see only bounds.
+        IRenderScene* Renderer = World->GetRenderer();
+        FVector3 SurfaceLocation;
+        if (Renderer->GetSurfaceAtPixel(PixelX, PixelY, Ignored, SurfaceLocation, HitNormal))
+        {
+            const ECS::FEntity Picked = Renderer->GetEntityAtPixel(PixelX, PixelY);
+            *OutHitEntity = World->IsValidEntity(Picked) && !Algo::Contains(Ignored, Picked) ? Picked : ECS::NullEntity;
+            return Hit(SurfaceLocation);
+        }
+
+        const SCameraComponent* Camera = World->GetCamera()->GetActiveCamera();
         if (Camera == nullptr && EditorEntity != ECS::NullEntity && World->IsValidEntity(EditorEntity))
         {
             Camera = World->TryGetComponent<SCameraComponent>(EditorEntity);
@@ -2551,7 +2659,7 @@ namespace Lumina
         bool  bHit         = false;
 
         // The case that matters most, since a landscape has no collision for anything else to hit.
-        ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
+        ECS::FRegistry& Registry = World->GetEntityRegistry();
         for (auto&& [Entity, Terrain] : Registry.View<STerrainComponent>().Each())
         {
             FVector3 TerrainOrigin(0.0f);
@@ -2578,7 +2686,7 @@ namespace Lumina
         {
             for (auto&& [Entity, Mesh, Transform] : View.Each())
             {
-                if (Mesh.CachedLocalRadius <= 0.0f)
+                if (Mesh.CachedLocalRadius <= 0.0f || Algo::Contains(Ignored, Entity))
                 {
                     continue;
                 }
@@ -2612,11 +2720,9 @@ namespace Lumina
 
                 BestDistance = T;
                 OutLocation  = RayOrigin + RayDir * T;
+                HitNormal    = Math::Normalize(OutLocation - Center);
                 bHit         = true;
-                if (OutHitEntity != nullptr)
-                {
-                    *OutHitEntity = Entity;
-                }
+                *OutHitEntity = Entity;
             }
         };
 
@@ -2625,7 +2731,7 @@ namespace Lumina
 
         if (bHit)
         {
-            return true;
+            return Hit(OutLocation);
         }
 
         // Only when the ray descends, or a camera tilted up would place the asset behind the viewer.
@@ -2634,35 +2740,22 @@ namespace Lumina
             const float T = -RayOrigin.y / RayDir.y;
             if (T > 0.0f && T < 1000.0f)
             {
-                OutLocation = RayOrigin + RayDir * T;
-                return true;
+                return Hit(RayOrigin + RayDir * T);
             }
         }
 
         // Along the CURSOR ray rather than straight ahead, so the asset still lands where they pointed.
-        OutLocation = RayOrigin + RayDir * FallbackDistance;
-        return true;
+        HitNormal = -RayDir;
+        return Hit(RayOrigin + RayDir * FallbackDistance);
     }
 
-    ECS::FEntity FEditorTool::HandleContentBrowserAssetDrop(FStringView VirtualPath, ECS::FEntity DropTarget, bool bAttachToTarget)
+    CObject* FEditorTool::LoadDroppedAsset(FStringView VirtualPath) const
     {
-        if (World == nullptr || VirtualPath.empty())
-        {
-            return ECS::NullEntity;
-        }
-
         FAssetData* AssetData = FAssetRegistry::Get().GetAssetByPath(VirtualPath);
         if (AssetData == nullptr)
         {
             LOG_WARN("Asset drop: no registry entry for '{}'", FString(VirtualPath.data(), VirtualPath.size()).c_str());
-            return ECS::NullEntity;
-        }
-
-        const FEditorAssetDropHandler* Handler = FEditorAssetDropRegistry::Get().FindHandler(AssetData->AssetClass);
-        if (Handler == nullptr || !*Handler)
-        {
-            LOG_WARN("Asset drop: no drop handler for class '{}' ('{}')", AssetData->AssetClass.c_str(), FString(VirtualPath.data(), VirtualPath.size()).c_str());
-            return ECS::NullEntity;
+            return nullptr;
         }
 
         // A dropped prefab pulls in its whole closure, which the inline path resolves depth-first here.
@@ -2674,17 +2767,24 @@ namespace Lumina
         if (Loaded == nullptr)
         {
             LOG_WARN("Asset drop: failed to load '{}'", FString(VirtualPath.data(), VirtualPath.size()).c_str());
+        }
+        return Loaded;
+    }
+
+    ECS::FEntity FEditorTool::HandleContentBrowserAssetDrop(FStringView VirtualPath, ECS::FEntity DropTarget, bool bAttachToTarget, const FTransform* SpawnTransform)
+    {
+        if (World == nullptr || VirtualPath.empty())
+        {
             return ECS::NullEntity;
         }
 
-        // TraceViewportPlacement always yields a point, so this is only for the no-camera case.
-        FTransform SpawnTransform = GetCameraSpawnTransform();
-        FVector3   TracedLocation;
-        if (TraceViewportPlacement(ImGui::GetMousePos(), TracedLocation))
+        CObject* Loaded = LoadDroppedAsset(VirtualPath);
+        if (Loaded == nullptr)
         {
-            SpawnTransform.SetLocation(TracedLocation);
+            return ECS::NullEntity;
         }
 
-        return (*Handler)(World.Get(), Loaded, SpawnTransform, DropTarget, bAttachToTarget);
+        const FTransform Placement = SpawnTransform != nullptr ? *SpawnTransform : GetDropSpawnTransform(Loaded);
+        return FEditorAssetDropRegistry::Get().Drop(World.Get(), Loaded, Placement, DropTarget, bAttachToTarget);
     }
 }

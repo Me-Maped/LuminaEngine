@@ -26,19 +26,17 @@ namespace Lumina
         #endif
     }
 
-    void SDebugDrawSystem::OnStartup()
+    void SDebugDrawSystem::OnStartup(const SSystemContext& Context)
     {
         #if !defined(LE_SHIPPING)
-        const FSystemContext& Context = GetContext();
 
         Context.GetRegistry().Ctx().Emplace<FDebugDrawState>();
         #endif
     }
 
-    void SDebugDrawSystem::OnUpdate()
+    void SDebugDrawSystem::OnUpdate(const SSystemContext& Context)
     {
         #if !defined(LE_SHIPPING)
-        const FSystemContext& Context = GetContext();
 
         FDebugDrawState& State = Context.GetRegistry().Ctx().Get<FDebugDrawState>();
 
@@ -67,7 +65,7 @@ namespace Lumina
         }
 
         // Before the first bake (world just loaded) fall back to the live camera so frame one still draws.
-        if (const SCameraComponent* Camera = World->GetActiveCamera())
+        if (const SCameraComponent* Camera = World->GetCamera()->GetActiveCamera())
         {
             State.Frustum    = Camera->GetViewVolume().GetFrustum();
             State.ViewOrigin = Camera->GetPosition();
@@ -76,10 +74,9 @@ namespace Lumina
         #endif
     }
 
-    void SDebugDrawSystem::OnTeardown()
+    void SDebugDrawSystem::OnTeardown(const SSystemContext& Context)
     {
         #if !defined(LE_SHIPPING)
-        const FSystemContext& Context = GetContext();
 
         Context.GetRegistry().Ctx().Erase<FDebugDrawState>();
         #endif
@@ -95,7 +92,7 @@ namespace Lumina
                 return nullptr;
             }
 
-            return ECS::GetWorldRegistry(*World).Ctx().Find<FDebugDrawState>();
+            return World->GetEntityRegistry().Ctx().Find<FDebugDrawState>();
             #else
             return nullptr;
             #endif

@@ -33,25 +33,24 @@ namespace Lumina
         Reads<SWeatherComponent>();
     }
 
-    void SWeatherSystem::OnStartup()
+    void SWeatherSystem::OnStartup(const SSystemContext& Context)
     {
         GetWorld()->GetOrEmplaceSingleton<FWeatherState>();
     }
 
-    bool SWeatherSystem::HasWork(EUpdateStage)
+    bool SWeatherSystem::HasWork(const SSystemContext& Context)
     {
         CWorld* World = GetWorld();
         const ECS::TComponentStorage<SWeatherComponent> Weather = World != nullptr
-            ? ECS::GetWorldRegistry(*World).FindStorage<SWeatherComponent>()
+            ? World->GetEntityRegistry().FindStorage<SWeatherComponent>()
             : ECS::TComponentStorage<SWeatherComponent>();
         return Weather && !Weather.IsEmpty();
     }
 
-    void SWeatherSystem::OnUpdate()
+    void SWeatherSystem::OnUpdate(const SSystemContext& Context)
     {
         LUMINA_PROFILE_SCOPE();
 
-        const FSystemContext& Context = GetContext();
         CWorld* World = Context.GetWorld();
         FWeatherState* State = World != nullptr ? World->TryGetSingleton<FWeatherState>() : nullptr;
         if (State == nullptr)

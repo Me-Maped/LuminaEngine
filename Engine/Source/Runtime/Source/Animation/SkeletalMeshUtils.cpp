@@ -223,8 +223,6 @@ namespace Lumina::SkeletalUtils
 
     void PackRenderBones(const FMatrix4* BoneTransforms, uint32 NumBones, FBoneTransform* OutBones)
     {
-        LUMINA_PROFILE_SCOPE();
-
         FBoneTransform* RESTRICT Out = OutBones;
         const FMatrix4* RESTRICT Src = BoneTransforms;
 
