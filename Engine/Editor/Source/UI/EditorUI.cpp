@@ -1194,12 +1194,12 @@ namespace Lumina
             return true;
         }
 
-        ModalManager.CreateDialogue("Read-Only Files", ImVec2(620, 340),
+        ModalManager.CreateDialogue(LOC("Read-Only Files"), ImVec2(620, 340),
             [ReadOnly = Move(ReadOnly), Then = Move(Then), bSaves = bThenSaves]() mutable -> bool
         {
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
             ImGui::PushStyleColor(ImGuiCol_Text, kProjDialogAccentGold);
-            ImGui::TextUnformatted(LE_ICON_LOCK "  Read-only on disk");
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_LOCK, "Read-only on disk"));
             ImGui::PopStyleColor();
             ImGuiX::Font::PopFont();
 
@@ -1209,8 +1209,8 @@ namespace Lumina
 
             ImGui::PushStyleColor(ImGuiCol_Text, kProjDialogTextDim);
             ImGui::TextWrapped("%s", bSaves
-                ? "These files are read-only on disk, so they cannot be saved. Make them writable to save, or cancel to leave them as they are."
-                : "These files are read-only on disk, so they cannot be changed, renamed, moved or deleted. Make them writable first, or cancel to leave them as they are.");
+                ? LOC("These files are read-only on disk, so they cannot be saved. Make them writable to save, or cancel to leave them as they are.")
+                : LOC("These files are read-only on disk, so they cannot be changed, renamed, moved or deleted. Make them writable first, or cancel to leave them as they are."));
             ImGui::PopStyleColor();
 
             ImGui::Spacing();
@@ -1230,18 +1230,18 @@ namespace Lumina
             const float BtnW = (ImGui::GetContentRegionAvail().x - Gap) * 0.5f;
 
             bool bShouldClose = false;
-            if (SchemeButton("Cancel", ImVec2(BtnW, BtnH), kButtonNeutral))
+            if (SchemeButton(LOC("Cancel"), ImVec2(BtnW, BtnH), kButtonNeutral))
             {
                 bShouldClose = true;
             }
             ImGui::SameLine(0.0f, Gap);
-            if (SchemeButton(bSaves ? LE_ICON_LOCK_OPEN_VARIANT "  Make Writable and Save" : LE_ICON_LOCK_OPEN_VARIANT "  Make Writable", ImVec2(BtnW, BtnH), kButtonDanger))
+            if (SchemeButton(bSaves ? LOC_ICON(LE_ICON_LOCK_OPEN_VARIANT, "Make Writable and Save") : LOC_ICON(LE_ICON_LOCK_OPEN_VARIANT, "Make Writable"), ImVec2(BtnW, BtnH), kButtonDanger))
             {
                 for (const FString& Path : ReadOnly)
                 {
                     if (!VFS::MakeWritable(FStringView(Path.c_str(), Path.size())))
                     {
-                        ImGuiX::Notifications::NotifyError("Could not make \"{0}\" writable.", Path.c_str());
+                        ImGuiX::Notifications::NotifyError(LOCF("Could not make \"{0}\" writable."), Path.c_str());
                     }
                 }
                 // Saving can open tools and modals of its own, which must not happen inside this popup.
@@ -3588,7 +3588,7 @@ namespace Lumina
             ImGui::PopStyleColor();
             if (Algo::AnyOf(States, [](ESaveState State) { return State == ESaveState::ReadOnly; }))
             {
-                ImGui::TextColored(EditorColors::Warning(), LE_ICON_LOCK " Read-only files cannot be saved until they are made writable.");
+                ImGui::TextColored(EditorColors::Warning(), "%s", LOC_ICON(LE_ICON_LOCK, "Read-only files cannot be saved until they are made writable."));
             }
             ImGui::Spacing();
 
@@ -3657,7 +3657,7 @@ namespace Lumina
                         ImGui::TextColored(EditorColors::Danger(), LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "Failed"));
                         break;
                     case ESaveState::ReadOnly:
-                        if (ImGui::SmallButton(LE_ICON_LOCK_OPEN_VARIANT " Make Writable"))
+                        if (ImGui::SmallButton(LOC_ICON(LE_ICON_LOCK_OPEN_VARIANT, "Make Writable")))
                         {
                             const FFixedString Path = Package->GetPackagePath();
                             if (VFS::MakeWritable(FStringView(Path.c_str(), Path.size())))
@@ -3665,7 +3665,7 @@ namespace Lumina
                                 States[Index] = ESaveState::Pending;
                             }
                         }
-                        ImGuiX::TextTooltip("{}", "Read-only on disk, so it cannot be saved. Click to make it writable.");
+                        ImGuiX::TextTooltip("{}", LOC("Read-only on disk, so it cannot be saved. Click to make it writable."));
                         break;
                     default:
                         ImGui::TextColored(EditorColors::TextMuted(), LOC("Modified"));

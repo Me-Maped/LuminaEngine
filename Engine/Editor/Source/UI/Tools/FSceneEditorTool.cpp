@@ -904,11 +904,11 @@ namespace Lumina
             return;
         }
 
-        if (ImGui::MenuItem(LE_ICON_CUBE_OUTLINE " Add Collision"))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_CUBE_OUTLINE, "Add Collision")))
         {
             AddMeshCollisionTransacted(Targets);
         }
-        ImGuiX::TextTooltip("{}", "A static body colliding with the mesh's own collision, or its triangles when it has none.");
+        ImGuiX::TextTooltip("{}", LOC("A static body colliding with the mesh's own collision, or its triangles when it has none."));
     }
 
     void FSceneEditorTool::DrawStaticMeshCollisionHint(ECS::FEntity Entity, const SStaticMeshComponent& MeshComponent)
@@ -920,31 +920,31 @@ namespace Lumina
         }
 
         ImGui::Spacing();
-        ImGui::TextColored(EditorColors::Warning(), LE_ICON_CUBE_OFF_OUTLINE " No collision");
-        ImGuiX::TextTooltip("{}", "Nothing collides with this entity in game.");
+        ImGui::TextColored(EditorColors::Warning(), "%s", LOC_ICON(LE_ICON_CUBE_OFF_OUTLINE, "No collision"));
+        ImGuiX::TextTooltip("{}", LOC("Nothing collides with this entity in game."));
         ImGui::SameLine();
 
         if (Mesh->Collision.HasCollision())
         {
-            if (ImGui::SmallButton(LE_ICON_PLUS " Add Collision"))
+            if (ImGui::SmallButton(LOC_ICON(LE_ICON_PLUS, "Add Collision")))
             {
                 AddMeshCollisionTransacted({ Entity });
             }
-            ImGuiX::TextTooltip("{}", "Use the collision authored on this mesh, as a static body. Set the Rigid Body to Dynamic for a prop that should move.");
+            ImGuiX::TextTooltip("{}", LOC("Use the collision authored on this mesh, as a static body. Set the Rigid Body to Dynamic for a prop that should move."));
             return;
         }
 
-        if (ImGui::SmallButton(LE_ICON_PENCIL " Make Collision"))
+        if (ImGui::SmallButton(LOC_ICON(LE_ICON_PENCIL, "Make Collision")))
         {
             ToolContext->OpenAssetEditor(Mesh->GetGUID());
         }
-        ImGuiX::TextTooltip("{}", "This mesh has no collision yet. Opens the mesh, where its Collision tab adds some.");
+        ImGuiX::TextTooltip("{}", LOC("This mesh has no collision yet. Opens the mesh, where its Collision tab adds some."));
         ImGui::SameLine();
-        if (ImGui::SmallButton(LE_ICON_VECTOR_TRIANGLE " Use Mesh Triangles"))
+        if (ImGui::SmallButton(LOC_ICON(LE_ICON_VECTOR_TRIANGLE, "Use Mesh Triangles")))
         {
             AddMeshCollisionTransacted({ Entity });
         }
-        ImGuiX::TextTooltip("{}", "Collide against the mesh's exact triangles. Right for static level geometry, but it can never move.");
+        ImGuiX::TextTooltip("{}", LOC("Collide against the mesh's exact triangles. Right for static level geometry, but it can never move."));
     }
 
     void FSceneEditorTool::DrawComponentHeader(FComponentTableEntry& Entry, ECS::FEntity Entity)

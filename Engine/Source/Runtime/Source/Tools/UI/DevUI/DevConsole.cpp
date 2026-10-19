@@ -8,6 +8,7 @@
 #include "Log/Log.h"
 #include "Log/LogMessage.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
+#include "Localization/Localization.h"
 
 #include <cctype>
 #include <imgui.h>
@@ -72,11 +73,13 @@ namespace Lumina
         ImGui::SetNextWindowSize(ImVec2(Viewport->WorkSize.x, Viewport->WorkSize.y * kConsoleHeightFraction), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowBgAlpha(kConsoleBackgroundAlpha);
 
-        if (ImGui::Begin(LE_ICON_CONSOLE " Console###DevConsole", nullptr, ImGuiWindowFlags_NoCollapse))
+        char ConsoleTitle[128];
+        snprintf(ConsoleTitle, sizeof(ConsoleTitle), "%s###DevConsole", LOC_ICON(LE_ICON_CONSOLE, "Console"));
+        if (ImGui::Begin(ConsoleTitle, nullptr, ImGuiWindowFlags_NoCollapse))
         {
-            ImGui::Checkbox("Keep script windows visible when closed", &bKeepScriptWindowsVisible);
+            ImGui::Checkbox(LOC_ID("Keep script windows visible when closed"), &bKeepScriptWindowsVisible);
             ImGui::SameLine();
-            ImGui::TextDisabled("` to close");
+            ImGui::TextDisabled("%s", LOC("` to close"));
             ImGui::Separator();
 
             DrawLog();
@@ -128,7 +131,7 @@ namespace Lumina
         {
             ImGui::SetKeyboardFocusHere();
         }
-        if (ImGui::InputTextWithHint("##DevConsoleInput", "Command or variable, Tab completes", InputBuffer, kInputCapacity, Flags, &FDevConsole::InputCallback, this))
+        if (ImGui::InputTextWithHint("##DevConsoleInput", LOC("Command or variable, Tab completes"), InputBuffer, kInputCapacity, Flags, &FDevConsole::InputCallback, this))
         {
             Submit();
             ImGui::SetKeyboardFocusHere(-1);
@@ -163,7 +166,7 @@ namespace Lumina
                 {
                     ImGui::Text("%s", Name.c_str());
                     ImGui::SameLine();
-                    ImGui::TextDisabled("command");
+                    ImGui::TextDisabled("%s", LOC("command"));
                     continue;
                 }
                 const TOptional<FString> Value = Registry.GetValueAsString(Name);
@@ -173,7 +176,7 @@ namespace Lumina
             }
             if ((int32)Matches.size() > kMaxSuggestions)
             {
-                ImGui::TextDisabled("%d more", (int)Matches.size() - kMaxSuggestions);
+                ImGui::TextDisabled(LOC("%d more"), (int)Matches.size() - kMaxSuggestions);
             }
             ImGui::EndTooltip();
         }

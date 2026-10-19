@@ -1,4 +1,5 @@
 #include "EditorPCH.h"
+#include "Localization/Localization.h"
 #include "MeshCollisionEditing.h"
 
 #include "imgui_internal.h"
@@ -538,16 +539,16 @@ namespace Lumina
             ImGui::Dummy(Size);
             ImGui::GetWindowDrawList()->AddRect(Min, ImVec2(Min.x + Size.x, Min.y + Size.y), EditorColors::U32(EditorColors::Border()),
                                                 ImGui::GetStyle().FrameRounding + 3.0f, 1.0f);
-            const char* Hint = "Click a shape above, or drag one here or onto the mesh";
+            const char* Hint = LOC("Click a shape above, or drag one here or onto the mesh");
             const ImVec2 HintSize = ImGui::CalcTextSize(Hint);
             ImGui::GetWindowDrawList()->AddText(ImVec2(Min.x + (Size.x - HintSize.x) * 0.5f, Min.y + (Size.y - HintSize.y) * 0.5f),
                                                 EditorColors::U32(EditorColors::TextMuted()), Hint);
         }
         else if (Collision->IsConcave())
         {
-            ImGui::TextColored(EditorColors::Success(), LE_ICON_VECTOR_TRIANGLE "  Exact Mesh");
+            ImGui::TextColored(EditorColors::Success(), "%s", LOC_ICON(LE_ICON_VECTOR_TRIANGLE, "Exact Mesh"));
             ImGui::SameLine();
-            ImGui::TextDisabled("%d triangles", Collision->NumTriangles());
+            ImGui::TextDisabled(LOC("%d triangles"), Collision->NumTriangles());
         }
         else
         {
@@ -568,7 +569,7 @@ namespace Lumina
 
                 if (ImGui::BeginPopupContextItem("##ShapeContext"))
                 {
-                    if (ImGui::MenuItem(LE_ICON_DELETE " Remove", "Del"))
+                    if (ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Remove"), "Del"))
                     {
                         PendingRemoval = i;
                     }
@@ -586,7 +587,7 @@ namespace Lumina
                 if (Primitive.Type == ECollisionPrimitiveType::ConvexHull)
                 {
                     char Points[32];
-                    snprintf(Points, sizeof(Points), "%d points", (int)Primitive.HullPoints.size());
+                    snprintf(Points, sizeof(Points), LOC("%d points"), (int)Primitive.HullPoints.size());
                     const float NameEnd = RowMin.x + 6.0f + ImGui::GetFontSize() * 1.6f + ImGui::CalcTextSize(PrimitiveTypeName(Primitive.Type)).x;
                     Draw->AddText(ImVec2(NameEnd + ImGui::GetFontSize() * 0.75f, TextY), EditorColors::U32(EditorColors::TextMuted()), Points);
                 }
@@ -599,7 +600,7 @@ namespace Lumina
                     PendingRemoval = i;
                 }
                 ImGui::PopStyleColor(2);
-                ImGuiX::TextTooltip("{}", "Remove this shape");
+                ImGuiX::TextTooltip("{}", LOC("Remove this shape"));
 
                 ImGui::PopID();
             }
@@ -622,9 +623,9 @@ namespace Lumina
         {
             ImGui::Spacing();
             const int32 NumShapes = Collision->IsConcave() ? 1 : (int32)Collision->Primitives.size();
-            ImGui::TextDisabled("%d %s, %d hull points", NumShapes, NumShapes == 1 ? "shape" : "shapes", Collision->NumHullPoints());
+            ImGui::TextDisabled(LOC("%d %s, %d hull points"), NumShapes, NumShapes == 1 ? LOC("shape") : LOC("shapes"), Collision->NumHullPoints());
             ImGui::SameLine();
-            if (ImGui::SmallButton(LE_ICON_BROOM " Clear All"))
+            if (ImGui::SmallButton(LOC_ICON(LE_ICON_BROOM, "Clear All")))
             {
                 ClearAll();
             }
@@ -651,7 +652,7 @@ namespace Lumina
         }
         else
         {
-            ImGui::TextDisabled("Select a shape in the list or the viewport.");
+            ImGui::TextDisabled("%s", LOC("Select a shape in the list or the viewport."));
         }
     }
 
@@ -1065,14 +1066,14 @@ namespace Lumina
 
     void FMeshCollisionEditing::DrawViewMenuItems()
     {
-        ImGui::MenuItem(LE_ICON_CUBE_OUTLINE " Show Collision", nullptr, &bDrawShapes);
-        ImGui::MenuItem(LE_ICON_CUBE " Solid Shapes", nullptr, &bDrawSolid);
+        ImGui::MenuItem(LOC_ICON(LE_ICON_CUBE_OUTLINE, "Show Collision"), nullptr, &bDrawShapes);
+        ImGui::MenuItem(LOC_ICON(LE_ICON_CUBE, "Solid Shapes"), nullptr, &bDrawSolid);
 
-        if (ImGui::MenuItem("Move Shape", "Space", GizmoOp == ImGuizmo::TRANSLATE))
+        if (ImGui::MenuItem(LOC("Move Shape"), "Space", GizmoOp == ImGuizmo::TRANSLATE))
         {
             GizmoOp = ImGuizmo::TRANSLATE;
         }
-        if (ImGui::MenuItem("Rotate Shape", "Space", GizmoOp == ImGuizmo::ROTATE))
+        if (ImGui::MenuItem(LOC("Rotate Shape"), "Space", GizmoOp == ImGuizmo::ROTATE))
         {
             GizmoOp = ImGuizmo::ROTATE;
         }

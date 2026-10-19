@@ -750,8 +750,8 @@ namespace Lumina
 
             if (Data->IsClassMissing())
             {
-                ImGui::TextColored(EditorColors::Danger(), LE_ICON_FILE_ALERT_OUTLINE " The type '%s' no longer exists.", Data->AssetClass.c_str());
-                ImGui::TextColored(kMenuTextDim, "This asset cannot be loaded or opened. Delete it, or restore the type or the plugin that defines it.");
+                ImGui::TextColored(EditorColors::Danger(), LOC_ICON(LE_ICON_FILE_ALERT_OUTLINE, "The type '%s' no longer exists."), Data->AssetClass.c_str());
+                ImGui::TextColored(kMenuTextDim, "%s", LOC("This asset cannot be loaded or opened. Delete it, or restore the type or the plugin that defines it."));
             }
 
             if (!Data->OwningPlugin.IsNone())
@@ -798,7 +798,7 @@ namespace Lumina
         ImGui::PopStyleColor();
         if (FileInfo.IsReadOnly())
         {
-            ImGui::TextColored(EditorColors::Warning(), LE_ICON_LOCK " Read-only on disk, so it cannot be saved, renamed, moved or deleted until it is made writable.");
+            ImGui::TextColored(EditorColors::Warning(), "%s", LOC_ICON(LE_ICON_LOCK, "Read-only on disk, so it cannot be saved, renamed, moved or deleted until it is made writable."));
         }
         ImGui::Separator();
 
@@ -3542,12 +3542,12 @@ namespace Lumina
 
         if (ContentItem->GetFileInfo().IsReadOnly())
         {
-            if (ImGui::MenuItem(LE_ICON_LOCK_OPEN_VARIANT " Make Writable"))
+            if (ImGui::MenuItem(LOC_ICON(LE_ICON_LOCK_OPEN_VARIANT, "Make Writable")))
             {
                 ToolContext->ConfirmWritable({ FString(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size()) },
                     [this] { RefreshContentBrowser(); }, false);
             }
-            ImGuiX::TextTooltip("{}", "Clear the read-only flag so it can be saved, renamed, moved or deleted.");
+            ImGuiX::TextTooltip("{}", LOC("Clear the read-only flag so it can be saved, renamed, moved or deleted."));
         }
 
         DrawMenuSection("CLIPBOARD");
@@ -3706,7 +3706,7 @@ namespace Lumina
         {
             ExportAssets(Exportable);
         }
-        ImGuiX::TextTooltip("Write each texture, sound and font back out as the file it was imported from. Other selected items are skipped.");
+        ImGuiX::TextTooltip(LOCF("Write each texture, sound and font back out as the file it was imported from. Other selected items are skipped."));
 
         ImGui::Spacing();
         ImGui::Separator();

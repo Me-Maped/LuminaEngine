@@ -563,49 +563,49 @@ namespace Lumina
         const SMeshCollision& Collision = Mesh->Collision;
 
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-        ImGui::SeparatorText("Collision");
+        ImGui::SeparatorText(LOC("Collision"));
         ImGuiX::Font::PopFont();
         ImGui::Spacing();
 
         if (!Collision.HasCollision())
         {
-            ImGui::TextWrapped("This mesh has no collision yet. Click a shape to wrap the mesh, or drag one onto the mesh to "
-                               "place it. Every entity that shows this mesh with a Mesh Collider uses it.");
+            ImGui::TextWrapped("%s", LOC("This mesh has no collision yet. Click a shape to wrap the mesh, or drag one onto the mesh to "
+                               "place it. Every entity that shows this mesh with a Mesh Collider uses it."));
         }
         else if (Collision.IsConcave())
         {
-            ImGui::TextColored(EditorColors::Warning(), LE_ICON_ALERT " Exact Mesh only collides on objects that never simulate.");
+            ImGui::TextColored(EditorColors::Warning(), "%s", LOC_ICON(LE_ICON_ALERT, "Exact Mesh only collides on objects that never simulate."));
         }
         else
         {
-            ImGui::TextWrapped("Every entity that shows this mesh with a Mesh Collider uses this collision. Save the mesh to keep it.");
+            ImGui::TextWrapped("%s", LOC("Every entity that shows this mesh with a Mesh Collider uses this collision. Save the mesh to keep it."));
         }
         ImGui::Spacing();
 
-        ImGui::SeparatorText("Add Shapes");
+        ImGui::SeparatorText(LOC("Add Shapes"));
         CollisionEditing->DrawPalette();
 
         ImGui::Spacing();
-        ImGui::SeparatorText("Shapes");
-        ImGui::Checkbox("Draw Solid", &CollisionEditing->bDrawSolid);
+        ImGui::SeparatorText(LOC("Shapes"));
+        ImGui::Checkbox(LOC_ID("Draw Solid"), &CollisionEditing->bDrawSolid);
         CollisionEditing->DrawShapeList();
 
         if (CollisionEditing->HasSelection())
         {
             ImGui::Spacing();
-            ImGui::SeparatorText("Selected Shape");
-            ImGui::TextDisabled("Drag the dots to resize, use the gizmo to move. Space switches to rotate.");
+            ImGui::SeparatorText(LOC("Selected Shape"));
+            ImGui::TextDisabled("%s", LOC("Drag the dots to resize, use the gizmo to move. Space switches to rotate."));
             CollisionEditing->DrawPrimitiveDetails();
         }
 
         ImGui::Spacing();
-        ImGui::SeparatorText("Settings");
+        ImGui::SeparatorText(LOC("Settings"));
         CollisionEditing->DrawSettings();
     }
 
     void FStaticMeshEditorTool::DrawCollisionMenu()
     {
-        if (!ImGui::BeginMenu(LE_ICON_CUBE_OUTLINE " Collision"))
+        if (!ImGui::BeginMenu(LOC_ICON(LE_ICON_CUBE_OUTLINE, "Collision")))
         {
             return;
         }
@@ -620,7 +620,7 @@ namespace Lumina
             ECollisionGenerator::SingleHull, ECollisionGenerator::PerSurfaceHulls, ECollisionGenerator::TriangleMesh,
         };
 
-        if (ImGui::BeginMenu(LE_ICON_PLUS " Add Shape"))
+        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_PLUS, "Add Shape")))
         {
             for (ECollisionGenerator Generator : Generators)
             {
@@ -634,7 +634,7 @@ namespace Lumina
         }
 
         const CStaticMesh* Mesh = Cast<CStaticMesh>(Asset.Get());
-        if (ImGui::MenuItem(LE_ICON_BROOM " Clear Collision", nullptr, false, Mesh != nullptr && Mesh->Collision.HasCollision()))
+        if (ImGui::MenuItem(LOC_ICON(LE_ICON_BROOM, "Clear Collision"), nullptr, false, Mesh != nullptr && Mesh->Collision.HasCollision()))
         {
             CollisionEditing->ClearAll();
         }
