@@ -346,6 +346,18 @@ namespace Lumina
         const bool bStartupProjectMounted = bOpenStartupProject && MountProject(StartupProject);
         BootMark("MountProject");
 
+        bool bStartupSucceeded = true;
+        #if !WITH_EDITOR
+        if (bStartupProjectFromCommandLine && !bStartupProjectMounted)
+        {
+            bStartupSucceeded = false;
+        }
+        #endif
+        if (bStartCookedRuntime && !MountCookedRuntime())
+        {
+            bStartupSucceeded = false;
+        }
+
         FCoreDelegates::OnPreEngineInit.BroadcastAndClear();
         BootMark("OnPreEngineInit");
 
@@ -502,6 +514,11 @@ namespace Lumina
         FPluginManager::Get().LoadModulesForPhase(EPluginLoadingPhase::PostEngineInit);
         RegisterPendingTypes();
 
+        if (bStartCookedRuntime && bStartupSucceeded && !StartCookedGame())
+        {
+            bStartupSucceeded = false;
+        }
+
         FCoreDelegates::OnPostEngineInit.BroadcastAndClear();
         BootMark("Phase PostEngineInit");
         if (bBootTimings)
@@ -509,7 +526,7 @@ namespace Lumina
             LOG_DISPLAY("[boot] TOTAL FEngine::Init {} ms", (PlatformTime::Seconds() - BootStart) * 1000.0);
         }
 
-        return true;
+        return bStartupSucceeded;
     }
 
     bool FEngine::Shutdown()
@@ -1035,7 +1052,7 @@ namespace Lumina
         
         CrashReporting::SetAttribute("Project", ProjectName);
         CrashReporting::ClearAttachments();
-        CrashReporting::AddAttachment(Paths::Combine(LogsDir, "Lumina.log"));
+        CrashReporting::AddAttachment(Logging::GetLogFilePath());
         
         VFS::Unmount("/Game");
         VFS::Unmount("/Config");
