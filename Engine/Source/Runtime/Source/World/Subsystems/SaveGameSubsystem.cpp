@@ -22,36 +22,6 @@ namespace Lumina
         constexpr uint32 SlotFormatVersion = 1;
         constexpr FStringView SlotExtension = ".sav";
 
-        bool IsSlotCharacter(char Character)
-        {
-            return (Character >= 'a' && Character <= 'z') || (Character >= 'A' && Character <= 'Z')
-                || (Character >= '0' && Character <= '9') || Character == ' ' || Character == '-' || Character == '_' || Character == '.';
-        }
-
-        // Anything a filename cannot hold becomes an underscore, so a slot name never leaves its directory.
-        FString SanitizeSlotName(const FString& SlotName)
-        {
-            FString Clean;
-            for (char Character : SlotName)
-            {
-                Clean += IsSlotCharacter(Character) ? Character : '_';
-            }
-            while (!Clean.empty() && (Clean.front() == '.' || Clean.front() == ' '))
-            {
-                Clean.erase(Clean.begin());
-            }
-            while (!Clean.empty() && (Clean.back() == '.' || Clean.back() == ' '))
-            {
-                Clean.pop_back();
-            }
-            return Clean;
-        }
-
-        FStringView View(const FString& String)
-        {
-            return FStringView(String.c_str(), String.size());
-        }
-
         void SendRequest(CWorld* World, const SSaveGameRequestEvent& Request)
         {
             if (World == nullptr)

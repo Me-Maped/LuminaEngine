@@ -13,6 +13,26 @@
 
 namespace Lumina
 {
+    // External linkage on purpose. Property tweens capture one of these in a lambda that
+    // FTween stores, and an anonymous-namespace type there breaks -Werror=subobject-linkage.
+    struct FResolvedProperty
+    {
+        TVector<const FProperty*> Chain;
+        ECS::FComponentTypeID     TypeID = ECS::InvalidComponentTypeID;
+
+        NODISCARD const FProperty* Leaf() const { return Chain.back(); }
+
+        NODISCARD void* Address(void* Component) const
+        {
+            uint8* Value = static_cast<uint8*>(Component);
+            for (const FProperty* Property : Chain)
+            {
+                Value = Property->GetValuePtr<uint8>(Value);
+            }
+            return Value;
+        }
+    };
+
     namespace
     {
         // A zero-length tweener still has to run its final value once, so it lands on the target.
@@ -48,25 +68,6 @@ namespace Lumina
         {
             return FQuat(Math::Radians(Degrees));
         }
-
-        // A dotted path through nested struct properties, walked again on every write since storage can move.
-        struct FResolvedProperty
-        {
-            TVector<const FProperty*> Chain;
-            ECS::FComponentTypeID     TypeID = ECS::InvalidComponentTypeID;
-
-            NODISCARD const FProperty* Leaf() const { return Chain.back(); }
-
-            NODISCARD void* Address(void* Component) const
-            {
-                uint8* Value = static_cast<uint8*>(Component);
-                for (const FProperty* Property : Chain)
-                {
-                    Value = Property->GetValuePtr<uint8>(Value);
-                }
-                return Value;
-            }
-        };
 
         bool ResolvePropertyPath(const CStruct* Component, FStringView Path, FResolvedProperty& Out)
         {

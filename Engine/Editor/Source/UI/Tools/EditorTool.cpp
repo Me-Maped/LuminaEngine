@@ -2668,14 +2668,14 @@ namespace Lumina
                 TerrainOrigin = TerrainTransform->GetLocation();
             }
 
-            FVector3 Hit;
-            if (FTerrainSculptSystem::Raycast(Terrain, TerrainOrigin, RayOrigin, RayDir, Hit))
+            FVector3 TerrainHit;
+            if (FTerrainSculptSystem::Raycast(Terrain, TerrainOrigin, RayOrigin, RayDir, TerrainHit))
             {
-                const float Distance = Math::Distance(RayOrigin, Hit);
+                const float Distance = Math::Distance(RayOrigin, TerrainHit);
                 if (Distance < BestDistance)
                 {
                     BestDistance = Distance;
-                    OutLocation  = Hit;
+                    OutLocation  = TerrainHit;
                     bHit         = true;
                 }
             }

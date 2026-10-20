@@ -390,8 +390,8 @@ namespace Lumina
         {
             const float U = ((float)(Slot->OriginX + LocalX) + 0.5f) / (float)Slot->ImageWidth;
             const float V = ((float)(Slot->OriginY + LocalY) + 0.5f) / (float)Slot->ImageHeight;
-            const FVector4 World = Slot->InverseViewProjection * FVector4(U * 2.0f - 1.0f, V * 2.0f - 1.0f, Depth, 1.0f);
-            return FVector3(World) / World.w;
+            const FVector4 Clip = Slot->InverseViewProjection * FVector4(U * 2.0f - 1.0f, V * 2.0f - 1.0f, Depth, 1.0f);
+            return FVector3(Clip) / Clip.w;
         };
 
         // Reverse Z clears to zero, so sky has no depth, and foliage and the ignored entities are read through as if absent.
