@@ -1,4 +1,4 @@
-#include "AssetRegistryEditorTool.h"
+﻿#include "AssetRegistryEditorTool.h"
 #include "Core/CoreEditorDelegates.h"
 
 
@@ -13,6 +13,7 @@
 #include "Core/Object/ObjectCore.h"
 #include "Core/Object/Package/Package.h"
 #include "Core/Serialization/Archiver.h"
+#include "Localization/Localization.h"
 #include "Platform/Time/PlatformTime.h"
 #include "TaskSystem/ParallelSort.h"
 #include "UI/Tools/EditorToolContext.h"

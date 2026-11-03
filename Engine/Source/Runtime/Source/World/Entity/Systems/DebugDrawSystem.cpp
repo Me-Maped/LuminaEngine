@@ -9,7 +9,7 @@
 namespace Lumina
 {
     static TConsoleVar<bool> CVarDebugDrawEnabled("DebugDraw.Enabled", true,
-        "Master switch for immediate-mode debug lines (physics, grid, navigation).");
+        "Master switch for immediate-mode debug lines (physics, navigation, skeletons).");
 
     static TConsoleVar<bool> CVarDebugDrawCullSources("DebugDraw.CullSources", true,
         "Frustum/distance cull debug draw at source granularity. Off draws every source, for debugging the cull itself.");
@@ -20,8 +20,8 @@ namespace Lumina
     void SDebugDrawSystem::Configure()
     {
         #if !defined(LE_SHIPPING)
-        RequireUpdate(EUpdateStage::FrameStart, EUpdatePriority::Highest);
-        RequireUpdate(EUpdateStage::Paused, EUpdatePriority::Highest);
+        RequireUpdate(EUpdateStage::FrameStart);
+        RequireUpdate(EUpdateStage::Paused);
         Reads<SCameraComponent>();
         #endif
     }

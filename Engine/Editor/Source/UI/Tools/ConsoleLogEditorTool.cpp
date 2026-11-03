@@ -1,9 +1,10 @@
 ﻿#include "ConsoleLogEditorTool.h"
 #include "Config/Config.h"
 #include "Core/Math/Math.h"
-#include "Settings/EditorSettings.h"
 #include "Localization/Localization.h"
+#include "Settings/EditorSettings.h"
 #include "UI/EditorUI.h"
+#include "Tools/UI/ImGui/EditorColors.h"
 
 #include <utility>
 
@@ -123,7 +124,7 @@ namespace Lumina
 
     void FConsoleLogEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)
     {
-        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_FILTER, "Filter")))
+        if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_FILTER, "Filter")))
         {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 3));
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 4));
@@ -166,7 +167,7 @@ namespace Lumina
             ImGui::EndMenu();
         }
         
-        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_COG, "Settings")))
+        if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_COG, "Settings")))
         {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 3));
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 4));
@@ -224,9 +225,7 @@ namespace Lumina
     {
         const float InputHeight = ImGui::GetFrameHeightWithSpacing() * 1.2f;
         
-        ImGui::SetNextItemWidth(-1);
-        
-        Filter.TextFilter.DrawWithHint("##LogFilter", LOC("Search..."));
+        ImGuiX::SearchBar("##LogFilter", Filter.TextFilter, LOC_ICON(LE_ICON_MAGNIFY, "Filter messages..."));
 
         ImGui::Spacing();
 
@@ -289,7 +288,7 @@ namespace Lumina
 
             if (Settings.bShowTimestamps)
             {
-                ImGui::TextColored(ImVec4(0.45f, 0.45f, 0.45f, 1.0f), LOC("[%s]"), Message.Time.c_str());
+                ImGui::TextColored(EditorColors::TextMuted(), LOC("[%s]"), Message.Time.c_str());
                 ImGui::SameLine(0, 6);
             }
 
@@ -301,7 +300,7 @@ namespace Lumina
 
             if (Settings.bShowLogger)
             {
-                ImGui::TextColored(ImVec4(0.55f, 0.70f, 0.90f, 1.0f), LOC("%s:"), Message.LoggerName.data());
+                ImGui::TextColored(EditorColors::TextDim(), LOC("%s:"), Message.LoggerName.data());
                 ImGui::SameLine(0, 6);
             }
 
@@ -867,7 +866,10 @@ namespace Lumina
             }
 
             ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), LE_ICON_ARROW_UP_DOWN " %s  " LE_ICON_KEYBOARD_TAB " %s  " LE_ICON_KEYBOARD_ESC " %s", LOC("Navigate"), LOC("Accept"), LOC("Cancel"));
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "%s  %s  %s",
+                LOC_ICON(LE_ICON_ARROW_UP_DOWN, "Navigate"),
+                LOC_ICON(LE_ICON_KEYBOARD_TAB, "Accept"),
+                LOC_ICON(LE_ICON_KEYBOARD_ESC, "Cancel"));
         }
         AutoCompleteOverlayHeight = ImGui::GetWindowHeight();
         ImGui::EndChild();

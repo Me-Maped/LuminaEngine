@@ -65,6 +65,12 @@ SKIP_FILES = {
         "generated RML source shown verbatim",
     "Engine/Source/Runtime/Source/Tools/UI/ImGui/ImGuiMemoryEditor.h":
         "vendored memory editor (MIT, ocornut/imgui_club)",
+    "Engine/Editor/Source/UI/Tools/NodeGraph/Material/Nodes/MaterialNode_Formula.h":
+        "name, category and tooltip come from the FMaterialFormula view; the literal in "
+        "GetNodeTooltip is only the fallback for a node with no formula",
+    "Engine/Editor/Source/UI/Tools/NodeGraph/Particle/Nodes/ParticleGraphNodes.cpp":
+        "the formula node's tooltip comes from the FMaterialFormula view; the literal in "
+        "GetNodeTooltip is only the fallback for a node with no formula",
 }
 
 # Individual literals that are drawn but deliberately left alone. Keyed by the literal itself;

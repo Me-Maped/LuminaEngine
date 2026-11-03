@@ -1469,9 +1469,14 @@ namespace Lumina
             float    CloudShadowExtent;
 
             float    CloudShadowCenter[2];
-            float    _Pad0[2];
+            uint32   ShadowOutUAV;
+            uint32   ShadowHistoryIndex;
 
             RHI::TGPUSpan<FGPUFogVolume> FogVolumes;   // offset 64, 8-aligned
+
+            uint32   FrameIndex;
+            uint32   bShadowHistoryValid;
+            uint32   _Pad1[2];
         };
         static_assert(sizeof(FFroxelInjectPushConstants) <= 128, "Froxel inject PC must fit 128B");
         static_assert(offsetof(FFroxelInjectPushConstants, FogVolumes) % 8 == 0, "PC pointer must be 8-aligned");
@@ -1490,7 +1495,7 @@ namespace Lumina
             float  LayerBottom;
 
             float  LayerTop;
-            float  _MediumPad0;
+            uint32 WeatherIndex;
             float  WindOffset[2];
 
             float  DetailWindOffset[2];
@@ -1681,6 +1686,7 @@ namespace Lumina
 
         FCloudShadowPushConstants PC = {};
         PC.NoiseIndex          = (uint32)Noise.GetResourceID();
+        PC.WeatherIndex        = (uint32)GetNamedImage(ENamedImage::CloudWeather).GetResourceID();
         PC.ShapeScale          = Math::Max(C.ShapeScale, 100.0f);
         PC.DetailScale         = Math::Max(C.DetailScale, 10.0f);
         PC.DetailStrength      = Math::Clamp(C.DetailStrength, 0.0f, 1.0f);
@@ -1744,6 +1750,14 @@ namespace Lumina
         RHI::CmdSetPipeline(CL, GetOrCreateComputePipeline(CS));
 
         const float FogRange = Math::Clamp(Frame.Volumetrics.FogParams.VolumetricParams.z, 1.0f, SceneGlobalData.FarPlane);
+        const float FogNear  = Math::Max(SceneGlobalData.NearPlane, 0.05f);
+
+        std::swap(CurrentView->Images[(int)ENamedImage::FroxelShadow], CurrentView->Images[(int)ENamedImage::FroxelShadowHistory]);
+        const FSceneImage& Shadow        = GetNamedImage(ENamedImage::FroxelShadow);
+        const FSceneImage& ShadowHistory = GetNamedImage(ENamedImage::FroxelShadowHistory);
+        const bool bShadowHistory = CurrentView->bIsPrimary && CurrentView->bFroxelShadowHistoryValid && CameraCutFramesLeft == 0u
+            && CurrentView->FroxelHistoryNear == FogNear && CurrentView->FroxelHistoryRange == FogRange
+            && Shadow.IsValid() && ShadowHistory.IsValid();
         const uint32 NumVolumes = Math::Min((uint32)Frame.Volumetrics.FogVolumes.size(), GFogMaxVolumes);
 
         FFroxelInjectPushConstants PC = {};
@@ -1751,9 +1765,13 @@ namespace Lumina
         PC.GridSize[0]          = FroxelGridSize.x;
         PC.GridSize[1]          = FroxelGridSize.y;
         PC.GridSize[2]          = FroxelGridSize.z;
-        PC.NearPlane            = Math::Max(SceneGlobalData.NearPlane, 0.05f);
+        PC.NearPlane            = FogNear;
         PC.FogRange             = FogRange;
         PC.bSunVolumetric       = bSunVolumetric ? 1u : 0u;
+        PC.ShadowOutUAV         = (uint32)Shadow.GetMipUAVIndex(0);
+        PC.ShadowHistoryIndex   = (uint32)ShadowHistory.GetResourceID();
+        PC.FrameIndex           = CurrentView->FroxelFrame++;
+        PC.bShadowHistoryValid  = bShadowHistory ? 1u : 0u;
         PC.Time                 = SceneGlobalData.Time;
 
         PC.CloudShadowIndex     = SceneGlobalData.FogCloudShadowIndex;
@@ -1772,6 +1790,10 @@ namespace Lumina
                          RenderUtils::GetGroupCount(FroxelGridSize.x, 4),
                          RenderUtils::GetGroupCount(FroxelGridSize.y, 4),
                          RenderUtils::GetGroupCount(FroxelGridSize.z, 4));
+
+        CurrentView->bFroxelShadowHistoryValid = CurrentView->bIsPrimary && Shadow.IsValid();
+        CurrentView->FroxelHistoryNear         = FogNear;
+        CurrentView->FroxelHistoryRange        = FogRange;
 
         // Integrate reads the scatter volume next.
         RHI::CmdBarrier(CL,
@@ -2535,12 +2557,40 @@ namespace Lumina
             FVector2 DetailWindOffset;
 
             uint32   CloudDepthUAV;
-            uint32   _Pad0;
+            uint32   Stride;
+            uint32   OffsetX;
+            uint32   OffsetY;
+
+            uint32   FrameIndex;
+            uint32   WeatherIndex;
             uint32   _Pad1;
             uint32   _Pad2;
         };
-        static_assert(sizeof(FCloudPushConstants) == 144,
+        static_assert(sizeof(FCloudPushConstants) == 160,
             "FCloudPushConstants must match VolumetricClouds.slang::FPushConstants.");
+
+        struct FCloudResolvePushConstants
+        {
+            uint32 ScatterUAV;
+            uint32 CloudDepthUAV;
+            uint32 HistoryIndex;
+            uint32 HistoryDepthIndex;
+
+            uint32 DepthIndex;
+            uint32 ScreenW;
+            uint32 ScreenH;
+            uint32 OffsetX;
+
+            uint32 OffsetY;
+            float  LayerBottom;
+            float  LayerTop;
+            float  MaxDistance;
+        };
+        static_assert(sizeof(FCloudResolvePushConstants) == 48,
+            "FCloudResolvePushConstants must match VolumetricCloudsResolve.slang::FPushConstants.");
+
+        // Visits every texel of a 2x2 block once in four frames, alternating diagonals so a still frame converges evenly.
+        constexpr uint32 kCloudMarchOffsets[4][2] = { { 0u, 0u }, { 1u, 1u }, { 1u, 0u }, { 0u, 1u } };
 
         constexpr uint32 CloudTileSize      = 8;
         constexpr uint32 CloudNoiseTileSize = 4;
@@ -2574,6 +2624,34 @@ namespace Lumina
             RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
             RHI::EStageFlags::Compute,
             RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
+
+        static const FShaderH WeatherCS = FShaderLibrary::Get("CloudWeatherBake.slang");
+        const FSceneImage& Weather = GetNamedImage(ENamedImage::CloudWeather);
+        if (!WeatherCS || !Weather.IsValid())
+        {
+            return false;
+        }
+
+        struct FCloudWeatherPushConstants
+        {
+            uint32 NoiseIndex;
+            uint32 WeatherUAV;
+            uint32 Size;
+            uint32 _Pad0;
+        };
+        FCloudWeatherPushConstants WeatherPC = {};
+        WeatherPC.NoiseIndex = (uint32)Noise.GetResourceID();
+        WeatherPC.WeatherUAV = (uint32)Weather.GetMipUAVIndex(0);
+        WeatherPC.Size       = Weather.GetSizeX();
+
+        RHI::CmdSetPipeline(CL, GetOrCreateComputePipeline(WeatherCS));
+        const uint32 WeatherGroups = RenderUtils::GetGroupCount(WeatherPC.Size, 8u);
+        RHI::CmdDispatch(CL, MakeArgs(WeatherPC), WeatherGroups, WeatherGroups, 1);
+
+        RHI::CmdBarrier(CL,
+            RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
+            RHI::EStageFlags::Compute,
+            RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
         CurrentView->bCloudNoiseBaked = true;
         CurrentView->CloudNoiseQueue  = Queue;
         return true;
@@ -2588,6 +2666,11 @@ namespace Lumina
 
         if (!Frame.Volumetrics.bClouds)
         {
+            // Off for a while means whatever the history holds is stale by the time clouds return.
+            if (CurrentView != nullptr)
+            {
+                CurrentView->bCloudHistoryValid = false;
+            }
             return false;
         }
 
@@ -2597,11 +2680,27 @@ namespace Lumina
             return false;
         }
 
-        const FSceneImage& Noise   = GetNamedImage(ENamedImage::CloudNoise);
-        const FSceneImage& Scatter    = GetNamedImage(ENamedImage::CloudScatter);
-        const FSceneImage& CloudDepth = GetNamedImage(ENamedImage::CloudDepth);
-        const FSceneImage& Depth      = GetNamedImage(ENamedImage::DepthAttachment);
-        if (!Noise.IsValid() || !Scatter.IsValid() || !CloudDepth.IsValid())
+        static const FShaderH ResolveCS = FShaderLibrary::Get("VolumetricCloudsResolve.slang");
+        if (!ResolveCS || CurrentView == nullptr)
+        {
+            return false;
+        }
+
+        // Last frame's targets become the history, so the march writes into the pair the composite read two frames ago.
+        std::swap(CurrentView->Images[(int)ENamedImage::CloudScatter], CurrentView->Images[(int)ENamedImage::CloudScatterHistory]);
+        std::swap(CurrentView->Images[(int)ENamedImage::CloudDepth], CurrentView->Images[(int)ENamedImage::CloudDepthHistory]);
+
+        // Cleared until this frame's clouds are written, so a bail below leaves no half-swapped history to reproject.
+        const bool bHistoryValid = CurrentView->bCloudHistoryValid;
+        CurrentView->bCloudHistoryValid = false;
+
+        const FSceneImage& Noise        = GetNamedImage(ENamedImage::CloudNoise);
+        const FSceneImage& Scatter      = GetNamedImage(ENamedImage::CloudScatter);
+        const FSceneImage& CloudDepth   = GetNamedImage(ENamedImage::CloudDepth);
+        const FSceneImage& History      = GetNamedImage(ENamedImage::CloudScatterHistory);
+        const FSceneImage& HistoryDepth = GetNamedImage(ENamedImage::CloudDepthHistory);
+        const FSceneImage& Depth        = GetNamedImage(ENamedImage::DepthAttachment);
+        if (!Noise.IsValid() || !Scatter.IsValid() || !CloudDepth.IsValid() || !History.IsValid() || !HistoryDepth.IsValid())
         {
             return false;
         }
@@ -2646,6 +2745,7 @@ namespace Lumina
         PC.ScatterUAV        = (uint32)ScatterUAV;
         PC.DepthIndex        = (uint32)Depth.GetResourceID();
         PC.NoiseIndex        = (uint32)Noise.GetResourceID();
+        PC.WeatherIndex      = (uint32)GetNamedImage(ENamedImage::CloudWeather).GetResourceID();
         PC.ScreenW           = Scatter.GetSizeX();
         PC.ScreenH           = Scatter.GetSizeY();
         PC.MarchSteps        = (uint32)Math::Clamp(C.MarchSteps, 16, 256);
@@ -2671,9 +2771,42 @@ namespace Lumina
                                         PC.WindOffset.y * C.DetailWindFactor);
         PC.CloudDepthUAV     = (uint32)CloudDepthUAV;
 
-        DispatchCompute(CL, CloudCS, PC, 
-                         RenderUtils::GetGroupCount(PC.ScreenW, CloudTileSize),
-                         RenderUtils::GetGroupCount(PC.ScreenH, CloudTileSize), 1);
+        // Only the primary view carries a previous view projection, and a cut leaves nothing worth reprojecting.
+        const bool bTemporal = CurrentView->bIsPrimary && bHistoryValid && CameraCutFramesLeft == 0u;
+        PC.FrameIndex = CurrentView->CloudFrame++;
+        const uint32* Offset = kCloudMarchOffsets[PC.FrameIndex & 3u];
+        PC.Stride  = bTemporal ? 2u : 1u;
+        PC.OffsetX = bTemporal ? Offset[0] : 0u;
+        PC.OffsetY = bTemporal ? Offset[1] : 0u;
+
+        DispatchCompute(CL, CloudCS, PC,
+                         RenderUtils::GetGroupCount((PC.ScreenW + PC.Stride - 1u) / PC.Stride, CloudTileSize),
+                         RenderUtils::GetGroupCount((PC.ScreenH + PC.Stride - 1u) / PC.Stride, CloudTileSize), 1);
+
+        if (bTemporal)
+        {
+            RHI::CmdBarrier(CL,
+                RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
+                RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
+
+            FCloudResolvePushConstants Resolve = {};
+            Resolve.ScatterUAV        = (uint32)ScatterUAV;
+            Resolve.CloudDepthUAV     = (uint32)CloudDepthUAV;
+            Resolve.HistoryIndex      = (uint32)History.GetResourceID();
+            Resolve.HistoryDepthIndex = (uint32)HistoryDepth.GetResourceID();
+            Resolve.DepthIndex        = (uint32)Depth.GetResourceID();
+            Resolve.ScreenW           = PC.ScreenW;
+            Resolve.ScreenH           = PC.ScreenH;
+            Resolve.OffsetX           = PC.OffsetX;
+            Resolve.OffsetY           = PC.OffsetY;
+            Resolve.LayerBottom       = PC.LayerBottom;
+            Resolve.LayerTop          = PC.LayerTop;
+            Resolve.MaxDistance       = PC.MaxDistance;
+            DispatchCompute(CL, ResolveCS, Resolve,
+                             RenderUtils::GetGroupCount(PC.ScreenW, CloudTileSize),
+                             RenderUtils::GetGroupCount(PC.ScreenH, CloudTileSize), 1);
+        }
+        CurrentView->bCloudHistoryValid = true;
 
         // The scatter volume feeds AtmosphereCompositePass and the cloud shadow map, both dispatches.
         RHI::CmdBarrier(CL,
@@ -3068,7 +3201,15 @@ namespace Lumina
             RHI::TGPUSpan<FInstanceCullEntry> RetainedCullEntries;
             RHI::TGPUSpan<FTransform3x4>      RetainedTransforms;
             RHI::TGPUSpan<FInstanceStatic>    RetainedStatic;
+            RHI::TGPUSpan<uint32>             LargeObjects;
             FSunDFShadowGrid                  Grid;
+        };
+
+        // Mirror of FPushConstants in SunDFShadowBinLarge.slang.
+        struct FSunDFShadowBinLargeArgs
+        {
+            RHI::TGPUSpan<uint32> LargeObjects;
+            FSunDFShadowGrid      Grid;
         };
 
         // Mirror of FTerrainShadowRecord in SunFarShadow.slang.
@@ -3224,12 +3365,13 @@ namespace Lumina
         }
 
         static const FShaderH CullCS = FShaderLibrary::Get("SunDFShadowCull.slang");
+        static const FShaderH BinLargeCS = FShaderLibrary::Get("SunDFShadowBinLarge.slang");
         const uint32 RetainedSlots = Frame.Geometry.RetainedUpload.SlotCount;
         const bool bRetainedFits = RetainedSlots > 0
                                 && RetainedCullEntryBuffer.CapacityOf<FInstanceCullEntry>() >= RetainedSlots
                                 && RetainedTransformBuffer.CapacityOf<FTransform3x4>()     >= RetainedSlots
                                 && RetainedStaticBuffer.CapacityOf<FInstanceStatic>()      >= RetainedSlots;
-        if (!CullCS || !bRetainedFits)
+        if (!CullCS || !BinLargeCS || !bRetainedFits)
         {
             return false;
         }
@@ -3239,7 +3381,9 @@ namespace Lumina
         ReserveBuffer(CL, SunDFCellCountBuffer, (uint64)NumCells * sizeof(uint32), false, false);
         ReserveBuffer(CL, SunDFCellItemBuffer,  (uint64)NumCells * kSunDFCellCapacity * sizeof(uint32), false, false);
         ReserveBuffer(CL, SunDFCounterBuffer,   4u * sizeof(uint32), false, false);
+        ReserveBuffer(CL, SunDFLargeObjectBuffer, (uint64)kSunDFMaxLargeCasters * sizeof(uint32), false, false);
         if (SunDFObjectBuffer.CapacityOf<FSunDFObject>() < kSunDFMaxObjects ||
+            SunDFLargeObjectBuffer.CapacityOf<uint32>() < kSunDFMaxLargeCasters ||
             SunDFCellCountBuffer.CapacityOf<uint32>() < NumCells ||
             SunDFCellItemBuffer.CapacityOf<uint32>() < NumCells * kSunDFCellCapacity ||
             SunDFCounterBuffer.CapacityOf<uint32>() < 4u)
@@ -3257,6 +3401,7 @@ namespace Lumina
         Args.RetainedCullEntries = { RetainedCullEntryBuffer, RetainedSlots };
         Args.RetainedTransforms  = { RetainedTransformBuffer, RetainedSlots };
         Args.RetainedStatic      = { RetainedStaticBuffer, RetainedSlots };
+        Args.LargeObjects        = { SunDFLargeObjectBuffer, kSunDFMaxLargeCasters };
         Args.Grid.Objects        = { SunDFObjectBuffer, kSunDFMaxObjects };
         Args.Grid.CellCounts     = { SunDFCellCountBuffer, NumCells };
         Args.Grid.CellItems      = { SunDFCellItemBuffer, NumCells * kSunDFCellCapacity };
@@ -3287,6 +3432,16 @@ namespace Lumina
         // SunDFShadowCull.slang undoes the fold with GroupID.y * MAX_DISPATCH_AXIS.
         const FUIntVector2 Groups = RenderUtils::FoldGroupCount(NumGroups);
         RHI::CmdDispatch(CL, MakeArgs(Args), Groups.x, Groups.y, 1u);
+
+        // A ground slab or a hill can cover the whole grid, so its cells are shared out across a group instead of one lane.
+        RHI::CmdBarrier(CL,
+            RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
+            RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
+        FSunDFShadowBinLargeArgs LargeArgs = {};
+        LargeArgs.LargeObjects = Args.LargeObjects;
+        LargeArgs.Grid         = Args.Grid;
+        RHI::CmdSetPipeline(CL, GetOrCreateComputePipeline(BinLargeCS));
+        RHI::CmdDispatch(CL, MakeArgs(LargeArgs), kSunDFMaxLargeCasters, 1u, 1u);
 
         RHI::CmdBarrier(CL,
             RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,

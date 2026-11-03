@@ -116,7 +116,7 @@ ForbidDependency(
 `Tidy` 会对编译数据库中每个第一方条目并行运行 clang-tidy，使用工作区 `.clang-tidy` 中的检查项，
 这正是 Rider 和 clangd 在你输入时读取的同一个文件。某个头文件的问题会从每个包含它的源文件返回，
 因此每个问题只报告一次，采用 IDE 错误列表能够识别的 MSVC `file(line,col): warning` 形式。
-第三方代码（`ThirdParty`、`External`、`imgui-node-editor`）和生成代码会被跳过。一个路径片段可以缩小
+第三方代码（`ThirdParty` 和 `External`）以及生成代码会被跳过。一个路径片段可以缩小
 运行范围，`-Checks=` 覆盖检查列表，`-Jobs=` 覆盖并行度，`-WarningsAsErrors` 则让任何问题都使运行失败。
 clang-tidy 按以下顺序查找：`-ClangTidy=<path>`、`LUMINA_CLANG_TIDY`、`PATH`，或 Visual Studio
 可选的 Clang 工具。

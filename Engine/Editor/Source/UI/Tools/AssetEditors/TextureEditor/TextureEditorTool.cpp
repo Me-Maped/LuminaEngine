@@ -1,9 +1,11 @@
+﻿#include "Localization/Localization.h"
 #include "TextureEditorTool.h"
 
 #include "Assets/AssetTypes/Textures/Texture.h"
 #include "Platform/Process/PlatformProcess.h"
 #include "Tools/Export/AssetExport.h"
 #include "Assets/AssetTypes/Textures/TextureArray.h"
+#include "Assets/AssetTypes/Textures/TextureRenderTarget.h"
 #include "Assets/Factories/TextureFactory/TextureFactory.h"
 #include "Assets/Factories/TextureFactory/TextureArrayFactory.h"
 #include "Tools/UI/ImGui/ImGuiDragDrop.h"
@@ -43,6 +45,12 @@ namespace Lumina
 
     void FTextureEditorTool::OnPropertyEditFinished(const FPropertyChangedEvent& Event)
     {
+        if (CTextureRenderTarget* RenderTarget = Cast<CTextureRenderTarget>(Asset.Get()))
+        {
+            RenderTarget->BuildResource();
+            return;
+        }
+
         // Never Stream, Filter and Address Mode carry no RequiresRecook, since no stored pixel depends on them.
         if (Event.Property == nullptr || !Event.Property->HasEditorFlag(EPropertyEditorFlags::RequiresRecook))
         {
@@ -72,6 +80,12 @@ namespace Lumina
     {
         FAssetEditorTool::OnPostUndoRedo();
 
+        if (CTextureRenderTarget* RenderTarget = Cast<CTextureRenderTarget>(Asset.Get()))
+        {
+            RenderTarget->BuildResource();
+            return;
+        }
+
         CTexture* Texture = Cast<CTexture>(Asset.Get());
         if (Texture != nullptr && !RecookForPropertyChange(Texture))
         {
@@ -81,6 +95,11 @@ namespace Lumina
 
     bool FTextureEditorTool::RecookForPropertyChange(CTexture* Texture)
     {
+        if (CTextureArray* Array = Cast<CTextureArray>(Texture))
+        {
+            return CTextureArrayFactory::Rebuild(Array);
+        }
+
         // Pristine bytes, on disk or stored on the asset, make an edit replace the last cook rather than layer on it.
         if (!Texture->SourcePath.empty() || Texture->HasSourceFile())
         {
@@ -392,8 +411,10 @@ namespace Lumina
                 };
             
                 ImVec4 dimensionColor(0.5f, 0.9f, 0.5f, 1.0f);
-                PropertyRow(LOC("Type"), FString(LOC("2D Texture")), &dimensionColor);
-                PropertyRow(LOC("Resolution"), Format("{}", ImageDesc.Extent.x) + " x " + Format("{}", ImageDesc.Extent.y));
+                const char* TypeLabel = Texture->IsA<CTextureRenderTarget>() ? "Render Target"
+                                      : (Texture->IsA<CTextureArray>() ? "2D Texture Array" : LOC("2D Texture"));
+                PropertyRow(LOC("Type"), TypeLabel, &dimensionColor);
+                PropertyRow(LOC_ID("Resolution"), Format("{}", ImageDesc.Extent.x) + " x " + Format("{}", ImageDesc.Extent.y));
 
                 // Format
                 const FFormatInfo& FormatInfo = RHI::Format::Info(ImageDesc.Format);
@@ -693,8 +714,7 @@ namespace Lumina
                     }
                     ImGui::EndDragDropTarget();
                 }
-                ImGuiX::TextTooltip(LOCF("Appended as the next slice. Every layer must match layer 0's size and format, "
-                                    "or enable Resize Layers To First."));
+                ImGuiX::TextTooltip(LOCF("Appended as the next slice. Every layer must match layer 0's size and format, " "or enable Resize Layers To First."));
 
                 ImGui::Spacing();
                 const bool bCanBuild = !Array->SourceTextures.empty();
@@ -731,7 +751,7 @@ namespace Lumina
             ImGui::Spacing();
 
             // The settings above are recorded, not applied, so the chain is whatever the last cook produced.
-            if (Texture->TextureResource != nullptr)
+            if (Texture->TextureResource != nullptr && !Texture->IsA<CTextureRenderTarget>() && !Texture->IsA<CTextureArray>())
             {
                 const FTextureResource::FDescription& CookedDesc = Texture->TextureResource->ImageDescription;
                 const FTextureGroupPolicy Policy = Texture->GetResolvedPolicy();
@@ -763,16 +783,11 @@ namespace Lumina
                 // A missing source is a quality note, since the cooked mips still decode back to an image.
                 if (Texture->SourcePath.empty())
                 {
-                    ImGuiX::TextTooltip(LOCF("Re-encodes the pixels already in this asset with the settings above. "
-                                        "It has no source file (mesh-embedded, or the file moved), so a "
-                                        "block-compressed texture takes a second compression generation and "
-                                        "tonal adjustments stack on the previous pass instead of replacing it."));
+                    ImGuiX::TextTooltip(LOCF("Re-encodes the pixels already in this asset with the settings above. " "It has no source file (mesh-embedded, or the file moved), so a " "block-compressed texture takes a second compression generation and " "tonal adjustments stack on the previous pass instead of replacing it."));
                 }
                 else
                 {
-                    ImGuiX::TextTooltip(LOCF("Re-reads the source file and re-encodes it with the settings above: color space, "
-                                        "compression quality, mip policy, size cap and every source adjustment. "
-                                        "Source: %s"), Texture->SourcePath.c_str());
+                    ImGuiX::TextTooltip(LOCF("Re-reads the source file and re-encodes it with the settings above: color space, " "compression quality, mip policy, size cap and every source adjustment. " "Source: %s"), Texture->SourcePath.c_str());
                 }
 
                 ImGui::Spacing();
@@ -789,15 +804,12 @@ namespace Lumina
                 {
                     ImGui::TextDisabled(LOC("off (whole chain resident)"));
                 }
-                ImGuiX::TextTooltip(LOCF("Never Stream, a group that disables it, or a single-mip texture all turn "
-                                    "streaming off. The split is rebuilt when the package is saved."));
+                ImGuiX::TextTooltip(LOCF("Never Stream, a group that disables it, or a single-mip texture all turn " "streaming off. The split is rebuilt when the package is saved."));
 
                 ImGui::TextUnformatted(LOC("Sampler"));
                 ImGui::SameLine(150);
                 ImGui::TextUnformatted(StockSamplerLabel(Texture->GetStockSampler()));
-                ImGuiX::TextTooltip(LOCF("What a material samples this texture through when its TextureSample node is "
-                                    "left at FromTexture. Materials bake it at compile time, so they need "
-                                    "recompiling after a change here."));
+                ImGuiX::TextTooltip(LOCF("What a material samples this texture through when its TextureSample node is " "left at FromTexture. Materials bake it at compile time, so they need " "recompiling after a change here."));
             }
 
             ImGui::Spacing();

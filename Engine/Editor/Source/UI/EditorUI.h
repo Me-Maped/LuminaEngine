@@ -17,6 +17,7 @@
 namespace Lumina
 {
     class FGamePreviewTool;
+    class FCodeWorkspaceTool;
     class FEditorToolModal;
     class FContentBrowserEditorTool;
     class FPrimitiveDrawManager;
@@ -79,6 +80,10 @@ namespace Lumina
 
         void OpenAssetEditor(const FGuid& AssetGUID) override;
         void OpenFileEditor(FStringView VirtualPath) override;
+        FEditorTool* FindFileEditor(FStringView VirtualPath) const override;
+
+        // The code workspace, opened and recorded in the session when it is not already up.
+        FCodeWorkspaceTool* OpenCodeWorkspace();
         void BrowseToAsset(FStringView VirtualPath) override;
         bool BrowseToFolder(FStringView Folder, FStringView Search);
         const FAssetData* GetContentBrowserSelectedAsset() const override;
@@ -145,8 +150,14 @@ namespace Lumina
 
         void VerifyDirtyPackages();
 
-        // Lists the packages with a checkbox each, and saves, discards or cancels the pending exit.
-        void OpenUnsavedChangesDialog(TVector<CPackage*> Packages);
+        // Lists the packages and unsaved file editors with a checkbox each, and saves, discards or cancels the pending exit.
+        void OpenUnsavedChangesDialog(TVector<CPackage*> Packages, TVector<FEditorTool*> FileTools);
+
+        FEditorTool* FindAssetToolForPackage(const CPackage* Package) const;
+
+        bool SaveToolBeforeClose(FEditorTool* Tool);
+
+        void PromptCloseTools(TVector<FEditorTool*> Tools);
 
         // Ctrl+P quick-open: a filterable list of every registered asset, Enter to open.
         void OpenAssetSearchModal();
@@ -157,6 +168,9 @@ namespace Lumina
         // File > Save All: every dirty package, routed through its open editor tool when there is one
         // so type-specific save work still runs.
         void SaveAllDirtyPackages() override;
+        void SavePackages(TVector<CPackage*> Packages) override;
+        void OpenPropertyMatrix(TVector<FGuid> Assets) override;
+        void OpenSettings(CClass* Page) override;
         bool ConfirmWritable(TVector<FString> VirtualPaths, TMoveOnlyFunction<void()> Then, bool bThenSaves = true) override;
 
         struct FSaveAllResult
@@ -234,13 +248,19 @@ namespace Lumina
 
         // Titlebar stats, composed once per frame so the right-hand region can be sized from their
         // measured width rather than a constant that silently clips when a stat is added.
+        struct FTitleBarStat
+        {
+            const char*      Label   = nullptr;
+            const char*      Tooltip = nullptr;
+            TFixedString<48> Value;
+        };
+
         struct FTitleBarStats
         {
-            TFixedString<64> Perf;
-            TFixedString<64> Objects;
-            TFixedString<64> Memory;
-            TFixedString<64> GPUMemory;
-            float            Width = 0.0f;
+            FTitleBarStat Entries[5];
+            float         LabelGap = 0.0f;
+            float         EntryGap = 0.0f;
+            float         Width    = 0.0f;
         };
 
         FTitleBarStats BuildTitleBarStats(const FUpdateContext& UpdateContext);

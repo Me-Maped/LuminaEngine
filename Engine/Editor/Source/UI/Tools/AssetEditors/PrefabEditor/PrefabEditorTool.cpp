@@ -1,4 +1,5 @@
-﻿#include "PrefabEditorTool.h"
+﻿#include "Localization/Localization.h"
+#include "PrefabEditorTool.h"
 #include "World/ECS/Registry.h"
 
 #include "Assets/AssetRegistry/AssetRegistry.h"
@@ -149,7 +150,7 @@ namespace Lumina
                 {
                     BeginRelationshipTransaction({ Data.Entity });
                     ECS::Utils::RemoveFromParent(Registry, Data.Entity);
-                    EndTransaction("Unparent");
+                    EndTransaction(LOC("Unparent"));
                     OutlinerListView.MarkTreeDirty();
                 }
             }
@@ -162,18 +163,18 @@ namespace Lumina
                     Registry.GetHierarchy().ForEachChild(Data.Entity, [&](ECS::FEntity Child) { Children.push_back(Child); });
                     BeginRelationshipTransaction({ Data.Entity });
                     ECS::Utils::DetachImmediateChildren(Registry, Data.Entity);
-                    EndTransaction("Detach Children");
+                    EndTransaction(LOC("Detach Children"));
                     OutlinerListView.MarkTreeDirty();
                 }
             }
 
-            if (!bIsRoot && ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_DUPLICATE, "Duplicate")))
+            if (!bIsRoot && ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_DUPLICATE, "Duplicate")))
             {
                 BeginTransaction();
                 ECS::FEntity New = DuplicatePrefabEntity(Data.Entity);
                 if (New != ECS::NullEntity)
                 {
-                    EndTransaction("Duplicate");
+                    EndTransaction(LOC_ICON(LE_ICON_CONTENT_DUPLICATE, "Duplicate"));
                     OutlinerListView.MarkTreeDirty();
                 }
                 else
@@ -182,7 +183,7 @@ namespace Lumina
                 }
             }
 
-            if (!bIsRoot && ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Delete")))
+            if (!bIsRoot && ImGui::MenuItem(LOC_ICON_ID(LE_ICON_DELETE, "Delete")))
             {
                 RequestDestroyEntity(Data.Entity);
             }
@@ -216,8 +217,7 @@ namespace Lumina
             }
             EndTransaction("Rename");
 
-            const SNameComponent* NameComp = Registry.TryGet<SNameComponent>(Data.Entity);
-            Tree.Get<FTreeNodeDisplay>(Item).DisplayName = EditorEntityUtils::MakeOutlinerDisplayName(NameComp, Data.Entity).c_str();
+            EditorEntityUtils::RenameOutlinerRow(Tree.Get<FTreeNodeDisplay>(Item), NewName);
             Asset->GetPackage()->MarkDirty();
         };
 
@@ -276,37 +276,37 @@ namespace Lumina
         // Hotkeys are suppressed while right-mouse flying so W/E/R/Q act as fly keys, not mode switches.
         auto Hovered = [this]() { return bViewportHovered && !CameraState.bWasLooking; };
 
-        RegisterAction({LOC("Translate Mode"), "Gizmo", LOC("Switch the gizmo to translate (move) mode"),
+        RegisterAction({LOC("Translate Mode"), LOC_ICON(LE_ICON_MOVE_RESIZE, "Gizmo"), LOC("Switch the gizmo to translate (move) mode"),
             FInputChord{ImGuiKey_W}, [this]{ GuizmoOp = ImGuizmo::TRANSLATE; }, Hovered});
 
-        RegisterAction({LOC("Rotate Mode"), "Gizmo", LOC("Switch the gizmo to rotate mode"),
+        RegisterAction({LOC("Rotate Mode"), LOC_ICON(LE_ICON_MOVE_RESIZE, "Gizmo"), LOC("Switch the gizmo to rotate mode"),
             FInputChord{ImGuiKey_E}, [this]{ GuizmoOp = ImGuizmo::ROTATE; }, Hovered});
 
-        RegisterAction({LOC("Scale Mode"), "Gizmo", LOC("Switch the gizmo to scale mode"),
+        RegisterAction({LOC("Scale Mode"), LOC_ICON(LE_ICON_MOVE_RESIZE, "Gizmo"), LOC("Switch the gizmo to scale mode"),
             FInputChord{ImGuiKey_R}, [this]{ GuizmoOp = ImGuizmo::SCALE; }, Hovered});
 
-        RegisterAction({LOC("Toggle Local/World"), "Gizmo", LOC("Switch the gizmo between world-space and entity-local space"),
+        RegisterAction({LOC("Toggle Local/World"), LOC_ICON(LE_ICON_MOVE_RESIZE, "Gizmo"), LOC("Switch the gizmo between world-space and entity-local space"),
             FInputChord{ImGuiKey_X}, [this]{ EditorEntityUtils::ToggleGizmoMode(GuizmoMode); }, Hovered});
 
-        RegisterAction({LOC("Focus Selection"), "View", LOC("Frame the camera on the last-selected entity"),
+        RegisterAction({LOC_ICON(LE_ICON_TARGET, "Focus Selection"), LOC_ICON(LE_ICON_EYE, "View"), LOC("Frame the camera on the last-selected entity"),
             FInputChord{ImGuiKey_F}, [this]{ FocusViewportToEntity(GetLastSelectedEntity()); }});
 
-        RegisterAction({LOC("Frame All"), "View", LOC("Frame the camera on every prefab entity"),
+        RegisterAction({LOC_ICON(LE_ICON_HOME, "Frame All"), LOC_ICON(LE_ICON_EYE, "View"), LOC("Frame the camera on every prefab entity"),
             FInputChord{ImGuiKey_Home}, [this]{ FrameAllEntities(); }, Hovered});
 
         RegisterAction({LOC("Reset Transform"), "Selection", LOC("Reset the selected entities' local transform to identity"),
             FInputChord{ImGuiKey_R, true, true}, [this]{ ResetSelectionTransform(); }, Hovered});
 
         // Advisory entries, inline-handled shortcuts surfaced under Help and Keybinds.
-        RegisterAction({LOC("Duplicate"), "Selection", LOC("Duplicate the selection in place"),
+        RegisterAction({LOC_ICON(LE_ICON_CONTENT_DUPLICATE, "Duplicate"), "Selection", LOC("Duplicate the selection in place"),
             FInputChord{ImGuiKey_D, true}, nullptr});
         RegisterAction({LOC("Copy"), "Selection", LOC("Copy the selection to the entity clipboard"),
             FInputChord{ImGuiKey_C, true}, nullptr});
         RegisterAction({LOC("Paste"), "Selection", LOC("Paste previously-copied entities under the prefab root"),
             FInputChord{ImGuiKey_V, true}, nullptr});
-        RegisterAction({LOC("Delete"), "Selection", LOC("Delete the selected entities"),
+        RegisterAction({LOC_ICON(LE_ICON_DELETE, "Delete"), "Selection", LOC("Delete the selected entities"),
             FInputChord{ImGuiKey_Delete}, nullptr});
-        RegisterAction({LOC("Cycle Gizmo"), "Gizmo", LOC("Cycle Translate→Rotate→Scale"),
+        RegisterAction({LOC("Cycle Gizmo"), LOC_ICON(LE_ICON_MOVE_RESIZE, "Gizmo"), LOC("Cycle Translate→Rotate→Scale"),
             FInputChord{ImGuiKey_Space}, nullptr});
     }
 
@@ -437,7 +437,7 @@ namespace Lumina
         SyncPreviewLighting(true);
     }
 
-    namespace
+    namespace PrefabEditorToolInternal
     {
         template<typename T>
         void SetComponentPresent(ECS::FRegistry& Registry, ECS::FEntity Entity, bool bPresent)
@@ -482,9 +482,9 @@ namespace Lumina
             bStudioLighting = !bPrefabSuppliesLighting;
         }
 
-        SetComponentPresent<SDirectionalLightComponent>(WorldRegistry, DirectionalLightEntity, bStudioLighting);
-        SetComponentPresent<SEnvironmentComponent>(WorldRegistry, DirectionalLightEntity, bStudioLighting);
-        SetComponentPresent<SSkyLightComponent>(WorldRegistry, DirectionalLightEntity, bStudioLighting);
+        PrefabEditorToolInternal::SetComponentPresent<SDirectionalLightComponent>(WorldRegistry, DirectionalLightEntity, bStudioLighting);
+        PrefabEditorToolInternal::SetComponentPresent<SEnvironmentComponent>(WorldRegistry, DirectionalLightEntity, bStudioLighting);
+        PrefabEditorToolInternal::SetComponentPresent<SSkyLightComponent>(WorldRegistry, DirectionalLightEntity, bStudioLighting);
     }
 
     void FPrefabEditorTool::CommitPreviewWorldToPrefab()
@@ -562,11 +562,21 @@ namespace Lumina
         if (CPrefab* Prefab = GetPrefab())
         {
             const uint32 ResolveCount = Prefab->GetVariantResolveCount();
-            if (ResolveCount != LastVariantResolveCount)
+            if (ResolveCount != LastVariantResolveCount && IsUnsavedDocument())
+            {
+                if (!bParentChangeDeferred)
+                {
+                    bParentChangeDeferred = true;
+                    ImGuiX::Notifications::NotifyInfo("The parent of '{0}' changed. Its edits are kept, and the view refreshes after you save.", Prefab->GetName().c_str());
+                }
+            }
+            else if (ResolveCount != LastVariantResolveCount)
             {
                 LastVariantResolveCount = ResolveCount;
+                bParentChangeDeferred = false;
                 LoadPrefabIntoPreviewWorld();
                 OutlinerListView.MarkTreeDirty();
+                ClearTransactionHistory();
             }
         }
 
@@ -642,7 +652,7 @@ namespace Lumina
         TVector<ECS::FEntity> Doomed;
         while (!EntityDestroyRequests.empty())
         {
-            Doomed.push_back(EntityDestroyRequests.back());
+            Doomed.push_back(EntityDestroyRequests.front());
             EntityDestroyRequests.pop();
         }
 
@@ -788,7 +798,7 @@ namespace Lumina
                 Registry.EmplaceOrReplace<FNeedsTransformUpdate>(Entity);
             }
         }
-        EndTransaction("Reset Transform");
+        EndTransaction(LOC("Reset Transform"));
         Asset->GetPackage()->MarkDirty();
     }
 
@@ -1034,14 +1044,14 @@ namespace Lumina
         {
             TFixedVector<ECS::FEntity, 64> Sources;
             Registry.View<FSelectedInEditorComponent>().ForEach([&](ECS::FEntity Selected) { Sources.push_back(Selected); });
-            DuplicateAndSelect(TSpan<const ECS::FEntity>(Sources.data(), Sources.size()), "Duplicate");
+            DuplicateAndSelect(TSpan<const ECS::FEntity>(Sources.data(), Sources.size()), LOC_ICON(LE_ICON_CONTENT_DUPLICATE, "Duplicate"));
         }
 
         if (bPastePressed)
         {
             TFixedVector<ECS::FEntity, 64> Sources;
             Registry.View<FCopiedTag>().ForEach([&](ECS::FEntity Tagged) { Sources.push_back(Tagged); });
-            DuplicateAndSelect(TSpan<const ECS::FEntity>(Sources.data(), Sources.size()), "Paste");
+            DuplicateAndSelect(TSpan<const ECS::FEntity>(Sources.data(), Sources.size()), LOC("Paste"));
         }
     }
 
@@ -1329,19 +1339,19 @@ namespace Lumina
         DrawHelpTextRow(LOC("Components"),
             LOC("Add Component on a selected entity to attach. Drag an asset directly onto the entity row "
             "in the outliner for shortcut adds (e.g. drop a static mesh to add a SStaticMeshComponent)."));
-        DrawHelpTextRow(LOC("Nested Prefabs"),
-            LOC("Drag another prefab asset into the outliner to instance it as a child. Property overrides "
-            "are per-instance; structural changes happen on the source prefab."));
+        DrawHelpTextRow("Dropping Prefabs",
+            "Dropping another prefab into the outliner copies its entities in. Prefabs do not nest, so "
+            "the copies are no longer linked to the source prefab.");
         DrawHelpTextRow(LOC("Save"),
-            LOC("Ctrl+S commits all entities, components and overrides to the prefab. Existing instances "
-            "in worlds reload on next open or with Reload Asset."));
+            "Ctrl+S commits all entities, components and overrides to the prefab, then refreshes its "
+            "placed copies in loaded worlds and its variants.");
     }
 
     void FPrefabEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)
     {
         FAssetEditorTool::DrawToolMenu(UpdateContext);
 
-        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_MOVE_RESIZE, "Gizmo")))
+        if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_MOVE_RESIZE, "Gizmo")))
         {
             const char* Ops[] = { LOC("Translate"), LOC("Rotate"), LOC("Scale") };
             int Current = (GuizmoOp == ImGuizmo::TRANSLATE) ? 0 : (GuizmoOp == ImGuizmo::ROTATE ? 1 : 2);
@@ -1370,7 +1380,7 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_EYE, "View")))
+        if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_EYE, "View")))
         {
             ImGui::Checkbox(LOC("World Grid"), &bWorldGridEnabled);
             ImGui::Checkbox(LOC("Component Visualizers"), &bShowComponentVisualizers);
@@ -1385,18 +1395,18 @@ namespace Lumina
             }
             if (ImGui::IsItemHovered())
             {
-                ImGui::SetTooltip(bPrefabSuppliesLighting
+                ImGui::SetTooltip("%s", bPrefabSuppliesLighting
                     ? LOC("This prefab carries its own lighting, so the studio rig starts off.\n"
-                      "Turning it on stacks a second sun and environment over the authored ones.")
+                          "Turning it on stacks a second sun and environment over the authored ones.")
                     : LOC("Preview-only directional light, environment and skylight.\n"
-                      "Not part of the prefab."));
+                          "Not part of the prefab."));
             }
 
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_HOME, "Frame All"), "Home"))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_HOME, "Frame All"), "Home"))
             {
                 FrameAllEntities();
             }
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_TARGET, "Focus Selection"), "F"))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_TARGET, "Focus Selection"), "F"))
             {
                 FocusViewportToEntity(GetLastSelectedEntity());
             }

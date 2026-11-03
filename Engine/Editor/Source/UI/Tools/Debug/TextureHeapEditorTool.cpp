@@ -1,3 +1,4 @@
+﻿#include "Localization/Localization.h"
 #include "TextureHeapEditorTool.h"
 #include "Renderer/RHICore.h"
 #include "Renderer/RenderResource.h"

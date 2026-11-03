@@ -1,53 +1,72 @@
-#include "GraphActionMenu.h"
+﻿#include "GraphActionMenu.h"
 
 #include "EdGraphNode.h"
 #include "EdNodeGraph.h"
 #include "Localization/Localization.h"
-#include "Search/TextSearch.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
-#include "imgui-node-editor/imgui_node_editor.h"
 
 namespace Lumina
 {
     namespace
     {
-        bool GraphQueryIsActive(const char* Text)
-        {
-            const TextSearch::FQuery Query(Text != nullptr ? Text : "");
-            return !Query.IsValid() || Query.GetTermCount() != 0;
-        }
-
+        // Consecutive match indices coalesce into one call to keep the draw-call count low.
         void DrawHighlightedText(const char* Text, const TVector<uint16>& MatchIndices, const ImVec4& MatchColor)
         {
             if (Text == nullptr)
             {
                 return;
             }
-            if (Text[0] == '\0' || MatchIndices.empty())
+
+            const size_t Length = strlen(Text);
+            if (Length == 0 || MatchIndices.empty())
             {
                 ImGui::TextUnformatted(Text);
                 return;
             }
 
-            const FGraphActionTextSpans Spans = BuildGraphActionHighlightSpans(Text, MatchIndices);
-            for (const FGraphActionTextSpan& Span : Spans)
+            size_t Cursor = 0;
+            size_t MatchIdx = 0;
+            bool bFirstSpan = true;
+
+            while (Cursor < Length)
             {
-                if (Span.Begin != 0)
+                if (!bFirstSpan)
                 {
                     ImGui::SameLine(0.0f, 0.0f);
                 }
-                if (Span.bMatched)
+                bFirstSpan = false;
+
+                const bool bInMatch = (MatchIdx < MatchIndices.size()) && (MatchIndices[MatchIdx] == Cursor);
+
+                size_t SpanEnd = Cursor + 1;
+                if (bInMatch)
                 {
+                    while (SpanEnd < Length
+                        && MatchIdx + (SpanEnd - Cursor) < MatchIndices.size()
+                        && MatchIndices[MatchIdx + (SpanEnd - Cursor)] == SpanEnd)
+                    {
+                        ++SpanEnd;
+                    }
+
                     ImGui::PushStyleColor(ImGuiCol_Text, MatchColor);
-                }
-                ImGui::TextUnformatted(Text + Span.Begin, Text + Span.End);
-                if (Span.bMatched)
-                {
+                    ImGui::TextUnformatted(Text + Cursor, Text + SpanEnd);
                     ImGui::PopStyleColor();
+                    MatchIdx += (SpanEnd - Cursor);
                 }
+                else
+                {
+                    while (SpanEnd < Length && (MatchIdx >= MatchIndices.size() || MatchIndices[MatchIdx] != SpanEnd))
+                    {
+                        ++SpanEnd;
+                    }
+
+                    ImGui::TextUnformatted(Text + Cursor, Text + SpanEnd);
+                }
+
+                Cursor = SpanEnd;
             }
         }
     }
@@ -83,7 +102,7 @@ namespace Lumina
         }
     }
 
-    void FGraphActionMenu::RebuildActions(CEdNodeGraph* Graph, const FLocalizationSnapshot& Snapshot)
+    void FGraphActionMenu::RebuildActions(CEdNodeGraph* Graph)
     {
         Actions.clear();
         VisibleIndices.clear();
@@ -96,6 +115,13 @@ namespace Lumina
         const THashSet<CClass*>& SupportedNodes = Graph->GetSupportedNodes();
         Actions.reserve(SupportedNodes.size());
 
+        THashSet<CClass*> Accepting;
+        bHasSourceFilter = Graph->PendingSourcePin != nullptr;
+        if (bHasSourceFilter)
+        {
+            Graph->CollectClassesAccepting(Graph->PendingSourcePin, Accepting);
+        }
+
         for (CClass* NodeClass : SupportedNodes)
         {
             CEdGraphNode* CDO = Cast<CEdGraphNode>(NodeClass->GetDefaultObject());
@@ -106,17 +132,29 @@ namespace Lumina
 
             FGraphAction Action;
             Action.NodeClass   = NodeClass;
-            Action.SourceName = CDO->GetNodeDisplayName();
-            Action.SourceCategory = CDO->GetNodeCategory();
-            Action.Key = NodeClass->GetName().ToString();
-            // Own both languages and translate all retained labels from one immutable table.
-            Action.DisplayName = FString(Snapshot.TranslateView(Action.SourceName, FStringView("node")));
-            Action.Category = FString(Snapshot.TranslateView(Action.SourceCategory));
-            Action.Tooltip = FString(Snapshot.TranslateView(CDO->GetNodeTooltip()));
-            Actions.push_back(Move(Action));
+            Action.DisplayName = FString(CDO->GetNodeDisplayName());
+            Action.Category    = CDO->GetNodeCategory().c_str();
+            Action.Tooltip     = FString(CDO->GetNodeTooltip());
+            Action.bAcceptsSource = !bHasSourceFilter || Accepting.contains(NodeClass);
+
+            TVector<FGraphNodeVariant> Variants;
+            CDO->GetVariants(Variants);
+            if (Variants.empty())
+            {
+                Actions.push_back(Move(Action));
+                continue;
+            }
+
+            for (const FGraphNodeVariant& Variant : Variants)
+            {
+                FGraphAction& Entry = Actions.emplace_back(Action);
+                Entry.Variant     = Variant.Name;
+                Entry.DisplayName = Variant.DisplayName;
+                Entry.Category    = Variant.Category;
+                Entry.Tooltip     = Variant.Tooltip;
+            }
         }
 
-        ActionsSnapshot = Snapshot;
         bActionsDirty = false;
     }
 
@@ -125,12 +163,15 @@ namespace Lumina
         VisibleIndices.clear();
         VisibleIndices.reserve(Actions.size());
 
-        const TextSearch::FQuery Query(QueryBuffer);
-        const bool bHasQuery = GraphQueryIsActive(QueryBuffer);
+        const bool bHasQuery = QueryBuffer[0] != '\0';
 
         for (int32 i = 0; i < static_cast<int32>(Actions.size()); ++i)
         {
             FGraphAction& Action = Actions[i];
+            if (bHasSourceFilter && bOnlyAcceptingNodes && !Action.bAcceptsSource)
+            {
+                continue;
+            }
 
             if (!bHasQuery)
             {
@@ -140,14 +181,28 @@ namespace Lumina
                 continue;
             }
 
-            if (!FuzzyMatchAliases(Query, {
-                {Action.DisplayName.c_str(), 100, true},
-                {Action.SourceName.c_str(), 100},
-                {Action.Key.c_str(), 50},
-                {Action.Category.c_str()},
-                {Action.SourceCategory.c_str()}}, Action.Score, Action.MatchIndices))
+            int32 NameScore = 0;
+            TVector<uint16> NameIndices;
+            const bool bNameMatched = FuzzyMatch(QueryBuffer, Action.DisplayName.c_str(), NameScore, NameIndices);
+
+            int32 CategoryScore = 0;
+            TVector<uint16> CategoryIndices;
+            const bool bCategoryMatched = FuzzyMatch(QueryBuffer, Action.Category.c_str(), CategoryScore, CategoryIndices);
+
+            if (!bNameMatched && !bCategoryMatched)
             {
                 continue;
+            }
+
+            if (bNameMatched && (!bCategoryMatched || NameScore >= CategoryScore))
+            {
+                Action.Score = NameScore + 100;
+                Action.MatchIndices = Move(NameIndices);
+            }
+            else
+            {
+                Action.Score = CategoryScore;
+                Action.MatchIndices.clear();
             }
 
             VisibleIndices.push_back(i);
@@ -191,31 +246,10 @@ namespace Lumina
             return false;
         }
 
-        const FLocalizationSnapshot Snapshot = FLocalization::Get().ReadForCurrentFrame();
-        if (bActionsDirty || !ActionsSnapshot.HasSameTable(Snapshot))
+        if (bActionsDirty)
         {
-            CClass* SelectedClass = SelectedIndex >= 0 && SelectedIndex < static_cast<int32>(VisibleIndices.size())
-                ? Actions[VisibleIndices[SelectedIndex]].NodeClass : nullptr;
-            RebuildActions(Graph, Snapshot);
+            RebuildActions(Graph);
             Rescore();
-            bool bRestored = false;
-            if (SelectedClass != nullptr)
-            {
-                for (int32 Index = 0; Index < static_cast<int32>(VisibleIndices.size()); ++Index)
-                {
-                    if (Actions[VisibleIndices[Index]].NodeClass == SelectedClass)
-                    {
-                        SelectedIndex = Index;
-                        bRestored = true;
-                        break;
-                    }
-                }
-            }
-            if (!bRestored)
-            {
-                SelectedIndex = 0;
-            }
-            bPendingScrollToSelected = bRestored;
         }
 
         constexpr ImVec2 PopupSize(360, 460);
@@ -298,7 +332,7 @@ namespace Lumina
         if (ImGui::BeginChild("##GraphActionList", ListSize, false))
         {
             FString CurrentCategory;
-            const bool bGroupByCategory = !GraphQueryIsActive(QueryBuffer);
+            const bool bGroupByCategory = QueryBuffer[0] == '\0';
 
             for (int32 Position = 0; Position < static_cast<int32>(VisibleIndices.size()); ++Position)
             {
@@ -326,7 +360,7 @@ namespace Lumina
 
                 const bool bIsSelected = (Position == SelectedIndex);
 
-                ImGui::PushID(Action.NodeClass);
+                ImGui::PushID(ActionIdx);
 
                 if (bIsSelected)
                 {
@@ -408,6 +442,16 @@ namespace Lumina
 
         ImGui::PopStyleVar(4);
 
+        if (bHasSourceFilter)
+        {
+            ImGui::SetCursorPosX(10.0f);
+            if (ImGui::Checkbox(LOC_ID("Only nodes that take this wire"), &bOnlyAcceptingNodes))
+            {
+                Rescore();
+                SelectedIndex = 0;
+            }
+        }
+
         if (bEnterCommitted && SelectedIndex >= 0 && SelectedIndex < static_cast<int32>(VisibleIndices.size()))
         {
             CommittedActionIndex = VisibleIndices[SelectedIndex];
@@ -420,11 +464,10 @@ namespace Lumina
         if (bCommitted && CommittedActionIndex >= 0)
         {
             const FGraphAction& Action = Actions[CommittedActionIndex];
-            CEdGraphNode* NewNode = Graph->CreateNode(Action.NodeClass);
+            CEdGraphNode* NewNode = Graph->CreateNode(Action.NodeClass, Action.Variant);
             if (NewNode != nullptr)
             {
-                ax::NodeEditor::SetNodePosition(NewNode->GetNodeID(),
-                    ax::NodeEditor::ScreenToCanvas(ImGui::GetMousePosOnOpeningCurrentPopup()));
+                Graph->PlaceNodeAtScreen(NewNode, ImGui::GetMousePosOnOpeningCurrentPopup());
 
                 if (Graph->PendingSourcePin != nullptr)
                 {
@@ -434,8 +477,7 @@ namespace Lumina
                     }
                 }
 
-                ax::NodeEditor::ClearSelection();
-                ax::NodeEditor::SelectNode(NewNode->GetNodeID(), false);
+                Graph->GetEditor().SelectNode(NewNode->GetNodeID(), false);
 
                 if (Graph->NodeSelectedCallback)
                 {

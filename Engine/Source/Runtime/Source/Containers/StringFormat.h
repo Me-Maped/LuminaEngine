@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <type_traits>
 #include <utility>
@@ -139,6 +139,17 @@ namespace Lumina
     {
         Out.clear();
         AppendFormat(Out, Fmt, std::forward<TArgs>(Args)...);
+    }
+
+    /** FormatTo for a format string that only exists at runtime, so nothing is checked at the call site. */
+    template <typename TOut, typename... TArgs>
+    void FormatTo(TOut& Out, Fmt::FRuntimeFormatString Fmt, TArgs&&... Args)
+    {
+        Fmt::TInlineFormatBuffer<256> Buffer;
+        const Fmt::TFormatArgStore<std::decay_t<TArgs>...> Store(Args...);
+        Fmt::VFormatTo(Buffer, Fmt.Value, Store.View());
+        Out.clear();
+        Out.append(Buffer.Data(), Buffer.Size());
     }
 
     /** Formats into a caller-owned array and reports how much was written, never allocating. */

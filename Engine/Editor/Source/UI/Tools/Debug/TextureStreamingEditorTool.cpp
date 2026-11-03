@@ -1,3 +1,4 @@
+﻿#include "Localization/Localization.h"
 #include "TextureStreamingEditorTool.h"
 #include <bit>
 

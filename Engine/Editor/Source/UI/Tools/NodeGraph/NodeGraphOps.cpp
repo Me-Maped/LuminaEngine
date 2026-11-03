@@ -1,4 +1,5 @@
-#include "EditorPCH.h"
+﻿#include "EditorPCH.h"
+#include "Localization/Localization.h"
 #include "UI/Tools/NodeGraph/NodeGraphOps.h"
 
 #include "LuminaEditor.h"
@@ -137,7 +138,7 @@ namespace Lumina::NodeGraphOps
 
         if (!Pin->HasConnection())
         {
-            OutError = Lumina::Format(LOCF("'{}' is not connected to anything."), LOC_VIEW(Pin->GetPinName()));
+            OutError = Lumina::Format(LOCF("'{}' is not connected to anything."), Pin->GetPinName());
             return false;
         }
 
@@ -146,7 +147,7 @@ namespace Lumina::NodeGraphOps
         return true;
     }
 
-    CEdGraphNode* AddNode(CEdNodeGraph* Graph, CClass* NodeClass, float X, float Y)
+    CEdGraphNode* AddNode(CEdNodeGraph* Graph, CClass* NodeClass, float X, float Y, FName Variant)
     {
         if (Graph == nullptr)
         {
@@ -154,7 +155,7 @@ namespace Lumina::NodeGraphOps
         }
 
         FNodeGraphEditScope Edit(Graph, LOC("Add Node"));
-        return Graph->SpawnNode(NodeClass, X, Y);
+        return Graph->SpawnNode(NodeClass, X, Y, Variant);
     }
 
     bool RemoveNode(CEdNodeGraph* Graph, CEdGraphNode* Node, FString& OutError)

@@ -43,27 +43,7 @@ namespace Lumina
 
         ShadowAtlas.InitImage();
 
-        {
-            RHI::FTextureDesc Desc;
-            Desc.Type      = RHI::ETextureType::Tex2D;
-            Desc.Dimension = FUIntVector3(GCSMAtlasWidth, GCSMAtlasHeight, 1);
-            Desc.Format    = EFormat::D32;
-            Desc.Usage     = RHI::EImageUsageFlags::DepthAttachment | RHI::EImageUsageFlags::Sampled | RHI::EImageUsageFlags::TransferDst;
-            NamedImages[(int)ENamedImage::Cascade] = CreateSceneImage(Desc);
-        }
-
-        {
-            const uint32 PyramidW = GCSMAtlasWidth  / 2u;
-            const uint32 PyramidH = GCSMAtlasHeight / 2u;
-
-            RHI::FTextureDesc Desc;
-            Desc.Type      = RHI::ETextureType::Tex2D;
-            Desc.Dimension = FUIntVector3(PyramidW, PyramidH, 1);
-            Desc.Format    = EFormat::R32_FLOAT;
-            Desc.MipCount  = RenderUtils::CalculateMipCount(PyramidW, PyramidH);
-            Desc.Usage     = RHI::EImageUsageFlags::Sampled | RHI::EImageUsageFlags::Storage;
-            NamedImages[(int)ENamedImage::CascadePyramid] = CreateSceneImage(Desc, true, /*bMipUAVs*/ true);
-        }
+        SyncCascadeAtlas(ActiveCascadeCount);
 
         SceneViews.reserve(MaxSceneViews);
 
@@ -235,6 +215,7 @@ namespace Lumina
         if (World != nullptr)
         {
             ECS::FRegistry& Registry = World->GetEntityRegistry();
+            ScenePrimitives.DisarmMoveStream(Registry);
             ECS::Utils::RemoveMovedTransformConsumer(Registry, MovedTransformConsumer);
             MovedTransformConsumer = Constants::kIndexNoneU32;
 
@@ -295,6 +276,7 @@ namespace Lumina
         SunDFCellItemBuffer.Release();
         SunDFCounterBuffer.Release();
         SunDFBlockListBuffer.Release();
+        SunDFLargeObjectBuffer.Release();
         SkinnedMeshletBoundsBuffer.Release();
         SkinnedMeshletConeBuffer.Release();
         SurfaceDescBuffer.Release();
@@ -326,6 +308,10 @@ namespace Lumina
             }
         }
 
+        for (FSceneBuffer& Slice : TransformStreamRing)
+        {
+            Slice.Release();
+        }
         for (uint32 Slot = 0; Slot < RHI::kFramesInFlight; ++Slot)
         {
             RenderBucketRing[Slot].Release();
@@ -406,6 +392,16 @@ namespace Lumina
         }
         ParticleCollisionResults.clear();
 
+        for (FParticleGridReadback& Readback : ParticleGridReadback)
+        {
+            if (Readback.Buffer)
+            {
+                RHI::Retire(Readback.Buffer);
+            }
+            Readback = {};
+        }
+        ParticleGridResults.clear();
+
         #if USING(WITH_EDITOR)
         for (FPickerReadbackSlot& Slot : PickerReadbackRing)
         {
@@ -427,6 +423,9 @@ namespace Lumina
         }
 
         SyncIBLResolution(Frame.Volumetrics.IBLResolution);
+
+        // Extraction just settled the sun's cascade count, and nothing has recorded against the atlas yet.
+        SyncCascadeAtlas(ActiveCascadeCount);
 
         // Same reason, since the scratch cube may need resizing for this frame's bake.
         if (Frame.ReflectionProbes.BakingProbe >= 0)
@@ -527,13 +526,16 @@ namespace Lumina
                 CullData.bCascadeHZBValid = 0u;
             }
 
+            const float AtlasW = (float)GCSMAtlasWidth(CascadeAtlasCount);
+            const float AtlasH = (float)GCSMAtlasHeight;
             for (int32 i = 0; i < NumCascades; ++i)
             {
-                CullData.CascadeHZBTile[i] = FVector4(
-                    (float)(GCSMCascadeOriginX[i] / 2) / CullData.CascadePyramidWidth,
-                    (float)(GCSMCascadeOriginY[i] / 2) / CullData.CascadePyramidHeight,
-                    (float)(GCSMCascadeSizes[i]   / 2) / CullData.CascadePyramidWidth,
-                    (float)(GCSMCascadeSizes[i]   / 2) / CullData.CascadePyramidHeight);
+                // A slot past the allocated row has no tile, and a zero scale keeps a stray test off its neighbour.
+                CullData.CascadeHZBTile[i] = i < CascadeAtlasCount ? FVector4(
+                    (float)GCSMCascadeOriginX(i) / AtlasW,
+                    (float)GCSMCascadeOriginY(i) / AtlasH,
+                    (float)GCSMCascadeSize       / AtlasW,
+                    (float)GCSMCascadeSize       / AtlasH) : FVector4(0.0f);
             }
         }
 
@@ -780,6 +782,7 @@ namespace Lumina
                 }
 
                 WeatherOcclusionPass(CL);
+                WeatherInteractionPass(CL);
 
                 {
                     SCENE_GPU_SCOPE(CL, "Light Functions");
@@ -994,7 +997,7 @@ namespace Lumina
                     ParticleRenderPass(CL);
                 }
 
-                RainPass(CL);
+                WeatherDrawPass(CL);
                 ReleaseIdleWeatherResources();
 
                 {
@@ -1095,6 +1098,12 @@ namespace Lumina
                 }
 
                 #if USING(WITH_EDITOR)
+                // After the temporal resolve, since its lines are anti-aliased analytically and jitter would only blur them.
+                {
+                    SCENE_GPU_SCOPE(CL, "Editor Grid");
+                    EditorGridPass(CL);
+                }
+
                 // After SMAA so the neighborhood blend cannot smear the outline, before Widgets so UI wins.
                 {
                     SCENE_GPU_SCOPE(CL, "Selection Outline");
@@ -1640,7 +1649,8 @@ namespace Lumina
             // Fixed size, one grid each, rewritten every frame.
             BlockDispatchArgsRing[Slot].Allocate(sizeof(RHI::FDispatchIndirectArguments));
             SkinDispatchArgsRing[Slot].Allocate(sizeof(RHI::FDispatchIndirectArguments));
-            MeshletCullDispatchArgsRing[Slot].Allocate(sizeof(RHI::FDispatchIndirectArguments));
+            // Three dispatch words, then the blocks each meshlet cull group takes.
+            MeshletCullDispatchArgsRing[Slot].Allocate(sizeof(RHI::FDispatchIndirectArguments) + sizeof(uint32));
 
             TotalsRing[Slot].Allocate(sizeof(uint32) * kTotalsSlots);
             TotalsZeroed[Slot] = false;
@@ -1739,11 +1749,16 @@ namespace Lumina
         case ENamedImage::AdaptedLuminance:   return "Scene.AdaptedLuminance";
         case ENamedImage::FroxelScatter:      return "Scene.FroxelScatter";
         case ENamedImage::FroxelIntegrated:   return "Scene.FroxelIntegrated";
+        case ENamedImage::FroxelShadow:       return "Scene.FroxelShadow";
+        case ENamedImage::FroxelShadowHistory: return "Scene.FroxelShadowHistory";
         case ENamedImage::AerialInScatter:    return "Scene.AerialInScatter";
         case ENamedImage::AerialTransmittance: return "Scene.AerialTransmittance";
         case ENamedImage::CloudNoise:         return "Scene.CloudNoise";
+        case ENamedImage::CloudWeather:       return "Scene.CloudWeather";
         case ENamedImage::CloudScatter:       return "Scene.CloudScatter";
         case ENamedImage::CloudDepth:         return "Scene.CloudDepth";
+        case ENamedImage::CloudScatterHistory: return "Scene.CloudScatterHistory";
+        case ENamedImage::CloudDepthHistory:  return "Scene.CloudDepthHistory";
         case ENamedImage::CloudShadow:        return "Scene.CloudShadow";
         case ENamedImage::BRDFLut:            return "Scene.BRDFLut";
         case ENamedImage::SkyCube:            return "Scene.SkyCube";
@@ -2226,6 +2241,11 @@ namespace Lumina
             FroxelDesc.Usage     = RHI::EImageUsageFlags::Sampled | RHI::EImageUsageFlags::Storage;
             View.Images[(int)ENamedImage::FroxelScatter]    = CreateSceneImage(FroxelDesc, true, true);
             View.Images[(int)ENamedImage::FroxelIntegrated] = CreateSceneImage(FroxelDesc, true, true);
+
+            FroxelDesc.Format = EFormat::RG16_FLOAT;
+            View.Images[(int)ENamedImage::FroxelShadow]        = CreateSceneImage(FroxelDesc, true, true);
+            View.Images[(int)ENamedImage::FroxelShadowHistory] = CreateSceneImage(FroxelDesc, true, true);
+            View.bFroxelShadowHistoryValid = false;
         }
 
         {
@@ -2247,18 +2267,28 @@ namespace Lumina
             View.Images[(int)ENamedImage::CloudNoise] = CreateSceneImage(CloudDesc, true, true);
             View.bCloudNoiseBaked = false;
 
+            RHI::FTextureDesc WeatherDesc;
+            WeatherDesc.Type      = RHI::ETextureType::Tex2D;
+            WeatherDesc.Dimension = FUIntVector3(kCloudNoiseSize, kCloudNoiseSize, 1);
+            WeatherDesc.Format    = EFormat::RGBA16_FLOAT;
+            WeatherDesc.Usage     = RHI::EImageUsageFlags::Sampled | RHI::EImageUsageFlags::Storage;
+            View.Images[(int)ENamedImage::CloudWeather] = CreateSceneImage(WeatherDesc, true, true);
+
             RHI::FTextureDesc ScatterDesc;
             ScatterDesc.Type      = RHI::ETextureType::Tex2D;
             ScatterDesc.Dimension = FUIntVector3(std::max<uint32>(Extent.x / 2u, 1u),
                                                  std::max<uint32>(Extent.y / 2u, 1u), 1);
             ScatterDesc.Format    = EFormat::RGBA16_FLOAT;
             ScatterDesc.Usage     = RHI::EImageUsageFlags::Sampled | RHI::EImageUsageFlags::Storage;
-            View.Images[(int)ENamedImage::CloudScatter] = CreateSceneImage(ScatterDesc, true, true);
+            View.Images[(int)ENamedImage::CloudScatter]        = CreateSceneImage(ScatterDesc, true, true);
+            View.Images[(int)ENamedImage::CloudScatterHistory] = CreateSceneImage(ScatterDesc, true, true);
 
             // The scene depth each half-res texel was marched against, so the composite can upsample by depth.
             RHI::FTextureDesc CloudDepthDesc = ScatterDesc;
             CloudDepthDesc.Format = EFormat::R32_FLOAT;
-            View.Images[(int)ENamedImage::CloudDepth] = CreateSceneImage(CloudDepthDesc, true, true);
+            View.Images[(int)ENamedImage::CloudDepth]        = CreateSceneImage(CloudDepthDesc, true, true);
+            View.Images[(int)ENamedImage::CloudDepthHistory] = CreateSceneImage(CloudDepthDesc, true, true);
+            View.bCloudHistoryValid = false;
 
             int32 CloudShadowRes = 512;
             if (const CRendererSettings* RS = GetDefault<CRendererSettings>())
@@ -2448,6 +2478,58 @@ namespace Lumina
 
         NamedImages[(int)ENamedImage::ProbeCaptureCube] = CreateSceneImage(Desc, /*bSampled*/ true, /*bMipUAVs*/ false);
         ProbeCaptureCubeSize = FaceSize;
+
+        NameOwnedImages(NamedImages);
+    }
+
+    void FDefaultSceneRenderer::SyncCascadeAtlas(int32 CascadeCount)
+    {
+        CascadeCount = Math::Clamp(CascadeCount, 1, NumCascades);
+        if (CascadeCount == CascadeAtlasCount)
+        {
+            return;
+        }
+
+        // Retired rather than freed, so a frame still in flight keeps sampling the old atlas.
+        RetireSceneImage(NamedImages[(int)ENamedImage::Cascade]);
+        RetireSceneImage(NamedImages[(int)ENamedImage::CascadePyramid]);
+
+        const uint32 AtlasW = (uint32)GCSMAtlasWidth(CascadeCount);
+        const uint32 AtlasH = (uint32)GCSMAtlasHeight;
+        {
+            RHI::FTextureDesc Desc;
+            Desc.Type      = RHI::ETextureType::Tex2D;
+            Desc.Dimension = FUIntVector3(AtlasW, AtlasH, 1);
+            Desc.Format    = EFormat::D32;
+            Desc.Usage     = RHI::EImageUsageFlags::DepthAttachment | RHI::EImageUsageFlags::Sampled | RHI::EImageUsageFlags::TransferDst;
+            NamedImages[(int)ENamedImage::Cascade] = CreateSceneImage(Desc);
+        }
+
+        {
+            const uint32 PyramidW = AtlasW / 4u;
+            const uint32 PyramidH = AtlasH / 4u;
+
+            RHI::FTextureDesc Desc;
+            Desc.Type      = RHI::ETextureType::Tex2D;
+            Desc.Dimension = FUIntVector3(PyramidW, PyramidH, 1);
+            Desc.Format    = EFormat::R32_FLOAT;
+            Desc.MipCount  = RenderUtils::CalculateMipCount(PyramidW, PyramidH);
+            Desc.Usage     = RHI::EImageUsageFlags::Sampled | RHI::EImageUsageFlags::Storage;
+            NamedImages[(int)ENamedImage::CascadePyramid] = CreateSceneImage(Desc, true, /*bMipUAVs*/ true);
+        }
+
+        // Views read through borrowed copies, which would otherwise keep pointing at the retired pair.
+        for (FSceneView& View : SceneViews)
+        {
+            View.Images[(int)ENamedImage::Cascade]        = BorrowSceneImage(NamedImages[(int)ENamedImage::Cascade]);
+            View.Images[(int)ENamedImage::CascadePyramid] = BorrowSceneImage(NamedImages[(int)ENamedImage::CascadePyramid]);
+        }
+
+        CascadeAtlasCount = CascadeCount;
+
+        // Last frame's pyramid has the old layout, so the next cull must not test against it.
+        bCascadePyramidValid.store(false, std::memory_order_release);
+        CascadePyramidOnCompute = {};
 
         NameOwnedImages(NamedImages);
     }

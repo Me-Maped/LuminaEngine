@@ -1,4 +1,5 @@
-#include "Core/Threading/Thread.h"
+﻿#include "Core/Threading/Thread.h"
+#include "Localization/Localization.h"
 #include "ProjectPackagerEditorTool.h"
 
 #include "Platform/Filesystem/PlatformFilesystem.h"

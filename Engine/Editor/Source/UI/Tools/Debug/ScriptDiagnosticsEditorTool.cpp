@@ -1,5 +1,5 @@
-﻿#include "ScriptDiagnosticsEditorTool.h"
-#include "Localization/Localization.h"
+﻿#include "Localization/Localization.h"
+#include "ScriptDiagnosticsEditorTool.h"
 
 #include <cfloat>
 
@@ -32,7 +32,7 @@ namespace Lumina
 
         void Timeline(const char* Id, const TVector<float>& History, const char* Unit, float Last)
         {
-            ImGui::TextDisabled("%s", LOC_VIEW(FStringView(Id + 2))); // skip the "##"
+            ImGui::TextDisabled("%s", Id + 2); // skip the "##"
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.66f, 0.78f, 0.95f, 1.0f), "%.1f %s", Last, Unit);
             if (!History.empty())
@@ -135,17 +135,16 @@ namespace Lumina
         ImGui::TextColored(ImVec4(0.45f, 0.80f, 0.55f, 1.0f), LOC("live %c"), Spinner[(DrawTicks / 6) % 4]);
 
         ImGui::SameLine(0.0f, 16.0f);
-        if (ImGui::Button(LOC_ICON(LE_ICON_RECYCLE, "Force GC")))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_RECYCLE, "Force GC")))
         {
             Refresh(true); // blocking full collect; settles a pending collectible-ALC unload
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip(LOC("Run a full blocking GC now. If 'Resident generations' drops back to 1, the\n"
-                              "previous reload's ALC was only pending async unload -- not a real leak."));
+            ImGui::SetTooltip(LOC("Run a full blocking GC now. If 'Resident generations' drops back to 1, the\n" "previous reload's ALC was only pending async unload -- not a real leak."));
         }
         ImGui::SameLine();
-        if (ImGui::Button(LOC_ICON(LE_ICON_REFRESH, "Reload Scripts")))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_REFRESH, "Reload Scripts")))
         {
             DotNet::RequestScriptReload();
         }

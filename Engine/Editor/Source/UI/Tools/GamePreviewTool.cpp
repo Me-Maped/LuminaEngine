@@ -1,5 +1,6 @@
 ﻿#include "Containers/StringFormat.h"
 #include "GamePreviewTool.h"
+#include "Localization/Localization.h"
 #include "World/WorldManager.h"
 #include "Core/Delegates/CoreDelegates.h"
 

@@ -1,5 +1,5 @@
+﻿#include "Localization/Localization.h"
 #include "MaterialNode_CustomSlang.h"
-#include "Localization/Localization.h"
 
 #include "imgui.h"
 #include "Core/Math/Hash/Hash.h"
@@ -398,18 +398,16 @@ namespace Lumina
         TVector<FString> Problems;
         const bool bValid = Validate(Problems);
 
-        ImGui::TextColored(ImVec4(0.55f, 0.58f, 0.64f, 1.0f),
-                           Lines == 1 ? LOC("%d in / %d out - %d line") : LOC("%d in / %d out - %d lines"),
-                           (int32)Inputs.size(), (int32)Outputs.size(), Lines);
+        ImGui::TextColored(ImVec4(0.55f, 0.58f, 0.64f, 1.0f), LOC("%d in / %d out - %d line%s"),
+                           (int32)Inputs.size(), (int32)Outputs.size(), Lines, Lines == 1 ? "" : "s");
 
         if (!bValid)
         {
-            ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.0f),
-                               Problems.size() == 1 ? LOC("%d problem") : LOC("%d problems"),
-                               (int32)Problems.size());
-            if (ImGui::IsItemHovered() && !Problems.empty())
+            ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.0f), LOC("%d problem%s"),
+                               (int32)Problems.size(), Problems.size() == 1 ? "" : "s");
+            if (ImGui::IsItemHovered() && !Problems.empty() && GetOwningGraph() != nullptr)
             {
-                ImGui::SetTooltip("%s", Problems[0].c_str());
+                GetOwningGraph()->GetEditor().SetTooltip(Problems[0]);
             }
         }
     }
@@ -425,17 +423,17 @@ namespace Lumina
                 const FString Name = Pin.Name.ToString();
                 if (!IsValidIdentifier(Name.c_str()))
                 {
-                    OutProblems.push_back(Format(LOCF("{} name '{}' is not a valid Slang identifier (letters, digits, underscore; cannot start with a digit)."), Direction, Name));
+                    OutProblems.push_back(FString(Direction) + " name '" + Name + "' is not a valid Slang identifier (letters, digits, underscore; cannot start with a digit).");
                     continue;
                 }
                 if (IsReservedWord(Name))
                 {
-                    OutProblems.push_back(Format(LOCF("{} name '{}' is a reserved Slang keyword."), Direction, Name));
+                    OutProblems.push_back(FString(Direction) + " name '" + Name + "' is a reserved Slang keyword.");
                     continue;
                 }
                 if (!Seen.insert(Name).second)
                 {
-                    OutProblems.push_back(Format(LOCF("Duplicate pin name '{}' -- input and output names must all be distinct."), Name));
+                    OutProblems.push_back(FString("Duplicate pin name '") + Name + "' -- input and output names must all be distinct.");
                 }
             }
         };
@@ -444,13 +442,13 @@ namespace Lumina
 
         if (Outputs.empty())
         {
-            OutProblems.push_back(LOC("No outputs declared -- add at least one output for this node to produce a value."));
+            OutProblems.push_back("No outputs declared, add at least one output for this node to produce a value.");
         }
 
         FString Directive;
         if (FindPreprocessorDirective(Code, Directive))
         {
-            OutProblems.push_back(Format(LOCF("Preprocessor directives are not allowed ('{}'). They escape this node's scope."), Directive));
+            OutProblems.push_back(FString("Preprocessor directives are not allowed ('") + Directive + "'). They escape this node's scope.");
         }
 
         const FBalanceResult Balance = CheckBalance(Code);

@@ -1,4 +1,5 @@
-﻿#include "Platform/Time/PlatformTime.h"
+﻿#include "Localization/Localization.h"
+#include "Platform/Time/PlatformTime.h"
 #include "MemoryProfilerEditorTool.h"
 
 #include <cctype>

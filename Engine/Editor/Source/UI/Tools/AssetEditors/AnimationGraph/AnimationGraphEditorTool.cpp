@@ -1,15 +1,13 @@
 ﻿#include "AnimationGraphEditorTool.h"
-#include "Localization/Localization.h"
-#include "UI/Tools/AssetEditors/Animation/AnimPreview.h"
 
 #include <cfloat>
-#include "World/ECS/Registry.h"
 #include "Animation/AnimGraphOps.h"
 #include "Animation/TaskSystem/AnimTaskExecutor.h"
 #include "Assets/AssetRegistry/AssetData.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Assets/AssetTypes/Mesh/Animation/Animation.h"
 #include "Containers/StringFormat.h"
+#include "Localization/Localization.h"
 #include "Tools/UI/ImGui/EditorColors.h"
 #include "Tools/UI/ImGui/ImGuiDragDrop.h"
 #include "UI/Tools/NodeGraph/Animation/Nodes/AnimGraphNode_BlendSpace.h"
@@ -25,8 +23,7 @@
 #include "Core/Object/ObjectIteration.h"
 #include "Core/Object/Package/Package.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
-#include "UI/Properties/PropertyEditContexts.h"
-#include "Core/Reflection/Type/Properties/EnumProperty.h"
+#include "UI/Tools/NodeGraph/EdGraphNode.h"
 #include "UI/Tools/NodeGraph/EdNodeGraphPin.h"
 #include "UI/Tools/NodeGraph/Animation/AnimGraphPin.h"
 #include "UI/Tools/NodeGraph/Animation/AnimationGraphCompiler.h"
@@ -34,8 +31,11 @@
 #include "UI/Tools/NodeGraph/Animation/AnimStateMachineGraph.h"
 #include "UI/Tools/NodeGraph/Animation/AnimStateTransition.h"
 #include "UI/Tools/NodeGraph/Animation/Nodes/AnimGraphNode_State.h"
+#include "UI/Tools/NodeGraph/Animation/Nodes/AnimGraphNode_StateMachine.h"
 #include "UI/Tools/NodeGraph/Animation/Nodes/AnimGraphNode_StateRouting.h"
+#include "World/ECS/Registry.h"
 #include "World/WorldManager.h"
+#include "World/WorldTypes.h"
 #include "World/Entity/Components/EnvironmentComponent.h"
 #include "World/Entity/Components/SkyLightComponent.h"
 #include "World/Entity/Components/LightComponent.h"
@@ -44,155 +44,163 @@
 #include "World/Entity/Components/SkeletalMeshComponent.h"
 #include "Renderer/SkeletonResource.h"
 
-namespace Lumina
+namespace Lumina::AnimationGraphEditorToolInternal
 {
-    static const char* AnimationGraphWindowName = "Animation Graph";
-    static const char* GraphPropertiesWindowName = "Graph Properties";
-    static const char* GraphParametersWindowName = "Parameters";
-    static const char* GraphTasksWindowName = "Task Graph";
-    static const char* GraphClipsWindowName = "Animation Clips";
+    // A window name doubles as its ImGui ID and its dock-layout key, so it stays the English source.
+    constexpr const char* AnimationGraphWindowName  = "Animation Graph";
+    constexpr const char* GraphPropertiesWindowName = "Graph Properties";
+    constexpr const char* GraphParametersWindowName = "Parameters";
+    constexpr const char* GraphTasksWindowName      = "Task Graph";
+    constexpr const char* GraphClipsWindowName      = "Animation Clips";
 
-    // Internal linkage, since these names would collide with another TU's Detail helpers.
-    namespace
+    const char* TaskTypeName(EAnimTaskType Type)
     {
-        namespace AnimGraphDetail
+        switch (Type)
         {
-            const char* TaskTypeName(EAnimTaskType Type)
-            {
-                switch (Type)
-                {
-                case EAnimTaskType::ReferencePose:      return LOC("Reference Pose");
-                case EAnimTaskType::SampleClip:         return LOC("Sample Clip");
-                case EAnimTaskType::Blend:              return LOC("Blend");
-                case EAnimTaskType::BlendMasked:        return LOC("Layered Blend");
-                case EAnimTaskType::MakeAdditive:       return LOC("Make Additive");
-                case EAnimTaskType::ApplyAdditive:      return LOC("Apply Additive");
-                case EAnimTaskType::Inertialize:        return LOC("Inertialize");
-                case EAnimTaskType::DeadBlend:          return LOC("Dead Blend");
-                case EAnimTaskType::SavePoseSnapshot:   return LOC("Save Snapshot");
-                case EAnimTaskType::LoadPoseSnapshot:   return LOC("Pose Snapshot");
-                case EAnimTaskType::FABRIK:             return LOC("FABRIK");
-                case EAnimTaskType::LookAt:             return LOC("Look At");
-                case EAnimTaskType::FootIK:             return LOC("Foot IK");
-                case EAnimTaskType::TranslateBone:      return LOC("Translate Bone");
-                case EAnimTaskType::BoneTransform:      return LOC("Bone Transform");
-                case EAnimTaskType::TwoBoneIK:          return LOC("Two Bone IK");
-                }
-                return LOC("Unknown");
-            }
-
-            // Pose sources green, blends blue, additive violet, state machines amber, bone ops teal.
-            ImVec4 TaskTypeColor(EAnimTaskType Type)
-            {
-                switch (Type)
-                {
-                case EAnimTaskType::ReferencePose:      return ImVec4(0.56f, 0.59f, 0.64f, 1.0f);
-                case EAnimTaskType::SampleClip:         return ImVec4(0.38f, 0.76f, 0.47f, 1.0f);
-                case EAnimTaskType::Blend:
-                case EAnimTaskType::BlendMasked:        return ImVec4(0.36f, 0.62f, 0.92f, 1.0f);
-                case EAnimTaskType::MakeAdditive:
-                case EAnimTaskType::ApplyAdditive:      return ImVec4(0.70f, 0.52f, 0.90f, 1.0f);
-                case EAnimTaskType::Inertialize:
-                case EAnimTaskType::DeadBlend:          return ImVec4(0.93f, 0.68f, 0.33f, 1.0f);
-                case EAnimTaskType::BoneTransform:
-                case EAnimTaskType::TwoBoneIK:
-                case EAnimTaskType::FABRIK:
-                case EAnimTaskType::LookAt:
-                case EAnimTaskType::FootIK:
-                case EAnimTaskType::TranslateBone:      return ImVec4(0.40f, 0.80f, 0.80f, 1.0f);
-
-                case EAnimTaskType::SavePoseSnapshot:
-                case EAnimTaskType::LoadPoseSnapshot:   return ImVec4(0.56f, 0.72f, 0.50f, 1.0f);
-                }
-                return ImVec4(0.60f, 0.60f, 0.60f, 1.0f);
-            }
-
-            FString BuildTaskDetail(const FAnimTaskDebugEntry& Entry)
-            {
-                switch (Entry.Type)
-                {
-                case EAnimTaskType::SampleClip:
-                    // Time first, since it is the per-frame liveness signal and long clip names get ellipsized.
-                    return Format(LOCF("t={:.3f}s   {}"), Entry.Time,
-                                  Entry.ClipName.IsNone() ? LOC("<no clip>") : Entry.ClipName.c_str());
-
-                case EAnimTaskType::BlendMasked:
-                    return Format(LOCF("alpha {:.2f}   mask {}/{} bones"),
-                                  Entry.Alpha, Entry.MaskWeightedBones, Entry.MaskTotalBones);
-
-                case EAnimTaskType::Blend:
-                case EAnimTaskType::ApplyAdditive:
-                case EAnimTaskType::BoneTransform:
-                case EAnimTaskType::TwoBoneIK:
-                case EAnimTaskType::FABRIK:
-                case EAnimTaskType::LookAt:
-                case EAnimTaskType::FootIK:
-                case EAnimTaskType::TranslateBone:
-                    return Format(LOCF("alpha {:.2f}"), Entry.Alpha);
-
-                case EAnimTaskType::Inertialize:
-                    return Format(LOCF("inertialization t={:.3f}s"), Entry.Time);
-
-                case EAnimTaskType::DeadBlend:
-                    return Format(LOCF("dead blend t={:.3f}s"), Entry.Time);
-
-                case EAnimTaskType::MakeAdditive:
-                    return FString(LOC("relative to bind pose"));
-
-                case EAnimTaskType::ReferencePose:
-                    return FString(LOC("skeleton bind pose"));
-
-                case EAnimTaskType::SavePoseSnapshot:
-                case EAnimTaskType::LoadPoseSnapshot:
-                    break;
-                }
-                return FString();
-            }
-
-            // Measured with the drawing font, so boxes stay clean at any zoom instead of clipping mid-glyph.
-            FString FitText(ImFont* Font, float FontSize, const char* Text, float MaxWidth)
-            {
-                if (Text == nullptr || Text[0] == '\0')
-                {
-                    return FString();
-                }
-                if (Font->CalcTextSizeA(FontSize, FLT_MAX, 0.0f, Text).x <= MaxWidth)
-                {
-                    return FString(Text);
-                }
-
-                const char* Ellipsis = "...";
-                const float Budget = MaxWidth - Font->CalcTextSizeA(FontSize, FLT_MAX, 0.0f, Ellipsis).x;
-                if (Budget <= 0.0f)
-                {
-                    return FString(Ellipsis);
-                }
-
-                FString Result(Text);
-                while (!Result.empty() &&
-                       Font->CalcTextSizeA(FontSize, FLT_MAX, 0.0f, Result.c_str()).x > Budget)
-                {
-                    Result.pop_back();
-                }
-                Result += Ellipsis;
-                return Result;
-            }
-
-            FString BuildDepText(const FAnimTaskDebugEntry& Entry)
-            {
-                if (Entry.DepA < 0 && Entry.DepB < 0)
-                {
-                    return FString(LOC("none (source task)"));
-                }
-                if (Entry.DepB < 0)
-                {
-                    return Format(LOCF("task {}"), (int32)Entry.DepA);
-                }
-                return Format(LOCF("task {}, task {}"), (int32)Entry.DepA, (int32)Entry.DepB);
-            }
+        case EAnimTaskType::ReferencePose:      return LOC("Reference Pose");
+        case EAnimTaskType::SampleClip:         return LOC("Sample Clip");
+        case EAnimTaskType::Blend:              return LOC("Blend");
+        case EAnimTaskType::BlendMasked:        return LOC("Layered Blend");
+        case EAnimTaskType::MakeAdditive:       return LOC("Make Additive");
+        case EAnimTaskType::ApplyAdditive:      return LOC("Apply Additive");
+        case EAnimTaskType::Inertialize:        return LOC("Inertialize");
+        case EAnimTaskType::DeadBlend:          return LOC("Dead Blend");
+        case EAnimTaskType::SavePoseSnapshot:   return LOC("Save Snapshot");
+        case EAnimTaskType::LoadPoseSnapshot:   return LOC("Pose Snapshot");
+        case EAnimTaskType::FABRIK:             return LOC("FABRIK");
+        case EAnimTaskType::LookAt:             return LOC("Look At");
+        case EAnimTaskType::FootIK:             return LOC("Foot IK");
+        case EAnimTaskType::TranslateBone:      return LOC("Translate Bone");
+        case EAnimTaskType::BoneTransform:      return LOC("Bone Transform");
+        case EAnimTaskType::TwoBoneIK:          return LOC("Two Bone IK");
         }
+        return LOC("Unknown");
     }
 
+    // Pose sources green, blends blue, additive violet, state machines amber, bone ops teal.
+    ImVec4 TaskTypeColor(EAnimTaskType Type)
+    {
+        switch (Type)
+        {
+        case EAnimTaskType::ReferencePose:      return ImVec4(0.56f, 0.59f, 0.64f, 1.0f);
+        case EAnimTaskType::SampleClip:         return ImVec4(0.38f, 0.76f, 0.47f, 1.0f);
+        case EAnimTaskType::Blend:
+        case EAnimTaskType::BlendMasked:        return ImVec4(0.36f, 0.62f, 0.92f, 1.0f);
+        case EAnimTaskType::MakeAdditive:
+        case EAnimTaskType::ApplyAdditive:      return ImVec4(0.70f, 0.52f, 0.90f, 1.0f);
+        case EAnimTaskType::Inertialize:
+        case EAnimTaskType::DeadBlend:          return ImVec4(0.93f, 0.68f, 0.33f, 1.0f);
+        case EAnimTaskType::BoneTransform:
+        case EAnimTaskType::TwoBoneIK:
+        case EAnimTaskType::FABRIK:
+        case EAnimTaskType::LookAt:
+        case EAnimTaskType::FootIK:
+        case EAnimTaskType::TranslateBone:      return ImVec4(0.40f, 0.80f, 0.80f, 1.0f);
+
+        case EAnimTaskType::SavePoseSnapshot:
+        case EAnimTaskType::LoadPoseSnapshot:   return ImVec4(0.56f, 0.72f, 0.50f, 1.0f);
+        }
+        return ImVec4(0.60f, 0.60f, 0.60f, 1.0f);
+    }
+
+    FString BuildTaskDetail(const FAnimTaskDebugEntry& Entry)
+    {
+        switch (Entry.Type)
+        {
+        case EAnimTaskType::SampleClip:
+            // Time first, since it is the per-frame liveness signal and long clip names get ellipsized.
+            return Format(LOCF("t={:.3f}s   {}"), Entry.Time,
+                          Entry.ClipName.IsNone() ? LOC("<no clip>") : Entry.ClipName.c_str());
+
+        case EAnimTaskType::BlendMasked:
+            return Format(LOCF("alpha {:.2f}   mask {}/{} bones"),
+                          Entry.Alpha, Entry.MaskWeightedBones, Entry.MaskTotalBones);
+
+        case EAnimTaskType::Blend:
+        case EAnimTaskType::ApplyAdditive:
+        case EAnimTaskType::BoneTransform:
+        case EAnimTaskType::TwoBoneIK:
+        case EAnimTaskType::FABRIK:
+        case EAnimTaskType::LookAt:
+        case EAnimTaskType::FootIK:
+        case EAnimTaskType::TranslateBone:
+            return Format(LOCF("alpha {:.2f}"), Entry.Alpha);
+
+        case EAnimTaskType::Inertialize:
+            return Format(LOCF("inertialization t={:.3f}s"), Entry.Time);
+
+        case EAnimTaskType::DeadBlend:
+            return Format(LOCF("dead blend t={:.3f}s"), Entry.Time);
+
+        case EAnimTaskType::MakeAdditive:
+            return FString(LOC("relative to bind pose"));
+
+        case EAnimTaskType::ReferencePose:
+            return FString(LOC("skeleton bind pose"));
+
+        case EAnimTaskType::SavePoseSnapshot:
+        case EAnimTaskType::LoadPoseSnapshot:
+            break;
+        }
+        return FString();
+    }
+
+    // Measured with the drawing font, so boxes stay clean at any zoom instead of clipping mid-glyph.
+    FString FitText(ImFont* Font, float FontSize, const char* Text, float MaxWidth)
+    {
+        if (Text == nullptr || Text[0] == '\0')
+        {
+            return FString();
+        }
+        if (Font->CalcTextSizeA(FontSize, FLT_MAX, 0.0f, Text).x <= MaxWidth)
+        {
+            return FString(Text);
+        }
+
+        const char* Ellipsis = "...";
+        const float Budget = MaxWidth - Font->CalcTextSizeA(FontSize, FLT_MAX, 0.0f, Ellipsis).x;
+        if (Budget <= 0.0f)
+        {
+            return FString(Ellipsis);
+        }
+
+        FString Result(Text);
+        while (!Result.empty() &&
+               Font->CalcTextSizeA(FontSize, FLT_MAX, 0.0f, Result.c_str()).x > Budget)
+        {
+            Result.pop_back();
+        }
+        Result += Ellipsis;
+        return Result;
+    }
+
+    FString BuildDepText(const FAnimTaskDebugEntry& Entry)
+    {
+        if (Entry.DepA < 0 && Entry.DepB < 0)
+        {
+            return FString(LOC("none (source task)"));
+        }
+        if (Entry.DepB < 0)
+        {
+            return Format(LOCF("task {}"), (int32)Entry.DepA);
+        }
+        return Format(LOCF("task {}, task {}"), (int32)Entry.DepA, (int32)Entry.DepB);
+    }
+
+    const char* WorldTypeLabel(EWorldType Type)
+    {
+        switch (Type)
+        {
+        case EWorldType::Game:       return LOC("Game");
+        case EWorldType::Simulation: return LOC("Sim");
+        case EWorldType::Editor:     return LOC("Editor");
+        default:                     return LOC("World");
+        }
+    }
+}
+
+namespace Lumina
+{
     FAnimationGraphEditorTool::FAnimationGraphEditorTool(IEditorToolContext* Context, CObject* InAsset)
         : FAssetEditorTool(Context, InAsset->GetName().c_str(), InAsset, NewObject<CWorld>())
         , NodeGraph(nullptr)
@@ -208,27 +216,27 @@ namespace Lumina
         PropertyContext.Provide(&StateMachineCtx);
         GetPropertyTable()->SetContext(&PropertyContext);
 
-        CreateToolWindow(AnimationGraphWindowName, [this](bool /*bFocused*/)
+        CreateToolWindow(AnimationGraphEditorToolInternal::AnimationGraphWindowName, [this](bool)
         {
             DrawGraphWindow();
         });
 
-        CreateToolWindow(GraphPropertiesWindowName, [this](bool /*bFocused*/)
+        CreateToolWindow(AnimationGraphEditorToolInternal::GraphPropertiesWindowName, [this](bool)
         {
             DrawPropertiesWindow();
         });
 
-        CreateToolWindow(GraphParametersWindowName, [this](bool /*bFocused*/)
+        CreateToolWindow(AnimationGraphEditorToolInternal::GraphParametersWindowName, [this](bool)
         {
             DrawParametersWindow();
         });
 
-        CreateToolWindow(GraphTasksWindowName, [this](bool /*bFocused*/)
+        CreateToolWindow(AnimationGraphEditorToolInternal::GraphTasksWindowName, [this](bool)
         {
             DrawTaskGraphWindow();
         });
 
-        CreateToolWindow(GraphClipsWindowName, [this](bool /*bFocused*/)
+        CreateToolWindow(AnimationGraphEditorToolInternal::GraphClipsWindowName, [this](bool)
         {
             DrawClipBrowserWindow();
         });
@@ -258,21 +266,32 @@ namespace Lumina
             }
         });
 
-        // EnterGraph creates its context, wires callbacks and pushes it.
+        // Any registry change can add, remove or rename a clip, so the browser relists on the next draw.
+        RegistryUpdatedHandle = FAssetRegistry::Get().GetOnAssetRegistryUpdated().AddLambda([this]
+        {
+            bClipCacheStale = true;
+        });
+
         EnterGraph(NodeGraph.Get(), LOC("Animation Graph"));
 
         // Seeds the runtime asset so the preview viewport has something to evaluate on the first frame.
         Compile(false);
     }
 
-    void FAnimationGraphEditorTool::OnDeinitialize(const FUpdateContext& /*UpdateContext*/)
+    void FAnimationGraphEditorTool::OnDeinitialize(const FUpdateContext&)
     {
+        FAssetRegistry::Get().GetOnAssetRegistryUpdated().Remove(RegistryUpdatedHandle);
+
         // Never leave the runtime capture pointing at a component this tool no longer watches.
         Anim::DisarmTaskCapture();
 
         // Covers the top graph plus any nested state machine or blend-tree canvas that was opened.
         for (CEdNodeGraph* Graph : InitializedGraphs)
         {
+            if (CAnimationGraphNodeGraph* BlendTree = Cast<CAnimationGraphNodeGraph>(Graph))
+            {
+                BlendTree->SetDebugView(nullptr);
+            }
             if (Graph != nullptr)
             {
                 Graph->Shutdown();
@@ -303,6 +322,16 @@ namespace Lumina
                 NavForwardStack.clear();
                 break;
             }
+        }
+
+        // A restore can resize a transition's conditions under its inline table, so those rebuild on the next draw.
+        TransitionTables.clear();
+
+        // Removed nodes report through the pre-delete callback, but a transition undone away does not.
+        const CAnimStateMachineGraph* SMGraph = GraphStack.empty() ? nullptr : Cast<CAnimStateMachineGraph>(GraphStack.back().Graph);
+        if (SelectedTransition != nullptr && (SMGraph == nullptr || !Algo::AnyOf(SMGraph->GetTransitions(), [this](const TStrongObjectPtr<CAnimStateTransition>& Transition) { return Transition.Get() == SelectedTransition; })))
+        {
+            ClearGraphSelection();
         }
     }
 
@@ -413,7 +442,7 @@ namespace Lumina
             return;
         }
         InitializedGraphs.insert(Graph);
-        Graph->Initialize();          // guarded internally; creates the context
+        Graph->Initialize();
         Graph->SetTransactionManager(&GetTransactionManager());
         WireGraphCallbacks(Graph);
     }
@@ -566,6 +595,11 @@ namespace Lumina
     {
         FAssetEditorTool::Update(UpdateContext);
 
+        if (World.IsValid() && World->GetRenderer() != nullptr)
+        {
+            World->GetRenderSettings().bDrawBillboards = false;
+        }
+
         // The skeleton is often assigned after the tool is open, so pick it up here too.
         SyncPreviewMesh();
 
@@ -577,9 +611,9 @@ namespace Lumina
 
     }
 
-    void FAnimationGraphEditorTool::DrawToolMenu(const FUpdateContext& /*UpdateContext*/)
+    void FAnimationGraphEditorTool::DrawToolMenu(const FUpdateContext&)
     {
-        if (ImGui::MenuItem(LOC_ICON(LE_ICON_COG, "Compile")))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_COG, "Compile")))
         {
             Compile();
         }
@@ -588,7 +622,7 @@ namespace Lumina
         PreviewMeshSelection.DrawMenu(Graph != nullptr ? Graph->Skeleton.Get() : nullptr);
     }
 
-    void FAnimationGraphEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& /*InDockspaceSize*/) const
+    void FAnimationGraphEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2&) const
     {
         ImGui::DockBuilderRemoveNodeChildNodes(InDockspaceID);
 
@@ -599,14 +633,14 @@ namespace Lumina
         ImGui::DockBuilderSplitNode(leftDockID, ImGuiDir_Up, 0.45f, &leftDockID, &bottomDockID);
 
         ImGui::DockBuilderDockWindow(GetToolWindowName(ViewportWindowName).c_str(),            leftDockID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(AnimationGraphWindowName).c_str(),      bottomDockID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(GraphPropertiesWindowName).c_str(),     rightDockID);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(AnimationGraphEditorToolInternal::AnimationGraphWindowName).c_str(),      bottomDockID);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(AnimationGraphEditorToolInternal::GraphPropertiesWindowName).c_str(),     rightDockID);
         // Parameters share the right pane, tabbed behind Properties.
-        ImGui::DockBuilderDockWindow(GetToolWindowName(GraphParametersWindowName).c_str(),     rightDockID);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(AnimationGraphEditorToolInternal::GraphParametersWindowName).c_str(),     rightDockID);
         // Task Graph tabs sit behind the node canvas, in the same what-is-this-graph-doing workspace.
-        ImGui::DockBuilderDockWindow(GetToolWindowName(GraphTasksWindowName).c_str(),          bottomDockID);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(AnimationGraphEditorToolInternal::GraphTasksWindowName).c_str(),          bottomDockID);
         // Clips sit with the other pickers on the right so they can be dragged onto the canvas.
-        ImGui::DockBuilderDockWindow(GetToolWindowName(GraphClipsWindowName).c_str(),          rightDockID);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(AnimationGraphEditorToolInternal::GraphClipsWindowName).c_str(),          rightDockID);
     }
 
     void FAnimationGraphEditorTool::DrawBreadcrumbBar()
@@ -709,7 +743,7 @@ namespace Lumina
         // The canvas in view, so a State Alias lists the states it can name.
         StateMachineCtx.Graph = GraphStack.empty() ? nullptr : Cast<CAnimStateMachineGraph>(GraphStack.back().Graph);
 
-        if (ImGui::Button(LOC_ICON(LE_ICON_COG, "Compile")))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_COG, "Compile")))
         {
             Compile();
         }
@@ -750,9 +784,7 @@ namespace Lumina
             !GraphStack.empty() && Cast<CAnimStateMachineGraph>(GraphStack.back().Graph) != nullptr)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped(LOC("Click a transition's condition badge to edit it here. Drag from a State's right band "
-                "onto another State's left band to add one. Click a State to rename it, double-click to edit its "
-                "blend tree, and right-click the canvas to add a State or an Any State source."));
+            ImGui::TextWrapped(LOC("Click a transition's condition badge to edit it here. Drag from a State's right band " "onto another State's left band to add one. Click a State to rename it, double-click to edit its " "blend tree, and right-click the canvas to add a State or an Any State source."));
             ImGui::PopStyleColor();
             ImGui::Separator();
         }
@@ -763,6 +795,11 @@ namespace Lumina
         if (CAnimGraphNode_State* StateNode = Cast<CAnimGraphNode_State>(SelectedNode))
         {
             DrawOutgoingTransitionsForState(StateNode);
+        }
+
+        if (SelectedTransition != nullptr)
+        {
+            DrawTransitionBlend(SelectedTransition);
         }
 
         if (!CompilationLog.empty())
@@ -816,8 +853,7 @@ namespace Lumina
         }
 
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-        ImGui::TextWrapped(LOC("Tested top to bottom while this state is active; the first passing condition wins. "
-                           "Reorder with Priority."));
+        ImGui::TextWrapped(LOC("Tested top to bottom while this state is active; the first passing condition wins. " "Reorder with Priority."));
         ImGui::PopStyleColor();
 
         for (int32 Index = 0; Index < (int32)Outgoing.size(); ++Index)
@@ -865,25 +901,6 @@ namespace Lumina
         }
     }
 
-    CEnum* FAnimationGraphEditorTool::ResolveReflectedEnum(const FName& Name)
-    {
-        if (!bEnumCacheBuilt)
-        {
-            bEnumCacheBuilt = true;
-            ForEachObject([&](CObjectBase* Object, int32)
-            {
-                if (Object != nullptr && Object->IsA<CEnum>())
-                {
-                    CEnum* Enum = static_cast<CEnum*>(Object);
-                    ReflectedEnumCache[Enum->GetName()] = Enum;
-                }
-            });
-        }
-
-        auto It = ReflectedEnumCache.find(Name);
-        return It == ReflectedEnumCache.end() ? nullptr : It->second;
-    }
-
     void FAnimationGraphEditorTool::DrawParametersWindow()
     {
         CAnimationGraph* Graph = Cast<CAnimationGraph>(Asset.Get());
@@ -909,37 +926,24 @@ namespace Lumina
             return;
         }
 
-        const FAnimGraphVMState* VMState = nullptr;
-        CWorld* TargetWorld = nullptr;
-        ECS::FEntity TargetEntity = ECS::NullEntity;
-        if (ResolveDebugTarget(TargetWorld, TargetEntity))
+        for (const FName& Name : Graph->CurveNames)
         {
-            if (SAnimationGraphComponent* Comp = TargetWorld->TryGetComponent<SAnimationGraphComponent>(TargetEntity))
+            auto It = CurveHistories.find(Name);
+            if (It == CurveHistories.end() || It->second.empty())
             {
-                VMState = &Comp->VMState;
+                ImGui::TextDisabled("%s", Name.c_str());
+                continue;
             }
-        }
 
-        for (int32 i = 0; i < (int32)Graph->CurveNames.size(); ++i)
-        {
-            const bool bHasValue = VMState != nullptr && i < (int32)VMState->CurveValues.size();
-            if (bHasValue)
-            {
-                ImGui::Text("%s", Graph->CurveNames[i].c_str());
-                ImGui::SameLine(ImGui::GetContentRegionAvail().x * 0.6f);
-                ImGui::Text("%.3f", VMState->CurveValues[i]);
-            }
-            else
-            {
-                ImGui::TextDisabled("%s", Graph->CurveNames[i].c_str());
-            }
+            ImGui::TextUnformatted(Name.c_str());
+            AnimDebugDraw::Plot(It->second, ImVec2(ImGui::GetContentRegionAvail().x, 46.0f), EditorColors::U32(EditorColors::Accent()));
+            ImGui::Spacing();
         }
     }
 
     void FAnimationGraphEditorTool::DrawParameters(CAnimationGraph* Graph)
     {
-        ImGui::TextWrapped(LOC("Read-only view of the preview entity's live parameter block. At runtime gameplay "
-            "code writes these directly on the Animation Graph Component."));
+        ImGui::TextWrapped(LOC("Read-only view of the preview entity's live parameter block. At runtime gameplay " "code writes these directly on the Animation Graph Component."));
         ImGui::Separator();
 
         CStruct* Struct = Graph->GetParameterStruct();
@@ -1024,8 +1028,9 @@ namespace Lumina
         }
 
         // Lets the debug overlay read live VM values back onto the graph, re-run every frame.
-        DebugPinRegisters = Compiler.GetPinRegisters();
-        DebugStateNodes   = Compiler.GetDebugStateNodes();
+        DebugView.PinRegisters = Compiler.GetPinRegisters();
+        DebugView.Playheads    = Compiler.GetDebugPlayheads();
+        DebugStateNodes        = Compiler.GetDebugStateNodes();
 
         if (bMarkPackageDirty)
         {
@@ -1039,6 +1044,7 @@ namespace Lumina
     {
         DebugPinValues.clear();
         DebugActiveNodes.clear();
+        DebugTransition = nullptr;
 
         CEdNodeGraph* Graph = GraphStack.empty() ? nullptr : GraphStack.back().Graph;
         if (Graph == nullptr)
@@ -1050,12 +1056,6 @@ namespace Lumina
         if (SMGraph != nullptr)
         {
             SMGraph->SetDebugTransition(nullptr, 0.0f);
-        }
-
-        if (!bDebugEnabled)
-        {
-            Graph->ClearDebugContext();
-            return;
         }
 
         CWorld* TargetWorld = nullptr;
@@ -1072,20 +1072,6 @@ namespace Lumina
 
         if (VMState != nullptr)
         {
-            // Live scalar values onto value pins.
-            const TVector<float>& Scalars = VMState->ScalarRegisters;
-            for (const auto& [Pin, Reg] : DebugPinRegisters)
-            {
-                CAnimGraphPin* AnimPin = Cast<CAnimGraphPin>(const_cast<CEdNodeGraphPin*>(Pin));
-                if (AnimPin == nullptr || AnimPin->GetPinType() != EAnimPinType::Value || Reg >= Scalars.size())
-                {
-                    continue;
-                }
-
-                DebugPinValues[const_cast<CEdNodeGraphPin*>(Pin)] = Format("{:.2f}", Scalars[Reg]);
-            }
-
-            // Highlight whichever State node the VM is currently in.
             const TVector<float>& Slots = VMState->StateSlots;
             for (const FAnimGraphDebugStateNode& Entry : DebugStateNodes)
             {
@@ -1102,12 +1088,166 @@ namespace Lumina
             }
         }
 
+        // Node previews and the transition plot read live values whether or not the overlay is on.
+        UpdateDebugView(VMState);
+        CAnimationGraphNodeGraph* BlendTree = Cast<CAnimationGraphNodeGraph>(Graph);
+        if (BlendTree != nullptr)
+        {
+            BlendTree->SetDebugView(&DebugView);
+        }
+
+        if (!bDebugEnabled)
+        {
+            Graph->ClearDebugContext();
+            return;
+        }
+
+        if (VMState != nullptr)
+        {
+            // An input shows its value in its own editor, so only outputs get one beside the pin.
+            for (const auto& [Pin, Reg] : DebugView.PinRegisters)
+            {
+                const CAnimGraphPin* AnimPin = Cast<CAnimGraphPin>(Pin);
+                if (AnimPin != nullptr && !AnimPin->bInputPin && AnimPin->GetPinType() == EAnimPinType::Value && Reg < DebugView.Scalars.size())
+                {
+                    DebugPinValues[const_cast<CEdNodeGraphPin*>(Pin)] = Format("{:.2f}", DebugView.Scalars[Reg]);
+                }
+            }
+
+            if (SMGraph != nullptr && DebugTransition != nullptr)
+            {
+                SMGraph->SetDebugTransition(DebugTransition, DebugTransitionWeight);
+            }
+
+            if (BlendTree != nullptr)
+            {
+                BlendTree->ComputePoseWeights(DebugView, ResolveDisplayedRootWeight());
+            }
+        }
+
         CEdNodeGraph::FGraphDebugContext Context;
         Context.bEnabled    = true;
-        Context.bFlowLinks  = true;
         Context.PinValues   = &DebugPinValues;
         Context.ActiveNodes = &DebugActiveNodes;
         Graph->SetDebugContext(Context);
+    }
+
+    void FAnimationGraphEditorTool::UpdateDebugView(const FAnimGraphVMState* VMState)
+    {
+        DebugView.bLive = VMState != nullptr;
+        DebugView.bShowWeights = bDebugEnabled && VMState != nullptr;
+        DebugView.NodeWeights.clear();
+        DebugView.Machines.clear();
+        if (VMState == nullptr)
+        {
+            return;
+        }
+
+        DebugView.Scalars = VMState->ScalarRegisters;
+
+        erase_if(DebugView.Histories, [this](const auto& Pair) { return !DebugView.PinRegisters.contains(Pair.first); });
+        for (const auto& [Pin, Reg] : DebugView.PinRegisters)
+        {
+            const CAnimGraphPin* AnimPin = Cast<CAnimGraphPin>(Pin);
+            if (AnimPin == nullptr || AnimPin->bInputPin || AnimPin->GetPinType() != EAnimPinType::Value || Reg >= DebugView.Scalars.size())
+            {
+                continue;
+            }
+
+            FAnimValueHistory& History = DebugView.Histories[Pin];
+            History.set_capacity(kAnimValueHistoryLength);
+            History.push_back(DebugView.Scalars[Reg]);
+        }
+
+        if (const CAnimationGraph* AssetGraph = Cast<CAnimationGraph>(Asset.Get()))
+        {
+            for (size_t Index = 0; Index < AssetGraph->CurveNames.size() && Index < VMState->CurveValues.size(); ++Index)
+            {
+                FAnimValueHistory& History = CurveHistories[AssetGraph->CurveNames[Index]];
+                History.set_capacity(kAnimValueHistoryLength);
+                History.push_back(VMState->CurveValues[Index]);
+            }
+        }
+
+        if (!GraphStack.empty())
+        {
+            UpdateMachineStatuses(GraphStack.back().Graph, *VMState);
+        }
+    }
+
+    void FAnimationGraphEditorTool::UpdateMachineStatuses(CEdNodeGraph* Graph, const FAnimGraphVMState& VMState)
+    {
+        const TVector<float>& Slots = VMState.StateSlots;
+        for (const TStrongObjectPtr<CEdGraphNode>& NodeRef : Graph->Nodes)
+        {
+            CAnimGraphNode_StateMachine* Machine = Cast<CAnimGraphNode_StateMachine>(NodeRef.Get());
+            if (Machine == nullptr)
+            {
+                continue;
+            }
+
+            const CEdNodeGraph* MachineGraph = Machine->GetEnterableSubGraph();
+            FAnimMachineStatus Status;
+            bool bFound = false;
+            for (const FAnimGraphDebugStateNode& Entry : DebugStateNodes)
+            {
+                const CAnimGraphNode_State* State = Cast<CAnimGraphNode_State>(Entry.Node);
+                if (State == nullptr || Entry.Node->GetOwningGraph() != MachineGraph || Entry.CurrentStateSlot >= Slots.size() || Entry.FromStateSlot >= Slots.size())
+                {
+                    continue;
+                }
+
+                if ((int32)(Slots[Entry.CurrentStateSlot] + 0.5f) == Entry.StateIndex)
+                {
+                    Status.Current = State->GetStateLabel();
+                    bFound = true;
+                }
+
+                // Negative means settled on one state, so nothing is blending.
+                if (Slots[Entry.FromStateSlot] >= 0.0f && (int32)(Slots[Entry.FromStateSlot] + 0.5f) == Entry.StateIndex)
+                {
+                    Status.From = State->GetStateLabel();
+                }
+
+                if (Entry.MachineIndex < VMState.Inertializers.size())
+                {
+                    const FAnimInertializer& Inert = VMState.Inertializers[Entry.MachineIndex];
+                    Status.Blend = Inert.bActive && Inert.Duration > 1e-5f ? Math::Clamp(Inert.Elapsed / Inert.Duration, 0.0f, 1.0f) : 1.0f;
+                }
+            }
+
+            if (bFound)
+            {
+                DebugView.Machines[Machine] = Status;
+            }
+        }
+    }
+
+    float FAnimationGraphEditorTool::ResolveDisplayedRootWeight() const
+    {
+        for (size_t Level = 1; Level < GraphStack.size(); ++Level)
+        {
+            for (const TStrongObjectPtr<CEdGraphNode>& NodeRef : GraphStack[Level - 1].Graph->Nodes)
+            {
+                const CAnimGraphNode_State* State = Cast<CAnimGraphNode_State>(NodeRef.Get());
+                if (State != nullptr && State->BlendTree.Get() == GraphStack[Level].Graph && !DebugActiveNodes.contains(State))
+                {
+                    return 0.0f;
+                }
+            }
+        }
+        return 1.0f;
+    }
+
+    void FAnimationGraphEditorTool::DrawTransitionBlend(CAnimStateTransition* Transition)
+    {
+        ImGui::Spacing();
+        ImGui::SeparatorText(LOC("Blend"));
+        const TOptional<float> Elapsed = DebugTransition == Transition ? TOptional<float>(DebugTransitionWeight * Transition->BlendDuration) : TOptional<float>();
+        AnimDebugDraw::SeamDecay(Transition->BlendDuration, Elapsed, ImGui::GetContentRegionAvail().x);
+        ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
+        ImGui::TextWrapped(LOC("The new state plays at full weight from the switch. What eases out is the offset between the two poses, over Blend Duration."));
+        ImGui::PopStyleColor();
     }
 
     void FAnimationGraphEditorTool::UpdateDebugTransition(CAnimStateMachineGraph* SMGraph, const FAnimGraphVMState& VMState)
@@ -1168,22 +1308,12 @@ namespace Lumina
         const FAnimInertializer& Inert = VMState.Inertializers[MachineIndex];
         const float Weight = Inert.Duration > 1e-5f ? Inert.Elapsed / Inert.Duration : 1.0f;
 
-        SMGraph->SetDebugTransition(Active, Weight);
+        DebugTransition       = Active;
+        DebugTransitionWeight = Weight;
     }
 
     void FAnimationGraphEditorTool::DrawDebugTargetCombo()
     {
-        static auto WorldTypeLabel = [](EWorldType Type, bool bLocalized = true) -> const char*
-        {
-            switch (Type)
-            {
-            case EWorldType::Game:       return bLocalized ? LOC("Game") : "Game";
-            case EWorldType::Simulation: return bLocalized ? LOC("Sim") : "Sim";
-            case EWorldType::Editor:     return bLocalized ? LOC("Editor") : "Editor";
-            default:                     return bLocalized ? LOC("World") : "World";
-            }
-        };
-
         CAnimationGraph* AssetGraph = Cast<CAnimationGraph>(Asset.Get());
 
         // Resolve the current selection's label; revert to preview if it's gone.
@@ -1204,15 +1334,14 @@ namespace Lumina
 
         // Flattened into one indexable list so the searchable picker can select by index.
         TVector<FString> Labels;
-        TVector<FString> SourceLabels;
         TVector<TPair<CWorld*, ECS::FEntity>> Targets;
         Labels.push_back(LOC("Preview"));
-        SourceLabels.push_back("Preview");
         Targets.push_back({ nullptr, static_cast<ECS::FEntity>(ECS::NullEntity) });
 
         int32 CurrentIndex = DebugTargetWorld.IsValid() ? Constants::kIndexNone : 0;
 
-        if (GWorldManager != nullptr && AssetGraph != nullptr)
+        // Walking every world's graph components is only worth it while the list is showing.
+        if (GWorldManager != nullptr && AssetGraph != nullptr && ImGuiX::IsSearchableComboOpen("##DebugTarget"))
         {
             for (const TUniquePtr<FWorldContext>& Ctx : GWorldManager->GetContexts())
             {
@@ -1231,9 +1360,7 @@ namespace Lumina
 
                     const SNameComponent* Name = CandidateWorld->TryGetComponent<SNameComponent>(Entity);
                     Labels.push_back((Name ? Name->Name.ToString() : FString(LOC("Entity")))
-                        + "  (" + WorldTypeLabel(Ctx->Type) + ")");
-                    SourceLabels.push_back((Name ? Name->Name.ToString() : FString("Entity"))
-                        + "  (" + WorldTypeLabel(Ctx->Type, false) + ")");
+                        + "  (" + AnimationGraphEditorToolInternal::WorldTypeLabel(Ctx->Type) + ")");
                     Targets.push_back({ CandidateWorld, Entity });
 
                     if (DebugTargetWorld.Get() == CandidateWorld && DebugTargetEntity == Entity)
@@ -1247,8 +1374,7 @@ namespace Lumina
         ImGui::SameLine();
         ImGui::SetNextItemWidth(220.0f);
         const int32 Picked = ImGuiX::SearchableCombo("##DebugTarget", CurrentLabel.c_str(), (int32)Labels.size(), CurrentIndex,
-            [&Labels](int32 Index) { return FFixedString(Labels[Index].c_str()); }, nullptr, nullptr,
-            [&SourceLabels](int32 Index) { return FFixedString(SourceLabels[Index].c_str()); });
+            [&Labels](int32 Index) { return FFixedString(Labels[Index].c_str()); });
 
         if (Picked != Constants::kIndexNone)
         {
@@ -1350,15 +1476,14 @@ namespace Lumina
 
         GetNode->ParameterName = MatchedParameter;
         Canvas->ConnectPins(GetNode->ValuePin, AxisPin);
-        Canvas->QueueNodePlacement(GetNode, ScreenPos);
+        Canvas->PlaceNodeAtScreen(GetNode, ScreenPos);
     }
 
     void FAnimationGraphEditorTool::FinishSpawnedNode(CEdGraphNode* Node, ImVec2 ScreenPos)
     {
         CEdNodeGraph* Canvas = GraphStack.back().Graph;
 
-        // Screen->canvas needs the node-editor context, which is only current inside DrawGraph.
-        Canvas->QueueNodePlacement(Node, ScreenPos);
+        Canvas->PlaceNodeAtScreen(Node, ScreenPos);
         Canvas->ValidateGraph();
 
         if (Asset.IsValid() && Asset->GetPackage() != nullptr)
@@ -1376,12 +1501,12 @@ namespace Lumina
         ImGui::TextUnformatted(LOC("Clips"));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 140.0f);
-        ClipFilter.DrawWithHint("##ClipFilter", LOC("Search..."));
+        ClipFilter.Draw("##ClipFilter");
 
         ImGui::SameLine();
         if (ImGui::Checkbox(LOC("Any skeleton"), &bClipBrowserAnySkeleton))
         {
-            ClipCacheAssetCount = -1; // force a rebuild with the new filter
+            bClipCacheStale = true;
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
@@ -1398,23 +1523,18 @@ namespace Lumina
         }
 
         // Matching runs off the registry dependency table, so clips filter without loading a single one.
-        TVector<FAssetData*> AllAssets = FAssetRegistry::Get().FindByPredicate([](const FAssetData&) { return true; });
-        if (ClipCacheSkeleton != Skeleton || ClipCacheAssetCount != (int32)AllAssets.size())
+        if (bClipCacheStale || ClipCacheSkeleton != Skeleton)
         {
-            ClipCacheSkeleton   = Skeleton;
-            ClipCacheAssetCount = (int32)AllAssets.size();
+            bClipCacheStale   = false;
+            ClipCacheSkeleton = Skeleton;
             ClipEntries.clear();
 
-            static const FName AnimationClassName = CAnimation::StaticClass()->GetName();
+            const FName AnimationClassName = CAnimation::StaticClass()->GetName();
+            const TVector<FAssetData*> Clips = FAssetRegistry::Get().FindByPredicate([&](const FAssetData& Data) { return Data.AssetClass == AnimationClassName; });
             THashMap<FGuid, bool> SkeletonVerdicts;
 
-            for (const FAssetData* Data : AllAssets)
+            for (const FAssetData* Data : Clips)
             {
-                if (Data->AssetClass != AnimationClassName)
-                {
-                    continue;
-                }
-
                 if (!bClipBrowserAnySkeleton && Skeleton != nullptr
                     && !AnimPreview::IsAssetCompatible(*Data, *Skeleton, SkeletonVerdicts))
                 {
@@ -1452,7 +1572,7 @@ namespace Lumina
         {
             for (const FClipEntry& Entry : ClipEntries)
             {
-                if (!ImGuiX::PassSearchFilter(ClipFilter, { Entry.DisplayName.c_str(), Entry.Path.c_str() }))
+                if (!ImGuiX::PassSearchFilter(ClipFilter, Entry.DisplayName.c_str()) && !ImGuiX::PassSearchFilter(ClipFilter, Entry.Path.c_str()))
                 {
                     continue;
                 }
@@ -1600,13 +1720,9 @@ namespace Lumina
 
         // The threading reality stated where it cannot be misread, one list is one thread.
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-        ImGui::TextWrapped(LOC("This whole list runs start-to-finish on a single worker thread; the animation system's "
-                           "parallelism is across meshes, not within one graph. Columns are dependency levels: tasks "
-                           "in the same column have no dependency between them."));
+        ImGui::TextWrapped(LOC("This whole list runs start-to-finish on a single worker thread; the animation system's " "parallelism is across meshes, not within one graph. Columns are dependency levels: tasks " "in the same column have no dependency between them."));
         ImGui::PopStyleColor();
         ImGui::Separator();
-
-        // ---- Layout -------------------------------------------------------------------------
 
         const float Scale = TaskGraphZoom;
 
@@ -1652,7 +1768,6 @@ namespace Lumina
             MaxColumnHeight = Math::Max(MaxColumnHeight, Height);
         }
 
-        // Column-local positions (canvas space); each column is vertically centered.
         TVector<ImVec2> Positions;
         Positions.resize(NumEntries, ImVec2(0.0f, 0.0f));
         for (int32 L = 0; L < NumLevels; ++L)
@@ -1674,8 +1789,6 @@ namespace Lumina
         const float TotalW = (float)NumLevels * NodeW + (float)(NumLevels - 1) * ColGap;
         const float TotalH = MaxColumnHeight;
 
-        // ---- Canvas -------------------------------------------------------------------------
-
         ImGui::BeginChild("##TaskCanvas", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
 
         const ImVec2 CanvasCursor = ImGui::GetCursorScreenPos();
@@ -1695,8 +1808,7 @@ namespace Lumina
                               6.0f * Scale);
 
             const int32 Count = (int32)Columns[L].size();
-            const FString Header = Count == 1 ? Format(LOCF("Level {}  ({} task)"), L, Count)
-                                               : Format(LOCF("Level {}  ({} tasks)"), L, Count);
+            const FString Header = Format("Level {}  ({} task{})", L, Count, Count == 1 ? "" : "s");
             DL->AddText(Font, SmallFont, ImVec2(BandMin.x + 8.0f * Scale, Origin.y - HeaderH + 4.0f * Scale),
                         EditorColors::U32(EditorColors::TextMuted()), Header.c_str());
         }
@@ -1740,7 +1852,6 @@ namespace Lumina
             }
         }
 
-        // Task boxes.
         for (int32 i = 0; i < NumEntries; ++i)
         {
             const FAnimTaskDebugEntry& Entry = Snap.Entries[i];
@@ -1755,7 +1866,7 @@ namespace Lumina
             const float Alpha    = Entry.bReachable ? 1.0f : 0.34f;
             const float Rounding = 6.0f * Scale;
 
-            const ImVec4 Category = AnimGraphDetail::TaskTypeColor(Entry.Type);
+            const ImVec4 Category = AnimationGraphEditorToolInternal::TaskTypeColor(Entry.Type);
 
             DL->AddRectFilled(Min, Max,
                               EditorColors::U32(EditorColors::WithAlpha(EditorColors::FrameBg(), Alpha)), Rounding);
@@ -1775,12 +1886,11 @@ namespace Lumina
             const FString Order = Entry.bReachable ? Format("#{}", (int32)Entry.ExecOrder) : FString(LOC("skipped"));
             const ImVec2 OrderSize = Font->CalcTextSizeA(SmallFont, FLT_MAX, 0.0f, Order.c_str());
 
-            // Category dot + title.
             DL->AddCircleFilled(ImVec2(TextX + 3.0f * Scale, TextY + FontSize * 0.5f), 3.5f * Scale,
                                 EditorColors::U32(EditorColors::WithAlpha(Category, Alpha)));
 
             const float TitleMaxW = BodyMaxW - DotOffset - OrderSize.x - 6.0f * Scale;
-            const FString Title = AnimGraphDetail::FitText(Font, FontSize, AnimGraphDetail::TaskTypeName(Entry.Type), TitleMaxW);
+            const FString Title = AnimationGraphEditorToolInternal::FitText(Font, FontSize, AnimationGraphEditorToolInternal::TaskTypeName(Entry.Type), TitleMaxW);
             DL->AddText(Font, FontSize, ImVec2(TextX + DotOffset, TextY),
                         EditorColors::U32(EditorColors::WithAlpha(EditorColors::TextPrimary(), Alpha)), Title.c_str());
 
@@ -1790,7 +1900,7 @@ namespace Lumina
 
             TextY += FontSize + LineGap;
 
-            const FString DetailText = AnimGraphDetail::FitText(Font, SmallFont, AnimGraphDetail::BuildTaskDetail(Entry).c_str(), BodyMaxW);
+            const FString DetailText = AnimationGraphEditorToolInternal::FitText(Font, SmallFont, AnimationGraphEditorToolInternal::BuildTaskDetail(Entry).c_str(), BodyMaxW);
             DL->AddText(Font, SmallFont, ImVec2(TextX, TextY),
                         EditorColors::U32(EditorColors::WithAlpha(EditorColors::TextDim(), Alpha)), DetailText.c_str());
 
@@ -1801,7 +1911,7 @@ namespace Lumina
             {
                 const FString Where = Format(LOCF("buffer {}  ({})"), (int32)Entry.BufferIndex,
                                              Entry.bStoleBuffer ? LOC("in place") : LOC("new"));
-                const FString Chip = AnimGraphDetail::FitText(Font, SmallFont, Where.c_str(), BodyMaxW);
+                const FString Chip = AnimationGraphEditorToolInternal::FitText(Font, SmallFont, Where.c_str(), BodyMaxW);
                 DL->AddText(Font, SmallFont, ImVec2(TextX, TextY),
                             EditorColors::U32(EditorColors::WithAlpha(
                                 Entry.bStoleBuffer ? EditorColors::AccentAlt() : EditorColors::TextMuted(), Alpha)),
@@ -1813,11 +1923,11 @@ namespace Lumina
             if (bWindowHovered && ImGui::IsMouseHoveringRect(Min, Max))
             {
                 ImGui::BeginTooltip();
-                ImGui::TextColored(Category, "%s", AnimGraphDetail::TaskTypeName(Entry.Type));
+                ImGui::TextColored(Category, "%s", AnimationGraphEditorToolInternal::TaskTypeName(Entry.Type));
                 ImGui::Separator();
                 ImGui::Text(LOC("Task index    %d%s"), i, bIsOutput ? LOC("   (graph output)") : "");
                 ImGui::Text(LOC("Level         %d"), (int32)Entry.Level);
-                ImGui::Text(LOC("Dependencies  %s"), AnimGraphDetail::BuildDepText(Entry).c_str());
+                ImGui::Text(LOC("Dependencies  %s"), AnimationGraphEditorToolInternal::BuildDepText(Entry).c_str());
                 ImGui::Separator();
                 if (Entry.bReachable)
                 {
@@ -1831,7 +1941,7 @@ namespace Lumina
                     ImGui::TextColored(EditorColors::Warning(), LOC("Skipped: not reachable from the output task."));
                     ImGui::TextColored(EditorColors::TextMuted(), LOC("Inactive branches cost nothing to evaluate."));
                 }
-                const FString DetailLine = AnimGraphDetail::BuildTaskDetail(Entry);
+                const FString DetailLine = AnimationGraphEditorToolInternal::BuildTaskDetail(Entry);
                 if (!DetailLine.empty())
                 {
                     ImGui::Separator();

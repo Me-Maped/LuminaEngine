@@ -1,3 +1,4 @@
+﻿#include "Localization/Localization.h"
 #include "ShadowAtlasEditorTool.h"
 
 #include "World/World.h"

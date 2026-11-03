@@ -15,7 +15,7 @@ struct FCloudMedium
     float  LayerBottom;
 
     float  LayerTop;
-    float  _Pad0;
+    FTexture2D Weather;
     float2 WindOffset;
 
     float2 DetailWindOffset;
@@ -41,8 +41,9 @@ float Cloud_HeightGradient(float H, float Billow)
     float Top  = saturate(Cloud_Remap(H, 0.45, 1.0, 1.0, 0.0));
     float Flat = Base * Top;
 
-    float Round = saturate(Cloud_Remap(H, 0.0, 0.25, 0.0, 1.0))
-                * saturate(Cloud_Remap(H, 0.7, 1.0, 1.0, 0.0));
+    // Thinning all the way up from just above the base, so the coverage cut narrows each puff with height into a dome rather than an extruded column.
+    float Round = saturate(Cloud_Remap(H, 0.0, 0.12, 0.0, 1.0))
+                * pow(saturate(Cloud_Remap(H, 0.25, 1.0, 1.0, 0.0)), 0.4);
     return lerp(Flat, Round, Billow);
 }
 
@@ -53,6 +54,8 @@ float Cloud_HeightFraction(FCloudMedium M, float Y)
 
 // The weather layer tiles at an irrational multiple of the shape tile, so the two repeats never line up.
 static const float kWeatherScaleRatio = 4.37;
+
+static const float kWeatherSliceV = 0.37;
 
 // Turning the weather layer against the shape tile keeps the two lattices from sharing an axis.
 static const float2x2 kWeatherRotation = float2x2(0.8572, -0.5150, 0.5150, 0.8572);
@@ -72,7 +75,7 @@ FCloudWeather Cloud_SampleWeather(FCloudMedium M, float3 WorldPos)
 {
     float2 Drifted = WorldPos.xz + M.WindOffset * 0.5;
     float2 P = mul(kWeatherRotation, Drifted) / max(M.ShapeScale * kWeatherScaleRatio, 1.0);
-    float4 Layout = M.Noise.SampleLevel(Samplers::LinearWrap, float3(P.x, 0.37, P.y), 0.0);
+    float4 Layout = M.Weather.SampleLevel(Samplers::LinearWrap, P, 0.0);
 
     float Regional = smoothstep(0.3, 0.8, Layout.g * 0.6 + Layout.b * 0.4);
 
@@ -83,8 +86,10 @@ FCloudWeather Cloud_SampleWeather(FCloudMedium M, float3 WorldPos)
     return Weather;
 }
 
-float Cloud_SampleDensityM(FCloudMedium M, float3 WorldPos, float HeightFrac, bool bCheap)
+// Envelope is the density before the detail erodes it, which says whether the point lies inside a cloud at all.
+float Cloud_SampleDensityEnvelopeM(FCloudMedium M, float3 WorldPos, float HeightFrac, bool bCheap, out float Envelope)
 {
+    Envelope = 0.0;
     FCloudWeather Weather = Cloud_SampleWeather(M, WorldPos);
     if (Weather.Coverage <= 0.01)
     {
@@ -106,6 +111,7 @@ float Cloud_SampleDensityM(FCloudMedium M, float3 WorldPos, float HeightFrac, bo
     // Coverage as the remap floor erodes inward, so puffs shrink rather than uniformly fading out.
     float Floor   = lerp(kCoverageClearFloor, kCoverageOvercastFloor, Weather.Coverage);
     float Density = saturate(Cloud_Remap(Base, Floor, 1.0, 0.0, 1.0));
+    Envelope = Density;
     if (Density <= 0.0 || bCheap)
     {
         return Density * M.Density * kCloudExtinctionPerMeter;
@@ -122,6 +128,12 @@ float Cloud_SampleDensityM(FCloudMedium M, float3 WorldPos, float HeightFrac, bo
     Density = saturate(Cloud_Remap(Density, Erosion * M.DetailStrength, 1.0, 0.0, 1.0));
 
     return Density * M.Density * kCloudExtinctionPerMeter;
+}
+
+float Cloud_SampleDensityM(FCloudMedium M, float3 WorldPos, float HeightFrac, bool bCheap)
+{
+    float Envelope;
+    return Cloud_SampleDensityEnvelopeM(M, WorldPos, HeightFrac, bCheap, Envelope);
 }
 
 // World XZ to cloud-shadow UV. Center is the snapped camera position, HalfExtent the map's reach.

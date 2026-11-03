@@ -1,6 +1,7 @@
-#include <gtest/gtest.h>
+﻿#include <gtest/gtest.h>
 
 #include "Config/EngineSettings.h"
+#include "Containers/Algorithm.h"
 #include "Core/Engine/Engine.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/ObjectCore.h"
@@ -13,20 +14,35 @@ using namespace Lumina;
 
 namespace
 {
-    // Inspect existing protected row state without constructing a fake row or adding a production API.
-    struct FSearchRowAccess : FPropertyRow
+    using FRows = TVector<FPropertyTable::FRowProbe>;
+
+    // The row implementation lives in PropertyTable.cpp, so a suite reads the tree through the
+    // table's probe snapshot instead of reaching into the rows themselves.
+    const FPropertyTable::FRowProbe* FindRow(const FRows& Rows, FStringView InternalName)
     {
-        static const auto& ChildrenOf(FPropertyRow& Row)
+        for (const FPropertyTable::FRowProbe& Row : Rows)
         {
-            const auto Member = &FSearchRowAccess::Children;
-            return Row.*Member;
+            if (Row.InternalName == InternalName)
+            {
+                return &Row;
+            }
         }
-        static bool& Expanded(FPropertyRow& Row)
+        return nullptr;
+    }
+
+    // The first child a container row grew. Rows are probed parents-first, so the row after a
+    // container in that order is its first child; a map entry still carries its key property's name.
+    const FPropertyTable::FRowProbe* FindChild(const FRows& Rows, const FPropertyTable::FRowProbe& Parent)
+    {
+        for (size_t Index = 0; Index + 1 < Rows.size(); ++Index)
         {
-            const auto Member = &FSearchRowAccess::bExpanded;
-            return Row.*Member;
+            if (&Rows[Index] == &Parent && Rows[Index + 1].Depth == Parent.Depth + 1)
+            {
+                return &Rows[Index + 1];
+            }
         }
-    };
+        return nullptr;
+    }
 
     struct FNestedSearchData
     {
@@ -137,13 +153,6 @@ namespace
             return Outer;
         }
 
-        static FPropertyRow* FindRow(FPropertyTable& Table, FStringView Name)
-        {
-            auto* Category = Table.FindOrCreateCategoryRow(FName("General"));
-            for (const auto& Row : FSearchRowAccess::ChildrenOf(*Category))
-                if (Row->GetFilterInternalName() == Name) return Row.get();
-            return nullptr;
-        }
     };
 }
 
@@ -217,26 +226,40 @@ TEST_F(PropertySearchTest, PopulatedMapMatchIncludesEntriesWithoutForcingExpansi
     Data.Unrelated.emplace(9, 7.0f);
     FPropertyTable Table(&Data, MakeCompositeType(), nullptr);
     ASSERT_TRUE(Matches(Table, ""));
-    FPropertyRow* Scores = FindRow(Table, "Scores");
-    FPropertyRow* Unrelated = FindRow(Table, "Unrelated");
+    ASSERT_TRUE(Table.SetRowExpanded("Scores", false));
+
+    ASSERT_TRUE(Matches(Table, "Scores"));
+    FRows Rows;
+    Table.ProbeRows(Rows);
+    const FPropertyTable::FRowProbe* Scores = FindRow(Rows, "Scores");
+    const FPropertyTable::FRowProbe* Unrelated = FindRow(Rows, "Unrelated");
     ASSERT_NE(Scores, nullptr);
     ASSERT_NE(Unrelated, nullptr);
-    FSearchRowAccess::Expanded(*Scores) = false;
+    EXPECT_FALSE(Scores->bExpanded);
+    ASSERT_EQ(Scores->ChildCount, 1u);
+    ASSERT_NE(FindChild(Rows, *Scores), nullptr);
+    EXPECT_TRUE(FindChild(Rows, *Scores)->bPassesFilter);
+    EXPECT_FALSE(Unrelated->bPassesFilter);
+    EXPECT_FALSE(FindChild(Rows, *Unrelated)->bPassesFilter);
 
+    // Opening a matching header must reveal the entry.
+    ASSERT_TRUE(Table.SetRowExpanded("Scores", true));
     ASSERT_TRUE(Matches(Table, "Scores"));
-    EXPECT_FALSE(FSearchRowAccess::Expanded(*Scores));
-    ASSERT_EQ(FSearchRowAccess::ChildrenOf(*Scores).size(), 1u);
-    EXPECT_TRUE(FSearchRowAccess::ChildrenOf(*Scores)[0]->PassesFilter());
-    EXPECT_FALSE(Unrelated->PassesFilter());
-    EXPECT_FALSE(FSearchRowAccess::ChildrenOf(*Unrelated)[0]->PassesFilter());
-
-    FSearchRowAccess::Expanded(*Scores) = true; // Opening a matching header must reveal the entry.
-    ASSERT_TRUE(Matches(Table, "Scores"));
-    EXPECT_TRUE(FSearchRowAccess::Expanded(*Scores));
-    EXPECT_TRUE(FSearchRowAccess::ChildrenOf(*Scores)[0]->PassesFilter());
+    Table.ProbeRows(Rows);
+    Scores = FindRow(Rows, "Scores");
+    Unrelated = FindRow(Rows, "Unrelated");
+    ASSERT_NE(Scores, nullptr);
+    ASSERT_NE(Unrelated, nullptr);
+    EXPECT_TRUE(Scores->bExpanded);
+    EXPECT_TRUE(FindChild(Rows, *Scores)->bPassesFilter);
     Table.ClearSearch();
-    EXPECT_FALSE(FSearchRowAccess::Expanded(*Scores));
-    EXPECT_TRUE(FSearchRowAccess::ChildrenOf(*Unrelated)[0]->PassesFilter());
+    Table.ProbeRows(Rows);
+    Scores = FindRow(Rows, "Scores");
+    Unrelated = FindRow(Rows, "Unrelated");
+    ASSERT_NE(Scores, nullptr);
+    ASSERT_NE(Unrelated, nullptr);
+    EXPECT_FALSE(Scores->bExpanded);
+    EXPECT_TRUE(FindChild(Rows, *Unrelated)->bPassesFilter);
     EXPECT_EQ(Data.Scores.at(1), 2.0f);
 }
 
@@ -245,22 +268,31 @@ TEST_F(PropertySearchTest, MatchingStructShowsContentButLeafSearchStillFiltersOt
     FCompositeSearchData Data;
     FPropertyTable Table(&Data, MakeCompositeType(), nullptr);
     ASSERT_TRUE(Matches(Table, "Nested"));
-    FPropertyRow* Nested = FindRow(Table, "Nested");
+    FRows Rows;
+    Table.ProbeRows(Rows);
+    const FPropertyTable::FRowProbe* Nested = FindRow(Rows, "Nested");
     ASSERT_NE(Nested, nullptr);
-    EXPECT_FALSE(FSearchRowAccess::Expanded(*Nested));
-    const auto& Children = FSearchRowAccess::ChildrenOf(*Nested);
-    ASSERT_EQ(Children.size(), 2u);
-    EXPECT_TRUE(Children[0]->PassesFilter());
-    EXPECT_TRUE(Children[1]->PassesFilter());
+    EXPECT_FALSE(Nested->bExpanded);
+    EXPECT_EQ(Nested->ChildCount, 2u);
 
     ASSERT_TRUE(Matches(Table, "Speed"));
-    EXPECT_TRUE(FSearchRowAccess::Expanded(*Nested));
-    EXPECT_TRUE(Children[0]->PassesFilter());
-    EXPECT_FALSE(Children[1]->PassesFilter());
+    Table.ProbeRows(Rows);
+    Nested = FindRow(Rows, "Nested");
+    ASSERT_NE(Nested, nullptr);
+    EXPECT_TRUE(Nested->bExpanded);
+    const FPropertyTable::FRowProbe* Speed = FindRow(Rows, "Speed");
+    const FPropertyTable::FRowProbe* Height = FindRow(Rows, "Height");
+    ASSERT_NE(Speed, nullptr);
+    ASSERT_NE(Height, nullptr);
+    EXPECT_TRUE(Speed->bPassesFilter);
+    EXPECT_FALSE(Height->bPassesFilter);
     Table.ClearSearch();
-    EXPECT_FALSE(FSearchRowAccess::Expanded(*Nested));
-    EXPECT_TRUE(Children[0]->PassesFilter());
-    EXPECT_TRUE(Children[1]->PassesFilter());
+    Table.ProbeRows(Rows);
+    Nested = FindRow(Rows, "Nested");
+    ASSERT_NE(Nested, nullptr);
+    EXPECT_FALSE(Nested->bExpanded);
+    EXPECT_TRUE(FindRow(Rows, "Speed")->bPassesFilter);
+    EXPECT_TRUE(FindRow(Rows, "Height")->bPassesFilter);
 }
 
 TEST_F(PropertySearchTest, RowsRebuiltDuringSearchRestoreTheirOwnInitialExpansion)
@@ -270,11 +302,16 @@ TEST_F(PropertySearchTest, RowsRebuiltDuringSearchRestoreTheirOwnInitialExpansio
     ASSERT_TRUE(Matches(Table, "Speed"));
     Table.MarkDirty();
     ASSERT_TRUE(Table.PrepareAndTestFilter());
-    FPropertyRow* Nested = FindRow(Table, "Nested");
+    FRows Rows;
+    Table.ProbeRows(Rows);
+    const FPropertyTable::FRowProbe* Nested = FindRow(Rows, "Nested");
     ASSERT_NE(Nested, nullptr);
-    EXPECT_TRUE(FSearchRowAccess::Expanded(*Nested));
+    EXPECT_TRUE(Nested->bExpanded);
     Table.ClearSearch();
-    EXPECT_FALSE(FSearchRowAccess::Expanded(*Nested));
+    Table.ProbeRows(Rows);
+    Nested = FindRow(Rows, "Nested");
+    ASSERT_NE(Nested, nullptr);
+    EXPECT_FALSE(Nested->bExpanded);
 }
 
 TEST_F(PropertySearchTest, ExternallyCreatedOptionalPayloadIsUpdatedBeforeFiltering)
@@ -282,14 +319,20 @@ TEST_F(PropertySearchTest, ExternallyCreatedOptionalPayloadIsUpdatedBeforeFilter
     FCompositeSearchData Data;
     FPropertyTable Table(&Data, MakeCompositeType(), nullptr);
     ASSERT_TRUE(Matches(Table, "Optional"));
-    FPropertyRow* Optional = FindRow(Table, "Optional");
+    FRows Rows;
+    Table.ProbeRows(Rows);
+    const FPropertyTable::FRowProbe* Optional = FindRow(Rows, "Optional");
     ASSERT_NE(Optional, nullptr);
-    EXPECT_TRUE(FSearchRowAccess::ChildrenOf(*Optional).empty());
-    FSearchRowAccess::Expanded(*Table.FindOrCreateCategoryRow(FName("General"))) = false;
+    EXPECT_EQ(Optional->ChildCount, 0u);
+    // A payload still arrives while the row it belongs to is the only one open state allows.
+    ASSERT_TRUE(Table.SetRowExpanded("Optional", false));
     Data.Optional = 8.0f;
     ASSERT_TRUE(Table.PrepareAndTestFilter());
-    ASSERT_EQ(FSearchRowAccess::ChildrenOf(*Optional).size(), 1u);
-    EXPECT_TRUE(FSearchRowAccess::ChildrenOf(*Optional)[0]->PassesFilter());
+    Table.ProbeRows(Rows);
+    Optional = FindRow(Rows, "Optional");
+    ASSERT_NE(Optional, nullptr);
+    ASSERT_EQ(Optional->ChildCount, 1u);
+    EXPECT_TRUE(FindChild(Rows, *Optional)->bPassesFilter);
     EXPECT_EQ(*Data.Optional, 8.0f);
 }
 
@@ -298,16 +341,18 @@ TEST_F(PropertySearchTest, PopulatedArrayStillIncludesItsNumberedEntries)
     Settings->RecentProjects.emplace_back("First.project");
     FPropertyTable Table(Settings);
     ASSERT_TRUE(Matches(Table, "Recent"));
-    FPropertyRow* Recent = nullptr;
-    auto* Category = Table.FindOrCreateCategoryRow(FName("Loading"));
-    for (const auto& Row : FSearchRowAccess::ChildrenOf(*Category))
-        if (Row->GetFilterInternalName() == "RecentProjects") Recent = Row.get();
+    FRows Rows;
+    Table.ProbeRows(Rows);
+    const FPropertyTable::FRowProbe* Recent = FindRow(Rows, "RecentProjects");
     ASSERT_NE(Recent, nullptr);
-    ASSERT_EQ(FSearchRowAccess::ChildrenOf(*Recent).size(), 1u);
-    EXPECT_TRUE(FSearchRowAccess::ChildrenOf(*Recent)[0]->PassesFilter());
+    ASSERT_EQ(Recent->ChildCount, 1u);
+    EXPECT_TRUE(FindChild(Rows, *Recent)->bPassesFilter);
     EXPECT_EQ(Settings->RecentProjects.size(), 1u);
     Table.ClearSearch();
-    EXPECT_TRUE(FSearchRowAccess::ChildrenOf(*Recent)[0]->PassesFilter());
+    Table.ProbeRows(Rows);
+    Recent = FindRow(Rows, "RecentProjects");
+    ASSERT_NE(Recent, nullptr);
+    EXPECT_TRUE(FindChild(Rows, *Recent)->bPassesFilter);
 }
 
 TEST_F(PropertySearchTest, LiteralPunctuationRemainsAnActiveOrdinaryQuery)

@@ -14,8 +14,10 @@
 #include "Containers/Algorithm.h"
 #include "FileSystem/FileSystem.h"
 #include "Paths/Paths.h"
+#include "Session/SessionOps.h"
 #include "Tools/Import/Importer.h"
 #include "Tools/Import/TextureImporter.h"
+#include "UI/Tools/EditorAssetActions.h"
 #include <filesystem>
 
 namespace Lumina::MCP
@@ -43,22 +45,7 @@ namespace Lumina::MCP
 
         bool IsWellFormedName(const FString& Name, FString& OutError)
         {
-            if (Name.empty())
-            {
-                OutError = "A name cannot be empty.";
-                return false;
-            }
-
-            for (char Character : Name)
-            {
-                if (Character == '/' || Character == (char)0x5C || Character == ':')
-                {
-                    OutError = "A name is just the name, so it cannot contain a path separator.";
-                    return false;
-                }
-            }
-
-            return true;
+            return AssetOps::IsValidLeafName(FStringView(Name.c_str(), Name.size()), &OutError);
         }
 
         Agent::FToolResult ReportPathOp(const AssetOps::FPathOpResult& Result, SPathOpResult& Out,
@@ -252,6 +239,31 @@ namespace Lumina::MCP
                 });
         }
 
+        void RegisterDuplicateAsset(FStringView Owner)
+        {
+            Agent::FToolRegistry::Get().Register<SDuplicateAssetParams, SPathOpResult>(
+                Owner, "assets.duplicate",
+                "Copy an asset beside itself as Name_Copy, as the Content Browser's Duplicate does, and save the copy.",
+                Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
+                [](const SDuplicateAssetParams& In, SPathOpResult& Out)
+                {
+                    FString Error;
+                    if (!IsWellFormedPath(In.Path, Error))
+                    {
+                        return Agent::FToolResult::Error(Error);
+                    }
+
+                    FFixedString NewPath;
+                    if (DuplicateAsset(FStringView(In.Path), NewPath) == nullptr)
+                    {
+                        return Agent::FToolResult::Error(Lumina::Format("Could not duplicate {}.", In.Path));
+                    }
+
+                    Out.Path = NewPath.c_str();
+                    return Agent::FToolResult::Ok(Lumina::Format("Duplicated to {}.", Out.Path));
+                });
+        }
+
         void RegisterMoveAsset(FStringView Owner)
         {
             Agent::FToolRegistry::Get().Register<SMoveAssetParams, SPathOpResult>(
@@ -296,22 +308,12 @@ namespace Lumina::MCP
                         return Agent::FToolResult::Error(Error);
                     }
 
-                    CPackage* Package = Object->GetPackage();
-                    if (Package == nullptr)
+                    if (!SessionOps::SaveAsset(Object, Error))
                     {
-                        return Agent::FToolResult::Error("That asset has no package to save.");
+                        return Agent::FToolResult::Error(Error);
                     }
 
-                    const FFixedString Path = Package->GetPackagePath();
-
-                    if (!CPackage::SavePackage(Package, Path))
-                    {
-                        return Agent::FToolResult::Error(Lumina::Format("Could not save {}.", Path));
-                    }
-
-                    FAssetRegistry::Get().AssetSaved(Object);
-
-                    Out.Path = FString(Path.c_str());
+                    Out.Path = FString(Object->GetPackage()->GetPackagePath().c_str());
 
                     return Agent::FToolResult::Ok(Lumina::Format("Saved {}.", Out.Path));
                 });
@@ -553,6 +555,7 @@ namespace Lumina::MCP
         RegisterListFolders(Owner);
         RegisterCreateFolder(Owner);
         RegisterRenameAsset(Owner);
+        RegisterDuplicateAsset(Owner);
         RegisterMoveAsset(Owner);
 
         Agent::FToolRegistry::Get().Register<SSearchAssetsParams, SSearchAssetsResult>(

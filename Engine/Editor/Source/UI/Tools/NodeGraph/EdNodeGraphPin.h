@@ -5,6 +5,7 @@
 #include "Containers/String.h"
 #include "Core/Math/Color.h"
 #include "Core/Object/Object.h"
+#include "GraphEditor.h"
 #include "EdNodeGraphPin.generated.h"
 
 namespace Lumina
@@ -43,6 +44,7 @@ namespace Lumina
         void SetHideDuringConnection(bool bHide) { bHidePinDuringConnection = bHide; }
         
         virtual uint32 GetPinColor() const { return PinColor; }
+        virtual EGraphPinShape GetPinShape() const { return EGraphPinShape::Circle; }
 
         // Localization context for this pin's name. A pin name doubles as an identifier, so it is
         // translated only where it is drawn, and a domain in which a word reads differently supplies
@@ -57,7 +59,7 @@ namespace Lumina
         void AddConnection(CEdNodeGraphPin* Pin) { Connections.push_back(Pin); }
         void RemoveConnection(CEdNodeGraphPin* Pin);
         FORCEINLINE TVector<CEdNodeGraphPin*> GetConnections() const { return Connections; }
-        FORCEINLINE CEdNodeGraphPin* GetConnection(size_t Index) { return Connections[Index]; }
+        FORCEINLINE CEdNodeGraphPin* GetConnection(size_t Index) const { return Connections[Index]; }
         void DisconnectFrom(CEdNodeGraphPin* OtherPin);
         void ClearConnections();
 

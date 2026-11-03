@@ -1,6 +1,7 @@
 ﻿#include "EditorPCH.h"
 #include "AudioGraphEditorTool.h"
 
+#include "Localization/Localization.h"
 #include "imgui.h"
 #include "Assets/AssetTypes/Audio/AudioGraph.h"
 #include "Audio/AudioGlobals.h"
@@ -177,6 +178,8 @@ namespace Lumina
             return;
         }
 
+        DrawLevelMeters();
+
         ImGui::Separator();
         ImGui::TextUnformatted(LOC("Parameters"));
 
@@ -238,6 +241,34 @@ namespace Lumina
         }
     }
 
+    void FAudioGraphEditorTool::DrawLevelMeters()
+    {
+        // Peaks fall back slowly, so a short transient stays readable for a moment.
+        constexpr float kMeterFallPerFrame = 0.92f;
+        constexpr float kDecibelsPerNeper  = 8.6858896f;
+        constexpr const char* ChannelLabels[] = { "L", "R" };
+
+        ImGui::Separator();
+        for (uint32 Channel = 0; Channel < 2; ++Channel)
+        {
+            MeterLevels[Channel] = Math::Max(PreviewInstance->GetOutputPeak(Channel), MeterLevels[Channel] * kMeterFallPerFrame);
+
+            const float Decibels = MeterLevels[Channel] > 1.0e-5f ? kDecibelsPerNeper * Math::Log(MeterLevels[Channel]) : -100.0f;
+            const auto Overlay = Format("{}  {:.1f} dB", ChannelLabels[Channel], Decibels);
+
+            const bool bClipping = MeterLevels[Channel] >= 1.0f;
+            if (bClipping)
+            {
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.9f, 0.25f, 0.2f, 1.0f));
+            }
+            ImGui::ProgressBar(Math::Min(MeterLevels[Channel], 1.0f), ImVec2(-1.0f, 0.0f), Overlay.c_str());
+            if (bClipping)
+            {
+                ImGui::PopStyleColor();
+            }
+        }
+    }
+
     bool FAudioGraphEditorTool::Compile(bool bMarkPackageDirty)
     {
         CAudioGraph* Graph = GetAsset<CAudioGraph>();
@@ -278,6 +309,7 @@ namespace Lumina
 
     void FAudioGraphEditorTool::StartPreview()
     {
+        const TVector<FPreviewParameter> Previous = PreviewParameters;
         StopPreview();
 
         CAudioGraph* Graph = GetAsset<CAudioGraph>();
@@ -316,6 +348,25 @@ namespace Lumina
             Parameter.FloatValue = Input.DefaultFloat;
             Parameter.IntValue   = Input.DefaultInt;
             Parameter.BoolValue  = Input.DefaultBool;
+
+            for (const FPreviewParameter& Old : Previous)
+            {
+                if (Old.Name != Parameter.Name || Old.Type != Parameter.Type)
+                {
+                    continue;
+                }
+                Parameter.FloatValue = Old.FloatValue;
+                Parameter.IntValue   = Old.IntValue;
+                Parameter.BoolValue  = Old.BoolValue;
+                switch (Parameter.Type)
+                {
+                case EAudioGraphType::Float: PreviewInstance->SetFloatParameter(Parameter.Name, Parameter.FloatValue); break;
+                case EAudioGraphType::Int32: PreviewInstance->SetIntParameter(Parameter.Name, Parameter.IntValue);     break;
+                case EAudioGraphType::Bool:  PreviewInstance->SetBoolParameter(Parameter.Name, Parameter.BoolValue);   break;
+                default: break;
+                }
+                break;
+            }
             PreviewParameters.push_back(Parameter);
         }
     }
@@ -330,6 +381,8 @@ namespace Lumina
         PreviewHandle = SAudioHandle::Invalid();
         PreviewInstance.reset();
         PreviewParameters.clear();
+        MeterLevels[0] = 0.0f;
+        MeterLevels[1] = 0.0f;
     }
 
     void FAudioGraphEditorTool::OnSave()

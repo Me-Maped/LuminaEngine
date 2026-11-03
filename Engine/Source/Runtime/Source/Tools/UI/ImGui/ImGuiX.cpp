@@ -1,6 +1,6 @@
-#include "Containers/StringFormat.h"
-#include "Localization/Localization.h"
+﻿#include "Containers/StringFormat.h"
 #include "Search/TextSearch.h"
+#include "Localization/Localization.h"
 #include "RuntimePCH.h"
 #include <iterator>
 #include "ImGuiX.h"
@@ -377,6 +377,23 @@ namespace Lumina::ImGuiX
         return Pressed;
     }
 
+    ImVec2 CenteredIconPos(const char* Icon, const ImVec2& Min, const ImVec2& Max)
+    {
+        const ImVec2 Size = ImGui::CalcTextSize(Icon);
+        ImVec2 Pos((Min.x + Max.x - Size.x) * 0.5f, (Min.y + Max.y - Size.y) * 0.5f);
+
+        unsigned int Codepoint = 0;
+        const char* IconEnd = Icon + strlen(Icon);
+        const int GlyphBytes = ImTextCharFromUtf8(&Codepoint, Icon, IconEnd);
+        ImFontBaked* Baked = ImGui::GetFontBaked();
+        const ImFontGlyph* Glyph = (GlyphBytes > 0 && Icon + GlyphBytes == IconEnd) ? Baked->FindGlyphNoFallback((ImWchar)Codepoint) : nullptr;
+        if (Glyph != nullptr && Glyph->Visible)
+        {
+            Pos.y = (Min.y + Max.y) * 0.5f - (Glyph->Y0 + Glyph->Y1) * 0.5f * (ImGui::GetFontSize() / Baked->Size) + 0.5f;
+        }
+        return Pos;
+    }
+
     bool ButtonEx(char const* pIcon, char const* pLabel, ImVec2 const& size, const ImColor& backgroundColor, const ImColor& iconColor, const ImColor& foregroundColor, bool shouldCenterContents)
     {
     	// Taken from Esoterica.
@@ -465,10 +482,7 @@ namespace Lumina::ImGuiX
                 }
                 else
                 {
-                    float const offsetX = ( bb.GetWidth() - iconSize.x ) / 2.0f;
-                    float const offsetY = ( ( bb.GetHeight() - iconSize.y ) / 2.0f );
-                    ImVec2 const iconOffset( offsetX, offsetY );
-                    pWindow->DrawList->AddText( pos + iconOffset, finalIconColor, pIcon );
+                    pWindow->DrawList->AddText( CenteredIconPos( pIcon, bb.Min, bb.Max ), finalIconColor, pIcon );
                 }
             }
             else
@@ -647,16 +661,14 @@ namespace Lumina::ImGuiX
             DL->AddCircle(KnobCenter, KnobRadius, LerpColor(FillCol, IM_COL32(0, 0, 0, 255), 0.15f), 0, ImMax(1.0f, 1.5f * Scale));
 
             // Optional value readout, right-aligned over the track.
-            const bool MixedValue = (g.LastItemData.ItemFlags & ImGuiItemFlags_MixedValue) != 0;
-            const char* DisplayFormat = MixedValue && g.MixedValueLabel != nullptr ? g.MixedValueLabel : Format;
             if (EnumHasAnyFlags(Flags, ESliderFlags::AlwaysValue))
             {
                 char Buf[64];
-                const char* BufEnd = Buf + ImGui::DataTypeFormatString(Buf, IM_ARRAYSIZE(Buf), DataType, Value, DisplayFormat);
+                const char* BufEnd = Buf + ImGui::DataTypeFormatString(Buf, IM_ARRAYSIZE(Buf), DataType, Value, Format);
                 const ImVec2 TextSize = ImGui::CalcTextSize(Buf, BufEnd);
                 const ImVec2 TextPos(FrameBB.Max.x - TextSize.x, CenterY - TextSize.y * 0.5f);
                 DL->AddText(TextPos + ImVec2(1, 1), IM_COL32(0, 0, 0, 110), Buf, BufEnd);
-                DL->AddText(TextPos, ImGui::GetColorU32(MixedValue ? ImGuiCol_TextMixedValue : ImGuiCol_Text), Buf, BufEnd);
+                DL->AddText(TextPos, ImGui::GetColorU32(ImGuiCol_Text), Buf, BufEnd);
             }
 
             // Trailing label.
@@ -668,7 +680,7 @@ namespace Lumina::ImGuiX
             if (EnumHasAnyFlags(Flags, ESliderFlags::ValueOnHover) && (Held || Hovered))
             {
                 char Buf[64];
-                ImGui::DataTypeFormatString(Buf, IM_ARRAYSIZE(Buf), DataType, Value, DisplayFormat);
+                ImGui::DataTypeFormatString(Buf, IM_ARRAYSIZE(Buf), DataType, Value, Format);
                 ImGuiX::TextTooltip("{}", Buf);
             }
 
@@ -696,7 +708,14 @@ namespace Lumina::ImGuiX
         const float Avail  = ImGui::GetContentRegionAvail().x;
 
         ImGui::SetNextItemWidth(Math::Max(Avail - ButtonWidth - Style.ItemSpacing.x - Margin, 48.0f));
-        bool bChanged = Filter.DrawWithHint(StrId, Hint);
+        bool bChanged = Filter.Draw(StrId);
+
+        if (Hint != nullptr && !Filter.IsActive())
+        {
+            const ImVec2 Min = ImGui::GetItemRectMin();
+            ImGui::GetWindowDrawList()->AddText(ImVec2(Min.x + Style.FramePadding.x, Min.y + Style.FramePadding.y),
+                ImGui::GetColorU32(ImGuiCol_TextDisabled), Hint);
+        }
 
         ImGui::SameLine();
 
@@ -711,6 +730,48 @@ namespace Lumina::ImGuiX
         ImGui::PopID();
 
         return bChanged;
+    }
+
+    bool PassSearchFilter(FStringView Query, FStringView Text)
+    {
+        const char* Word      = Query.data();
+        const char* QueryEnd  = Query.data() + Query.size();
+        const char* TextBegin = Text.data();
+        const char* TextEnd   = Text.data() + Text.size();
+
+        while (Word < QueryEnd)
+        {
+            while (Word < QueryEnd && *Word == ' ')
+            {
+                ++Word;
+            }
+
+            const char* WordEnd = Word;
+            while (WordEnd < QueryEnd && *WordEnd != ' ')
+            {
+                ++WordEnd;
+            }
+
+            if (WordEnd == Word)
+            {
+                break;
+            }
+
+            if (TextBegin == TextEnd || ImStristr(TextBegin, TextEnd, Word, WordEnd) == nullptr)
+            {
+                return false;
+            }
+
+            Word = WordEnd;
+        }
+
+        // An empty box, or one holding only spaces, filters nothing out.
+        return true;
+    }
+
+    bool PassSearchFilter(const ImGuiTextFilter& Filter, FStringView Text)
+    {
+        return PassSearchFilter(FStringView(Filter.InputBuf), Text);
     }
 
     bool IsSearchFilterActive(const ImGuiTextFilter& Filter)
@@ -743,14 +804,9 @@ namespace Lumina::ImGuiX
         return PassSearchFilter(FStringView(Filter.InputBuf), Fields);
     }
 
-    bool PassSearchFilter(FStringView Query, FStringView Text)
+    bool IsSearchableComboOpen(const char* StrId)
     {
-        return PassSearchFilter(Query, {Text});
-    }
-
-    bool PassSearchFilter(const ImGuiTextFilter& Filter, FStringView Text)
-    {
-        return PassSearchFilter(FStringView(Filter.InputBuf), {Text});
+        return ImGui::IsPopupOpen(ImHashStr("##ComboPopup", 0, ImGui::GetID(StrId)), ImGuiPopupFlags_None);
     }
 
     int32 SearchableCombo(const char* StrId, const char* Preview, int32 ItemCount, int32 CurrentIndex, const TFunction<FFixedString(int32)>& GetItemLabel, const char* ItemIcon, FFixedString* OutCreatedText, const TFunction<FFixedString(int32)>& GetSearchAlias)
@@ -774,8 +830,7 @@ namespace Lumina::ImGuiX
         }
 
         // Measured only while open, and ImGui honors a size constraint rather than forcing the button width.
-        const ImGuiID PopupId = ImHashStr("##ComboPopup", 0, ComboId);
-        if (ImGui::IsPopupOpen(PopupId, ImGuiPopupFlags_None))
+        if (IsSearchableComboOpen(StrId))
         {
             float ContentWidth = 0.0f;
             for (int32 i = 0; i < ItemCount; ++i)
@@ -805,7 +860,16 @@ namespace Lumina::ImGuiX
                 ImGui::SetKeyboardFocusHere();
             }
             ImGui::SetNextItemWidth(PopupWidth);
-            Filter.DrawWithHint("##filter", LOC_ICON(LE_ICON_MAGNIFY, "Search..."));
+            Filter.Draw("##filter");
+
+            // Gray magnify hint while the search box is empty.
+            if (!Filter.IsActive())
+            {
+                ImVec2 HintPos = ImGui::GetItemRectMin();
+                HintPos.x += Style.FramePadding.x + 2.0f;
+                HintPos.y += Style.FramePadding.y;
+                ImGui::GetWindowDrawList()->AddText(HintPos, ImGui::GetColorU32(ImGuiCol_TextDisabled), LOC_ICON(LE_ICON_MAGNIFY, "Search..."));
+            }
 
             ImGui::Separator();
 
@@ -947,8 +1011,7 @@ namespace Lumina::ImGuiX
         const char* Preview = (CurrentIndex != Constants::kIndexNone) ? Assets[CurrentIndex]->AssetName.c_str() : "Select an asset...";
 
         const int32 Picked = SearchableCombo(StrId, Preview, (int32)Assets.size(), CurrentIndex,
-            [&Assets](int32 Index) { return FFixedString(Assets[Index]->AssetName.c_str()); }, ItemIcon, nullptr,
-            [&Assets](int32 Index) { return FFixedString(Assets[Index]->Path.c_str()); });
+            [&Assets](int32 Index) { return FFixedString(Assets[Index]->AssetName.c_str()); }, ItemIcon);
 
         if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
         {
@@ -964,7 +1027,7 @@ namespace Lumina::ImGuiX
         if (!IsComboListOpen(StrId))
         {
             const FFixedString ClosedPreview = InOutClass ? FFixedString(InOutClass->GetName().c_str())
-                                                          : FFixedString(bAllowNone ? "None" : "Select a class...");
+                                                          : FFixedString(bAllowNone ? LOC("None") : "Select a class...");
             SearchableCombo(StrId, ClosedPreview.c_str(), 0, (InOutClass != nullptr || bAllowNone) ? 0 : Constants::kIndexNone,
                 [](int32) { return FFixedString(); }, ItemIcon);
             return false;
@@ -974,7 +1037,7 @@ namespace Lumina::ImGuiX
         for (TObjectIterator<CClass> It; It; ++It)
         {
             CClass* Candidate = *It;
-            if (BaseClass == nullptr || Candidate->IsChildOf(BaseClass))
+            if (Candidate->CanInstantiate() && (BaseClass == nullptr || Candidate->IsChildOf(BaseClass)))
             {
                 Candidates.push_back(Candidate);
             }
@@ -985,7 +1048,7 @@ namespace Lumina::ImGuiX
             return strcmp(A->GetName().c_str(), B->GetName().c_str()) < 0;
         });
 
-        // "None" occupies index 0 when allowed, so every candidate sits one slot further along.
+        // LOC("None") occupies index 0 when allowed, so every candidate sits one slot further along.
         const int32 Offset = bAllowNone ? 1 : 0;
 
         int32 CurrentIndex = bAllowNone ? 0 : Constants::kIndexNone;
@@ -1000,21 +1063,13 @@ namespace Lumina::ImGuiX
 
         // Copied, since c_str hands back a rotating buffer the per-item labels below would overwrite.
         const FFixedString Preview = InOutClass ? FFixedString(InOutClass->GetName().c_str())
-                                                : FFixedString(bAllowNone ? "None" : "Select a class...");
+                                                : FFixedString(bAllowNone ? LOC("None") : "Select a class...");
 
         const int32 Picked = SearchableCombo(StrId, Preview.c_str(), (int32)Candidates.size() + Offset, CurrentIndex,
             [&Candidates, Offset](int32 Index) -> FFixedString
             {
-                return (Index < Offset) ? FFixedString("None") : FFixedString(Candidates[Index - Offset]->GetName().c_str());
-            }, ItemIcon, nullptr,
-            [&Candidates, Offset](int32 Index) -> FFixedString
-            {
-                if (Index < Offset) { return FFixedString(LOC("None")); }
-                const auto Source = Candidates[Index - Offset]->MakeDisplayName();
-                const auto Snapshot = FLocalization::Get().ReadForCurrentFrame();
-                const FStringView Translated = Snapshot.TranslateView(Source);
-                return FFixedString(Translated.data(), Translated.size());
-            });
+                return (Index < Offset) ? FFixedString(LOC("None")) : FFixedString(Candidates[Index - Offset]->GetName().c_str());
+            }, ItemIcon);
 
         if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
         {
@@ -1030,7 +1085,7 @@ namespace Lumina::ImGuiX
         if (!IsComboListOpen(StrId))
         {
             const FFixedString ClosedPreview = InOutStruct ? FFixedString(InOutStruct->GetName().c_str())
-                                                           : FFixedString(bAllowNone ? "None" : "Select a type...");
+                                                           : FFixedString(bAllowNone ? LOC("None") : "Select a type...");
             SearchableCombo(StrId, ClosedPreview.c_str(), 0, (InOutStruct != nullptr || bAllowNone) ? 0 : Constants::kIndexNone,
                 [](int32) { return FFixedString(); }, ItemIcon);
             return false;
@@ -1069,21 +1124,13 @@ namespace Lumina::ImGuiX
 
         // Copied for the same reason ClassCombo copies, since c_str reuses a thread-local buffer.
         const FFixedString Preview = InOutStruct ? FFixedString(InOutStruct->GetName().c_str())
-                                                 : FFixedString(bAllowNone ? "None" : "Select a type...");
+                                                 : FFixedString(bAllowNone ? LOC("None") : "Select a type...");
 
         const int32 Picked = SearchableCombo(StrId, Preview.c_str(), (int32)Candidates.size() + Offset, CurrentIndex,
             [&Candidates, Offset](int32 Index) -> FFixedString
             {
-                return (Index < Offset) ? FFixedString("None") : FFixedString(Candidates[Index - Offset]->GetName().c_str());
-            }, ItemIcon, nullptr,
-            [&Candidates, Offset](int32 Index) -> FFixedString
-            {
-                if (Index < Offset) { return FFixedString(LOC("None")); }
-                const auto Source = Candidates[Index - Offset]->MakeDisplayName();
-                const auto Snapshot = FLocalization::Get().ReadForCurrentFrame();
-                const FStringView Translated = Snapshot.TranslateView(Source);
-                return FFixedString(Translated.data(), Translated.size());
-            });
+                return (Index < Offset) ? FFixedString(LOC("None")) : FFixedString(Candidates[Index - Offset]->GetName().c_str());
+            }, ItemIcon);
 
         if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
         {
@@ -1580,25 +1627,37 @@ namespace Lumina::ImGuiX
 
         // Their hit boxes reach the window edge, which is what the OS does and what Fitts' law wants.
         const ImVec2 ButtonSize(UnscaledButtonWidth * GetUIScale(), ImGui::GetContentRegionAvail().y);
+        ImDrawList* DrawList = ImGui::GetWindowDrawList();
+        const ImVec4 TextColor = EditorColors::TextPrimary();
 
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
 
-        // Drawn with the stock button, since the flat one scales a transparent background and shows none.
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 1.0f, 1.0f, 0.10f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 1.0f, 1.0f, 0.16f));
+        auto ControlButton = [&](const char* ID, const char* Icon, ImU32 HoverFill, ImU32 HeldFill)
+        {
+            const bool bPressed = ImGui::InvisibleButton(ID, ButtonSize);
+            const bool bHovered = ImGui::IsItemHovered();
+            const ImVec2 Min = ImGui::GetItemRectMin();
+            const ImVec2 Max = ImGui::GetItemRectMax();
+            if (bHovered)
+            {
+                DrawList->AddRectFilled(Min, Max, ImGui::IsItemActive() ? HeldFill : HoverFill);
+            }
 
-        if (ImGui::Button(LE_ICON_WINDOW_MINIMIZE "##Minimize", ButtonSize))
+            DrawList->AddText(CenteredIconPos(Icon, Min, Max), EditorColors::U32(EditorColors::WithAlpha(TextColor, bHovered ? 1.0f : 0.62f)), Icon);
+            ImGui::SameLine();
+            return bPressed;
+        };
+
+        const ImU32 HoverFill = IM_COL32(255, 255, 255, 22);
+        const ImU32 HeldFill  = IM_COL32(255, 255, 255, 36);
+
+        if (ControlButton("##Minimize", LE_ICON_WINDOW_MINIMIZE, HoverFill, HeldFill))
         {
             Window->Minimize();
         }
 
-        ImGui::SameLine();
-
         const bool bMaximized = Window->IsWindowMaximized();
-        if (ImGui::Button(bMaximized ? LE_ICON_WINDOW_RESTORE "##Restore" : LE_ICON_WINDOW_MAXIMIZE "##Restore", ButtonSize))
+        if (ControlButton("##Restore", bMaximized ? LE_ICON_WINDOW_RESTORE : LE_ICON_WINDOW_MAXIMIZE, HoverFill, HeldFill))
         {
             if (bMaximized)
             {
@@ -1610,18 +1669,12 @@ namespace Lumina::ImGuiX
             }
         }
 
-        ImGui::SameLine();
-
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.13f, 0.13f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.10f, 0.10f, 1.0f));
-        if (ImGui::Button(LE_ICON_WINDOW_CLOSE "##Close", ButtonSize))
+        if (ControlButton("##Close", LE_ICON_WINDOW_CLOSE, IM_COL32(196, 43, 28, 255), IM_COL32(160, 32, 22, 255)))
         {
             FApplication::RequestExit();
         }
-        ImGui::PopStyleColor(2);
 
-        ImGui::PopStyleColor(3);
-        ImGui::PopStyleVar(3);
+        ImGui::PopStyleVar();
     }
 
     void FApplicationTitleBar::Draw(TFunction<void()>&& MenuSectionDrawFunction, TFunction<void()>&& InfoSectionDrawFunction, float InfoSectionWidth)
@@ -1669,10 +1722,15 @@ namespace Lumina::ImGuiX
             const bool bVisible = BeginTitleBarSection("##MenuSection", ImVec2(MenuX, 0.0f), ImVec2(MenuWidth, BarHeight), true);
             if (bVisible)
             {
+                // BeginMenu places text below and popups above the cursor by the frame padding, so both are aligned through it.
+                const float FramePaddingY = ImGui::GetStyle().FramePadding.y;
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(16.0f * Scale, 8.0f * Scale));
-                if (ImGui::BeginMenuBar())
+                ImGui::PushStyleVarY(ImGuiStyleVar_FramePadding, Math::Max(0.0f, RowOffsetY - FramePaddingY));
+                const bool bMenuBar = ImGui::BeginMenuBar();
+                ImGui::PopStyleVar();
+                if (bMenuBar)
                 {
-                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + RowOffsetY);
+                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + Math::Min(FramePaddingY, RowOffsetY));
                     MenuSectionDrawFunction();
                     ImGui::EndMenuBar();
                 }

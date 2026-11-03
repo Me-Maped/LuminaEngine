@@ -1,4 +1,5 @@
-// Engine headers reach for the ECS; the Runtime PCH supplies it there, not here.
+﻿// Engine headers reach for the ECS; the Runtime PCH supplies it there, not here.
+#include "Localization/Localization.h"
 #include "NetworkEditorTool.h"
 #include "World/ECS/Registry.h"
 

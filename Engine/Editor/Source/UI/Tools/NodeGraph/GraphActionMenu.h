@@ -1,9 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "Containers/Vector.h"
 #include "Containers/String.h"
 #include "GraphActionMenuSearch.h"
-#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -18,6 +17,8 @@ namespace Lumina
     struct FGraphAction
     {
         CClass*             NodeClass = nullptr;
+        // Which of the class's variants this entry places, or none for the class itself.
+        FName               Variant;
         FString             DisplayName;
         FString             Category;
         FString             Tooltip;
@@ -25,9 +26,9 @@ namespace Lumina
         // Filled by the fuzzy matcher; cleared when the query is empty.
         int32               Score = 0;
         TVector<uint16>     MatchIndices;
-        FString             SourceName;
-        FString             SourceCategory;
-        FString             Key;
+
+        // False when the menu opened from a dragged wire and this node has no pin that takes it.
+        bool                bAcceptsSource = true;
     };
 
     // Incremental fuzzy search over the graph's registered node classes (keyboard nav, highlighting,
@@ -45,13 +46,12 @@ namespace Lumina
 
     private:
 
-        void RebuildActions(CEdNodeGraph* Graph, const FLocalizationSnapshot& Snapshot);
+        void RebuildActions(CEdNodeGraph* Graph);
         void Rescore();
         void ClampSelection();
 
         char                    QueryBuffer[128] = {};
         FString                 CachedQueryForScore;
-        FLocalizationSnapshot   ActionsSnapshot;
         TVector<FGraphAction>   Actions;
         TVector<int32>          VisibleIndices;
         int32                   SelectedIndex = 0;
@@ -59,6 +59,11 @@ namespace Lumina
         bool                    bActionsDirty = true;
         bool                    bFocusInput = false;
         bool                    bPendingScrollToSelected = false;
+        bool                    bHasSourceFilter = false;
+        bool                    bOnlyAcceptingNodes = true;
     };
 
+    // Case-insensitive fuzzy subsequence match; OutScore valid only on match (higher is better),
+    // OutMatchIndices receives the matched Target positions for highlighting.
+    bool FuzzyMatch(const char* Query, const char* Target, int32& OutScore, TVector<uint16>& OutMatchIndices);
 }

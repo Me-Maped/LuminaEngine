@@ -1,8 +1,10 @@
+﻿#include "Localization/Localization.h"
 #include "SkeletalMeshEditorTool.h"
 #include "World/ECS/Registry.h"
 
 #include "Assets/AssetTypes/Mesh/SkeletalMesh/SkeletalMesh.h"
 #include "Assets/AssetTypes/Mesh/Skeleton/Skeleton.h"
+#include "UI/Tools/EditorToolContext.h"
 #include "Core/Object/Cast.h"
 #include "Tools/UI/ImGui/ImGuiFonts.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
@@ -321,9 +323,7 @@ namespace Lumina
         {
             ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
                 LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "No skeleton assigned."));
-            ImGui::TextWrapped(LOC("Joint indices address a skeleton's bone array directly, so without one this "
-                               "mesh cannot be posed and the renderer holds it back. Assign one under Asset "
-                               "Details, or reimport with a Target Skeleton set."));
+            ImGui::TextWrapped(LOC("Joint indices address a skeleton's bone array directly, so without one this " "mesh cannot be posed and the renderer holds it back. Assign one under Asset " "Details, or reimport with a Target Skeleton set."));
             return;
         }
 
@@ -349,9 +349,7 @@ namespace Lumina
             ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
                 LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "Mesh references %u bones but the skeleton provides %u."),
                 Skinning.RequiredBones, BoneCount);
-            ImGui::TextWrapped(LOC("The GPU bone fetch is unbounded, so vertices weighted past the end read whatever "
-                               "follows this instance's bone slice and fly across the level. Reimport the mesh "
-                               "against this skeleton."));
+            ImGui::TextWrapped(LOC("The GPU bone fetch is unbounded, so vertices weighted past the end read whatever " "follows this instance's bone slice and fly across the level. Reimport the mesh " "against this skeleton."));
         }
         else if (Skinning.OutOfRangeVertices > 0)
         {
@@ -611,8 +609,8 @@ namespace Lumina
 
                 PropertyRow(LOC("Meshlet Vertices"), Format("{}", MD.MeshletSkinnedVertices.size()));
                 PropertyRow(LOC("Triangles (LOD 0)"), Format("{}", LOD0Triangles));
-                PropertyRow(LOC("Meshlets"), Format("{}", MD.Meshlets.size()));
-                PropertyRow(LOC("Surfaces"), Format("{}", Resource.GetNumSurfaces()));
+                PropertyRow(LOC_ID("Meshlets"), Format("{}", MD.Meshlets.size()));
+                PropertyRow(LOC_ID("Surfaces"), Format("{}", Resource.GetNumSurfaces()));
                 PropertyRow(LOC("LOD Levels"), Format("{}", MaxLODsAcrossSurfaces));
 
                 ImGui::TableNextRow();
@@ -770,10 +768,7 @@ namespace Lumina
 
                     const bool bSelected = ((int32)i == SelectedSurfaceIndex);
 
-                    // "###" puts the ID on the surface's own id rather than on the translated prefix, so
-                    // the expanded flag survives a language switch and a reorder (see LOC_ID).
-                    FString headerLabel = LOC("Surface ") + Format("{}", i) + ": " + Surface.ID.ToString()
-                                        + "###" + Surface.ID.ToString();
+                    FString headerLabel = LOC("Surface ") + Format("{}", i) + ": " + Surface.ID.ToString();
                     const bool bOpen = ImGui::CollapsingHeader(headerLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
 
                     if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
@@ -879,6 +874,7 @@ namespace Lumina
         MeshEntity = World->ConstructEntity("MeshEntity");
         SSkeletalMeshComponent& MeshComponent = World->EmplaceComponent<SSkeletalMeshComponent>(MeshEntity);
         MeshComponent.SetSkeletalMesh(SkeletalMesh);
+        PreviewSkeleton = SkeletalMesh->Skeleton.Get();
 
         if (SkeletalMesh->Skeleton.IsValid())
         {
@@ -977,7 +973,7 @@ namespace Lumina
         if (PreviewClip.IsValid())
         {
             ImGui::SameLine();
-            if (ImGui::Button(LOC_ICON(LE_ICON_CLOSE, "Clear")))
+            if (ImGui::Button(LOC_ICON_ID(LE_ICON_CLOSE, "Clear")))
             {
                 SetPreviewClip(nullptr);
             }
@@ -1000,7 +996,7 @@ namespace Lumina
 
         const float Duration = Math::Max(PreviewClip->GetDuration(), 0.0001f);
 
-        if (ImGui::Button(bPreviewPlaying ? LOC_ICON(LE_ICON_PAUSE, "Pause") : LOC_ICON(LE_ICON_PLAY, "Play")))
+        if (ImGui::Button(bPreviewPlaying ? LOC_ICON_ID(LE_ICON_PAUSE, "Pause") : LOC_ICON_ID(LE_ICON_PLAY, "Play")))
         {
             if (!bPreviewPlaying && !bPreviewLooping && AnimComponent->CurrentTime >= Duration)
             {
@@ -1168,6 +1164,7 @@ namespace Lumina
 
     void FSkeletalMeshEditorTool::OnDeinitialize(const FUpdateContext& UpdateContext)
     {
+        SocketHierarchy.CloseOpenDragTransaction();
     }
 
     void FSkeletalMeshEditorTool::DrawViewportOverlayElements(const FUpdateContext& UpdateContext, ImTextureRef ViewportTexture, ImVec2 ViewportSize)
@@ -1185,6 +1182,14 @@ namespace Lumina
         CSkeletalMesh* SkeletalMesh = CastAsserted<CSkeletalMesh>(Asset.Get());
         SocketHierarchy.Initialize(SkeletalMesh->Skeleton.Get(), SkeletalMesh, &GetTransactionManager());
         SocketHierarchy.OnUndoRedo();
+
+        if (MeshEntity != ECS::NullEntity && PreviewSkeleton.Get() != SkeletalMesh->Skeleton.Get())
+        {
+            SkeletalMesh->RemapJointIndicesToSkeleton();
+            PreviewClip = nullptr;
+            World->DestroyEntity(MeshEntity);
+            CreatePreviewMeshEntity();
+        }
     }
 
     void FSkeletalMeshEditorTool::OnAssetLoadFinished()
@@ -1208,6 +1213,29 @@ namespace Lumina
         SocketHierarchy.Initialize(SkeletalMesh->Skeleton.Get(), SkeletalMesh, &GetTransactionManager());
     }
 
+    void FSkeletalMeshEditorTool::OnSave()
+    {
+        FAssetEditorTool::OnSave();
+
+        CSkeletalMesh* SkeletalMesh = Cast<CSkeletalMesh>(Asset.Get());
+        CPackage* SkeletonPackage = SkeletalMesh != nullptr && SkeletalMesh->Skeleton.IsValid() ? SkeletalMesh->Skeleton->GetPackage() : nullptr;
+        if (SkeletonPackage != nullptr && SkeletonPackage->IsDirty())
+        {
+            ToolContext->SavePackages({ SkeletonPackage });
+        }
+    }
+
+    bool FSkeletalMeshEditorTool::IsUnsavedDocument()
+    {
+        if (FAssetEditorTool::IsUnsavedDocument())
+        {
+            return true;
+        }
+        CSkeletalMesh* SkeletalMesh = Cast<CSkeletalMesh>(Asset.Get());
+        CPackage* SkeletonPackage = SkeletalMesh != nullptr && SkeletalMesh->Skeleton.IsValid() ? SkeletalMesh->Skeleton->GetPackage() : nullptr;
+        return SkeletonPackage != nullptr && SkeletonPackage->IsDirty();
+    }
+
     void FSkeletalMeshEditorTool::OnPropertyEditFinished(const FPropertyChangedEvent& Event)
     {
         CSkeletalMesh* SkeletalMesh = Cast<CSkeletalMesh>(Asset.Get());
@@ -1218,8 +1246,9 @@ namespace Lumina
 
         // The property table never calls PostPropertyChange, so a Skeleton swap would leave the indices behind.
         SkeletalMesh->RemapJointIndicesToSkeleton();
+        SkeletalMesh->BumpSocketGeneration();
 
-        if (Event.PropertyName == "Skeleton")
+        if (Event.PropertyName == LOC_ICON(LE_ICON_BONE, "Skeleton"))
         {
             SocketHierarchy.Initialize(SkeletalMesh->Skeleton.Get(), SkeletalMesh, &GetTransactionManager());
         }
@@ -1229,7 +1258,7 @@ namespace Lumina
         }
 
         // The scene claims a primitive's bone range only when it is new, so a reused preview keeps the old skeleton.
-        if (Event.PropertyName == "Skeleton" && MeshEntity != ECS::NullEntity)
+        if (Event.PropertyName == LOC_ICON(LE_ICON_BONE, "Skeleton") && MeshEntity != ECS::NullEntity)
         {
             PreviewClip = nullptr;
             World->DestroyEntity(MeshEntity);
@@ -1243,7 +1272,7 @@ namespace Lumina
             LOC("The Skinning panel checks the mesh against its skeleton: whether every weighted joint has a "
             "bone, how many bones each vertex blends, and which bones drive nothing. Select a bone to "
             "highlight the vertices it moves."));
-        DrawHelpTextRow(LOC("Skeleton"),
+        DrawHelpTextRow(LOC_ICON(LE_ICON_BONE, "Skeleton"),
             LOC("Joint indices address the skeleton's bone array by position, so a mesh only works with the "
             "skeleton it was imported against. To bind it to another, reimport with that Target Skeleton "
             "set; the importer rewrites the indices by bone name."));
@@ -1267,10 +1296,10 @@ namespace Lumina
         FAssetEditorTool::DrawToolMenu(UpdateContext);
 
         // Gizmo Control Dropdown
-        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_MOVE_RESIZE, "Gizmo Control")))
+        if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_MOVE_RESIZE, "Gizmo Control")))
         {
             const char* operations[] = { LOC("Translate"), LOC("Rotate"), LOC("Scale") };
-            static int currentOp = 0;
+            int currentOp = GuizmoOp == ImGuizmo::ROTATE ? 1 : (GuizmoOp == ImGuizmo::SCALE ? 2 : 0);
 
             if (ImGui::Combo("##", &currentOp, operations, IM_ARRAYSIZE(operations)))
             {
@@ -1285,7 +1314,7 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_BONE, "Skeleton")))
+        if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_BONE, "Skeleton")))
         {
             CSkeletalMesh* SkeletalMesh = Cast<CSkeletalMesh>(Asset.Get());
             CSkeleton* Skeleton = (SkeletalMesh != nullptr) ? SkeletalMesh->Skeleton.Get() : nullptr;
@@ -1298,12 +1327,12 @@ namespace Lumina
             }
             else
             {
-                ImGui::TextDisabled(LOC("No skeleton assigned."));
+                ImGui::TextDisabled(LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "No skeleton assigned."));
             }
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_REFRESH, "Re-analyze Skinning")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_REFRESH, "Re-analyze Skinning")))
             {
                 Skinning = FSkinningAnalysis();
                 PointsCachedForBone = -1;
@@ -1317,11 +1346,11 @@ namespace Lumina
     void FSkeletalMeshEditorTool::DrawViewModeExtraItems()
     {
         ImGui::Separator();
-        ImGui::MenuItem(LOC_ICON(LE_ICON_CUBE_OUTLINE, "Show AABB"), nullptr, &bShowAABB);
-        ImGui::MenuItem(LOC_ICON(LE_ICON_BONE, "Show Bones"), nullptr, &bShowBones);
-        ImGui::MenuItem(LOC_ICON(LE_ICON_LINK, "Show Sockets"), nullptr, &bShowSockets);
+        ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CUBE_OUTLINE, "Show AABB"), nullptr, &bShowAABB);
+        ImGui::MenuItem(LOC_ICON_ID(LE_ICON_BONE, "Show Bones"), nullptr, &bShowBones);
+        ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LINK, "Show Sockets"), nullptr, &bShowSockets);
 
-        if (ImGui::MenuItem(LOC_ICON(LE_ICON_RELOAD, "Reload Mesh Buffers")))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_RELOAD, "Reload Mesh Buffers")))
         {
             Asset->PostLoad();
         }

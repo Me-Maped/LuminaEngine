@@ -1,12 +1,12 @@
+﻿#include "Localization/Localization.h"
 #include "MaterialNodeExpression.h"
-#include "Localization/Localization.h"
 
-#include "imgui-node-editor/imgui_node_editor.h"
 #include "Core/Object/Cast.h"
 #include "Core/Object/Package/Package.h"
 #include "Memory/Memcpy.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
+#include "UI/Tools/NodeGraph/EdNodeGraph.h"
 #include "UI/Tools/NodeGraph/Material/MaterialOutput.h"
 
 namespace Lumina
@@ -24,6 +24,13 @@ namespace Lumina
         Output->SetShouldDrawEditor(false);
     }
 
+    FString CMaterialExpression::GetNodeTitleText() const
+    {
+        // The accessor is non-const only for the rename, and nothing is written through it here.
+        const FName* ParameterName = bDynamic ? const_cast<CMaterialExpression*>(this)->GetParameterName() : nullptr;
+        return ParameterName != nullptr && !ParameterName->IsNone() ? ParameterName->ToString() : Super::GetNodeTitleText();
+    }
+
     void CMaterialExpression::DrawNodeTitleBar()
     {
         FName* ParameterName = GetParameterName();
@@ -37,26 +44,26 @@ namespace Lumina
 
         if (!bDynamic)
         {
-            ImGui::TextUnformatted(LOC_VIEW_CTX(GetNodeDisplayName(), "node"));
+            ImGui::TextUnformatted(GetNodeDisplayName().data());
             return;
         }
 
-        // A graph of nodes all titled Float says nothing about which one drives EmissivePower. A
-        // named parameter draws its own name, which is user data and is never translated.
-        const bool bNamed = ParameterName != nullptr && !ParameterName->IsNone();
-        const FString Name = bNamed ? ParameterName->ToString() : FString(GetNodeDisplayName());
-        const char* Label = bNamed ? Name.c_str() : LOC_VIEW_CTX(GetNodeDisplayName(), "node");
-        ImGui::Text(LE_ICON_MATERIAL_DESIGN " %s", Label);
+        // A graph of nodes all titled Float says nothing about which one drives EmissivePower.
+        ImGui::Text(LE_ICON_MATERIAL_DESIGN " %s", GetNodeTitleText().c_str());
 
-        ImGuiX::TextTooltip("{}", ParameterName != nullptr
-            ? "Material parameter. F2 renames it here; its value lives in the \"Material Properties\" window."
-            : "Edit this parameter in the \"Material Properties\" window.");
+        if (ImGui::IsItemHovered() && GetOwningGraph() != nullptr)
+        {
+            GetOwningGraph()->GetEditor().SetTooltip(ParameterName != nullptr
+                ? LOC("Material parameter. F2 renames it here; its value lives in the \"Material Properties\" window.")
+                : LOC("Edit this parameter in the \"Material Properties\" window."));
+        }
 
         // Single selection only, or a marquee select drops every parameter node into edit mode.
         if (ParameterName != nullptr
             && ImGui::IsKeyPressed(ImGuiKey_F2, false)
-            && ax::NodeEditor::GetSelectedObjectCount() == 1
-            && ax::NodeEditor::IsNodeSelected(GetNodeID()))
+            && GetOwningGraph() != nullptr
+            && GetOwningGraph()->GetEditor().GetSelectedNodeCount() == 1
+            && GetOwningGraph()->GetEditor().IsNodeSelected(GetNodeID()))
         {
             bRenamingParameter = true;
             GParameterRenameNeedsFocus = true;
@@ -71,9 +78,6 @@ namespace Lumina
 
     void CMaterialExpression::DrawParameterRename(FName& Out)
     {
-        // DrawGraph re-arms shortcuts every frame, so this is a per-frame opt-out needing no restore.
-        ax::NodeEditor::EnableShortcuts(false);
-
         if (GParameterRenameNeedsFocus)
         {
             ImGui::SetKeyboardFocusHere();

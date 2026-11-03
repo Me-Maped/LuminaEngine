@@ -1,10 +1,11 @@
-#include "ContentBrowserEditorTool.h"
+﻿#include "ContentBrowserEditorTool.h"
 #include "Core/CoreEditorDelegates.h"
-#include "Localization/Localization.h"
 
 #include "Asset/AssetOps.h"
+#include "BulkRename.h"
 #include "EditorAssetActions.h"
 #include "EditorToolContext.h"
+#include "Localization/Localization.h"
 #include "ReplaceReferencesModal.h"
 #include "Assets/AssetManager/AssetManager.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
@@ -74,11 +75,129 @@
 #include "Settings/EditorSettings.h"
 #include "Tools/Import/ImportHelpers.h"
 #include "Containers/StringFormat.h"
+#include "UI/CodeEditor/Languages/CSharpScriptLanguage.h"
 
 namespace Lumina
 {
-    namespace
+    namespace ContentBrowserEditorToolInternal
     {
+        struct FPendingOSDrop
+        {
+            FFixedString Path;
+            ImVec2 MousePos;
+        };
+
+        struct FPendingRename
+        {
+            FFixedString OldName;
+            FFixedString NewName;
+        };
+
+        struct FPendingDestroy
+        {
+            FFixedString PendingDestroy;
+        };
+
+        struct FContentBrowserListViewItemData
+        {
+            FFixedString Path;
+        };
+
+        // Resolved once at construction, so the draw loop never reparses or reclassifies the file.
+        enum class EIconKind : uint8
+        {
+            Directory,
+            Asset,
+            CSharpScript,
+            Markup,
+            Stylesheet,
+            Audio,
+            Generic,
+        };
+
+        class FContentBrowserTileViewItem : public FTileViewItem
+        {
+        public:
+
+            // Refers into the browser's folder listing, which is only rebuilt after every tile is gone.
+            FContentBrowserTileViewItem(FTileViewItem* InParent, const VFS::FFileInfo& InInfo, bool bInProtected, FName InTypeLabel, bool bInMissingType)
+                : FTileViewItem(InParent)
+                , bProtected(bInProtected)
+                , bMissingType(bInMissingType)
+                , TypeLabel(InTypeLabel)
+                , FileInfo(InInfo)
+                , IconKind(ClassifyIcon(InInfo))
+            {
+            }
+
+            void SetDragDropPayloadData() const override
+            {
+                if (FileInfo.IsLAsset())
+                {
+                    FStringView Path(FileInfo.VirtualPath.c_str(), FileInfo.VirtualPath.size());
+                    if (const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(Path))
+                    {
+                        DragDrop::SetAssetPayload(*Data);
+                        return;
+                    }
+                }
+                DragDrop::SetFilePayload(FStringView(FileInfo.VirtualPath.c_str(), FileInfo.VirtualPath.size()));
+            }
+
+            void DrawTooltip() const override;
+            
+            NODISCARD bool HasContextMenu() override { return true; }
+
+            NODISCARD FStringView GetName() const override
+            {
+                return VFS::FileName(FileInfo.PathSource, true);
+            }
+            
+            NODISCARD const VFS::FFileInfo& GetFileInfo() const { return FileInfo; }
+            NODISCARD FStringView GetPathSource() const { return FileInfo.PathSource; }
+            NODISCARD FStringView GetVirtualPath() const { return FileInfo.VirtualPath; }
+            NODISCARD bool IsAsset() const { return FileInfo.IsLAsset(); }
+            NODISCARD bool IsDirectory() const { return FileInfo.IsDirectory(); }
+            NODISCARD FString GetExtension() const { return FileInfo.GetExt(); }
+            NODISCARD bool IsProtected() const { return bProtected; }
+            NODISCARD bool IsMissingType() const { return bMissingType; }
+            NODISCARD EIconKind GetIconKind() const { return IconKind; }
+
+            NODISCARD FStringView GetTypeLabel() const override
+            {
+                const char* Label = TypeLabel.IsNone() ? nullptr : TypeLabel.c_str();
+                return Label != nullptr ? FStringView(Label) : FStringView();
+            }
+
+            // Interned rather than inline, since an FFixedString member pushed a block-allocated item past a whole block.
+            void SetTypeLabel(const FFixedString& InLabel)
+            {
+                TypeLabel = InLabel.empty() ? NAME_None : FName(InLabel.c_str());
+            }
+
+        private:
+
+            static EIconKind ClassifyIcon(const VFS::FFileInfo& Info)
+            {
+                if (Info.IsDirectory()) { return EIconKind::Directory; }
+                if (Info.IsLAsset())    { return EIconKind::Asset; }
+
+                const size_t Dot = Info.Name.find_last_of('.');
+                const FStringView Ext = Dot == FString::npos ? FStringView() : FStringView(Info.Name.c_str() + Dot, Info.Name.size() - Dot);
+                if (Ext == ".rml")  { return EIconKind::Markup; }
+                if (Ext == ".rcss") { return EIconKind::Stylesheet; }
+                if (Ext == ".wav")  { return EIconKind::Audio; }
+                if (Ext == ".cs")   { return EIconKind::CSharpScript; }
+                return EIconKind::Generic;
+            }
+
+            bool                    bProtected = false;
+            bool                    bMissingType = false;
+            FName                   TypeLabel;
+            const VFS::FFileInfo&   FileInfo;
+            EIconKind               IconKind = EIconKind::Generic;
+        };
+
 
         constexpr ImVec4 kMenuText          = ImVec4(0.90f, 0.90f, 0.93f, 1.00f);
         constexpr ImVec4 kMenuTextDim       = ImVec4(0.55f, 0.56f, 0.62f, 1.00f);
@@ -97,7 +216,7 @@ namespace Lumina
             ImGui::PushStyleColor(ImGuiCol_Text, kMenuTextSection);
             const float OldX = ImGui::GetCursorPosX();
             ImGui::SetCursorPosX(OldX + 4.0f);
-            ImGui::TextUnformatted(LOC(Label));
+            ImGui::TextUnformatted(Label);
             ImGui::PopStyleColor();
             ImGuiX::Font::PopFont();
         }
@@ -235,11 +354,19 @@ namespace Lumina
 
             size_t Start = (Raw[0] == 'C' && Raw[1] >= 'A' && Raw[1] <= 'Z') ? 1 : 0;
 
+            auto IsUpper = [](char C) { return C >= 'A' && C <= 'Z'; };
+            auto IsLower = [](char C) { return C >= 'a' && C <= 'z'; };
+
             FFixedString Out;
             for (size_t i = Start; Raw[i] != '\0'; ++i)
             {
                 const char C = Raw[i];
-                Out.push_back((C >= 'a' && C <= 'z') ? (char)(C - ('a' - 'A')) : C);
+                const bool bWordStart = i > Start && IsUpper(C) && (IsLower(Raw[i - 1]) || (IsUpper(Raw[i - 1]) && IsLower(Raw[i + 1])));
+                if (bWordStart)
+                {
+                    Out.push_back(' ');
+                }
+                Out.push_back(IsLower(C) ? (char)(C - ('a' - 'A')) : C);
             }
             return Out;
         }
@@ -276,12 +403,21 @@ namespace Lumina
                 { "CS",               LE_ICON_LANGUAGE_CSHARP,     IM_COL32(160, 200, 130, 255) },
                 { "RML",              LE_ICON_XML,                 IM_COL32(200, 180, 140, 255) },
                 { "RCSS",             LE_ICON_LANGUAGE_CSS3,       IM_COL32(150, 190, 230, 255) },
-                { kMissingTypeTag,    LE_ICON_FILE_ALERT_OUTLINE,  IM_COL32(235, 95, 90, 255) },
+                { "MISSINGTYPE",      LE_ICON_FILE_ALERT_OUTLINE,  IM_COL32(235, 95, 90, 255) },
             };
+
+            FFixedString Compact;
+            for (const char C : TypeTag)
+            {
+                if (C != ' ')
+                {
+                    Compact.push_back(C);
+                }
+            }
 
             for (const FEntry& Entry : kEntries)
             {
-                if (IEquals(TypeTag, Entry.Tag))
+                if (IEquals(FStringView(Compact.c_str(), Compact.size()), Entry.Tag))
                 {
                     return { Entry.Glyph, Entry.Accent };
                 }
@@ -289,15 +425,8 @@ namespace Lumina
             return { LE_ICON_FILE_DOCUMENT_OUTLINE, IM_COL32(170, 175, 190, 255) };
         }
 
-        // The tag stays English, since the tile art and the style table resolve against it; only the
-        // drawn line is translated, so a table entry can never change which glyph a type gets.
-        const char* TypeTagDisplayText(FStringView TypeTag)
-        {
-            return TypeTag.empty() ? "" : LOC_VIEW(TypeTag);
-        }
-
         // Drawn rather than blitted, so it stays sharp at any tile size and needs no atlas.
-        void DrawTypeCard(ImDrawList& DrawList, const ImVec2& Min, const ImVec2& Max, FStringView TypeTag, const char* DisplayText)
+        void DrawTypeCard(ImDrawList& DrawList, const ImVec2& Min, const ImVec2& Max, FStringView TypeTag)
         {
             const FTypeStyle Style = StyleForType(TypeTag);
 
@@ -335,22 +464,6 @@ namespace Lumina
                                       PageMin.y + (PageMax.y - PageMin.y) * 0.20f);
                 DrawList.AddText(Font, GlyphSize, GlyphPos, Style.Accent, Style.Glyph);
             }
-
-            // Dropped rather than squeezed when illegible, since the line under the name carries the type.
-            const float TagSize = Math::Min((PageMax.y - PageMin.y) * 0.16f, 13.0f);
-            const char* const Tag = (DisplayText != nullptr) ? DisplayText : "";
-            if (TagSize >= 7.0f && Tag[0] != '\0')
-            {
-                const char* const TagEnd = Tag + strlen(Tag);
-                ImFont* Font = ImGui::GetFont();
-                const ImVec2 TagExtent = Font->CalcTextSizeA(TagSize, FLT_MAX, 0.0f, Tag, TagEnd);
-                if (TagExtent.x <= (PageMax.x - PageMin.x) * 0.86f)
-                {
-                    const ImVec2 TagPos((PageMin.x + PageMax.x - TagExtent.x) * 0.5f,
-                                        PageMax.y - TagExtent.y - (PageMax.y - PageMin.y) * 0.10f);
-                    DrawList.AddText(Font, TagSize, TagPos, Style.Accent, Tag, TagEnd);
-                }
-            }
         }
 
         // Build / IDE directories that never belong in the browser (regenerated on demand).
@@ -376,7 +489,7 @@ namespace Lumina
             // Reflector-emitted C# bindings, rewritten by every build and never authored by hand.
             if (IEquals(Name, "Generated") && IEquals(VFS::FileName(Parent), "Scripts")) { return true; }
 
-            if (IEquals(Parent, "/Engine/Resources") && !IEquals(Name, "Content") && !IEquals(Name, "Scripts"))
+            if (IEquals(Parent, "/Engine/Resources") && !IEquals(Name, LOC("Content")) && !IEquals(Name, "Scripts"))
             {
                 return true;
             }
@@ -402,7 +515,7 @@ namespace Lumina
             {
                 return false;
             }
-            if (IEquals(Root, "Engine"))
+            if (IEquals(Root, LOC("Engine")))
             {
                 return IEquals(NextSegment(), "Resources") && IEquals(NextSegment(), "Scripts");
             }
@@ -751,7 +864,7 @@ namespace Lumina
             if (Data->IsClassMissing())
             {
                 ImGui::TextColored(EditorColors::Danger(), LOC_ICON(LE_ICON_FILE_ALERT_OUTLINE, "The type '%s' no longer exists."), Data->AssetClass.c_str());
-                ImGui::TextColored(kMenuTextDim, "%s", LOC("This asset cannot be loaded or opened. Delete it, or restore the type or the plugin that defines it."));
+                ImGui::TextColored(kMenuTextDim, LOC("This asset cannot be loaded or opened. Delete it, or restore the type or the plugin that defines it."));
             }
 
             if (!Data->OwningPlugin.IsNone())
@@ -789,74 +902,74 @@ namespace Lumina
     }
 
     // Scripts show lifecycle, assets show refs and GUID, files show size, folders show item counts.
-    void FContentBrowserEditorTool::FContentBrowserTileViewItem::DrawTooltip() const
+    void ContentBrowserEditorToolInternal::FContentBrowserTileViewItem::DrawTooltip() const
     {
         ImGui::PushTextWrapPos(ImGui::GetFontSize() * 26.0f);
 
-        ImGui::PushStyleColor(ImGuiCol_Text, kMenuAccent);
+        ImGui::PushStyleColor(ImGuiCol_Text, ContentBrowserEditorToolInternal::kMenuAccent);
         ImGui::TextUnformatted(FileInfo.Name.c_str());
         ImGui::PopStyleColor();
         if (FileInfo.IsReadOnly())
         {
-            ImGui::TextColored(EditorColors::Warning(), "%s", LOC_ICON(LE_ICON_LOCK, "Read-only on disk, so it cannot be saved, renamed, moved or deleted until it is made writable."));
+            ImGui::TextColored(EditorColors::Warning(), LOC_ICON(LE_ICON_LOCK, "Read-only on disk, so it cannot be saved, renamed, moved or deleted until it is made writable."));
         }
         ImGui::Separator();
 
         switch (IconKind)
         {
-        case EIconKind::CSharpScript:
+        case ContentBrowserEditorToolInternal::EIconKind::CSharpScript:
             {
                 const FStringView VPath(FileInfo.VirtualPath.c_str(), FileInfo.VirtualPath.size());
                 const FStringView DPath(FileInfo.PathSource.c_str(), FileInfo.PathSource.size());
-                UpdateScriptHoverCache(VPath, DPath);
-                DrawScriptHoverContent(GScriptHoverCache.Info);
+                ContentBrowserEditorToolInternal::UpdateScriptHoverCache(VPath, DPath);
+                ContentBrowserEditorToolInternal::DrawScriptHoverContent(ContentBrowserEditorToolInternal::GScriptHoverCache.Info);
                 break;
             }
-        case EIconKind::Asset:
+        case ContentBrowserEditorToolInternal::EIconKind::Asset:
             {
-                DrawAssetTooltipContent(FileInfo);
+                ContentBrowserEditorToolInternal::DrawAssetTooltipContent(FileInfo);
                 break;
             }
-        case EIconKind::Directory:
+        case ContentBrowserEditorToolInternal::EIconKind::Directory:
             {
                 int32 Count = 0;
                 const FStringView VPath(FileInfo.VirtualPath.c_str(), FileInfo.VirtualPath.size());
                 VFS::DirectoryIterator(VPath, [&Count](const VFS::FFileInfo&) { ++Count; });
-                ImGui::TextColored(kMenuTextDim, Count == 1 ? LOC("Folder - %d item") : LOC("Folder - %d items"), Count);
+                ImGui::TextColored(ContentBrowserEditorToolInternal::kMenuTextDim, LOC("Folder - %d item%s"), Count, Count == 1 ? "" : "s");
                 break;
             }
-        case EIconKind::Markup:
+        case ContentBrowserEditorToolInternal::EIconKind::Markup:
             {
-                ImGui::TextColored(kMenuTextDim, LOC("UI Document (.rml)"));
-                DrawItemSizeLine(FileInfo);
+                ImGui::TextColored(ContentBrowserEditorToolInternal::kMenuTextDim, LOC("UI Document (.rml)"));
+                ContentBrowserEditorToolInternal::DrawItemSizeLine(FileInfo);
                 break;
             }
-        case EIconKind::Stylesheet:
+        case ContentBrowserEditorToolInternal::EIconKind::Stylesheet:
             {
-                ImGui::TextColored(kMenuTextDim, LOC("UI Stylesheet (.rcss)"));
-                DrawItemSizeLine(FileInfo);
+                ImGui::TextColored(ContentBrowserEditorToolInternal::kMenuTextDim, LOC("UI Stylesheet (.rcss)"));
+                ContentBrowserEditorToolInternal::DrawItemSizeLine(FileInfo);
                 break;
             }
-        case EIconKind::Audio:
+        case ContentBrowserEditorToolInternal::EIconKind::Audio:
             {
-                ImGui::TextColored(kMenuTextDim, LOC("Audio Clip (%s)"), FileInfo.GetExt().c_str());
-                DrawItemSizeLine(FileInfo);
+                ImGui::TextColored(ContentBrowserEditorToolInternal::kMenuTextDim, LOC("Audio Clip (%s)"), FileInfo.GetExt().c_str());
+                ContentBrowserEditorToolInternal::DrawItemSizeLine(FileInfo);
                 break;
             }
-        case EIconKind::Generic:
+        case ContentBrowserEditorToolInternal::EIconKind::Generic:
             {
                 const FString Ext = FileInfo.GetExt();
                 if (!Ext.empty())
                 {
-                    ImGui::TextColored(kMenuTextDim, LOC("%s file"), Ext.c_str());
+                    ImGui::TextColored(ContentBrowserEditorToolInternal::kMenuTextDim, LOC("%s file"), Ext.c_str());
                 }
-                DrawItemSizeLine(FileInfo);
+                ContentBrowserEditorToolInternal::DrawItemSizeLine(FileInfo);
                 break;
             }
         }
 
         ImGui::Spacing();
-        ImGui::TextColored(kMenuTextDim, "%s", FileInfo.VirtualPath.c_str());
+        ImGui::TextColored(ContentBrowserEditorToolInternal::kMenuTextDim, "%s", FileInfo.VirtualPath.c_str());
 
         ImGui::PopTextWrapPos();
     }
@@ -873,7 +986,7 @@ namespace Lumina
 
             for (const FFixedString& Path : FileEvent.GetPaths())
             {
-                ActionRegistry.EnqueueAction<FPendingOSDrop>(FPendingOSDrop{ Path, DropCursor });
+                ActionRegistry.EnqueueAction<ContentBrowserEditorToolInternal::FPendingOSDrop>(ContentBrowserEditorToolInternal::FPendingOSDrop{ Path, DropCursor });
             }
 
             return true;
@@ -1008,7 +1121,7 @@ namespace Lumina
 
         ContentBrowserTileViewContext.bShowTypeLabels = true;
 
-        CreateToolWindow("Content", [&] (bool bIsFocused)
+        CreateToolWindow(LOC("Content"), [&] (bool bIsFocused)
         {
             // A starting width only, since the pane is resizable and keeps wherever it was last dragged.
             constexpr float DefaultDirectoryWidth = 225.0f;
@@ -1023,7 +1136,7 @@ namespace Lumina
         
         ContentBrowserTileViewContext.DragDropFunction = [this] (FTileViewItem* DropItem, const TVector<FTileViewItem*>& Selections)
         {
-            auto* TypedDroppedItem = static_cast<FContentBrowserTileViewItem*>(DropItem);
+            auto* TypedDroppedItem = static_cast<FTileItem*>(DropItem);
             if (!TypedDroppedItem->IsDirectory())
             {
                 return;
@@ -1056,7 +1169,7 @@ namespace Lumina
 
             for (FTileViewItem* Item : Selections)
             {
-                auto* SourceItem = reinterpret_cast<FContentBrowserTileViewItem*>(Item);
+                auto* SourceItem = reinterpret_cast<FTileItem*>(Item);
 
                 if (SourceItem->GetVirtualPath() == SourcePath)
                 {
@@ -1074,7 +1187,7 @@ namespace Lumina
 
         ContentBrowserTileViewContext.DrawItemOverrideFunction = [this] (FTileViewItem* Item)
         {
-            FContentBrowserTileViewItem* ContentItem = static_cast<FContentBrowserTileViewItem*>(Item);
+            FTileItem* ContentItem = static_cast<FTileItem*>(Item);
             
             ImVec4 TintColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 
@@ -1088,7 +1201,7 @@ namespace Lumina
             ImTextureRef ImTexture;
             switch (ContentItem->GetIconKind())
             {
-            case EIconKind::Directory:
+            case ContentBrowserEditorToolInternal::EIconKind::Directory:
                 {
                     // Folders keep the folder image, since navigation should not read as a document.
                     ImTexture = ImGuiX::ToImTextureRef(Paths::GetEngineResourceDirectory() + "/Textures/Folder.png");
@@ -1096,7 +1209,7 @@ namespace Lumina
                     bDrawTypeCard = false;
                     break;
                 }
-            case EIconKind::Asset:
+            case ContentBrowserEditorToolInternal::EIconKind::Asset:
                 {
                     if (ContentItem->IsMissingType())
                     {
@@ -1167,8 +1280,7 @@ namespace Lumina
             }
             else if (bDrawTypeCard)
             {
-                DrawTypeCard(*DrawList, BodyMin, BodyMax, ContentItem->GetTypeLabel(),
-                    TypeTagDisplayText(ContentItem->GetTypeLabel()));
+                ContentBrowserEditorToolInternal::DrawTypeCard(*DrawList, BodyMin, BodyMax, ContentItem->GetTypeLabel());
             }
 
             if (ContentItem->GetFileInfo().IsReadOnly())
@@ -1239,7 +1351,7 @@ namespace Lumina
         
         ContentBrowserTileViewContext.ItemDoubleClickedFunction = [this] (FTileViewItem* Item)
         {
-            FContentBrowserTileViewItem* ContentItem = static_cast<FContentBrowserTileViewItem*>(Item);
+            FTileItem* ContentItem = static_cast<FTileItem*>(Item);
             FFixedString Path {ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size()};
             
             if (ContentItem->IsDirectory())
@@ -1253,7 +1365,7 @@ namespace Lumina
                     ToolContext->OpenAssetEditor(Asset->AssetGUID);
                 }
             }
-            else if (ContentItem->GetIconKind() == EIconKind::Markup || ContentItem->GetIconKind() == EIconKind::Stylesheet)
+            else if (ContentItem->GetIconKind() == ContentBrowserEditorToolInternal::EIconKind::Markup || ContentItem->GetIconKind() == ContentBrowserEditorToolInternal::EIconKind::Stylesheet)
             {
                 // Files with an in-engine editor (.rml/.rcss) open as editor tabs.
                 ToolContext->OpenFileEditor(ContentItem->GetVirtualPath());
@@ -1284,7 +1396,7 @@ namespace Lumina
 
             if (Items.size() == 1)
             {
-                DrawAssetContextMenu(static_cast<FContentBrowserTileViewItem*>(Items[0]));
+                DrawAssetContextMenu(static_cast<FTileItem*>(Items[0]));
                 return;
             }
 
@@ -1316,7 +1428,7 @@ namespace Lumina
                     if (FileInfo.IsDirectory())
                     {
                         // Hide dot-entries (e.g. the .lmeta sidecar tree) and build/IDE folders.
-                        if (ShouldHideDirectory(FileInfo))
+                        if (ContentBrowserEditorToolInternal::ShouldHideDirectory(FileInfo))
                         {
                             return;
                         }
@@ -1328,7 +1440,7 @@ namespace Lumina
                         const FStringView Ext = Dot == FString::npos ? FStringView() : FStringView(FileInfo.Name.c_str() + Dot, FileInfo.Name.size() - Dot);
 
                         // Only extensions the engine authors or consumes are surfaced, and the rest stay hidden.
-                        if (!IsBrowsableFileExtension(Ext))
+                        if (!ContentBrowserEditorToolInternal::IsBrowsableFileExtension(Ext))
                         {
                             return;
                         }
@@ -1364,7 +1476,7 @@ namespace Lumina
                 }
 
                 // A folder repeats a handful of classes thousands of times, so each label is built and interned once.
-                const FName MissingTypeLabel(kMissingTypeTag);
+                const FName MissingTypeLabel(ContentBrowserEditorToolInternal::kMissingTypeTag);
                 THashMap<FName, FName> ClassLabels;
                 for (FListingEntry& Entry : Listing)
                 {
@@ -1384,7 +1496,7 @@ namespace Lumina
                         FName ClassLabel = MissingTypeLabel;
                         if (FindObject<CClass>(Entry.AssetClass) != nullptr)
                         {
-                            const FFixedString Label = UpperTypeTag(Entry.AssetClass);
+                            const FFixedString Label = ContentBrowserEditorToolInternal::UpperTypeTag(Entry.AssetClass);
                             ClassLabel = Label.empty() ? NAME_None : FName(Label.c_str());
                         }
                         Cached = ClassLabels.emplace(Entry.AssetClass, ClassLabel).first;
@@ -1410,7 +1522,7 @@ namespace Lumina
             const FStringView BrowseTarget = VFS::RemoveExtension(FStringView(PendingBrowseToPath.c_str(), PendingBrowseToPath.size()));
             const FStringView RenameTarget = VFS::RemoveExtension(FStringView(PendingRenamePath.c_str(), PendingRenamePath.size()));
             FTileViewItem*               BrowseItem = nullptr;
-            FContentBrowserTileViewItem* RenameItem = nullptr;
+            FTileItem* RenameItem = nullptr;
 
             for (const FListingEntry& Entry : Listing)
             {
@@ -1423,23 +1535,19 @@ namespace Lumina
                     }
                 }
 
-                // Keep user names/path bytes intact; translated type labels also retain their source tag.
+                // Folders are navigation, so only a name search hides them, and type is searchable for everything else.
                 if (!Search.empty())
                 {
-                    // This listing is one folder. The shared parent path would make "a" match every row via "/Game".
-                    const FStringView Stem = VFS::FileName(Entry.Info.PathSource, true);
-                    const FStringView FileName(Entry.Info.Name.c_str(), Entry.Info.Name.size());
-                    const FStringView Type = Entry.Info.IsDirectory() || Entry.TypeLabel.IsNone()
-                        ? FStringView() : FStringView(Entry.TypeLabel.c_str());
-                    if (!ImGuiX::PassSearchFilter(Search, { Stem, FileName,
-                        Type, TypeTagDisplayText(Type), Entry.AssetClass.IsNone() ? "" : Entry.AssetClass.c_str() }))
+                    const FStringView Name = VFS::FileName(Entry.Info.PathSource, true);
+                    const bool bTypeMatches = !Entry.Info.IsDirectory() && !Entry.TypeLabel.IsNone() && ImGuiX::PassSearchFilter(Search, FStringView(Entry.TypeLabel.c_str()));
+                    if (!ImGuiX::PassSearchFilter(Search, Name) && !bTypeMatches)
                     {
                         continue;
                     }
                 }
 
                 const bool bProtected = AssetOps::IsProtectedRoot(FStringView(Entry.Info.VirtualPath.c_str(), Entry.Info.VirtualPath.size()));
-                FContentBrowserTileViewItem* NewItem = ContentBrowserTileView.AddItemToTree<FContentBrowserTileViewItem>(nullptr, Entry.Info, bProtected, Entry.TypeLabel, Entry.bMissingType);
+                FTileItem* NewItem = ContentBrowserTileView.AddItemToTree<FTileItem>(nullptr, Entry.Info, bProtected, Entry.TypeLabel, Entry.bMissingType);
 
                 const FStringView ItemPath = VFS::RemoveExtension(NewItem->GetVirtualPath());
                 if (!BrowseTarget.empty() && ItemPath == BrowseTarget)
@@ -1472,7 +1580,13 @@ namespace Lumina
         {
             if (Key == ImGuiKey_F2)
             {
-                FContentBrowserTileViewItem* ContentItem = static_cast<FContentBrowserTileViewItem*>(&Item);
+                if (const TVector<FTileViewItem*>& Selections = ContentBrowserTileView.GetSelections(); Selections.size() > 1)
+                {
+                    BulkRenameItems(Selections);
+                    return true;
+                }
+
+                FTileItem* ContentItem = static_cast<FTileItem*>(&Item);
                 if (ContentItem->IsProtected())
                 {
                     ImGuiX::Notifications::NotifyError(LOCF("Cannot rename a core directory"));
@@ -1493,7 +1607,7 @@ namespace Lumina
                     return true;
                 }
 
-                FContentBrowserTileViewItem* ContentItem = static_cast<FContentBrowserTileViewItem*>(&Item);
+                FTileItem* ContentItem = static_cast<FTileItem*>(&Item);
                 if (ContentItem->IsProtected())
                 {
                     ImGuiX::Notifications::NotifyError(LOCF("Cannot delete a core directory"));
@@ -1509,7 +1623,7 @@ namespace Lumina
 
         ContentBrowserTileViewContext.ItemRenamedFunction = [this] (FTileViewItem* Item, const char* NewName)
         {
-            FContentBrowserTileViewItem* ContentItem = static_cast<FContentBrowserTileViewItem*>(Item);
+            FTileItem* ContentItem = static_cast<FTileItem*>(Item);
 
             // Empty or unchanged, so drop the edit rather than spam an error.
             if (NewName == nullptr || NewName[0] == 0)
@@ -1519,6 +1633,14 @@ namespace Lumina
 
             if (ContentItem->GetName() == FStringView(NewName))
             {
+                return;
+            }
+
+            // A separator here would silently turn the rename into a move into some other folder.
+            FString Reason;
+            if (!AssetOps::IsValidLeafName(FStringView(NewName), &Reason))
+            {
+                ImGuiX::Notifications::NotifyError(LOCF("Rename Failed: {0}"), Reason);
                 return;
             }
 
@@ -1532,7 +1654,7 @@ namespace Lumina
                 return;
             }
 
-            ActionRegistry.EnqueueAction<FPendingRename>(FPendingRename{ FFixedString(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().length()), TestPath });
+            ActionRegistry.EnqueueAction<ContentBrowserEditorToolInternal::FPendingRename>(ContentBrowserEditorToolInternal::FPendingRename{ FFixedString(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().length()), TestPath });
         };
 
         // The tree selects on right-click first, so SelectedPath already names the folder under the cursor.
@@ -1545,7 +1667,7 @@ namespace Lumina
 
         DirectoryContext.DragDropFunction = [this](FTreeListView& Tree, FTreeNodeID Item)
         {
-            FContentBrowserListViewItemData& Data = Tree.Get<FContentBrowserListViewItemData>(Item);
+            ContentBrowserEditorToolInternal::FContentBrowserListViewItemData& Data = Tree.Get<ContentBrowserEditorToolInternal::FContentBrowserListViewItemData>(Item);
 
             const DragDrop::FPayload* Peek = DragDrop::PeekPayload();
             if (Peek == nullptr || !DragDrop::IsDelivered())
@@ -1571,7 +1693,7 @@ namespace Lumina
 
             for (FTileViewItem* TileItem : ContentBrowserTileView.GetSelections())
             {
-                auto* SourceItem = static_cast<FContentBrowserTileViewItem*>(TileItem);
+                auto* SourceItem = static_cast<FTileItem*>(TileItem);
 
                 if (SourceItem->GetVirtualPath() == SourcePath)
                 {
@@ -1589,7 +1711,7 @@ namespace Lumina
             DisplayName.append(LE_ICON_FOLDER).append(" ").append(Info.Name.begin(), Info.Name.end());
 
             FTreeNodeID ItemEntity = Tree.CreateNode(Parent, FStringView(DisplayName.data(), DisplayName.length()), Hash::GetHash64(Info.PathSource));
-            Tree.EmplaceUserData<FContentBrowserListViewItemData>(ItemEntity).Path.assign(Info.VirtualPath.begin(), Info.VirtualPath.end());
+            Tree.EmplaceUserData<ContentBrowserEditorToolInternal::FContentBrowserListViewItemData>(ItemEntity).Path.assign(Info.VirtualPath.begin(), Info.VirtualPath.end());
 
             FTreeNodeDisplay& FolderDisplay = Tree.Get<FTreeNodeDisplay>(ItemEntity);
             FolderDisplay.IconText = LE_ICON_FOLDER;
@@ -1606,7 +1728,7 @@ namespace Lumina
             bool bHasSubdirs = false;
             VFS::DirectoryIterator(Info.VirtualPath, [&](const VFS::FFileInfo& Child)
             {
-                if (Child.IsDirectory() && !ShouldHideDirectory(Child))
+                if (Child.IsDirectory() && !ContentBrowserEditorToolInternal::ShouldHideDirectory(Child))
                 {
                     bHasSubdirs = true;
                 }
@@ -1627,7 +1749,7 @@ namespace Lumina
                 FFixedString Name;
                 Name.assign(LE_ICON_FOLDER).append(" ").append(Label);
                 FTreeNodeID RootItem = Tree.CreateNode(InvalidTreeNode, FStringView(Name.data(), Name.length()), Hash::GetHash64(FStringView(Path).data(), FStringView(Path).length()));
-                Tree.EmplaceUserData<FContentBrowserListViewItemData>(RootItem).Path = Path;
+                Tree.EmplaceUserData<ContentBrowserEditorToolInternal::FContentBrowserListViewItemData>(RootItem).Path = Path;
 
                 FTreeNodeDisplay& RootDisplay = Tree.Get<FTreeNodeDisplay>(RootItem);
                 RootDisplay.IconText = LE_ICON_FOLDER;
@@ -1652,10 +1774,10 @@ namespace Lumina
 
         DirectoryContext.BuildChildrenFunction = [this, AddFolderNode](FTreeListView& Tree, FTreeNodeID Parent)
         {
-            FContentBrowserListViewItemData& Data = Tree.Get<FContentBrowserListViewItemData>(Parent);
+            ContentBrowserEditorToolInternal::FContentBrowserListViewItemData& Data = Tree.Get<ContentBrowserEditorToolInternal::FContentBrowserListViewItemData>(Parent);
             VFS::DirectoryIterator(FStringView(Data.Path.data(), Data.Path.length()), [&](const VFS::FFileInfo& Info)
             {
-                if (!Info.IsDirectory() || ShouldHideDirectory(Info))
+                if (!Info.IsDirectory() || ContentBrowserEditorToolInternal::ShouldHideDirectory(Info))
                 {
                     return;
                 }
@@ -1670,7 +1792,7 @@ namespace Lumina
                 return;
             }
 
-            FContentBrowserListViewItemData& Data = Tree.Get<FContentBrowserListViewItemData>(Item);
+            ContentBrowserEditorToolInternal::FContentBrowserListViewItemData& Data = Tree.Get<ContentBrowserEditorToolInternal::FContentBrowserListViewItemData>(Item);
 
             // A no-op when the tree is only catching up, which keeps RevealPendingDirectory out of history.
             NavigateTo(FStringView(Data.Path.c_str(), Data.Path.size()));
@@ -1687,16 +1809,6 @@ namespace Lumina
 
     void FContentBrowserEditorTool::Update(const FUpdateContext& UpdateContext)
     {
-        const FLocalizationSnapshot Localization = FLocalization::Get().ReadForCurrentFrame();
-        if (!SearchLocalization.HasSameTable(Localization))
-        {
-            SearchLocalization = Localization;
-            if (!SearchText.empty())
-            {
-                // Refilter the cached listing without rereading the directory.
-                ContentBrowserTileView.MarkTreeDirty();
-            }
-        }
         // The watcher runs on its own thread, so its change is only applied to the listing here.
         if (bDiskListingChanged.exchange(false, std::memory_order_acquire))
         {
@@ -1753,7 +1865,7 @@ namespace Lumina
         const bool bWorldActive = IsAnyWorldPlayingOrSimulating();
         bool bBlockNotified = false;
 
-        ActionRegistry.ProcessAllOf<FPendingDestroy>([&] (const FPendingDestroy& Destroy)
+        ActionRegistry.ProcessAllOf<ContentBrowserEditorToolInternal::FPendingDestroy>([&] (const ContentBrowserEditorToolInternal::FPendingDestroy& Destroy)
         {
             if (bWorldActive)
             {
@@ -1770,7 +1882,7 @@ namespace Lumina
             {
                 ToolContext->ConfirmWritable(Move(ReadOnly), [this, Path = Destroy.PendingDestroy]
                 {
-                    ActionRegistry.EnqueueAction<FPendingDestroy>(FPendingDestroy{ Path });
+                    ActionRegistry.EnqueueAction<ContentBrowserEditorToolInternal::FPendingDestroy>(ContentBrowserEditorToolInternal::FPendingDestroy{ Path });
                 }, false);
                 return;
             }
@@ -1865,13 +1977,13 @@ namespace Lumina
             }
 		});
         
-        ActionRegistry.ProcessAllOf<FPendingRename>([&](FPendingRename& Rename)
+        ActionRegistry.ProcessAllOf<ContentBrowserEditorToolInternal::FPendingRename>([&](ContentBrowserEditorToolInternal::FPendingRename& Rename)
         {
             if (TVector<FString> ReadOnly = AssetOps::FindReadOnlyFiles(Rename.OldName); !ReadOnly.empty())
             {
                 ToolContext->ConfirmWritable(Move(ReadOnly), [this, Retry = Rename]
                 {
-                    ActionRegistry.EnqueueAction<FPendingRename>(FPendingRename(Retry));
+                    ActionRegistry.EnqueueAction<ContentBrowserEditorToolInternal::FPendingRename>(ContentBrowserEditorToolInternal::FPendingRename(Retry));
                 }, false);
                 return;
             }
@@ -1902,28 +2014,28 @@ namespace Lumina
         ImGui::DockBuilderSplitNode(bottomCenterDockID, ImGuiDir_Right, 0.66f, &bottomCenterDockID, &bottomLeftDockID);
         ImGui::DockBuilderSplitNode(bottomCenterDockID, ImGuiDir_Right, 0.5f, &bottomRightDockID, &bottomCenterDockID);
 
-        ImGui::DockBuilderDockWindow(GetToolWindowName("Content").c_str(), bottomCenterDockID);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(LOC("Content")).c_str(), bottomCenterDockID);
     }
 
     void FContentBrowserEditorTool::DrawHelpMenu()
     {
         DrawHelpTextRow(LOC("Browse"),
             LOC("Left panel is the directory tree, right is the tile grid for the selected folder. "
-                "Double-click a folder to enter, double-click an asset to open its editor."));
+            "Double-click a folder to enter, double-click an asset to open its editor."));
         DrawHelpTextRow(LOC("Create"),
             LOC("Right-click empty space in the tile grid for the New menu (Material, Prefab, C# script, etc). "
-                "Right-click a folder for create-in-place."));
+            "Right-click a folder for create-in-place."));
         DrawHelpTextRow(LOC("Import"),
             LOC("Drag external files (FBX, PNG, WAV, ...) onto the tile grid to import. "
-                "Each importer maps to a CObject asset class."));
+            "Each importer maps to a CObject asset class."));
         DrawHelpTextRow(LOC("Drag & Drop"),
             LOC("Drag an asset tile into the world viewport, outliner, or a property field that accepts its type. "
-                "Filtering happens at drop-time based on the asset class."));
+            "Filtering happens at drop-time based on the asset class."));
         DrawHelpTextRow(LOC("Filter"),
             LOC("Filter menu hides asset classes you don't want to see. View Options changes tile size."));
         DrawHelpTextRow(LOC("Rename / Delete"),
-            LOC("F2 renames the tile in place; Delete removes. References follow a rename by asset GUID, "
-                "so inbound references stay intact without redirectors."));
+            "F2 renames the tile in place, or opens Bulk Rename when several are selected; Delete removes. References follow a rename by asset GUID, "
+            "so inbound references stay intact without redirectors.");
     }
 
     FFixedString FContentBrowserEditorTool::MakeTypeLabel(const VFS::FFileInfo& FileInfo)
@@ -1938,7 +2050,7 @@ namespace Lumina
             const FStringView Path(FileInfo.VirtualPath.c_str(), FileInfo.VirtualPath.size());
             if (const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(Path))
             {
-                return UpperTypeTag(Data->AssetClass);
+                return ContentBrowserEditorToolInternal::UpperTypeTag(Data->AssetClass);
             }
             // Discovered on disk but not registered yet; the tile still needs a stable line.
             return FFixedString("ASSET");
@@ -2060,11 +2172,7 @@ namespace Lumina
             for (const FName& Name : Names)
             {
                 bool& State = FilterState[Name];
-                // The English class name stays the identity, so two types can never collide on a
-                // translation, and the tick state survives a language switch.
-                const FFixedString ClassName = FriendlyClassName(Name);
-                const FFixedString CheckLabel = FormatAs<FFixedString>("{}###{}", LOC(ClassName.c_str()), ClassName.c_str());
-                if (ImGui::Checkbox(CheckLabel.c_str(), &State))
+                if (ImGui::Checkbox(ContentBrowserEditorToolInternal::FriendlyClassName(Name).c_str(), &State))
                 {
                     RefilterContentBrowser();
                 }
@@ -2074,7 +2182,7 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
-		if (ImGui::BeginMenu(LOC_ICON(LE_ICON_COGS, "View Options")))
+		if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_COGS, "View Options")))
         {
             ImGui::SetNextItemWidth(128.0f);
             if (ImGui::SliderFloat("##Zoom", &ContentBrowserTileSize, 46.0f, 256.0f, LOC("Tile: %.1fx")))
@@ -2096,10 +2204,10 @@ namespace Lumina
         FFixedString OldName(PayloadPath.data(), PayloadPath.length());
         FFixedString NewName = Paths::Combine(DropPath, DirName);
 
-        ActionRegistry.EnqueueAction<FPendingRename>(FPendingRename{ OldName, NewName });
+        ActionRegistry.EnqueueAction<ContentBrowserEditorToolInternal::FPendingRename>(ContentBrowserEditorToolInternal::FPendingRename{ OldName, NewName });
     }
 
-    void FContentBrowserEditorTool::OpenDeletionWarningPopup(const FContentBrowserTileViewItem* Item)
+    void FContentBrowserEditorTool::OpenDeletionWarningPopup(const FTileItem* Item)
     {
         TVector<FFixedString> Paths;
         Paths.emplace_back(Item->GetVirtualPath().data(), Item->GetVirtualPath().size());
@@ -2113,48 +2221,22 @@ namespace Lumina
 
         for (const FFixedString& Path : Paths)
         {
-            const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(Path);
-            if (Data == nullptr)
+            const FString Variants = AssetOps::FindDependentPrefabVariants(FStringView(Path.c_str(), Path.size()));
+            if (Variants.empty())
             {
                 continue;
             }
-
-            CClass* AssetClass = FindObject<CClass>(Data->AssetClass);
-            if (AssetClass == nullptr || !AssetClass->IsChildOf(CPrefab::StaticClass()))
+            if (!DependentVariants.empty())
             {
-                continue;
+                DependentVariants += ", ";
             }
-
-            CPrefab* Prefab = LoadObject<CPrefab>(Data->AssetGUID);
-            if (Prefab == nullptr)
-            {
-                continue;
-            }
-
-            // FindDirectVariants iterates loaded objects, so a variant nobody opened has to be brought in first.
-            for (const FAssetData* Referencer : FAssetRegistry::Get().GetReferencersOf(Data->AssetGUID))
-            {
-                CClass* ReferencerClass = Referencer != nullptr ? FindObject<CClass>(Referencer->AssetClass) : nullptr;
-                if (ReferencerClass != nullptr && ReferencerClass->IsChildOf(CPrefab::StaticClass()))
-                {
-                    LoadObject<CPrefab>(Referencer->AssetGUID);
-                }
-            }
-
-            for (CPrefab* Variant : Prefab->FindDirectVariants())
-            {
-                if (!DependentVariants.empty())
-                {
-                    DependentVariants += ", ";
-                }
-                DependentVariants += Variant->GetName().c_str();
-            }
+            DependentVariants += Variants.c_str();
         }
 
         return DependentVariants;
     }
 
-    void FContentBrowserEditorTool::OpenReplaceReferencesModal(const FContentBrowserTileViewItem* Item)
+    void FContentBrowserEditorTool::OpenReplaceReferencesModal(const FTileItem* Item)
     {
         TVector<FFixedString> Paths;
         Paths.emplace_back(Item->GetVirtualPath().data(), Item->GetVirtualPath().size());
@@ -2196,7 +2278,7 @@ namespace Lumina
         {
             for (const FFixedString& Path : Paths)
             {
-                ActionRegistry.EnqueueAction<FPendingDestroy>(FPendingDestroy{ Path });
+                ActionRegistry.EnqueueAction<ContentBrowserEditorToolInternal::FPendingDestroy>(ContentBrowserEditorToolInternal::FPendingDestroy{ Path });
             }
 
             if (ProtectedCount > 0)
@@ -2358,8 +2440,7 @@ namespace Lumina
                     bDiskListingChanged.store(true, std::memory_order_release);
                 }
 
-                // Which files are script sources and how long to wait for a burst to settle both belong to
-                // the scripting layer, so the browser reports the change and decides nothing.
+                // The scripting layer decides what is a script source and how long a burst settles, so the browser only reports.
                 if (Event.Action != EFileAction::Modified)
                 {
                     DotNet::NotifyScriptSourceChanged(Event.Path);
@@ -2794,7 +2875,7 @@ namespace Lumina
             for (int32 Index = 0; Index < NumChildren; ++Index)
             {
                 const FTreeNodeID Child = DirectoryListView.GetChildNode(Parent, Index);
-                const FContentBrowserListViewItemData& Data = DirectoryListView.Get<FContentBrowserListViewItemData>(Child);
+                const ContentBrowserEditorToolInternal::FContentBrowserListViewItemData& Data = DirectoryListView.Get<ContentBrowserEditorToolInternal::FContentBrowserListViewItemData>(Child);
                 if (LeadsToTarget(FStringView(Data.Path.c_str(), Data.Path.size())))
                 {
                     return Child;
@@ -2813,7 +2894,7 @@ namespace Lumina
         while (true)
         {
             // Copied, since ExpandNode creates nodes and can reallocate the node pool.
-            const FFixedString CurrentPath = DirectoryListView.Get<FContentBrowserListViewItemData>(Current).Path;
+            const FFixedString CurrentPath = DirectoryListView.Get<ContentBrowserEditorToolInternal::FContentBrowserListViewItemData>(Current).Path;
             if (FStringView(CurrentPath.c_str(), CurrentPath.size()) == Target)
             {
                 break;
@@ -2842,7 +2923,7 @@ namespace Lumina
 
         ImGui::SetCursorPos(ImGui::GetCursorPos() + ImVec2(Padding, Padding));
 
-        ImGui::BeginChild("Content", AdjustedSize, true, ImGuiWindowFlags_None);
+        ImGui::BeginChild(LOC("Content"), AdjustedSize, true, ImGuiWindowFlags_None);
 
         // Hover rather than focus, so the thumb buttons work without clicking into the browser first.
         if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows))
@@ -2910,7 +2991,7 @@ namespace Lumina
         ImGuiX::TextTooltip(LOCF("Forward"));
         ImGui::PopStyleVar();
 
-        ImGui::TextUnformatted("|");
+        ImGui::Spring(0.0f, 10.0f);
 
         // The first segment is the mount alias, shown with its tree label.
         auto RootSegmentLabel = [](FStringView) -> const char*
@@ -2933,12 +3014,18 @@ namespace Lumina
 
             if (CrumbIndex > 0)
             {
-                ImGui::TextUnformatted(LE_ICON_ARROW_RIGHT);
+                ImGuiX::TextColoredUnformatted(EditorColors::TextMuted(), LE_ICON_CHEVRON_RIGHT);
             }
+
+            const bool bCurrentFolder = FullPath.find_first_not_of('/', Cursor) == FStringView::npos;
 
             ImGui::PushID(CrumbIndex);
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(3, 2));
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2, 0));
+            ImGui::PushStyleColor(ImGuiCol_Text, bCurrentFolder ? EditorColors::TextPrimary() : EditorColors::TextDim());
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorColors::WithAlpha(EditorColors::TextPrimary(), 0.10f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorColors::WithAlpha(EditorColors::TextPrimary(), 0.16f));
 
             const char* Label = (CrumbIndex == 0) ? RootSegmentLabel(Segment) : nullptr;
             FFixedString Display;
@@ -2950,6 +3037,7 @@ namespace Lumina
                 NavigateTo(CrumbPath);
             }
 
+            ImGui::PopStyleColor(4);
             ImGui::PopStyleVar(2);
             ImGui::PopID();
 
@@ -2970,7 +3058,7 @@ namespace Lumina
         
         ImRect Rect(ChildMin, ChildMax);
 
-        ActionRegistry.ProcessAllOf<FPendingOSDrop>([&](const FPendingOSDrop& Drop)
+        ActionRegistry.ProcessAllOf<ContentBrowserEditorToolInternal::FPendingOSDrop>([&](const ContentBrowserEditorToolInternal::FPendingOSDrop& Drop)
         {
             if (Rect.Contains(Drop.MousePos))
             {
@@ -2990,7 +3078,7 @@ namespace Lumina
             return nullptr;   // ambiguous (or nothing) to hand to a single-object property
         }
 
-        const FContentBrowserTileViewItem* Item = static_cast<const FContentBrowserTileViewItem*>(Selections[0]);
+        const FTileItem* Item = static_cast<const FTileItem*>(Selections[0]);
         if (Item == nullptr || !Item->IsAsset())
         {
             return nullptr;
@@ -3008,7 +3096,7 @@ namespace Lumina
             return FFixedString();
         }
 
-        const FContentBrowserTileViewItem* Item = static_cast<const FContentBrowserTileViewItem*>(Selections[0]);
+        const FTileItem* Item = static_cast<const FTileItem*>(Selections[0]);
         if (Item == nullptr || Item->IsDirectory())
         {
             return FFixedString();
@@ -3046,7 +3134,7 @@ namespace Lumina
         }
     }
 
-    void FContentBrowserEditorTool::DrawReimportAssetMenuItem(const FContentBrowserTileViewItem* ContentItem, bool bIsProtected)
+    void FContentBrowserEditorTool::DrawReimportAssetMenuItem(const FTileItem* ContentItem, bool bIsProtected)
     {
         const FFixedString AssetPath(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size());
         const FAssetData*  Data = FAssetRegistry::Get().GetAssetByPath(AssetPath);
@@ -3065,7 +3153,7 @@ namespace Lumina
 
         const FGuid AssetGUID = Data->AssetGUID;
 
-        if (ImGui::MenuItem(LOC_ICON(LE_ICON_FILE_REPLACE, "Reimport From File..."), nullptr, false, !bIsProtected))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_FILE_REPLACE, "Reimport From File..."), nullptr, false, !bIsProtected))
         {
             // The modal manager allows a single owner, and a reimport under a batch would lose its dialogue.
             if (bImportWindowOpen)
@@ -3096,8 +3184,6 @@ namespace Lumina
             }
 
             FFixedString Filter;
-            // Translated at the construction site rather than by the platform dialog, because the
-            // display name embeds the pattern list and so cannot be a table key on its own.
             Filter.append(LOC("Supported Files (")).append(Patterns).append(")");
             Filter.push_back('\0');
             Filter.append(Patterns);
@@ -3298,7 +3384,7 @@ namespace Lumina
         });
     }
 
-    void FContentBrowserEditorTool::DrawDuplicateAssetMenuItem(const FContentBrowserTileViewItem* ContentItem, bool bIsProtected)
+    void FContentBrowserEditorTool::DrawDuplicateAssetMenuItem(const FTileItem* ContentItem, bool bIsProtected)
     {
         const FFixedString SourcePath(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size());
         const FAssetData*  Data = FAssetRegistry::Get().GetAssetByPath(SourcePath);
@@ -3307,27 +3393,15 @@ namespace Lumina
             return;
         }
 
-        if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_DUPLICATE, "Duplicate"), nullptr, false, !bIsProtected))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_DUPLICATE, "Duplicate"), nullptr, false, !bIsProtected))
         {
-            CObject* Source = LoadObject<CObject>(Data->AssetGUID);
-            if (Source == nullptr)
-            {
-                ImGuiX::Notifications::NotifyError(LOCF("Could not load '{0}' to duplicate it."), SourcePath);
-                return;
-            }
-
-            const FFixedString NewPath = MakeSiblingAssetPath(
-                FStringView(SourcePath.c_str(), SourcePath.size()), "_Copy");
-
-            // A material keeps its node graph as a second export, so the whole package is copied and rewritten.
-            CObject* Copy = DuplicateAssetPackage(Source, FStringView(NewPath.c_str(), NewPath.size()));
-            if (Copy == nullptr)
+            FFixedString NewPath;
+            if (DuplicateAsset(FStringView(SourcePath.c_str(), SourcePath.size()), NewPath) == nullptr)
             {
                 ImGuiX::Notifications::NotifyError(LOCF("Failed to duplicate '{0}'."), SourcePath);
                 return;
             }
 
-            FAssetRegistry::Get().AssetCreated(Copy);
             ImGuiX::Notifications::NotifySuccess(LOCF("Duplicated to '{0}'."), NewPath);
 
             // A duplicate lands as Name_Copy, which is even less likely to be wanted than a factory default.
@@ -3335,7 +3409,7 @@ namespace Lumina
         }
     }
 
-    void FContentBrowserEditorTool::DrawCreateVariantMenuItem(const FContentBrowserTileViewItem* ContentItem)
+    void FContentBrowserEditorTool::DrawCreateVariantMenuItem(const FTileItem* ContentItem)
     {
         const FFixedString SourcePath(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size());
         const FAssetData*  Data = FAssetRegistry::Get().GetAssetByPath(SourcePath);
@@ -3350,7 +3424,7 @@ namespace Lumina
             return;
         }
 
-        if (!ImGui::MenuItem(LOC_ICON(LE_ICON_SOURCE_BRANCH, "Create Variant")))
+        if (!ImGui::MenuItem(LOC_ICON_ID(LE_ICON_SOURCE_BRANCH, "Create Variant")))
         {
             return;
         }
@@ -3388,15 +3462,15 @@ namespace Lumina
         QueueRenameAfterCreate(FStringView(NewPath.c_str(), NewPath.size()));
     }
 
-    void FContentBrowserEditorTool::DrawAssetContextMenu(FContentBrowserTileViewItem* ContentItem)
+    void FContentBrowserEditorTool::DrawAssetContextMenu(FTileItem* ContentItem)
     {
         const bool bIsAsset      = ContentItem->IsAsset();
         const bool bIsDirectory  = ContentItem->IsDirectory();
-        const bool bIsCSharp     = ContentItem->GetIconKind() == EIconKind::CSharpScript;
+        const bool bIsCSharp     = ContentItem->GetIconKind() == ContentBrowserEditorToolInternal::EIconKind::CSharpScript;
         const bool bIsProtected  = ContentItem->IsProtected();
         // UI markup (.rml document + .rcss stylesheet) has an in-engine editor; everything else opens externally.
-        const bool bHasInEngineEditor = ContentItem->GetIconKind() == EIconKind::Markup
-                                     || ContentItem->GetIconKind() == EIconKind::Stylesheet;
+        const bool bHasInEngineEditor = ContentItem->GetIconKind() == ContentBrowserEditorToolInternal::EIconKind::Markup
+                                     || ContentItem->GetIconKind() == ContentBrowserEditorToolInternal::EIconKind::Stylesheet;
         const FString  Extension = ContentItem->GetExtension();
 
         const char* HeaderIcon;
@@ -3405,20 +3479,20 @@ namespace Lumina
         if (bIsDirectory)
         {
             HeaderIcon = LE_ICON_FOLDER_OPEN;
-            HeaderTint = kMenuAccentFolder;
+            HeaderTint = ContentBrowserEditorToolInternal::kMenuAccentFolder;
             TypeLabel  = "Folder";
         }
         else if (bIsAsset)
         {
             HeaderIcon = LE_ICON_FILE_DOCUMENT;
-            HeaderTint = kMenuAccent;
-            TypeLabel  = "Asset";
+            HeaderTint = ContentBrowserEditorToolInternal::kMenuAccent;
+            TypeLabel  = LOC("Asset");
         }
         else if (bIsCSharp)
         {
             HeaderIcon = LE_ICON_LANGUAGE_CSHARP;
-            HeaderTint = kMenuAccentScript;
-            TypeLabel  = "C# Script";
+            HeaderTint = ContentBrowserEditorToolInternal::kMenuAccentScript;
+            TypeLabel  = LOC("C# Script");
         }
         else
         {
@@ -3433,13 +3507,13 @@ namespace Lumina
 
         ImGuiX::PushMenuItemStyle();
 
-        DrawMenuHeader(HeaderIcon, TitleBuf.c_str(), SubtitleBuf.c_str(), HeaderTint);
+        ContentBrowserEditorToolInternal::DrawMenuHeader(HeaderIcon, TitleBuf.c_str(), SubtitleBuf.c_str(), HeaderTint);
 
-        DrawMenuSection("OPEN");
+        ContentBrowserEditorToolInternal::DrawMenuSection("OPEN");
 
         if (bIsDirectory)
         {
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_FOLDER_OPEN, "Open Folder"), LOC("Dbl-Click")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_FOLDER_OPEN, "Open Folder"), LOC("Dbl-Click")))
             {
                 SelectedPath = FFixedString(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size());
                 RefreshContentBrowser();
@@ -3447,7 +3521,7 @@ namespace Lumina
         }
         else if (bIsAsset)
         {
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_FOLDER_OPEN, "Open Asset"), LOC("Dbl-Click")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_FOLDER_OPEN, "Open Asset"), LOC("Dbl-Click")))
             {
                 FFixedString Path(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size());
                 if (const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(Path))
@@ -3458,7 +3532,7 @@ namespace Lumina
         }
         else
         {
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_FOLDER_OPEN, "Open"), LOC("Dbl-Click")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_FOLDER_OPEN, "Open"), LOC("Dbl-Click")))
             {
                 if (bHasInEngineEditor)
                 {
@@ -3470,13 +3544,13 @@ namespace Lumina
                     Platform::LaunchURL(UTF8_TO_TCHAR(ContentItem->GetPathSource().data()));
                 }
             }
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_OPEN_IN_NEW, "Open Externally")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_OPEN_IN_NEW, "Open Externally")))
             {
                 Platform::LaunchURL(UTF8_TO_TCHAR(ContentItem->GetPathSource().data()));
             }
         }
 
-        if (ImGui::MenuItem(LOC_ICON(LE_ICON_MICROSOFT_WINDOWS, "Show in Explorer")))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_MICROSOFT_WINDOWS, "Show in Explorer")))
         {
             FString Parent = Paths::Parent(ContentItem->GetPathSource());
             Platform::LaunchURL(UTF8_TO_TCHAR(Parent.c_str()));
@@ -3495,7 +3569,7 @@ namespace Lumina
 
                     if (!AvailableActions.empty())
                     {
-                        DrawMenuSection("ACTIONS");
+                        ContentBrowserEditorToolInternal::DrawMenuSection("ACTIONS");
 
                         const FAssetActionContext ActionContext{ ToolContext, Data };
                         for (const FAssetAction* Action : AvailableActions)
@@ -3511,7 +3585,7 @@ namespace Lumina
             }
         }
 
-        DrawMenuSection("EDIT");
+        ContentBrowserEditorToolInternal::DrawMenuSection("EDIT");
 
         bool bReplaceReferencesClicked = false;
         if (bIsAsset)
@@ -3524,25 +3598,25 @@ namespace Lumina
             const FAssetData* ExportData = FAssetRegistry::Get().GetAssetByPath(ExportPath);
             if (ExportData != nullptr && AssetExport::CanExport(FindObject<CClass>(ExportData->AssetClass)))
             {
-                if (ImGui::MenuItem(LOC_ICON(LE_ICON_EXPORT, "Export...")))
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_EXPORT, "Export...")))
                 {
                     ExportAssets({ ExportData->AssetGUID });
                 }
                 ImGuiX::TextTooltip(LOCF("Write the file this asset was imported from to a folder on disk."));
             }
 
-            bReplaceReferencesClicked = ImGui::MenuItem(LOC_ICON(LE_ICON_LINK_VARIANT, "Replace References..."));
+            bReplaceReferencesClicked = ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LINK_VARIANT, "Replace References..."));
             ImGuiX::TextTooltip(LOCF("Point everything that references this asset at a different one, or null them."));
         }
 
-        if (ImGui::MenuItem(LOC_ICON(LE_ICON_RENAME, "Rename"), "F2", false, !bIsProtected))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_RENAME, "Rename"), "F2", false, !bIsProtected))
         {
             ContentBrowserTileView.BeginInlineRename(ContentItem);
         }
 
         if (ContentItem->GetFileInfo().IsReadOnly())
         {
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_LOCK_OPEN_VARIANT, "Make Writable")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LOCK_OPEN_VARIANT, "Make Writable")))
             {
                 ToolContext->ConfirmWritable({ FString(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size()) },
                     [this] { RefreshContentBrowser(); }, false);
@@ -3550,14 +3624,14 @@ namespace Lumina
             ImGuiX::TextTooltip("{}", LOC("Clear the read-only flag so it can be saved, renamed, moved or deleted."));
         }
 
-        DrawMenuSection("CLIPBOARD");
+        ContentBrowserEditorToolInternal::DrawMenuSection("CLIPBOARD");
 
-        if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_COPY, "Copy Path")))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_COPY, "Copy Path")))
         {
             ImGui::SetClipboardText(ContentItem->GetVirtualPath().data());
             ImGuiX::Notifications::NotifyInfo(LOCF("Path copied to clipboard"));
         }
-        if (ImGui::MenuItem(LOC_ICON(LE_ICON_TAG, "Copy Name")))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_TAG, "Copy Name")))
         {
             FFixedString Name(ContentItem->GetName().data(), ContentItem->GetName().size());
             ImGui::SetClipboardText(Name.c_str());
@@ -3565,7 +3639,7 @@ namespace Lumina
         }
         if (bIsAsset)
         {
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_LINK, "Copy Reference")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LINK, "Copy Reference")))
             {
                 FFixedString Path(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size());
                 if (const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(Path))
@@ -3581,17 +3655,17 @@ namespace Lumina
         ImGui::Spacing();
         ImGui::Separator();
 
-        ImGui::PushStyleColor(ImGuiCol_Text,          kMenuDanger);
+        ImGui::PushStyleColor(ImGuiCol_Text,          ContentBrowserEditorToolInternal::kMenuDanger);
         const bool bWorldActive = IsAnyWorldPlayingOrSimulating();
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kMenuDangerHover);
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ContentBrowserEditorToolInternal::kMenuDangerHover);
         ImGui::PushStyleColor(ImGuiCol_HeaderActive,  ImVec4(0.85f, 0.22f, 0.24f, 0.85f));
-        const bool bDeleteClicked = ImGui::MenuItem(LOC_ICON(LE_ICON_TRASH_CAN, "Delete"), "Del", false, !bIsProtected && !bWorldActive);
+        const bool bDeleteClicked = ImGui::MenuItem(LOC_ICON_ID(LE_ICON_TRASH_CAN, "Delete"), "Del", false, !bIsProtected && !bWorldActive);
         ImGui::PopStyleColor(3);
 
         if (bIsProtected)
         {
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Tiny);
-            ImGui::PushStyleColor(ImGuiCol_Text, kMenuTextDim);
+            ImGui::PushStyleColor(ImGuiCol_Text, ContentBrowserEditorToolInternal::kMenuTextDim);
             const float OldX = ImGui::GetCursorPosX();
             ImGui::SetCursorPosX(OldX + 4.0f);
             ImGui::TextUnformatted(LOC_ICON(LE_ICON_LOCK, "Protected, cannot be deleted"));
@@ -3601,7 +3675,7 @@ namespace Lumina
         else if (bWorldActive)
         {
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Tiny);
-            ImGui::PushStyleColor(ImGuiCol_Text, kMenuTextDim);
+            ImGui::PushStyleColor(ImGuiCol_Text, ContentBrowserEditorToolInternal::kMenuTextDim);
             const float OldX = ImGui::GetCursorPosX();
             ImGui::SetCursorPosX(OldX + 4.0f);
             ImGui::TextUnformatted(LOC_ICON(LE_ICON_LOCK, "Stop play to delete"));
@@ -3630,7 +3704,7 @@ namespace Lumina
 
         for (FTileViewItem* Item : Items)
         {
-            const auto* ContentItem = static_cast<const FContentBrowserTileViewItem*>(Item);
+            const auto* ContentItem = static_cast<const FTileItem*>(Item);
 
             if (ContentItem->IsProtected()) { ++ProtectedCount; }
 
@@ -3640,7 +3714,7 @@ namespace Lumina
         }
 
         FFixedString Title;
-        Title = FormatAs<FFixedString>(LOCF("{} items selected"), Items.size());
+        Title.append(Format("{}", Items.size()).c_str()).append(" items selected");
 
         FFixedString Subtitle;
         auto AppendPart = [&Subtitle](int32 Count, const char* Label)
@@ -3661,16 +3735,16 @@ namespace Lumina
 
         ImGuiX::PushMenuItemStyle();
 
-        DrawMenuHeader(LE_ICON_SELECT_MULTIPLE, Title.c_str(), Subtitle.c_str(), kMenuAccent);
+        ContentBrowserEditorToolInternal::DrawMenuHeader(LE_ICON_SELECT_MULTIPLE, Title.c_str(), Subtitle.c_str(), ContentBrowserEditorToolInternal::kMenuAccent);
 
-        DrawMenuSection("CLIPBOARD");
+        ContentBrowserEditorToolInternal::DrawMenuSection("CLIPBOARD");
 
-        if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_COPY, "Copy Paths")))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_COPY, "Copy Paths")))
         {
             FFixedString Clipboard;
             for (FTileViewItem* Item : Items)
             {
-                const auto* ContentItem = static_cast<const FContentBrowserTileViewItem*>(Item);
+                const auto* ContentItem = static_cast<const FTileItem*>(Item);
                 if (!Clipboard.empty())
                 {
                     Clipboard.append("\n");
@@ -3683,23 +3757,58 @@ namespace Lumina
         }
 
         // Decided from the registry's class names, so drawing the menu never loads an asset.
+        TVector<FGuid> Assets;
         TVector<FGuid> Exportable;
         for (FTileViewItem* Item : Items)
         {
-            const auto* ContentItem = static_cast<const FContentBrowserTileViewItem*>(Item);
+            const auto* ContentItem = static_cast<const FTileItem*>(Item);
+            const FFixedString ItemPath(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size());
             if (!ContentItem->IsAsset())
             {
                 continue;
             }
-            const FFixedString AssetPath(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size());
-            const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(AssetPath);
-            if (Data != nullptr && AssetExport::CanExport(FindObject<CClass>(Data->AssetClass)))
+            const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(ItemPath);
+            if (Data == nullptr || Data->IsClassMissing())
+            {
+                continue;
+            }
+            Assets.push_back(Data->AssetGUID);
+            if (AssetExport::CanExport(FindObject<CClass>(Data->AssetClass)))
             {
                 Exportable.push_back(Data->AssetGUID);
             }
         }
 
-        DrawMenuSection("EXPORT");
+        const bool bWorldActive = IsAnyWorldPlayingOrSimulating();
+
+        ContentBrowserEditorToolInternal::DrawMenuSection("BULK");
+
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_TABLE_EDIT, "Edit in Property Matrix"), nullptr, false, !Assets.empty()))
+        {
+            ToolContext->OpenPropertyMatrix(Assets);
+        }
+        ImGuiX::TextTooltip(LOCF("Compare and edit the selected assets' properties side by side. Folders and other files are skipped."));
+
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_RENAME, "Bulk Rename..."), "F2", false, ProtectedCount < (int32)Items.size() && !bWorldActive))
+        {
+            BulkRenameItems(Items);
+        }
+        ImGuiX::TextTooltip(LOCF("Find and replace, prefix, suffix and numbering across the selection, previewed before anything moves."));
+
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_SAVE, "Save Selected"), nullptr, false, !Assets.empty()))
+        {
+            TVector<CPackage*> Packages;
+            for (const FGuid& Asset : Assets)
+            {
+                if (CObject* Resident = FindObject<CObject>(Asset))
+                {
+                    Packages.push_back(Resident->GetPackage());
+                }
+            }
+            ToolContext->SavePackages(Move(Packages));
+        }
+
+        ContentBrowserEditorToolInternal::DrawMenuSection("EXPORT");
 
         const FFixedString ExportLabel(Format(LE_ICON_EXPORT " Export {} Asset{}...", Exportable.size(), Exportable.size() == 1 ? "" : "s").c_str());
         if (ImGui::MenuItem(ExportLabel.c_str(), nullptr, false, !Exportable.empty()))
@@ -3711,20 +3820,19 @@ namespace Lumina
         ImGui::Spacing();
         ImGui::Separator();
 
-        const bool bWorldActive  = IsAnyWorldPlayingOrSimulating();
         const bool bAllProtected = ProtectedCount == (int32)Items.size();
 
-        ImGui::PushStyleColor(ImGuiCol_Text,          kMenuDanger);
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kMenuDangerHover);
+        ImGui::PushStyleColor(ImGuiCol_Text,          ContentBrowserEditorToolInternal::kMenuDanger);
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ContentBrowserEditorToolInternal::kMenuDangerHover);
         ImGui::PushStyleColor(ImGuiCol_HeaderActive,  ImVec4(0.85f, 0.22f, 0.24f, 0.85f));
-        const bool bDeleteClicked = ImGui::MenuItem(LOC_ICON(LE_ICON_TRASH_CAN, "Delete Selected"), "Del", false, !bAllProtected && !bWorldActive);
+        const bool bDeleteClicked = ImGui::MenuItem(LOC_ICON_ID(LE_ICON_TRASH_CAN, "Delete Selected"), "Del", false, !bAllProtected && !bWorldActive);
         ImGui::PopStyleColor(3);
 
         // Protected entries are skipped rather than blocking, so say so before the batch runs.
         if (bAllProtected || bWorldActive || ProtectedCount > 0)
         {
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Tiny);
-            ImGui::PushStyleColor(ImGuiCol_Text, kMenuTextDim);
+            ImGui::PushStyleColor(ImGuiCol_Text, ContentBrowserEditorToolInternal::kMenuTextDim);
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 4.0f);
 
             if (bWorldActive)
@@ -3737,12 +3845,7 @@ namespace Lumina
             }
             else
             {
-                // Two keys rather than a plural suffix, since a translation decides on its own where the
-                // number sits relative to the noun.
-                const char* const ProtectedLabel = (ProtectedCount == 1)
-                    ? LOC_ICON(LE_ICON_LOCK, "%d protected entry will be skipped")
-                    : LOC_ICON(LE_ICON_LOCK, "%d protected entries will be skipped");
-                ImGui::Text(ProtectedLabel, ProtectedCount);
+                ImGui::Text(LOC_ICON(LE_ICON_LOCK, "%d protected entr%s will be skipped"), ProtectedCount, ProtectedCount == 1 ? "y" : "ies");
             }
 
             ImGui::PopStyleColor();
@@ -3755,6 +3858,24 @@ namespace Lumina
         if (bDeleteClicked)
         {
             DeleteSelectedItems(Items);
+        }
+    }
+
+    void FContentBrowserEditorTool::BulkRenameItems(const TVector<FTileViewItem*>& Items)
+    {
+        TVector<FFixedString> Paths;
+        for (FTileViewItem* Item : Items)
+        {
+            const auto* ContentItem = static_cast<const FTileItem*>(Item);
+            if (!ContentItem->IsProtected())
+            {
+                Paths.emplace_back(ContentItem->GetVirtualPath().data(), ContentItem->GetVirtualPath().size());
+            }
+        }
+
+        if (!Paths.empty())
+        {
+            OpenBulkRenameModal(ToolContext, Move(Paths), [this] { RefreshContentBrowser(); });
         }
     }
 
@@ -3772,7 +3893,7 @@ namespace Lumina
         int32 ProtectedCount = 0;
         for (FTileViewItem* Item : Items)
         {
-            const auto* ContentItem = static_cast<const FContentBrowserTileViewItem*>(Item);
+            const auto* ContentItem = static_cast<const FTileItem*>(Item);
             if (ContentItem->IsProtected())
             {
                 ++ProtectedCount;
@@ -3795,14 +3916,14 @@ namespace Lumina
             FolderTitle.assign(LOC("Content"));
         }
 
-        DrawMenuHeader(LE_ICON_FOLDER_OPEN, FolderTitle.c_str(), SelectedPath.c_str(), kMenuAccentFolder);
+        ContentBrowserEditorToolInternal::DrawMenuHeader(LE_ICON_FOLDER_OPEN, FolderTitle.c_str(), SelectedPath.c_str(), ContentBrowserEditorToolInternal::kMenuAccentFolder);
 
         // This is what stops scripts landing outside Scripts and assets landing inside it.
-        const bool bScriptDir = IsScriptDirectory(FStringView(SelectedPath.c_str(), SelectedPath.size()));
+        const bool bScriptDir = ContentBrowserEditorToolInternal::IsScriptDirectory(FStringView(SelectedPath.c_str(), SelectedPath.size()));
 
-        DrawMenuSection("CREATE");
+        ContentBrowserEditorToolInternal::DrawMenuSection("CREATE");
 
-        if (ImGui::MenuItem(LOC_ICON(LE_ICON_FOLDER_PLUS, "New Folder")))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_FOLDER_PLUS, "New Folder")))
         {
             FFixedString FinalPath = VFS::MakeUniqueFilePath(SelectedPath + "/NewFolder");
             VFS::CreateDir(FinalPath);
@@ -3812,7 +3933,7 @@ namespace Lumina
 
         // Aggregated asset creation submenu (factory-driven), grouped into per-category submenus.
         const TVector<CFactory*>& Factories = CFactoryRegistry::Get().GetFactories();
-        if (!bScriptDir && ImGui::BeginMenu(LOC_ICON(LE_ICON_PLUS_BOX, "New Asset")))
+        if (!bScriptDir && ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_PLUS_BOX, "New Asset")))
         {
             auto CreateFromFactory = [this](CFactory* Factory)
             {
@@ -3890,7 +4011,7 @@ namespace Lumina
 
             for (const FString& Category : Categories)
             {
-                if (!ImGui::BeginMenu(LOC(Category.c_str())))
+                if (!ImGui::BeginMenu(Category.c_str()))
                 {
                     continue;
                 }
@@ -3910,7 +4031,7 @@ namespace Lumina
 
                 for (CFactory* Factory : InCategory)
                 {
-                    FString DisplayName = FString(LE_ICON_FILE_DOCUMENT_PLUS) + " " + LOC(Factory->GetAssetName().c_str());
+                    FString DisplayName = FString(LE_ICON_FILE_DOCUMENT_PLUS) + " " + Factory->GetAssetName();
                     if (ImGui::MenuItem(DisplayName.c_str()))
                     {
                         CreateFromFactory(Factory);
@@ -3922,46 +4043,17 @@ namespace Lumina
             ImGui::EndMenu();
         }
         
-        if (bScriptDir && ImGui::MenuItem(LOC_ICON(LE_ICON_LANGUAGE_CSHARP, "New C# Script")))
+        if (bScriptDir && ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LANGUAGE_CSHARP, "New C# Script")))
         {
             FFixedString NewScriptPath = SelectedPath + "/" + "NewScript.cs";
             NewScriptPath = VFS::MakeUniqueFilePath(NewScriptPath);
             
-            FStringView Stem = VFS::FileName(FStringView(NewScriptPath.c_str(), NewScriptPath.size()), true);
-            FFixedString ClassName;
-            for (char C : Stem)
-            {
-                const bool bValid = (C >= 'a' && C <= 'z') || (C >= 'A' && C <= 'Z') || (C >= '0' && C <= '9') || C == '_';
-                ClassName.push_back(bValid ? C : '_');
-            }
-            if (ClassName.empty() || (ClassName[0] >= '0' && ClassName[0] <= '9'))
-            {
-                ClassName.insert(ClassName.begin(), '_');
-            }
-
-            FString Contents;
-            Contents += "using LuminaSharp;\n";
-            Contents += "using Lumina;\n\n";
-            // Not "Game", which would shadow LuminaSharp.Game and break Game.OpenLevel in every script.
-            Contents += "namespace GameScripts;\n\n";
-            Contents += "[Reflect]\n";
-            Contents += "public sealed class ";
-            Contents += ClassName.c_str();
-            Contents += " : CEntityScript\n";
-            Contents += "{\n";
-            Contents += "    public override void OnReady()\n";
-            Contents += "    {\n";
-            Contents += "    }\n\n";
-            Contents += "    public override void OnUpdate(float deltaTime)\n";
-            Contents += "    {\n";
-            Contents += "    }\n";
-            Contents += "}\n";
-
+            const FString Contents = CSharpScript::NewScriptSource(VFS::FileName(FStringView(NewScriptPath.c_str(), NewScriptPath.size()), true));
             VFS::WriteFile(NewScriptPath, Contents);
             RefreshContentBrowser();
         }
 
-        if (!bScriptDir && ImGui::MenuItem(LOC_ICON(LE_ICON_LANGUAGE_CSS3, "New UI Widget")))
+        if (!bScriptDir && ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LANGUAGE_CSS3, "New UI Widget")))
         {
             FFixedString NewWidgetPath = SelectedPath + "/" + "NewWidget.rml";
             NewWidgetPath = VFS::MakeUniqueFilePath(NewWidgetPath);
@@ -3995,7 +4087,7 @@ namespace Lumina
             RefreshContentBrowser();
         }
 
-        if (!bScriptDir && ImGui::MenuItem(LOC_ICON(LE_ICON_LANGUAGE_CSS3, "New UI Stylesheet")))
+        if (!bScriptDir && ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LANGUAGE_CSS3, "New UI Stylesheet")))
         {
             FFixedString NewSheetPath = SelectedPath + "/" + "NewStylesheet.rcss";
             NewSheetPath = VFS::MakeUniqueFilePath(NewSheetPath);
@@ -4015,26 +4107,13 @@ namespace Lumina
         // Imports bring in assets, so they are offered only outside Scripts.
         if (!bScriptDir)
         {
-            DrawMenuSection("IMPORT");
+            ContentBrowserEditorToolInternal::DrawMenuSection("IMPORT");
 
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_IMPORT, "Import Asset...")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_IMPORT, "Import Asset...")))
             {
                 TVector<FFixedString> SelectedFiles;
-
-                // Built here rather than kept as a literal so the display half can be translated: the
-                // extension list it embeds is data, and is written through untouched in both places.
-                constexpr const char* ImportPatterns = "*.wav;*.png;*.jpg;*.hdr;*.fbx;*.gltf;*.glb;*.obj;*.ttf;*.otf";
-
-                FFixedString Filter;
-                Filter.append(LOC("Supported Assets")).append(" (").append(ImportPatterns).append(")");
-                Filter.push_back('\0');
-                Filter.append(ImportPatterns);
-                Filter.push_back('\0');
-                Filter.append(LOC("All Files (*.*)"));
-                Filter.push_back('\0');
-                Filter.push_back('\0');
-
-                if (Platform::OpenFileDialogueMulti(SelectedFiles, LOC("Import Assets"), Filter.c_str()))
+                const char* Filter = "Supported Assets (*.wav;*.png;*.jpg;*.hdr;*.fbx;*.gltf;*.glb;*.obj;*.ttf;*.otf)\0*.wav;*.png;*.jpg;*.hdr;*.fbx;*.gltf;*.glb;*.obj;*.ttf;*.otf\0All Files (*.*)\0*.*\0";
+                if (Platform::OpenFileDialogueMulti(SelectedFiles, LOC("Import Assets"), Filter))
                 {
                     TryImport(SelectedFiles);
                 }
@@ -4042,14 +4121,14 @@ namespace Lumina
         }
 
         // VIEW -------------------------------------------------------------
-        DrawMenuSection("VIEW");
+        ContentBrowserEditorToolInternal::DrawMenuSection("VIEW");
 
-        if (ImGui::MenuItem(LOC_ICON(LE_ICON_REFRESH, "Refresh")))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_REFRESH, "Refresh")))
         {
             RefreshContentBrowser();
         }
 
-        if (ImGui::MenuItem(LOC_ICON(LE_ICON_MICROSOFT_WINDOWS, "Show in Explorer")))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_MICROSOFT_WINDOWS, "Show in Explorer")))
         {
             FPathString Resolved = VFS::ResolvePath(FStringView(SelectedPath.c_str(), SelectedPath.size()));
             const char* Target = Resolved.empty() ? SelectedPath.c_str() : Resolved.c_str();

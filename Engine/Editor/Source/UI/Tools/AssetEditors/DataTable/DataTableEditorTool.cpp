@@ -1,4 +1,4 @@
-#include "DataTableEditorTool.h"
+﻿#include "DataTableEditorTool.h"
 
 #include "DataTableWidgets.h"
 #include "Assets/AssetTypes/DataTable/DataTable.h"
@@ -8,6 +8,7 @@
 #include "Core/Delegates/CoreDelegates.h"
 #include "Core/Reflection/PropertyText.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
+#include "Localization/Localization.h"
 #include "Paths/Paths.h"
 #include "Platform/Filesystem/FileHelper.h"
 #include "Platform/Process/PlatformProcess.h"

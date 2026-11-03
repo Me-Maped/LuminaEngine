@@ -1,5 +1,6 @@
-#include "AnimGraphNode_ClipPlayer.h"
+﻿#include "AnimGraphNode_ClipPlayer.h"
 #include "Localization/Localization.h"
+#include "UI/Tools/NodeGraph/Animation/AnimGraphDebugView.h"
 #include "UI/Tools/NodeGraph/Animation/AnimationGraphCompiler.h"
 #include "Assets/AssetTypes/Mesh/Animation/Animation.h"
 
@@ -54,5 +55,11 @@ namespace Lumina
 
         Compiler.SetPinRegister(PosePin, PoseReg);
         Compiler.SetPinRegister(FinishedPin, FinishedReg);
+        Compiler.SetDebugPlayhead(this, TimeReg);
+    }
+
+    void CAnimGraphNode_ClipPlayer::DrawPreview(const FAnimGraphDebugView* View)
+    {
+        AnimDebugDraw::ClipTimeline(Clip.Get(), View != nullptr ? View->ReadPlayhead(this) : TOptional<float>(), kAnimNodePreviewWidth);
     }
 }

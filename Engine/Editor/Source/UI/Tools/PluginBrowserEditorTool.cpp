@@ -1,5 +1,6 @@
-#include "Containers/StringFormat.h"
+﻿#include "Containers/StringFormat.h"
 #include <string>
+#include "Localization/Localization.h"
 #include "PluginBrowserEditorTool.h"
 
 #include "Core/Application/Application.h"
@@ -16,7 +17,6 @@
 #include "Tools/UI/ImGui/ImGuiAllocator.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiFonts.h"
-#include "Tools/UI/ImGui/ImGuiX.h"
 #include "UI/Tools/EditorToolContext.h"
 
 #include "imgui.h"
@@ -31,7 +31,7 @@ namespace Lumina
 
     void FPluginBrowserEditorTool::OnInitialize()
     {
-        CreateToolWindow("Plugins", [this](bool bIsFocused)
+        CreateToolWindow(LOC("Plugins"), [this](bool bIsFocused)
         {
             DrawBrowserWindow(bIsFocused);
         });
@@ -55,7 +55,7 @@ namespace Lumina
             LOC("Overrides are per-project: disabling a plugin here only disables it "
             "for the loaded project. Other projects keep using the descriptor "
             "default. With no project loaded the view is read-only."));
-        DrawHelpTextRow(LOC("Modules"),
+        DrawHelpTextRow(LOC_ID("Modules"),
             LOC("The detail panel lists each module's type (Runtime / Editor / "
             "Developer) and loading phase. Editor modules are silently skipped "
             "in non-editor builds; Developer modules are skipped in Shipping."));
@@ -105,9 +105,8 @@ namespace Lumina
 
             if (!SearchFilter.empty())
             {
-                const FPluginDescriptor& Descriptor = P->GetDescriptor();
-                if (!ImGuiX::PassSearchFilter(SearchFilter, { P->GetName(), Descriptor.Category, Descriptor.Description,
-                    bEngine ? "Engine" : "Project", bEngine ? LOC("Engine") : LOC("Project") }))
+                FStringView Name = P->GetName();
+                if (Name.find(SearchFilter.c_str()) == FStringView::npos)
                 {
                     continue;
                 }
@@ -172,7 +171,7 @@ namespace Lumina
         const bool bHasProject = GEngine && !GEngine->GetProjectName().empty();
         const bool bCanCreate = bHasProject && !Paths::IsInstalledBuild();
         if (!bCanCreate) ImGui::BeginDisabled();
-        if (ImGui::Button(LOC_ICON(LE_ICON_PUZZLE_PLUS, "New Plugin")))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_PUZZLE_PLUS, "New Plugin")))
         {
             OpenCreatePluginDialog();
         }
@@ -320,11 +319,11 @@ namespace Lumina
             };
 
             Row(LOC("Path"),     Plugin->GetDescriptorPath().data());
-            Row(LOC("Category"), Desc.Category.c_str());
-            Row(LOC("Version"),  Desc.VersionName.empty()
+            Row(LOC_ID("Category"), Desc.Category.c_str());
+            Row(LOC_ID("Version"),  Desc.VersionName.empty()
                                 ? Format("{}", Desc.Version).c_str()
                                 : Desc.VersionName.c_str());
-            Row(LOC("Type"),     Plugin->IsEnginePlugin() ? LOC("Engine plugin") : LOC("Project plugin"));
+            Row(LOC_ID("Type"),     Plugin->IsEnginePlugin() ? LOC("Engine plugin") : LOC("Project plugin"));
             Row(LOC("Editor-only"), Desc.bEditorOnly ? LOC("Yes") : LOC("No"));
             Row(LOC("Has content"), Desc.bContainsContent ? LOC("Yes") : LOC("No"));
 
@@ -353,9 +352,9 @@ namespace Lumina
                     ImGui::TableSetColumnIndex(0);
                     ImGui::TextUnformatted(Mod.Name.c_str());
                     ImGui::TableSetColumnIndex(1);
-                    ImGui::TextUnformatted(LOC_VIEW(LexToString(Mod.Type)));
+                    ImGui::TextUnformatted(LexToString(Mod.Type).data());
                     ImGui::TableSetColumnIndex(2);
-                    ImGui::TextUnformatted(LOC_VIEW(LexToString(Mod.LoadingPhase)));
+                    ImGui::TextUnformatted(LexToString(Mod.LoadingPhase).data());
                 }
                 ImGui::EndTable();
             }
@@ -374,7 +373,7 @@ namespace Lumina
                     ImGui::BulletText("%s (v>=%d)%s%s",
                         Dep.Name.c_str(), Dep.Version,
                         Dep.bOptional ? LOC("  [optional]") : "",
-                        (DepPlugin != nullptr && DepPlugin->IsEnabled()) ? "" : (FString("  -- ") + Status).c_str());
+                        Status[0] == 'o' ? "" : (FString("  -- ") + Status).c_str());
                 }
             }
         }
@@ -396,7 +395,7 @@ namespace Lumina
         {
             ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.30f, 1.0f),
                 LOC_ICON(LE_ICON_CIRCLE_MEDIUM, "%d pending change%s"),
-                NumPending, NumPending == 1 ? "" : LOC_S);
+                NumPending, NumPending == 1 ? "" : "s");
             ImGui::SameLine();
         }
         else
@@ -409,7 +408,7 @@ namespace Lumina
         ImGui::SameLine(ImGui::GetWindowWidth() - ButtonWidth - 16.0f);
 
         if (!bCanApply) ImGui::BeginDisabled();
-        if (ImGui::Button(LOC_ICON(LE_ICON_REFRESH, "Apply & Restart"), ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_REFRESH, "Apply & Restart"), ImVec2(ButtonWidth, 0)))
         {
             FString Error;
             if (ApplyAndPersist(Error))
@@ -470,7 +469,7 @@ namespace Lumina
         }
 
         // Preserves existing entries and any forward-compatible fields, and appends new ones.
-        nlohmann::json& PluginsArr = Root["Plugins"];
+        nlohmann::json& PluginsArr = Root[LOC("Plugins")];
         if (!PluginsArr.is_array())
         {
             PluginsArr = nlohmann::json::array();
@@ -485,7 +484,7 @@ namespace Lumina
             for (auto& Entry : PluginsArr)
             {
                 if (!Entry.is_object()) continue;
-                auto NameIt = Entry.find("Name");
+                auto NameIt = Entry.find(LOC_ID("Name"));
                 if (NameIt == Entry.end() || !NameIt->is_string()) continue;
                 if (NameIt->get_ref<const std::string&>() == Name.c_str())
                 {
@@ -497,7 +496,7 @@ namespace Lumina
             if (!bUpdatedExisting)
             {
                 nlohmann::json New;
-                New["Name"]    = std::string(Name.c_str(), Name.size());
+                New[LOC_ID("Name")]    = std::string(Name.c_str(), Name.size());
                 New["Enabled"] = bEnabled;
                 PluginsArr.push_back(Move(New));
             }
@@ -520,11 +519,10 @@ namespace Lumina
 
     void FPluginBrowserEditorTool::PromptRestart()
     {
-        ToolContext->PushModal(LOC("Restart Required"), ImVec2(420, 160),
+        ToolContext->PushModal(LOC("Restart Required"), ImVec2(420, 0),
             []() -> bool
             {
-                ImGui::TextWrapped(LOC("Plugin changes were saved to the .lproject. "
-                                   "Restart the editor to load the new module set."));
+                ImGui::TextWrapped(LOC("Plugin changes were saved to the .lproject. " "Restart the editor to load the new module set."));
                 ImGui::Spacing();
 
                 const char* RestartLabel = LOC_ICON(LE_ICON_POWER, "Restart Now");
@@ -604,7 +602,7 @@ namespace Lumina
 
                 const bool bNameEmpty = NewPluginNameBuf[0] == '\0';
                 if (bNameEmpty) ImGui::BeginDisabled();
-                if (ImGui::Button(LOC_ICON(LE_ICON_PUZZLE_PLUS, "Create"), ImVec2(ButtonWidth, 0)))
+                if (ImGui::Button(LOC_ICON_ID(LE_ICON_PUZZLE_PLUS, "Create"), ImVec2(ButtonWidth, 0)))
                 {
                     FFixedString OutDir;
                     FString Error;

@@ -1,3 +1,4 @@
+﻿#include "Localization/Localization.h"
 #include "NsightPerfTool.h"
 
 // Vulkan lives only in this plugin, and RHINative hands out opaque handles reinterpreted below.

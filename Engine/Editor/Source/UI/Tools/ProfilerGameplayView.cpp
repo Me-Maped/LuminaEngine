@@ -1,3 +1,4 @@
+﻿#include "Localization/Localization.h"
 #include "ProfilerEditorTool.h"
 #include "ProfilerViewCommon.h"
 
@@ -118,6 +119,17 @@ namespace Lumina
             }
 
             // Decorated for display only; the profiler stat is keyed on the undecorated class name.
+            FString RunsAfterList(const FSystemScheduleEntry& Entry)
+            {
+                FString List;
+                for (FName Name : Entry.RunsAfter)
+                {
+                    List += List.empty() ? "" : ", ";
+                    List += Name.ToString();
+                }
+                return List.empty() ? FString("nothing it declares") : List;
+            }
+
             FString SystemLabel(const FSystemScheduleEntry& Entry)
             {
                 const FString Name = Entry.Name.ToString();
@@ -310,17 +322,17 @@ namespace Lumina
 
         if (ImGui::BeginTabBar("##insights"))
         {
-            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_SITEMAP, "Schedule")))
+            if (ImGui::BeginTabItem(LOC_ICON_ID(LE_ICON_SITEMAP, "Schedule")))
             {
                 DrawSchedule();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_TABLE, "Stats")))
+            if (ImGui::BeginTabItem(LOC_ICON_ID(LE_ICON_TABLE, "Stats")))
             {
                 DrawStats();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem(LOC_ICON(LE_ICON_INFORMATION, "Detail")))
+            if (ImGui::BeginTabItem(LOC_ICON_ID(LE_ICON_INFORMATION, "Detail")))
             {
                 DrawDetail();
                 ImGui::EndTabItem();
@@ -400,9 +412,7 @@ namespace Lumina
         ImGui::TextColored(EditorColors::TextDim(), LOC("widest x%d"), WidestBatch);
 
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-        ImGui::TextWrapped(LOC("Columns are parallel batches: everything in one column runs concurrently on job-system workers, "
-                           "and the next column waits for all of it. Stage bands are hard barriers. Click a system to see "
-                           "every system in its stage it can never share a batch with."));
+        ImGui::TextWrapped(LOC("Columns are parallel batches: everything in one column runs concurrently on job-system workers, " "and the next column waits for all of it. Stage bands are hard barriers. Click a system to see " "every system in its stage it can never share a batch with."));
         ImGui::PopStyleColor();
         ImGui::Separator();
 
@@ -496,17 +506,10 @@ namespace Lumina
             }
 
             const int32 StageBatches = Last - L + 1;
-            // Translated in two pieces so each count picks its own singular or plural entry: a plural
-            // suffix handed in as an argument would leak a Latin "s" into a translated sentence.
-            char SystemsText[32];
-            snprintf(SystemsText, sizeof(SystemsText),
-                     StageSystems == 1 ? LOC("%d system") : LOC("%d systems"), StageSystems);
-            char BatchesText[32];
-            snprintf(BatchesText, sizeof(BatchesText),
-                     StageBatches == 1 ? LOC("%d batch") : LOC("%d batches"), StageBatches);
             char Header[128];
-            snprintf(Header, sizeof(Header), "%s   %s  /  %s",
-                     LOC_VIEW(InsightsDetail::StageName(Stage)), SystemsText, BatchesText);
+            snprintf(Header, sizeof(Header), "%s   %d system%s  /  %d batch%s",
+                     InsightsDetail::StageName(Stage), StageSystems, StageSystems == 1 ? "" : "s",
+                     StageBatches, StageBatches == 1 ? "" : "es");
             DL->AddText(Font, SmallFont, ImVec2(BandMin.x + 10.0f * Scale, BandMin.y + 4.0f * Scale),
                         EditorColors::U32(StageTint), Header);
 
@@ -695,11 +698,10 @@ namespace Lumina
                 ImGui::BeginTooltip();
                 ImGui::TextColored(StageTint, "%s", Label.c_str());
                 ImGui::Separator();
-                ImGui::Text(LOC("Stage       %s"), LOC_VIEW(InsightsDetail::StageName(Entry.Stage)));
-                ImGui::Text(Entry.BatchSize == 1 ? LOC("Batch       %d   (%d system)")
-                                                 : LOC("Batch       %d   (%d systems)"),
-                            (int32)Entry.Batch, (int32)Entry.BatchSize);
-                ImGui::Text(LOC("Priority    %d"), (int32)Entry.Priority);
+                ImGui::Text(LOC("Stage       %s"), InsightsDetail::StageName(Entry.Stage));
+                ImGui::Text(LOC("Batch       %d   (%d system%s)"), (int32)Entry.Batch, (int32)Entry.BatchSize,
+                            Entry.BatchSize == 1 ? "" : "s");
+                ImGui::Text(LOC("Runs after  %s"), InsightsDetail::RunsAfterList(Entry).c_str());
                 ImGui::Separator();
                 if (Entry.bExclusive)
                 {
@@ -716,9 +718,8 @@ namespace Lumina
                 if (Stat != nullptr)
                 {
                     ImGui::Separator();
-                    ImGui::TextColored(EditorColors::TextDim(),
-                        Stat->Calls == 1 ? LOC("%.3f ms over %d call") : LOC("%.3f ms over %d calls"),
-                        Stat->InclusiveMs, (int32)Stat->Calls);
+                    ImGui::TextColored(EditorColors::TextDim(), LOC("%.3f ms over %d call%s"), Stat->InclusiveMs,
+                                       (int32)Stat->Calls, Stat->Calls == 1 ? "" : "s");
                 }
                 ImGui::EndTooltip();
             }
@@ -791,7 +792,7 @@ namespace Lumina
             Rows.reserve(GameplayFrame.Entries.size());
             for (const FGameplayProfileEntry& Entry : GameplayFrame.Entries)
             {
-                if (ImGuiX::PassSearchFilter(FStringView(Filter), FStringView(Entry.Name.c_str())))
+                if (Filter[0] == '\0' || Entry.Name.find(Filter) != FFixedString::npos)
                 {
                     Rows.push_back(&Entry);
                 }
@@ -868,8 +869,7 @@ namespace Lumina
         {
             ImGui::Spacing();
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped(LOC("No gameplay scopes yet. Enter Play to capture script and system updates, or instrument "
-                               "C# with  using (Profiler.Sample(\"Name\")) { ... }"));
+            ImGui::TextWrapped(LOC("No gameplay scopes yet. Enter Play to capture script and system updates, or instrument " "C# with  using (Profiler.Sample(\"Name\")) { ... }"));
             ImGui::PopStyleColor();
         }
     }
@@ -896,23 +896,23 @@ namespace Lumina
         ImGui::PopStyleColor();
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(StageTint, "%s", LOC_VIEW(InsightsDetail::StageName(Entry.Stage)));
+        ImGui::TextColored(StageTint, "%s", InsightsDetail::StageName(Entry.Stage));
         InsightsDetail::StripSeparator();
         ImGui::TextColored(EditorColors::TextDim(), LOC("batch %d"), (int32)Entry.Batch);
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), LOC("priority %d"), (int32)Entry.Priority);
-        InsightsDetail::StripSeparator();
+        if (!Entry.RunsAfter.empty())
+        {
+            ImGui::TextColored(EditorColors::TextDim(), LOC("after %s"), InsightsDetail::RunsAfterList(Entry).c_str());
+            InsightsDetail::StripSeparator();
+        }
         if (Entry.bExclusive)
         {
             ImGui::TextColored(EditorColors::Warning(), LOC_ICON(LE_ICON_LOCK, "runs alone"));
         }
         else if (Entry.BatchSize > 1)
         {
-            ImGui::TextColored(EditorColors::Success(),
-                               Entry.BatchSize == 2
-                                   ? LOC_ICON(LE_ICON_LIGHTNING_BOLT, "parallel with %d other")
-                                   : LOC_ICON(LE_ICON_LIGHTNING_BOLT, "parallel with %d others"),
-                               (int32)Entry.BatchSize - 1);
+            ImGui::TextColored(EditorColors::Success(), LOC_ICON(LE_ICON_LIGHTNING_BOLT, "parallel with %d other%s"),
+                               (int32)Entry.BatchSize - 1, Entry.BatchSize == 2 ? "" : "s");
         }
         else
         {
@@ -924,8 +924,7 @@ namespace Lumina
         if (Entry.bExclusive)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped(LOC("This system declares no FSystemAccess, so the scheduler treats it as writing everything. "
-                               "Declaring reads and writes lets it batch with other systems."));
+            ImGui::TextWrapped(LOC("This system declares no FSystemAccess, so the scheduler treats it as writing everything. " "Declaring reads and writes lets it batch with other systems."));
             ImGui::PopStyleColor();
         }
         else
@@ -954,7 +953,7 @@ namespace Lumina
 
         if (ConflictIndices.empty())
         {
-            ImGui::TextColored(EditorColors::Success(), LOC("Nothing in %s conflicts with this system."), LOC_VIEW(InsightsDetail::StageName(Entry.Stage)));
+            ImGui::TextColored(EditorColors::Success(), LOC("Nothing in %s conflicts with this system."), InsightsDetail::StageName(Entry.Stage));
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
             ImGui::TextWrapped(LOC("It can run in the stage's first batch alongside everything else."));
             ImGui::PopStyleColor();
@@ -962,10 +961,8 @@ namespace Lumina
         else
         {
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped(ConflictIndices.size() == 1
-                    ? LOC("These %d system can never share a batch with this one. Each row is a serialization point.")
-                    : LOC("These %d systems can never share a batch with this one. Each row is a serialization point."),
-                (int32)ConflictIndices.size());
+            ImGui::TextWrapped(LOC("These %d system%s can never share a batch with this one. Each row is a serialization point."),
+                               (int32)ConflictIndices.size(), ConflictIndices.size() == 1 ? "" : "s");
             ImGui::PopStyleColor();
 
             const ImGuiTableFlags Flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV
@@ -1016,8 +1013,7 @@ namespace Lumina
         {
             ImGui::Spacing();
             ImGui::SeparatorText(LOC("Timing (last frame)"));
-            ImGui::TextColored(EditorColors::TextDim(),
-                Stat->Calls == 1 ? LOC("%d call") : LOC("%d calls"), (int32)Stat->Calls);
+            ImGui::TextColored(EditorColors::TextDim(), LOC("%d call%s"), (int32)Stat->Calls, Stat->Calls == 1 ? "" : "s");
             InsightsDetail::StripSeparator();
             ImGui::TextColored(InsightsDetail::CostColor(GameplayFrame.TotalMs > 0.0 ? Stat->InclusiveMs / GameplayFrame.TotalMs : 0.0),
                                LOC("%.3f ms inclusive"), Stat->InclusiveMs);

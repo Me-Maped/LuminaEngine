@@ -1,4 +1,4 @@
-﻿#include "CoreTypeCustomization.h"
+#include "CoreTypeCustomization.h"
 #include "Localization/Localization.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
@@ -67,12 +67,13 @@ namespace Lumina
             return EPropertyChangeOp::None;
         }
 
+        // None edits as an empty field, which also turns a cleared field back into None.
         char Buffer[256];
-        strncpy(Buffer, DisplayValue.c_str(), sizeof(Buffer));
+        strncpy(Buffer, DisplayValue.IsNone() ? "" : DisplayValue.c_str(), sizeof(Buffer));
         Buffer[sizeof(Buffer) - 1] = 0;
 
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
-        if (ImGui::InputText("##Name", Buffer, sizeof(Buffer)))
+        if (ImGui::InputTextWithHint("##Name", LOC("None"), Buffer, sizeof(Buffer)))
         {
             DisplayValue = FName(Buffer);
         }

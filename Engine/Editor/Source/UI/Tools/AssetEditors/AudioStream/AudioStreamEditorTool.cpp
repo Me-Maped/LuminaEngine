@@ -1,8 +1,9 @@
-#include "AudioStreamEditorTool.h"
+﻿#include "AudioStreamEditorTool.h"
 
 #include "Assets/AssetTypes/Audio/AudioStream.h"
 #include "Audio/AudioGlobals.h"
 #include "Core/Math/Math.h"
+#include "Localization/Localization.h"
 #include "Tools/UI/ImGui/ImGuiFonts.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "Containers/StringFormat.h"
@@ -37,6 +38,14 @@ namespace Lumina
     void FAudioStreamEditorTool::OnDeinitialize(const FUpdateContext& /*UpdateContext*/)
     {
         StopPreview();
+    }
+
+    void FAudioStreamEditorTool::OnAssetDataChangedExternally()
+    {
+        FAssetEditorTool::OnAssetDataChangedExternally();
+        StopPreview();
+        ScrubTime = 0.0f;
+        BuildPeaks();
     }
 
     void FAudioStreamEditorTool::BuildPeaks()

@@ -1,3 +1,4 @@
+﻿#include "Localization/Localization.h"
 #include "ProfilerEditorTool.h"
 #include "ProfilerViewCommon.h"
 

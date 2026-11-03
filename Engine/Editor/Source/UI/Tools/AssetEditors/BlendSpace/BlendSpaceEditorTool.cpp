@@ -1,4 +1,5 @@
 ﻿#include "BlendSpaceEditorTool.h"
+#include "Localization/Localization.h"
 #include "World/ECS/Registry.h"
 
 #include "Animation/TaskSystem/AnimTaskExecutor.h"
@@ -815,9 +816,9 @@ namespace Lumina
                     EndAssetTransaction();
                 }
             }
-            else if (DraggedSample < (int32)BlendSpace->Samples.size())
+            else if (DraggedSample < (int32)BlendSpace->Samples.size() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
             {
-                BlendSpace->Samples[DraggedSample].Position = SnapToGrid(CanvasToAxis(MousePos));
+                BlendSpace->Samples[DraggedSample].Position = SnapToGrid(CanvasToAxis(MousePos) - DragGrabOffset);
                 BlendSpace->RebuildTopology();
                 NotifyAssetDataChanged();
             }
@@ -843,6 +844,7 @@ namespace Lumina
             {
                 SelectedSample = Hit;
                 DraggedSample = Hit;
+                DragGrabOffset = CanvasToAxis(MousePos) - BlendSpace->Samples[Hit].Position;
                 BeginAssetTransaction(LOC("Move Blend Sample"));
                 bDragTransactionOpen = true;
             }
@@ -869,7 +871,7 @@ namespace Lumina
 
         if (ImGui::BeginPopup("##SampleContext"))
         {
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_DELETE, "Remove Sample")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_DELETE, "Remove Sample")))
             {
                 RemoveSampleAt(SelectedSample);
             }
@@ -895,7 +897,7 @@ namespace Lumina
 
         ImGui::Spacing();
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-        ImGui::SeparatorText(LOC("Blend Space"));
+        ImGui::SeparatorText(LOC_ICON(LE_ICON_CHART_SCATTER_PLOT, "Blend Space"));
         ImGuiX::Font::PopFont();
         ImGui::Spacing();
 
@@ -911,7 +913,7 @@ namespace Lumina
             RefreshPreviewMesh();
         }
 
-        if (ImGui::BeginMenu(LOC_ICON(LE_ICON_CHART_SCATTER_PLOT, "Blend Space")))
+        if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_CHART_SCATTER_PLOT, "Blend Space")))
         {
             bool bTri = bShowTriangulation;
             if (ImGui::MenuItem(LOC("Show Triangulation"), nullptr, &bTri))
@@ -941,7 +943,7 @@ namespace Lumina
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_REFRESH, "Rebuild Triangulation")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_REFRESH, "Rebuild Triangulation")))
             {
                 GetAsset<CBlendSpace>()->RebuildTopology();
             }

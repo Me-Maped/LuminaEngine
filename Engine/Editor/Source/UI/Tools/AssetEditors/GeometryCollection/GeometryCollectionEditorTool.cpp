@@ -1,4 +1,5 @@
-#include "GeometryCollectionEditorTool.h"
+﻿#include "GeometryCollectionEditorTool.h"
+#include "Localization/Localization.h"
 #include "World/ECS/Registry.h"
 
 #include "Assets/AssetTypes/GeometryCollection/GeometryCollection.h"
@@ -28,6 +29,25 @@ namespace Lumina
         {
             DrawFractureWindow();
         });
+    }
+
+    void FGeometryCollectionEditorTool::OnPropertyEditFinished(const FPropertyChangedEvent& Event)
+    {
+        if (CGeometryCollection* Collection = Cast<CGeometryCollection>(Asset.Get()))
+        {
+            Collection->InvalidatePieceMeshes();
+        }
+        bPreviewDirty = true;
+    }
+
+    void FGeometryCollectionEditorTool::OnPostUndoRedo()
+    {
+        FAssetEditorTool::OnPostUndoRedo();
+        if (CGeometryCollection* Collection = Cast<CGeometryCollection>(Asset.Get()))
+        {
+            Collection->InvalidatePieceMeshes();
+        }
+        bPreviewDirty = true;
     }
 
     void FGeometryCollectionEditorTool::SetupWorldForTool()
@@ -170,13 +190,44 @@ namespace Lumina
         ImGui::Text(LOC("Vertices: %u   Triangles: %u"), TotalVerts, TotalTris);
         ImGui::Spacing();
 
+        const bool bHasSource = Collection->SourceMesh.IsValid();
+        ImGui::BeginDisabled(!bHasSource);
         if (ImGui::Button(LOC("Generate Fracture"), ImVec2(-FLT_MIN, 0.0f)))
         {
+            const FObjectSnapshotCommand::FSerializer Serializer = [](FArchive& Ar, CObject* Object)
+            {
+                Object->GetClass()->SerializeProperties(Ar, Object);
+                if (CGeometryCollection* Target = Cast<CGeometryCollection>(Object))
+                {
+                    Target->SerializeFractureData(Ar);
+                    if (Ar.IsReading())
+                    {
+                        Target->InvalidatePieceMeshes();
+                    }
+                }
+            };
+
+            TVector<uint8> Before;
+            FObjectSnapshotCommand::Capture(Collection, Before, Serializer);
             Collection->Rebuild();
-            Asset->GetPackage()->MarkDirty();
+            TVector<uint8> After;
+            FObjectSnapshotCommand::Capture(Collection, After, Serializer);
+
+            const FName Label(LOC("Generate Fracture"));
+            FTransactionManager& Manager = GetTransactionManager();
+            Manager.BeginTransaction(Label);
+            Manager.Record(MakeUnique<FObjectSnapshotCommand>(Collection, Label, Move(Before), Move(After), Serializer));
+            Manager.CommitTransaction();
+
+            NotifyAssetDataChanged();
             bPreviewDirty = true;
         }
+        ImGui::EndDisabled();
         ImGuiX::TextTooltip(LOCF("Re-bake convex chunks from the source mesh using the settings below."));
+        if (!bHasSource)
+        {
+            ImGui::TextDisabled(LOC("Pick a Source Mesh below to generate a fracture."));
+        }
 
         ImGui::Spacing();
         ImGui::SetNextItemWidth(-FLT_MIN);

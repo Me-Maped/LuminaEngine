@@ -1,4 +1,5 @@
-﻿#include "RuntimePCH.h"
+﻿#include "Localization/Localization.h"
+#include "RuntimePCH.h"
 #include "TreeListView.h"
 #include "imgui.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
@@ -173,7 +174,7 @@ namespace Lumina
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, RowFramePadding);
         if (ImGui::BeginTable("TreeViewTable", 1, TableFlags))
         {
-            ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(LOC_ID("Label"), ImGuiTableColumnFlags_WidthStretch);
 
             ImGuiListClipper Clipper;
             Clipper.Begin(static_cast<int>(Rows->size()));

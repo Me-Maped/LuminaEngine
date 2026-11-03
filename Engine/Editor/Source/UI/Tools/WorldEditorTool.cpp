@@ -1,4 +1,5 @@
 ﻿#include <string>
+#include "Localization/Localization.h"
 #include "Tools/Import/ImportPaths.h"
 #include "World/ECS/Registry.h"
 #include "WorldEditorTool.h"
@@ -6,7 +7,6 @@
 #include "Play/StandaloneLauncher.h"
 #include "Core/Math/Math.h"
 #include "EditorToolContext.h"
-#include "Localization/Localization.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Assets/AssetTypes/Prefabs/Prefab.h"
 #include "Assets/AssetTypes/Prefabs/PrefabComponents.h"
@@ -79,254 +79,257 @@
 
 namespace Lumina
 {
-    static constexpr const char* WorldSettingsName = "World Settings";
+    namespace WorldEditorToolInternal
+    {
+        constexpr const char* WorldSettingsName = "World Settings";
 
-    // The console has no context pointer, so the command reaches the world editor through this.
-    static FWorldEditorTool* GActiveWorldEditor = nullptr;
+        // The console has no context pointer, so the command reaches the world editor through this.
+        FWorldEditorTool* GActiveWorldEditor = nullptr;
 
-    static FAutoConsoleCommand GToggleGameViewCommand("Editor.ToggleGameView",
-        "Hide or show editor overlays such as the grid and gizmos, as the G key does over the viewport.", []
-        {
-            if (GActiveWorldEditor != nullptr)
+        FAutoConsoleCommand GToggleGameViewCommand("Editor.ToggleGameView",
+            "Hide or show editor overlays such as the grid and gizmos, as the G key does over the viewport.", []
             {
-                GActiveWorldEditor->ToggleGameViewMode();
-            }
-        });
-    static FAutoConsoleCommand GShadowRangeDemoCommand("Editor.ShadowRangeDemo",
-        "Open a transient world built to test sun shadows from a few meters out to several kilometers.", []
-        {
-            if (GActiveWorldEditor != nullptr)
+                if (GActiveWorldEditor != nullptr)
+                {
+                    GActiveWorldEditor->ToggleGameViewMode();
+                }
+            });
+        FAutoConsoleCommand GShadowRangeDemoCommand("Editor.ShadowRangeDemo",
+            "Open a transient world built to test sun shadows from a few meters out to several kilometers.", []
             {
-                GActiveWorldEditor->OpenShadowRangeDemo();
-            }
-        });
-    static constexpr const char* SceneGraphName = "Scene Graph";
-    static constexpr const char* SystemsName = "Systems";
+                if (GActiveWorldEditor != nullptr)
+                {
+                    GActiveWorldEditor->OpenShadowRangeDemo();
+                }
+            });
+        constexpr const char* SceneGraphName = "Scene Graph";
+        constexpr const char* SystemsName = "Systems";
     
-    static FVector3 SanitizeManipulationScale(FVector3 Scale)
-    {
-        constexpr float MinScale = 0.001f;
-        for (int i = 0; i < 3; ++i)
+        FVector3 SanitizeManipulationScale(FVector3 Scale)
         {
-            if (!std::isfinite(Scale[i]) || std::abs(Scale[i]) < MinScale)
+            constexpr float MinScale = 0.001f;
+            for (int i = 0; i < 3; ++i)
             {
-                Scale[i] = Scale[i] < 0.0f ? -MinScale : MinScale;
+                if (!std::isfinite(Scale[i]) || std::abs(Scale[i]) < MinScale)
+                {
+                    Scale[i] = Scale[i] < 0.0f ? -MinScale : MinScale;
+                }
             }
+            return Scale;
         }
-        return Scale;
-    }
 
-    static bool IsLockedPrefabChild(const ECS::FRegistry& Registry, ECS::FEntity Entity)
-    {
-        if (Entity == ECS::NullEntity || !Registry.IsValid(Entity))
+        bool IsLockedPrefabChild(const ECS::FRegistry& Registry, ECS::FEntity Entity)
         {
-            return false;
+            if (Entity == ECS::NullEntity || !Registry.IsValid(Entity))
+            {
+                return false;
+            }
+            const SPrefabInstanceComponent* Instance = Registry.TryGet<SPrefabInstanceComponent>(Entity);
+            return Instance != nullptr && !Instance->bIsRoot;
         }
-        const SPrefabInstanceComponent* Instance = Registry.TryGet<SPrefabInstanceComponent>(Entity);
-        return Instance != nullptr && !Instance->bIsRoot;
-    }
     
-    static ECS::FEntity ResolveSelectionRootForViewportPick(ECS::FRegistry& Registry, ECS::FEntity Entity)
-    {
-        if (Entity == ECS::NullEntity || !Registry.IsValid(Entity))
+        ECS::FEntity ResolveSelectionRootForViewportPick(ECS::FRegistry& Registry, ECS::FEntity Entity)
         {
-            return Entity;
-        }
-
-        // The picked entity is itself a root, keep it.
-        if (Registry.HasAll<SSelectionRoot>(Entity))
-        {
-            return Entity;
-        }
-        if (const SPrefabInstanceComponent* Instance = Registry.TryGet<SPrefabInstanceComponent>(Entity))
-        {
-            if (Instance->bIsRoot)
+            if (Entity == ECS::NullEntity || !Registry.IsValid(Entity))
             {
                 return Entity;
             }
-        }
 
-        const ECS::FHierarchy& Hierarchy = Registry.GetHierarchy();
-        for (ECS::FEntity Parent = Hierarchy.GetParent(Entity); Parent != ECS::NullEntity; Parent = Hierarchy.GetParent(Parent))
-        {
-            if (Registry.HasAll<SSelectionRoot>(Parent))
+            // The picked entity is itself a root, keep it.
+            if (Registry.HasAll<SSelectionRoot>(Entity))
             {
-                return Parent;
+                return Entity;
             }
-            if (const SPrefabInstanceComponent* ParentInstance = Registry.TryGet<SPrefabInstanceComponent>(Parent))
+            if (const SPrefabInstanceComponent* Instance = Registry.TryGet<SPrefabInstanceComponent>(Entity))
             {
-                if (ParentInstance->bIsRoot)
+                if (Instance->bIsRoot)
+                {
+                    return Entity;
+                }
+            }
+
+            const ECS::FHierarchy& Hierarchy = Registry.GetHierarchy();
+            for (ECS::FEntity Parent = Hierarchy.GetParent(Entity); Parent != ECS::NullEntity; Parent = Hierarchy.GetParent(Parent))
+            {
+                if (Registry.HasAll<SSelectionRoot>(Parent))
                 {
                     return Parent;
                 }
+                if (const SPrefabInstanceComponent* ParentInstance = Registry.TryGet<SPrefabInstanceComponent>(Parent))
+                {
+                    if (ParentInstance->bIsRoot)
+                    {
+                        return Parent;
+                    }
+                }
             }
+
+            return Entity;
         }
 
-        return Entity;
-    }
+        // The editor world has no physics scene, so mesh AABBs are projected in software.
 
-    // The editor world has no physics scene, so mesh AABBs are projected in software.
-
-    // Project world AABB to screen rect (y-down, viewport pixels). Returns false if the box is behind near plane.
-    static bool ProjectAABBToScreenRect(const SAABB& WorldAABB, const FMatrix4& ViewProj,
-                                        const ImVec2& ViewportSize,
-                                        ImVec2& OutMin, ImVec2& OutMax)
-    {
-        const FVector3 Corners[8] = {
-            { WorldAABB.Min.x, WorldAABB.Min.y, WorldAABB.Min.z },
-            { WorldAABB.Max.x, WorldAABB.Min.y, WorldAABB.Min.z },
-            { WorldAABB.Min.x, WorldAABB.Max.y, WorldAABB.Min.z },
-            { WorldAABB.Max.x, WorldAABB.Max.y, WorldAABB.Min.z },
-            { WorldAABB.Min.x, WorldAABB.Min.y, WorldAABB.Max.z },
-            { WorldAABB.Max.x, WorldAABB.Min.y, WorldAABB.Max.z },
-            { WorldAABB.Min.x, WorldAABB.Max.y, WorldAABB.Max.z },
-            { WorldAABB.Max.x, WorldAABB.Max.y, WorldAABB.Max.z },
-        };
-
-        OutMin = ImVec2( FLT_MAX,  FLT_MAX);
-        OutMax = ImVec2(-FLT_MAX, -FLT_MAX);
-        bool bAnyInFront = false;
-
-        for (const FVector3& Corner : Corners)
+        // Project world AABB to screen rect (y-down, viewport pixels). Returns false if the box is behind near plane.
+        bool ProjectAABBToScreenRect(const SAABB& WorldAABB, const FMatrix4& ViewProj,
+                                            const ImVec2& ViewportSize,
+                                            ImVec2& OutMin, ImVec2& OutMax)
         {
-            FVector4 Clip = ViewProj * FVector4(Corner, 1.0f);
+            const FVector3 Corners[8] = {
+                { WorldAABB.Min.x, WorldAABB.Min.y, WorldAABB.Min.z },
+                { WorldAABB.Max.x, WorldAABB.Min.y, WorldAABB.Min.z },
+                { WorldAABB.Min.x, WorldAABB.Max.y, WorldAABB.Min.z },
+                { WorldAABB.Max.x, WorldAABB.Max.y, WorldAABB.Min.z },
+                { WorldAABB.Min.x, WorldAABB.Min.y, WorldAABB.Max.z },
+                { WorldAABB.Max.x, WorldAABB.Min.y, WorldAABB.Max.z },
+                { WorldAABB.Min.x, WorldAABB.Max.y, WorldAABB.Max.z },
+                { WorldAABB.Max.x, WorldAABB.Max.y, WorldAABB.Max.z },
+            };
+
+            OutMin = ImVec2( FLT_MAX,  FLT_MAX);
+            OutMax = ImVec2(-FLT_MAX, -FLT_MAX);
+            bool bAnyInFront = false;
+
+            for (const FVector3& Corner : Corners)
+            {
+                FVector4 Clip = ViewProj * FVector4(Corner, 1.0f);
+                if (Clip.w <= 1e-4f)
+                {
+                    continue;
+                }
+                const float NdcX = Clip.x / Clip.w;
+                const float NdcY = Clip.y / Clip.w;
+                // Caller flipped [1][1] to GL-Y-up; convert NDC +Y up to y-down pixels.
+                const float Px = (NdcX * 0.5f + 0.5f) * ViewportSize.x;
+                const float Py = (1.0f - (NdcY * 0.5f + 0.5f)) * ViewportSize.y;
+                OutMin.x = Math::Min(OutMin.x, Px);
+                OutMin.y = Math::Min(OutMin.y, Py);
+                OutMax.x = Math::Max(OutMax.x, Px);
+                OutMax.y = Math::Max(OutMax.y, Py);
+                bAnyInFront = true;
+            }
+
+            return bAnyInFront;
+        }
+
+        // Distance straight down from Origin to the box's top, zero when Origin is already inside it.
+        bool CastDownToAABB(const FVector3& Origin, const SAABB& Box, float& OutT)
+        {
+            const bool bOverXZ = Origin.x >= Box.Min.x && Origin.x <= Box.Max.x && Origin.z >= Box.Min.z && Origin.z <= Box.Max.z;
+            if (!bOverXZ || Origin.y < Box.Min.y)
+            {
+                return false;
+            }
+            OutT = Math::Max(0.0f, Origin.y - Box.Max.y);
+            return true;
+        }
+
+        // Project world point to viewport pixels (y-down); ViewProj uses GL-Y-up like ProjectAABBToScreenRect.
+        bool ProjectPointToScreen(const FVector3& WorldPos, const FMatrix4& ViewProj,
+                                         const ImVec2& ViewportSize, ImVec2& OutScreen)
+        {
+            FVector4 Clip = ViewProj * FVector4(WorldPos, 1.0f);
             if (Clip.w <= 1e-4f)
             {
-                continue;
+                return false;
             }
             const float NdcX = Clip.x / Clip.w;
             const float NdcY = Clip.y / Clip.w;
-            // Caller flipped [1][1] to GL-Y-up; convert NDC +Y up to y-down pixels.
-            const float Px = (NdcX * 0.5f + 0.5f) * ViewportSize.x;
-            const float Py = (1.0f - (NdcY * 0.5f + 0.5f)) * ViewportSize.y;
-            OutMin.x = Math::Min(OutMin.x, Px);
-            OutMin.y = Math::Min(OutMin.y, Py);
-            OutMax.x = Math::Max(OutMax.x, Px);
-            OutMax.y = Math::Max(OutMax.y, Py);
-            bAnyInFront = true;
+            OutScreen.x = (NdcX * 0.5f + 0.5f) * ViewportSize.x;
+            OutScreen.y = (1.0f - (NdcY * 0.5f + 0.5f)) * ViewportSize.y;
+            return true;
         }
 
-        return bAnyInFront;
-    }
-
-    // Distance straight down from Origin to the box's top, zero when Origin is already inside it.
-    static bool CastDownToAABB(const FVector3& Origin, const SAABB& Box, float& OutT)
-    {
-        const bool bOverXZ = Origin.x >= Box.Min.x && Origin.x <= Box.Max.x && Origin.z >= Box.Min.z && Origin.z <= Box.Max.z;
-        if (!bOverXZ || Origin.y < Box.Min.y)
+        // Walk LOD-0 verts. Meshlet vertex positions are full mesh-local float3 (no quantization).
+        template <typename TVisitor>
+        void ForEachMeshVertexLocal(const CStaticMesh& Mesh, TVisitor&& Visit)
         {
-            return false;
-        }
-        OutT = Math::Max(0.0f, Origin.y - Box.Max.y);
-        return true;
-    }
-
-    // Project world point to viewport pixels (y-down); ViewProj uses GL-Y-up like ProjectAABBToScreenRect.
-    static bool ProjectPointToScreen(const FVector3& WorldPos, const FMatrix4& ViewProj,
-                                     const ImVec2& ViewportSize, ImVec2& OutScreen)
-    {
-        FVector4 Clip = ViewProj * FVector4(WorldPos, 1.0f);
-        if (Clip.w <= 1e-4f)
-        {
-            return false;
-        }
-        const float NdcX = Clip.x / Clip.w;
-        const float NdcY = Clip.y / Clip.w;
-        OutScreen.x = (NdcX * 0.5f + 0.5f) * ViewportSize.x;
-        OutScreen.y = (1.0f - (NdcY * 0.5f + 0.5f)) * ViewportSize.y;
-        return true;
-    }
-
-    // Walk LOD-0 verts. Meshlet vertex positions are full mesh-local float3 (no quantization).
-    template <typename TVisitor>
-    static void ForEachMeshVertexLocal(const CStaticMesh& Mesh, TVisitor&& Visit)
-    {
-        const FMeshResource& Resource = Mesh.GetMeshResource();
-        if (Resource.bSkinnedMesh)
-        {
-            return;
-        }
-        const FMeshletData& MeshletData = Resource.MeshletData;
-        if (MeshletData.IsEmpty())
-        {
-            return;
-        }
-        const TVector<FMeshlet>& Meshlets = MeshletData.Meshlets;
-
-        Mesh.ForEachSurface([&](const FGeometrySurface& Surface, uint32)
-        {
-            if (Surface.NumLODs == 0)
+            const FMeshResource& Resource = Mesh.GetMeshResource();
+            if (Resource.bSkinnedMesh)
             {
                 return;
             }
-            const uint32 Offset = Surface.LODMeshletOffset[0];
-            const uint32 Count  = Surface.LODMeshletCount[0];
-            for (uint32 i = 0; i < Count; ++i)
+            const FMeshletData& MeshletData = Resource.MeshletData;
+            if (MeshletData.IsEmpty())
             {
-                const FMeshlet& M = Meshlets[Offset + i];
-                for (uint32 v = 0; v < M.VertexCount; ++v)
+                return;
+            }
+            const TVector<FMeshlet>& Meshlets = MeshletData.Meshlets;
+
+            Mesh.ForEachSurface([&](const FGeometrySurface& Surface, uint32)
+            {
+                if (Surface.NumLODs == 0)
                 {
-                    Visit(GetMeshletVertexPosition(MeshletData, M, v, false));
+                    return;
                 }
-            }
-        });
-    }
-
-    // LOD-0 vertex closest to TargetScreenPos; returns true if any projected within MaxScreenDistPx.
-    static bool FindClosestVertexToScreenPoint(const CStaticMesh& Mesh,
-                                               const FMatrix4& MeshWorldMatrix,
-                                               const FMatrix4& ViewProj,
-                                               const ImVec2& ViewportSize,
-                                               const ImVec2& TargetScreenPos,
-                                               float MaxScreenDistPx,
-                                               FVector3& OutLocalPos,
-                                               FVector3& OutWorldPos)
-    {
-        const FMeshResource& Resource = Mesh.GetMeshResource();
-        if (Resource.bSkinnedMesh || Resource.MeshletData.IsEmpty())
-        {
-            return false;
+                const uint32 Offset = Surface.LODMeshletOffset[0];
+                const uint32 Count  = Surface.LODMeshletCount[0];
+                for (uint32 i = 0; i < Count; ++i)
+                {
+                    const FMeshlet& M = Meshlets[Offset + i];
+                    for (uint32 v = 0; v < M.VertexCount; ++v)
+                    {
+                        Visit(GetMeshletVertexPosition(MeshletData, M, v, false));
+                    }
+                }
+            });
         }
 
-        // Cheap whole-mesh cull against an inflated screen rect.
-        ImVec2 BoxMin, BoxMax;
-        const SAABB WorldAABB = Mesh.GetAABB().ToWorld(MeshWorldMatrix);
-        if (!ProjectAABBToScreenRect(WorldAABB, ViewProj, ViewportSize, BoxMin, BoxMax))
+        // LOD-0 vertex closest to TargetScreenPos; returns true if any projected within MaxScreenDistPx.
+        bool FindClosestVertexToScreenPoint(const CStaticMesh& Mesh,
+                                                   const FMatrix4& MeshWorldMatrix,
+                                                   const FMatrix4& ViewProj,
+                                                   const ImVec2& ViewportSize,
+                                                   const ImVec2& TargetScreenPos,
+                                                   float MaxScreenDistPx,
+                                                   FVector3& OutLocalPos,
+                                                   FVector3& OutWorldPos)
         {
-            return false;
-        }
-        if (TargetScreenPos.x < BoxMin.x - MaxScreenDistPx || TargetScreenPos.x > BoxMax.x + MaxScreenDistPx ||
-            TargetScreenPos.y < BoxMin.y - MaxScreenDistPx || TargetScreenPos.y > BoxMax.y + MaxScreenDistPx)
-        {
-            return false;
-        }
-
-        const FMatrix4 MVP = ViewProj * MeshWorldMatrix;
-        float BestDistSq = MaxScreenDistPx * MaxScreenDistPx;
-        bool  bFound = false;
-
-        ForEachMeshVertexLocal(Mesh, [&](const FVector3& LocalPos)
-        {
-            FVector4 Clip = MVP * FVector4(LocalPos, 1.0f);
-            if (Clip.w <= 1e-4f)
+            const FMeshResource& Resource = Mesh.GetMeshResource();
+            if (Resource.bSkinnedMesh || Resource.MeshletData.IsEmpty())
             {
-                return;
+                return false;
             }
-            const float Px = (Clip.x / Clip.w * 0.5f + 0.5f) * ViewportSize.x;
-            const float Py = (1.0f - (Clip.y / Clip.w * 0.5f + 0.5f)) * ViewportSize.y;
-            const float dx = Px - TargetScreenPos.x;
-            const float dy = Py - TargetScreenPos.y;
-            const float DistSq = dx * dx + dy * dy;
-            if (DistSq < BestDistSq)
-            {
-                BestDistSq  = DistSq;
-                OutLocalPos = LocalPos;
-                OutWorldPos = FVector3(MeshWorldMatrix * FVector4(LocalPos, 1.0f));
-                bFound = true;
-            }
-        });
 
-        return bFound;
+            // Cheap whole-mesh cull against an inflated screen rect.
+            ImVec2 BoxMin, BoxMax;
+            const SAABB WorldAABB = Mesh.GetAABB().ToWorld(MeshWorldMatrix);
+            if (!ProjectAABBToScreenRect(WorldAABB, ViewProj, ViewportSize, BoxMin, BoxMax))
+            {
+                return false;
+            }
+            if (TargetScreenPos.x < BoxMin.x - MaxScreenDistPx || TargetScreenPos.x > BoxMax.x + MaxScreenDistPx ||
+                TargetScreenPos.y < BoxMin.y - MaxScreenDistPx || TargetScreenPos.y > BoxMax.y + MaxScreenDistPx)
+            {
+                return false;
+            }
+
+            const FMatrix4 MVP = ViewProj * MeshWorldMatrix;
+            float BestDistSq = MaxScreenDistPx * MaxScreenDistPx;
+            bool  bFound = false;
+
+            ForEachMeshVertexLocal(Mesh, [&](const FVector3& LocalPos)
+            {
+                FVector4 Clip = MVP * FVector4(LocalPos, 1.0f);
+                if (Clip.w <= 1e-4f)
+                {
+                    return;
+                }
+                const float Px = (Clip.x / Clip.w * 0.5f + 0.5f) * ViewportSize.x;
+                const float Py = (1.0f - (Clip.y / Clip.w * 0.5f + 0.5f)) * ViewportSize.y;
+                const float dx = Px - TargetScreenPos.x;
+                const float dy = Py - TargetScreenPos.y;
+                const float DistSq = dx * dx + dy * dy;
+                if (DistSq < BestDistSq)
+                {
+                    BestDistSq  = DistSq;
+                    OutLocalPos = LocalPos;
+                    OutWorldPos = FVector3(MeshWorldMatrix * FVector4(LocalPos, 1.0f));
+                    bFound = true;
+                }
+            });
+
+            return bFound;
+        }
     }
 
 
@@ -339,25 +342,25 @@ namespace Lumina
 
     void FWorldEditorTool::OnInitialize()
     {
-        GActiveWorldEditor = this;
-        CreateToolWindow(SceneGraphName, [&] (bool bFocused)
+        WorldEditorToolInternal::GActiveWorldEditor = this;
+        CreateToolWindow(WorldEditorToolInternal::SceneGraphName, [&] (bool bFocused)
         {
             DrawOutliner(bFocused);
         });
         
-        CreateToolWindow(WorldSettingsName, [&](bool bFocused)
+        CreateToolWindow("Details", [&] (bool bFocused)
+        {
+            DrawDetailsPanel(bFocused);
+        });
+
+        CreateToolWindow(WorldEditorToolInternal::WorldSettingsName, [&](bool bFocused)
         {
             DrawWorldSettings(bFocused);
         });
 
-        CreateToolWindow(SystemsName, [&](bool bFocused)
+        CreateToolWindow(WorldEditorToolInternal::SystemsName, [&](bool bFocused)
         {
             DrawSystemsPanel(bFocused);
-        });
-
-        CreateToolWindow("Details", [&] (bool bFocused)
-        {
-            DrawDetailsPanel(bFocused);
         });
         
         const CWorldEditorSettings* Settings = GetDefault<CWorldEditorSettings>();
@@ -396,7 +399,7 @@ namespace Lumina
             }
 
             ECS::FRegistry& Registry = World->GetEntityRegistry();
-            const bool bLocked = IsLockedPrefabChild(Registry, Data.Entity);
+            const bool bLocked = WorldEditorToolInternal::IsLockedPrefabChild(Registry, Data.Entity);
 
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(8, 4));
@@ -432,19 +435,19 @@ namespace Lumina
             ImGui::Separator();
 
             // --- Edit ---
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_PENCIL, "Rename")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_PENCIL, "Rename")))
             {
                 PushRenameEntityModal(Data.Entity);
             }
 
-            if (!bLocked && ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_DUPLICATE, "Duplicate")))
+            if (!bLocked && ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_DUPLICATE, "Duplicate")))
             {
                 BeginCreationTransaction();
                 ECS::FEntity New = ECS::NullEntity;
                 CopyEntity(New, Data.Entity);
                 if (New != ECS::NullEntity)
                 {
-                    EndTransaction("Duplicate");
+                    EndTransaction(LOC_ICON(LE_ICON_CONTENT_DUPLICATE, "Duplicate"));
                 }
                 else
                 {
@@ -452,7 +455,7 @@ namespace Lumina
                 }
             }
 
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_IDENTIFIER, "Copy Entity ID")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_IDENTIFIER, "Copy Entity ID")))
             {
                 ImGui::SetClipboardText(Format("{}", (Data.Entity).Value).c_str());
             }
@@ -463,11 +466,11 @@ namespace Lumina
             // --- Hierarchy ---
             if (!bLocked && Registry.GetHierarchy().GetParent(Data.Entity) != ECS::NullEntity)
             {
-                if (ImGui::MenuItem(LOC_ICON(LE_ICON_ARROW_UP_BOLD, "Unparent")))
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_ARROW_UP_BOLD, "Unparent")))
                 {
                     BeginRelationshipTransaction({ Data.Entity });
                     ECS::Utils::RemoveFromParent(Registry, Data.Entity);
-                    EndTransaction("Unparent");
+                    EndTransaction(LOC_ICON(LE_ICON_ARROW_UP_BOLD, "Unparent"));
                     ReparentEntityInOutliner(Data.Entity);
                 }
 
@@ -476,7 +479,7 @@ namespace Lumina
                 BuildSocketPickerData(Data.Entity, SocketData);
                 const SSocketAttachmentComponent* Attachment = Registry.TryGet<SSocketAttachmentComponent>(Data.Entity);
 
-                if (!SocketData.Sockets.empty() && ImGui::BeginMenu(LOC_ICON(LE_ICON_LINK, "Attach to Socket")))
+                if (!SocketData.Sockets.empty() && ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_LINK, "Attach to Socket")))
                 {
                     for (const FName& Socket : SocketData.Sockets)
                     {
@@ -486,7 +489,7 @@ namespace Lumina
                             const ECS::FEntity Parent = Registry.GetHierarchy().GetParent(Data.Entity);
                             BeginRelationshipTransaction({ Data.Entity }, Parent);
                             World->GetAnimation()->AttachEntityToSocket(Data.Entity, Parent, Socket);
-                            EndTransaction("Attach to Socket");
+                            EndTransaction(LOC_ICON(LE_ICON_LINK, "Attach to Socket"));
                             if (Data.Entity == DetailsEntity)
                             {
                                 bDetailsDirty = true;
@@ -496,11 +499,11 @@ namespace Lumina
                     ImGui::EndMenu();
                 }
 
-                if (Attachment != nullptr && ImGui::MenuItem(LOC_ICON(LE_ICON_LINK_OFF, "Clear Socket Attachment")))
+                if (Attachment != nullptr && ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LINK_OFF, "Clear Socket Attachment")))
                 {
                     BeginComponentTransaction({ Data.Entity }, SSocketAttachmentComponent::StaticStruct());
                     Registry.Remove<SSocketAttachmentComponent>(Data.Entity);
-                    EndTransaction("Clear Socket Attachment");
+                    EndTransaction(LOC_ICON(LE_ICON_LINK_OFF, "Clear Socket Attachment"));
                     if (Data.Entity == DetailsEntity)
                     {
                         bDetailsDirty = true;
@@ -510,14 +513,14 @@ namespace Lumina
 
             if (!bLocked && Registry.GetHierarchy().GetChildCount(Data.Entity) != 0)
             {
-                if (ImGui::MenuItem(LOC_ICON(LE_ICON_CALL_SPLIT, "Detach Children")))
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CALL_SPLIT, "Detach Children")))
                 {
                     // Snapshot child IDs before mutating relationships, then move each in the tree.
                     TFixedVector<ECS::FEntity, 20> Children;
                     Registry.GetHierarchy().ForEachChild(Data.Entity, [&](ECS::FEntity Child) { Children.push_back(Child); });
                     BeginRelationshipTransaction({ Data.Entity });
                     ECS::Utils::DetachImmediateChildren(Registry, Data.Entity);
-                    EndTransaction("Detach Children");
+                    EndTransaction(LOC_ICON(LE_ICON_CALL_SPLIT, "Detach Children"));
                     for (ECS::FEntity Child : Children)
                     {
                         ReparentEntityInOutliner(Child);
@@ -529,7 +532,7 @@ namespace Lumina
             {
                 DrawMoveToFolderMenuItems(GetComponentEditTargets(Data.Entity));
 
-                if (ImGui::MenuItem(LOC_ICON(LE_ICON_FOLDER_PLUS, "New Folder from Selection")))
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_FOLDER_PLUS, "New Folder from Selection")))
                 {
                     const TVector<ECS::FEntity> Targets = GetComponentEditTargets(Data.Entity);
                     const uint32 NewFolder = CreateSceneFolder(MakeUniqueFolderName(0), 0);
@@ -545,8 +548,8 @@ namespace Lumina
             {
                 const bool bIsSelectionRoot = Registry.HasAll<SSelectionRoot>(Data.Entity);
                 const char* RootLabel = bIsSelectionRoot
-                    ? LOC_ICON(LE_ICON_TARGET, "Unmark Selection Root")
-                    : LOC_ICON(LE_ICON_TARGET, "Mark as Selection Root");
+                    ? LE_ICON_TARGET " Unmark Selection Root"
+                    : LE_ICON_TARGET " Mark as Selection Root";
                 if (ImGui::MenuItem(RootLabel))
                 {
                     if (bIsSelectionRoot)
@@ -563,7 +566,7 @@ namespace Lumina
 
             ImGui::Separator();
 
-            if (!bLocked && ImGui::MenuItem(LOC_ICON(LE_ICON_PACKAGE_VARIANT, "Create Prefab from Entity...")))
+            if (!bLocked && ImGui::MenuItem(LOC_ICON_ID(LE_ICON_PACKAGE_VARIANT, "Create Prefab from Entity...")))
             {
                 PushCreatePrefabModalForEntity(Data.Entity);
             }
@@ -572,13 +575,13 @@ namespace Lumina
             if (const SPrefabInstanceComponent* Instance = Registry.TryGet<SPrefabInstanceComponent>(Data.Entity);
                 Instance != nullptr && Instance->bIsRoot)
             {
-                if (ImGui::MenuItem(LOC_ICON(LE_ICON_SYNC, "Resync from Prefab"), nullptr, false, Instance->SourcePrefab != nullptr))
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_SYNC, "Resync from Prefab"), nullptr, false, Instance->SourcePrefab != nullptr))
                 {
                     ResyncPrefabInstance(Data.Entity);
                 }
                 ImGuiX::TextTooltip("{}", LOC("Re-apply the source prefab to this instance now. Per-instance overrides and the placed transform are kept."));
 
-                if (ImGui::MenuItem(LOC_ICON(LE_ICON_LINK_VARIANT_OFF, "Detach from Prefab")))
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LINK_VARIANT_OFF, "Detach from Prefab")))
                 {
                     DetachPrefabInstance(Data.Entity);
                 }
@@ -589,7 +592,7 @@ namespace Lumina
             {
                 ImGui::Separator();
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-                if (ImGui::MenuItem(LOC_ICON(LE_ICON_TRASH_CAN, "Delete")))
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_TRASH_CAN, "Delete")))
                 {
                     EntityDestroyRequests.push(Data.Entity);
                 }
@@ -690,11 +693,7 @@ namespace Lumina
                 return;
             }
 
-            FFixedString Name;
-            Name.append(LE_ICON_CUBE).append(" ")
-                .append(NewName).append(Format(" - ({})", (Data.Entity).Value));
-
-			Tree.Get<FTreeNodeDisplay>(Item).DisplayName = Name;
+            EditorEntityUtils::RenameOutlinerRow(Tree.Get<FTreeNodeDisplay>(Item), NewName);
 
             SNameComponent& NameComponent = World->GetEntityRegistry().Get<SNameComponent>(Data.Entity);
             NameComponent.Name = NewName;
@@ -797,9 +796,9 @@ namespace Lumina
 
     void FWorldEditorTool::OnDeinitialize(const FUpdateContext& UpdateContext)
     {
-        if (GActiveWorldEditor == this)
+        if (WorldEditorToolInternal::GActiveWorldEditor == this)
         {
-            GActiveWorldEditor = nullptr;
+            WorldEditorToolInternal::GActiveWorldEditor = nullptr;
         }
         FCoreDelegates::OnWorldTraveled.Remove(WorldTraveledHandle);
         WorldTraveledHandle = FDelegateHandle{};
@@ -907,7 +906,7 @@ namespace Lumina
             }
             if (bDestroyed)
             {
-                EndTransaction("Delete Entity");
+                EndTransaction(LOC_ICON(LE_ICON_TRASH_CAN, "Delete Entity"));
             }
             else
             {
@@ -953,8 +952,7 @@ namespace Lumina
             }
         }
 
-        // Gated off text input, so renaming an entity does not delete it.
-        // Alt excluded so a Ctrl+Alt chord cannot also fire the plain Ctrl clipboard commands.
+        // Off during text input so a rename cannot delete the entity, and off Alt so a Ctrl+Alt chord cannot fire the clipboard commands.
         const bool bSelectionEditActive = (bViewportHovered || bOutlinerActive)
             && !ImGui::GetIO().WantTextInput && !ImGui::GetIO().KeyAlt;
 
@@ -982,7 +980,7 @@ namespace Lumina
 
             for (ECS::FEntity SelectedEntity : CurrentSelection)
             {
-                const bool bLocked = IsLockedPrefabChild(World->GetEntityRegistry(), SelectedEntity);
+                const bool bLocked = WorldEditorToolInternal::IsLockedPrefabChild(World->GetEntityRegistry(), SelectedEntity);
 
                 if (bCopyPressed)
                 {
@@ -1027,7 +1025,7 @@ namespace Lumina
             TFixedVector<ECS::FEntity, 64> CopySources;
             World->GetEntityRegistry().View<FCopiedTag>().ForEach([&](ECS::FEntity Entity)
             {
-                if (!IsLockedPrefabChild(World->GetEntityRegistry(), Entity))
+                if (!WorldEditorToolInternal::IsLockedPrefabChild(World->GetEntityRegistry(), Entity))
                 {
                     CopySources.push_back(Entity);
                 }
@@ -1053,7 +1051,7 @@ namespace Lumina
                     ClearSelectedEntities();
                     for (ECS::FEntity New : NewlyPasted)
                     {
-                        AddSelectedEntity(New, false);
+                        AddSelectedEntity(New);
                     }
                     EndTransaction("Paste");
                 }
@@ -1143,91 +1141,91 @@ namespace Lumina
         // Hotkeys are suppressed while right-mouse flying so W/E/R/Q act as fly keys, not mode switches.
         auto Hovered      = [this]() { return bViewportHovered && !CameraState.bWasLooking; };
 
-        RegisterAction({LOC("Translate Mode"), "Gizmo", LOC("Switch the gizmo to translate (move) mode"),
+        RegisterAction({LOC("Translate Mode"), LOC("Gizmo"), LOC("Switch the gizmo to translate (move) mode"),
             FInputChord{ImGuiKey_W}, [this]
             {
                 GuizmoOp = ImGuizmo::TRANSLATE;
             }, Hovered});
 
-        RegisterAction({LOC("Rotate Mode"), "Gizmo", LOC("Switch the gizmo to rotate mode"),
+        RegisterAction({LOC("Rotate Mode"), LOC("Gizmo"), LOC("Switch the gizmo to rotate mode"),
             FInputChord{ImGuiKey_E}, [this]
             {
                 GuizmoOp = ImGuizmo::ROTATE;
             }, Hovered});
 
-        RegisterAction({LOC("Scale Mode"), "Gizmo", LOC("Switch the gizmo to scale mode"),
+        RegisterAction({LOC("Scale Mode"), LOC("Gizmo"), LOC("Switch the gizmo to scale mode"),
             FInputChord{ImGuiKey_R}, [this]
             {
                 GuizmoOp = ImGuizmo::SCALE;
             }, Hovered});
 
-        RegisterAction({LOC("Toggle Local/World"), "Gizmo", LOC("Switch the gizmo between world-space and entity-local space"),
+        RegisterAction({LOC("Toggle Local/World"), LOC("Gizmo"), LOC("Switch the gizmo between world-space and entity-local space"),
             FInputChord{ImGuiKey_X}, [this]
             {
                 ToggleGuizmoMode();
             }, Hovered});
 
-        RegisterAction({LOC("Focus Selection"), "View", LOC("Frame the camera on the last-selected entity"),
+        RegisterAction({LOC("Focus Selection"), LOC_ICON(LE_ICON_VIDEO_OUTLINE, "View"), LOC("Frame the camera on the last-selected entity"),
             FInputChord{ImGuiKey_F}, [this]
             {
                 FocusViewportToEntity(GetLastSelectedEntity());
             }});
 
-        RegisterAction({LOC("Toggle Game View"), "View", LOC("Hide editor overlays so the viewport shows what a runtime camera would"),
+        RegisterAction({LOC("Toggle Game View"), LOC_ICON(LE_ICON_VIDEO_OUTLINE, "View"), LOC("Hide editor overlays so the viewport shows what a runtime camera would"),
             FInputChord{ImGuiKey_G}, [this]
             {
                 ToggleGameViewMode();
             }, Hovered});
 
-        RegisterAction({LOC("Frame All"), "View", LOC("Frame the camera on every entity in the world"),
+        RegisterAction({LOC("Frame All"), LOC_ICON(LE_ICON_VIDEO_OUTLINE, "View"), LOC("Frame the camera on every entity in the world"),
             FInputChord{ImGuiKey_Home}, [this]
             {
                 FrameAllEntities();
             }, Hovered});
 
-        RegisterAction({LOC("Group Selected"), "Selection", LOC("Wrap the selection under a new parent entity"),
+        RegisterAction({LOC("Group Selected"), LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"), LOC("Wrap the selection under a new parent entity"),
             FInputChord{ImGuiKey_G, /*Ctrl*/true}, [this]
             {
                 GroupSelectedEntities();
             }, Hovered});
 
-        RegisterAction({LOC("Drop to Floor"), "Selection", LOC("Project the selection straight down onto the nearest mesh"),
+        RegisterAction({LOC("Drop to Floor"), LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"), LOC("Project the selection straight down onto the nearest mesh"),
             FInputChord{ImGuiKey_End}, [this]
             {
                 DropSelectionToFloor(); 
             }, Hovered});
 
-        RegisterAction({LOC("Align Transform with View"), "Transform", LOC("Move and rotate the selection onto the editor camera"),
+        RegisterAction({LOC("Align Transform with View"), LOC_ICON(LE_ICON_AXIS_ARROW, "Transform"), LOC("Move and rotate the selection onto the editor camera"),
             FInputChord{ImGuiKey_M, /*Ctrl*/true, /*Shift*/false, /*Alt*/true}, [this]
             {
                 AlignSelectionToView(/*bRotationOnly*/false);
             }, Hovered});
 
-        RegisterAction({LOC("Align Rotation with View"), "Transform", LOC("Rotate the selection onto the editor camera, leaving position alone"),
+        RegisterAction({LOC("Align Rotation with View"), LOC_ICON(LE_ICON_AXIS_ARROW, "Transform"), LOC("Rotate the selection onto the editor camera, leaving position alone"),
             FInputChord{ImGuiKey_F, /*Ctrl*/true, /*Shift*/false, /*Alt*/true}, [this]
             {
                 AlignSelectionToView(/*bRotationOnly*/true);
             }, Hovered});
 
-        RegisterAction({LOC("Transform Dialog"), "Transform", LOC("Apply a numeric translate, rotate and scale to the selection"),
+        RegisterAction({LOC("Transform Dialog"), LOC_ICON(LE_ICON_AXIS_ARROW, "Transform"), LOC("Apply a numeric translate, rotate and scale to the selection"),
             FInputChord{}, [this]
             {
                 OpenTransformDialog();
             }});
 
-        RegisterAction({LOC("Align View to Transform"), "Transform", LOC("Move the editor camera onto the last-selected entity"),
+        RegisterAction({LOC("Align View to Transform"), LOC_ICON(LE_ICON_AXIS_ARROW, "Transform"), LOC("Move the editor camera onto the last-selected entity"),
             FInputChord{ImGuiKey_V, /*Ctrl*/true, /*Shift*/false, /*Alt*/true}, [this]
             {
                 AlignViewToSelection();
             }, Hovered});
 
-        RegisterAction({LOC("Copy Transform"), "Selection", LOC("Copy the last-selected entity's transform to the clipboard"),
+        RegisterAction({LOC("Copy Transform"), LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"), LOC("Copy the last-selected entity's transform to the clipboard"),
             FInputChord{ImGuiKey_C, true, true}, [this]
             {
                 CopyTransformFromLastSelected();
             }, Hovered});
 
-        RegisterAction({LOC("Paste Transform"), "Selection", LOC("Apply the previously-copied transform to every selected entity"),
+        RegisterAction({LOC("Paste Transform"), LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"), LOC("Apply the previously-copied transform to every selected entity"),
             FInputChord{ImGuiKey_V, true, true}, [this]
             {
                 PasteTransformToSelection();
@@ -1238,28 +1236,28 @@ namespace Lumina
             FInputChord{ImGuiKey_S, true}, nullptr});
 
         // Advisory entries, inline-handled shortcuts registered so the shortcuts window surfaces them.
-        RegisterAction({LOC("Copy Entities"), "Selection", LOC("Copy the selection to the entity clipboard"),
+        RegisterAction({LOC("Copy Entities"), LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"), LOC("Copy the selection to the entity clipboard"),
             FInputChord{ImGuiKey_C, true}, nullptr});
         
-        RegisterAction({LOC("Duplicate Entities"), "Selection", LOC("Duplicate the selection in place"),
+        RegisterAction({LOC("Duplicate Entities"), LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"), LOC("Duplicate the selection in place"),
             FInputChord{ImGuiKey_D, true}, nullptr});
 
-        RegisterAction({"Drag a Copy", "Selection", "Alt-drag the transform gizmo to drag a duplicate of the selection",
+        RegisterAction({"Drag a Copy", LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"), "Alt-drag the transform gizmo to drag a duplicate of the selection",
             FInputChord{}, nullptr});
 
-        RegisterAction({"Camera Follows Drag", "Selection", "Hold Shift while moving the selection with the gizmo to bring the camera along",
+        RegisterAction({"Camera Follows Drag", LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"), "Hold Shift while moving the selection with the gizmo to bring the camera along",
             FInputChord{}, nullptr});
         
-        RegisterAction({LOC("Paste Entities"), "Selection", LOC("Paste previously-copied entities"),
+        RegisterAction({LOC("Paste Entities"), LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"), LOC("Paste previously-copied entities"),
             FInputChord{ImGuiKey_V, true}, nullptr});
         
-        RegisterAction({LOC("Delete Selection"), "Selection", LOC("Delete every selected entity"),
+        RegisterAction({LOC("Delete Selection"), LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"), LOC("Delete every selected entity"),
             FInputChord{ImGuiKey_Delete}, nullptr});
         
-        RegisterAction({LOC("Recall Camera Bookmark"), "Camera", LOC("Press 1-9 to recall a saved camera position"),
+        RegisterAction({LOC("Recall Camera Bookmark"), LOC("Camera"), LOC("Press 1-9 to recall a saved camera position"),
             FInputChord{}, nullptr});
         
-        RegisterAction({LOC("Save Camera Bookmark"), "Camera", LOC("Ctrl+1..9 saves the camera into the matching slot"),
+        RegisterAction({LOC("Save Camera Bookmark"), LOC("Camera"), LOC("Ctrl+1..9 saves the camera into the matching slot"),
             FInputChord{}, nullptr});
     }
 
@@ -1413,7 +1411,7 @@ namespace Lumina
 
     bool FWorldEditorTool::CanDuplicateEntity(ECS::FEntity Entity) const
     {
-        return !IsLockedPrefabChild(World->GetEntityRegistry(), Entity);
+        return !WorldEditorToolInternal::IsLockedPrefabChild(World->GetEntityRegistry(), Entity);
     }
 
     void FWorldEditorTool::SetActiveMode(int32 NewIndex)
@@ -1425,21 +1423,31 @@ namespace Lumina
         // bImGuizmoUsedOnce sticks true otherwise and blocks clicks after switching back.
         if (bImGuizmoUsedOnce)
         {
-            EndTransaction("Transform");
+            EndTransaction(LOC_ICON(LE_ICON_AXIS_ARROW, "Transform"));
             bImGuizmoUsedOnce = false;
         }
         bVertexSnapAnchorValid = false;
         bVertexSnapApplied     = false;
         SelectionBox.bActive   = false;
 
-        if (IWorldEditorMode* Old = EditorModes[ActiveModeIndex].get())
-        {
-            Old->OnExit(World.Get());
-        }
+        ExitActiveMode();
         ActiveModeIndex = NewIndex;
-        if (IWorldEditorMode* New = EditorModes[ActiveModeIndex].get())
+        EnterActiveMode();
+    }
+
+    void FWorldEditorTool::ExitActiveMode()
+    {
+        if (IWorldEditorMode* Mode = GetActiveMode())
         {
-            New->OnEnter(World.Get());
+            Mode->OnExit(World.Get());
+        }
+    }
+
+    void FWorldEditorTool::EnterActiveMode()
+    {
+        if (IWorldEditorMode* Mode = GetActiveMode())
+        {
+            Mode->OnEnter(World.Get());
         }
     }
 
@@ -1460,9 +1468,7 @@ namespace Lumina
             return Super::GetToolName();
         }
 
-        // A world that was never saved has no package and still carries its placeholder name. This value
-        // is the tool's identity as well as its tab text (GetID hashes it, SessionOps derives the tab id
-        // from it), so the placeholder stays English rather than moving the identity with the language.
+        // A world that was never saved has no package and still carries its placeholder name.
         const FName Name = World->GetPackage() != nullptr ? World->GetName() : FName("Untitled");
 
         if (CachedWindowNameSource != Name)
@@ -1486,14 +1492,14 @@ namespace Lumina
     {
         FEditorTool::DrawToolMenu(UpdateContext);
 
-        DrawActionMenu(LOC_ICON(LE_ICON_AXIS_ARROW, "Transform"), "Transform");
-        DrawActionMenu(LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"), "Selection");
-        DrawActionMenu(LOC_ICON(LE_ICON_VIDEO_OUTLINE, "View"), "View");
+        DrawActionMenu(LE_ICON_AXIS_ARROW " Transform", LOC_ICON(LE_ICON_AXIS_ARROW, "Transform"));
+        DrawActionMenu(LE_ICON_CURSOR_DEFAULT_OUTLINE " Selection", LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"));
+        DrawActionMenu(LE_ICON_VIDEO_OUTLINE " View", LOC_ICON(LE_ICON_VIDEO_OUTLINE, "View"));
     }
 
     void FWorldEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow(LOC("Selection"),
+        DrawHelpTextRow(LOC_ICON(LE_ICON_CURSOR_DEFAULT_OUTLINE, "Selection"),
             LOC("Click an entity in the viewport or outliner to select. Ctrl-click adds, Shift-click range-selects. "
             "Marquee-drag in the viewport for area selection. Esc clears."));
         DrawHelpTextRow(LOC("Gizmo"),
@@ -1534,17 +1540,13 @@ namespace Lumina
 
         // SplitNode takes parent, direction, ratio, out-at-direction and out-opposite, easy to swap.
         ImGuiID dockRightBottom = 0, dockRightTop = 0;
-        ImGui::DockBuilderSplitNode(dockRight, ImGuiDir_Down, 0.35f, &dockRightBottom, &dockRightTop);
-
-        // A bottom strip with Details and World Settings side by side.
-        ImGuiID dockRightBottomLeft = 0, dockRightBottomRight = 0;
-        ImGui::DockBuilderSplitNode(dockRightBottom, ImGuiDir_Right, 0.5f, &dockRightBottomRight, &dockRightBottomLeft);
+        ImGui::DockBuilderSplitNode(dockRight, ImGuiDir_Down, 0.55f, &dockRightBottom, &dockRightTop);
 
         ImGui::DockBuilderDockWindow(GetToolWindowName(ViewportWindowName).c_str(),    dockLeft);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(SceneGraphName).c_str(),        dockRightTop);
-        ImGui::DockBuilderDockWindow(GetToolWindowName("Details").c_str(),             dockRightBottomLeft);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(WorldSettingsName).c_str(),     dockRightBottomRight);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(SystemsName).c_str(),           dockRightBottomRight);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(WorldEditorToolInternal::SceneGraphName).c_str(),        dockRightTop);
+        ImGui::DockBuilderDockWindow(GetToolWindowName("Details").c_str(),             dockRightBottom);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(WorldEditorToolInternal::WorldSettingsName).c_str(),     dockRightBottom);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(WorldEditorToolInternal::SystemsName).c_str(),           dockRightBottom);
     }
 
     void FWorldEditorTool::DrawViewportOverlayElements(const FUpdateContext& UpdateContext, ImTextureRef ViewportTexture, ImVec2 ViewportSize)
@@ -1605,7 +1607,7 @@ namespace Lumina
         // ImGuizmo never sees the release, so end the transaction and reset or clicks stay blocked.
         if (!bGizmoTargetValid && bImGuizmoUsedOnce)
         {
-            EndTransaction("Transform");
+            EndTransaction(LOC_ICON(LE_ICON_AXIS_ARROW, "Transform"));
             bImGuizmoUsedOnce = false;
             bVertexSnapAnchorValid = false;
             bVertexSnapApplied = false;
@@ -1685,7 +1687,7 @@ namespace Lumina
                         {
                             const ImVec2 MP = ImGui::GetMousePos();
                             const ImVec2 MouseInViewport(MP.x - ViewportOrigin.x, MP.y - ViewportOrigin.y);
-                            bPreviewAnchorValid = FindClosestVertexToScreenPoint(
+                            bPreviewAnchorValid = WorldEditorToolInternal::FindClosestVertexToScreenPoint(
                                 *PivotMC->StaticMesh.Get(), PreManipulateMatrix, SnapViewProj,
                                 ViewportSize, MouseInViewport, FLT_MAX,
                                 PreviewAnchorLocal, PreviewAnchorWorld);
@@ -1756,7 +1758,7 @@ namespace Lumina
                                 const FVector3 AnchorCandidateWorld = AnchorPreWorld + DeltaTranslation;
 
                                 ImVec2 AnchorScreen;
-                                if (ProjectPointToScreen(AnchorCandidateWorld, SnapViewProj, ViewportSize, AnchorScreen))
+                                if (WorldEditorToolInternal::ProjectPointToScreen(AnchorCandidateWorld, SnapViewProj, ViewportSize, AnchorScreen))
                                 {
                                     float BestDistSq = VertexSnapPixelRadius * VertexSnapPixelRadius;
                                     FVector3 BestTargetWorld(0.0f);
@@ -1775,7 +1777,7 @@ namespace Lumina
                                         }
 
                                         FVector3 LP, WP;
-                                        if (!FindClosestVertexToScreenPoint(*MeshComp.StaticMesh.Get(),
+                                        if (!WorldEditorToolInternal::FindClosestVertexToScreenPoint(*MeshComp.StaticMesh.Get(),
                                                                             Xform.GetWorldMatrix(), SnapViewProj,
                                                                             ViewportSize, AnchorScreen,
                                                                             VertexSnapPixelRadius, LP, WP))
@@ -1783,7 +1785,7 @@ namespace Lumina
                                             return;
                                         }
                                         ImVec2 HitScreen;
-                                        if (!ProjectPointToScreen(WP, SnapViewProj, ViewportSize, HitScreen)) return;
+                                        if (!WorldEditorToolInternal::ProjectPointToScreen(WP, SnapViewProj, ViewportSize, HitScreen)) return;
                                         const float dx = HitScreen.x - AnchorScreen.x;
                                         const float dy = HitScreen.y - AnchorScreen.y;
                                         const float DistSq = dx * dx + dy * dy;
@@ -1849,7 +1851,7 @@ namespace Lumina
 
                                     case ImGuizmo::SCALE:
                                     {
-                                        Transform.SetLocalScale(SanitizeManipulationScale(Transform.GetLocalScale() * LocalDeltaScaleVec));
+                                        Transform.SetLocalScale(WorldEditorToolInternal::SanitizeManipulationScale(Transform.GetLocalScale() * LocalDeltaScaleVec));
                                         break;
                                     }
 
@@ -1940,7 +1942,7 @@ namespace Lumina
 
                                     Transform.SetLocalLocation(LocalTranslation);
                                     Transform.SetLocalRotation(LocalRotation);
-                                    Transform.SetLocalScale(SanitizeManipulationScale(LocalScale));
+                                    Transform.SetLocalScale(WorldEditorToolInternal::SanitizeManipulationScale(LocalScale));
                                 }
                                 else
                                 {
@@ -1954,7 +1956,7 @@ namespace Lumina
 
                                     Transform.SetLocalLocation(WorldTranslation);
                                     Transform.SetLocalRotation(WorldRotation);
-                                    Transform.SetLocalScale(SanitizeManipulationScale(WorldScale));
+                                    Transform.SetLocalScale(WorldEditorToolInternal::SanitizeManipulationScale(WorldScale));
                                 }
                             });
                         }
@@ -1977,7 +1979,7 @@ namespace Lumina
                     }
                     else if (bImGuizmoUsedOnce)
                     {
-                        EndTransaction("Transform");
+                        EndTransaction(LOC_ICON(LE_ICON_AXIS_ARROW, "Transform"));
                         bImGuizmoUsedOnce = false;
                         bVertexSnapAnchorValid = false;
                         bVertexSnapApplied     = false;
@@ -2019,7 +2021,7 @@ namespace Lumina
                         if (bHaveAnchor)
                         {
                             ImVec2 S;
-                            if (ProjectPointToScreen(AnchorWorld, SnapViewProj, ViewportSize, S))
+                            if (WorldEditorToolInternal::ProjectPointToScreen(AnchorWorld, SnapViewProj, ViewportSize, S))
                             {
                                 const ImVec2 P(S.x + ViewportOrigin.x, S.y + ViewportOrigin.y);
                                 const ImU32 C = bVertexSnapApplied ? SnapCol : ArmedCol;
@@ -2032,7 +2034,7 @@ namespace Lumina
                         if (bVertexSnapApplied)
                         {
                             ImVec2 T;
-                            if (ProjectPointToScreen(VertexSnapTargetWorld, SnapViewProj, ViewportSize, T))
+                            if (WorldEditorToolInternal::ProjectPointToScreen(VertexSnapTargetWorld, SnapViewProj, ViewportSize, T))
                             {
                                 const ImVec2 P(T.x + ViewportOrigin.x, T.y + ViewportOrigin.y);
                                 DL->AddCircleFilled(P, 5.0f, SnapCol);
@@ -2094,7 +2096,7 @@ namespace Lumina
                 else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 {
                     ECS::FEntity Hit = World->GetRenderer()->GetEntityAtPixel(TexX, TexY);
-                    Hit = ResolveSelectionRootForViewportPick(World->GetEntityRegistry(), Hit);
+                    Hit = WorldEditorToolInternal::ResolveSelectionRootForViewportPick(World->GetEntityRegistry(), Hit);
                     if (Hit != ECS::NullEntity)
                     {
                         PickCtx.Broker->Fulfill(static_cast<uint32>((Hit).Value));
@@ -2114,7 +2116,7 @@ namespace Lumina
                     if (bRightWasShortClick)
                     {
                         ECS::FEntity EntityHandle = World->GetRenderer()->GetEntityAtPixel(TexX, TexY);
-                        EntityHandle = ResolveSelectionRootForViewportPick(World->GetEntityRegistry(), EntityHandle);
+                        EntityHandle = WorldEditorToolInternal::ResolveSelectionRootForViewportPick(World->GetEntityRegistry(), EntityHandle);
 
                         // On a picker miss keep existing selection so the menu still has something to act on.
                         if (EntityHandle != ECS::NullEntity && !IsEntitySelected(EntityHandle))
@@ -2171,7 +2173,7 @@ namespace Lumina
                     if (!bLeftDragging)
                     {
                         ECS::FEntity EntityHandle = World->GetRenderer()->GetEntityAtPixel(TexX, TexY);
-                        EntityHandle = ResolveSelectionRootForViewportPick(World->GetEntityRegistry(), EntityHandle);
+                        EntityHandle = WorldEditorToolInternal::ResolveSelectionRootForViewportPick(World->GetEntityRegistry(), EntityHandle);
 
                         // Ctrl+click toggles picked entity in selection; plain click replaces.
                         if (ImGui::GetIO().KeyCtrl)
@@ -2213,7 +2215,7 @@ namespace Lumina
                             if (const SStaticMeshComponent* Mesh = Registry.TryGet<SStaticMeshComponent>(Entity))
                             {
                                 SAABB WorldAABB = Mesh->GetAABB().ToWorld(Transform.GetWorldMatrix());
-                                if (!ProjectAABBToScreenRect(WorldAABB, ViewProj, ViewportSize, ProjMin, ProjMax))
+                                if (!WorldEditorToolInternal::ProjectAABBToScreenRect(WorldAABB, ViewProj, ViewportSize, ProjMin, ProjMax))
                                 {
                                     return;
                                 }
@@ -2236,7 +2238,7 @@ namespace Lumina
                                                && ProjMax.y >= RectMin.y && ProjMin.y <= RectMax.y;
                             if (bOverlap)
                             {
-                                Hits.insert(ResolveSelectionRootForViewportPick(Registry, Entity));
+                                Hits.insert(WorldEditorToolInternal::ResolveSelectionRootForViewportPick(Registry, Entity));
                             }
                         });
 
@@ -2255,7 +2257,7 @@ namespace Lumina
                             }
                             else
                             {
-                                AddSelectedEntity(Hit, false);
+                                AddSelectedEntity(Hit);
                             }
                         }
                     } 
@@ -2277,7 +2279,7 @@ namespace Lumina
             if (World->GetEntityRegistry().IsValid(LastSelected))
             {
                 ECS::FRegistry& Registry = World->GetEntityRegistry();
-                const bool bLastSelectedLocked = IsLockedPrefabChild(Registry, LastSelected);
+                const bool bLastSelectedLocked = WorldEditorToolInternal::IsLockedPrefabChild(Registry, LastSelected);
                 const size_t NumSelected = SelectedEntities.size();
                 const bool bMultiSelected = NumSelected > 1;
 
@@ -2315,14 +2317,14 @@ namespace Lumina
                 // Edit actions, the clipboard and duplicate.
                 if (!bLastSelectedLocked)
                 {
-                    if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_DUPLICATE, "Duplicate"), "Ctrl+D"))
+                    if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_DUPLICATE, "Duplicate"), "Ctrl+D"))
                     {
                         BeginTransaction();
                         ECS::FEntity To = ECS::NullEntity;
                         CopyEntity(To, LastSelected);
                         if (To != ECS::NullEntity)
                         {
-                            EndTransaction("Duplicate");
+                            EndTransaction(LOC_ICON(LE_ICON_CONTENT_DUPLICATE, "Duplicate"));
                         }
                         else
                         {
@@ -2332,14 +2334,14 @@ namespace Lumina
                     }
                 }
 
-                if (ImGui::MenuItem(LOC_ICON(LE_ICON_CONTENT_COPY, "Copy"), "Ctrl+C"))
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_COPY, "Copy"), "Ctrl+C"))
                 {
                     ClearCopies();
                     AddEntityToCopies(LastSelected);
                     ImGui::CloseCurrentPopup();
                 }
 
-                if (ImGui::MenuItem(LOC("Copy Entity ID")))
+                if (ImGui::MenuItem(LOC_ICON(LE_ICON_IDENTIFIER, "Copy Entity ID")))
                 {
                     ImGui::SetClipboardText(Format("{}", (LastSelected).Value).c_str());
                     ImGui::CloseCurrentPopup();
@@ -2384,7 +2386,7 @@ namespace Lumina
                 // Hierarchy.
                 if (!bLastSelectedLocked && bMultiSelected)
                 {
-                    if (ImGui::MenuItem(LOC_ICON(LE_ICON_FOLDER, "Group Selection"), "Ctrl+G"))
+                    if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_FOLDER, "Group Selection"), "Ctrl+G"))
                     {
                         GroupSelectedEntities();
                         ImGui::CloseCurrentPopup();
@@ -2393,11 +2395,11 @@ namespace Lumina
 
                 if (!bLastSelectedLocked && Registry.GetHierarchy().GetParent(LastSelected) != ECS::NullEntity)
                 {
-                    if (ImGui::MenuItem(LOC("Unparent")))
+                    if (ImGui::MenuItem(LOC_ICON(LE_ICON_ARROW_UP_BOLD, "Unparent")))
                     {
                         BeginRelationshipTransaction({ LastSelected });
                         ECS::Utils::RemoveFromParent(Registry, LastSelected);
-                        EndTransaction("Unparent");
+                        EndTransaction(LOC_ICON(LE_ICON_ARROW_UP_BOLD, "Unparent"));
                         ReparentEntityInOutliner(LastSelected);
                         ImGui::CloseCurrentPopup();
                     }
@@ -2405,13 +2407,13 @@ namespace Lumina
 
                 if (!bLastSelectedLocked && Registry.GetHierarchy().GetChildCount(LastSelected) != 0)
                 {
-                    if (ImGui::MenuItem(LOC("Detach Children")))
+                    if (ImGui::MenuItem(LOC_ICON(LE_ICON_CALL_SPLIT, "Detach Children")))
                     {
                         TVector<ECS::FEntity> Children;
                         Registry.GetHierarchy().ForEachChild(LastSelected, [&](ECS::FEntity Child) { Children.push_back(Child); });
                         BeginRelationshipTransaction({ LastSelected });
                         ECS::Utils::DetachImmediateChildren(Registry, LastSelected);
-                        EndTransaction("Detach Children");
+                        EndTransaction(LOC_ICON(LE_ICON_CALL_SPLIT, "Detach Children"));
                         for (ECS::FEntity Child : Children)
                         {
                             ReparentEntityInOutliner(Child);
@@ -2423,7 +2425,7 @@ namespace Lumina
                 if (!bLastSelectedLocked)
                 {
                     const bool bIsSelectionRoot = Registry.HasAll<SSelectionRoot>(LastSelected);
-                    if (ImGui::MenuItem(bIsSelectionRoot ? LOC("Unmark Selection Root") : LOC("Mark as Selection Root")))
+                    if (ImGui::MenuItem(bIsSelectionRoot ? LOC_ICON(LE_ICON_TARGET, "Unmark Selection Root") : LOC_ICON(LE_ICON_TARGET, "Mark as Selection Root")))
                     {
                         if (bIsSelectionRoot)
                         {
@@ -2443,7 +2445,7 @@ namespace Lumina
                 ImGui::Spacing();
 
                 // Prefab.
-                if (ImGui::MenuItem(LOC_ICON(LE_ICON_PACKAGE_VARIANT, "Create Prefab from Selected...")))
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_PACKAGE_VARIANT, "Create Prefab from Selected...")))
                 {
                     PushCreatePrefabFromSelectionModal();
                     ImGui::CloseCurrentPopup();
@@ -2453,14 +2455,14 @@ namespace Lumina
                 if (const SPrefabInstanceComponent* Instance = Registry.TryGet<SPrefabInstanceComponent>(LastSelected);
                     Instance != nullptr && Instance->bIsRoot)
                 {
-                    if (ImGui::MenuItem(LOC_ICON(LE_ICON_SYNC, "Resync from Prefab"), nullptr, false, Instance->SourcePrefab != nullptr))
+                    if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_SYNC, "Resync from Prefab"), nullptr, false, Instance->SourcePrefab != nullptr))
                     {
                         ResyncPrefabInstance(LastSelected);
                         ImGui::CloseCurrentPopup();
                     }
                     ImGuiX::TextTooltip("{}", LOC("Re-apply the source prefab to this instance now. Per-instance overrides and the placed transform are kept."));
 
-                    if (ImGui::MenuItem(LOC_ICON(LE_ICON_LINK_VARIANT_OFF, "Detach from Prefab")))
+                    if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LINK_VARIANT_OFF, "Detach from Prefab")))
                     {
                         DetachPrefabInstance(LastSelected);
                         ImGui::CloseCurrentPopup();
@@ -2476,7 +2478,7 @@ namespace Lumina
                 if (!bLastSelectedLocked)
                 {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-                    if (ImGui::MenuItem(LOC_ICON(LE_ICON_TRASH_CAN, "Delete Entity"), "Del"))
+                    if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_TRASH_CAN, "Delete Entity"), "Del"))
                     {
                         if (Dialogs::Confirmation(LOC("Confirm Deletion"), LOCF("Are you sure you want to delete entity \"{0}\"?\n\nThis action cannot be undone."), (LastSelected).Value))
                         {
@@ -2544,7 +2546,7 @@ namespace Lumina
         if (IWorldEditorMode* Active = GetActiveMode())
         {
             char Preview[64];
-            ImFormatString(Preview, sizeof(Preview), "%s  %s", Active->GetIcon(), LOC_VIEW(Active->GetDisplayName()));
+            ImFormatString(Preview, sizeof(Preview), "%s  %s", Active->GetIcon(), Active->GetDisplayName());
 
             const float PadY = Math::Max(ImGui::GetStyle().FramePadding.y, (ButtonSize - ImGui::GetTextLineHeight()) * 0.5f);
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, PadY));
@@ -2565,7 +2567,7 @@ namespace Lumina
                     const bool bSelected = (Idx == ActiveModeIndex);
 
                     char Label[64];
-                    ImFormatString(Label, sizeof(Label), "%s  %s", Mode->GetIcon(), LOC_VIEW(Mode->GetDisplayName()));
+                    ImFormatString(Label, sizeof(Label), "%s  %s", Mode->GetIcon(), Mode->GetDisplayName());
                     if (ImGui::Selectable(Label, bSelected))
                     {
                         SetActiveMode(Idx);
@@ -2574,7 +2576,7 @@ namespace Lumina
                     {
                         if (ImGui::IsItemHovered())
                         {
-                            ImGui::SetTooltip("%s", LOC_VIEW(Tip));
+                            ImGui::SetTooltip("%s", Tip);
                         }
                     }
                     if (bSelected)
@@ -2615,7 +2617,7 @@ namespace Lumina
         ComponentAttachPicker.SearchHint = LOC("Search components...");
         ComponentAttachPicker.ItemNoun   = LOC("components");
         ComponentAttachPicker.TrailingCategory = EntityScriptPicker::NativeCategory;
-        if (!ImGui::BeginMenu(LOC_ICON(LE_ICON_PUZZLE, "Add Component")))
+        if (!ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_PUZZLE, "Add Component")))
         {
             return;
         }
@@ -2659,7 +2661,7 @@ namespace Lumina
         // Always offered, since it either assigns a script or swaps the one already on the entity.
         ScriptAttachPicker.SearchHint = LOC("Search scripts...");
         ScriptAttachPicker.ItemNoun   = LOC("scripts");
-        ScriptAttachPicker.TrailingCategory = LOC("C++");
+        ScriptAttachPicker.TrailingCategory = EntityScriptPicker::NativeCategory;
         if (ImGui::BeginMenu(bHasScript ? LOC_ICON_ID(LE_ICON_LANGUAGE_CSHARP, "Change Script") : LOC_ICON_ID(LE_ICON_LANGUAGE_CSHARP, "Attach Script")))
         {
             if (const FPickerItem* Picked = ScriptAttachPicker.DrawContents(&EntityScriptPicker::GatherItems))
@@ -2673,7 +2675,7 @@ namespace Lumina
         if (bHasScript)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
-            if (ImGui::MenuItem(LOC_ICON(LE_ICON_TRASH_CAN, "Remove Script")))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_TRASH_CAN, "Remove Script")))
             {
                 RemoveScriptFromEntity(Entity);
                 ImGui::CloseCurrentPopup();
@@ -2696,7 +2698,7 @@ namespace Lumina
         BeginComponentTransaction({ Entity }, SEntityScriptComponent::StaticStruct());
         // Attaches by class, the same call for a C++ script and a C# one, with OnReady on the next tick.
         EntityScripts::Attach(Registry, Entity, FindObject<CClass>(FName(ScriptClass)));
-        EndTransaction(bHad ? "Add Script" : "Attach Script");
+        EndTransaction(bHad ? "Add Script" : LOC_ICON_ID(LE_ICON_LANGUAGE_CSHARP, "Attach Script"));
 
         if (World->GetPackage() != nullptr)
         {
@@ -2717,7 +2719,7 @@ namespace Lumina
 
         BeginComponentTransaction({ Entity }, SEntityScriptComponent::StaticStruct());
         Registry.Remove<SEntityScriptComponent>(Entity); // on_destroy refreshes the outliner
-        EndTransaction("Remove Script");
+        EndTransaction(LOC_ICON(LE_ICON_TRASH_CAN, "Remove Script"));
 
         if (World->GetPackage() != nullptr)
         {
@@ -2892,7 +2894,7 @@ namespace Lumina
         });
     }
 
-    namespace
+    namespace WorldEditorToolInternal
     {
         // Includes a precomputed entity count, so the modal shows exactly what is being captured.
         struct FCreatePrefabRequest
@@ -2944,7 +2946,7 @@ namespace Lumina
         THashSet<ECS::FEntity> Filtered;
         for (ECS::FEntity Entity : SelectedEntities)
         {
-            if (Registry.IsValid(Entity) && !IsLockedPrefabChild(Registry, Entity))
+            if (Registry.IsValid(Entity) && !WorldEditorToolInternal::IsLockedPrefabChild(Registry, Entity))
             {
                 Filtered.insert(Entity);
             }
@@ -2990,7 +2992,7 @@ namespace Lumina
         }
 
         ECS::FRegistry& Registry = World->GetEntityRegistry();
-        FCreatePrefabRequest Req = BuildCreatePrefabRequest(Registry, std::move(Roots));
+        WorldEditorToolInternal::FCreatePrefabRequest Req = WorldEditorToolInternal::BuildCreatePrefabRequest(Registry, std::move(Roots));
 
         ToolContext->PushModal(LOC("Create Prefab From Selection"), ImVec2(560.0f, 290.0f),
             [this, Req = std::move(Req)]() -> bool
@@ -3184,7 +3186,7 @@ namespace Lumina
             OutError = LOC("Nothing selected that a prefab can capture.");
             return nullptr;
         }
-        const FCreatePrefabRequest Req = BuildCreatePrefabRequest(World->GetEntityRegistry(), Move(Roots));
+        const WorldEditorToolInternal::FCreatePrefabRequest Req = WorldEditorToolInternal::BuildCreatePrefabRequest(World->GetEntityRegistry(), Move(Roots));
         return CreatePrefabFromRoots(Req.Roots, Req.Pivot, Folder, Name, OutError);
     }
 
@@ -3197,7 +3199,7 @@ namespace Lumina
         }
 
         ECS::FRegistry& Registry = World->GetEntityRegistry();
-        if (!Registry.IsValid(Entity) || IsLockedPrefabChild(Registry, Entity))
+        if (!Registry.IsValid(Entity) || WorldEditorToolInternal::IsLockedPrefabChild(Registry, Entity))
         {
             ImGuiX::Notifications::NotifyWarning(LOCF("Cannot create a prefab from this entity."));
             return;
@@ -3253,7 +3255,7 @@ namespace Lumina
         BeginTransaction();
         if (CPrefab::DetachInstance(World.Get(), InstanceRoot))
         {
-            EndTransaction("Detach from Prefab");
+            EndTransaction(LOC_ICON(LE_ICON_LINK_VARIANT_OFF, "Detach from Prefab"));
             OutlinerListView.MarkTreeDirty();
         }
         else
@@ -3279,6 +3281,8 @@ namespace Lumina
 
     void FWorldEditorTool::SetWorld(CWorld* InWorld)
     {
+        ExitActiveMode();
+
         // Stop inspecting any foreign world (while its registry is still alive) before swapping the document.
         if (IsInspectingForeignWorld())
         {
@@ -3307,6 +3311,8 @@ namespace Lumina
 
         RebindRegistryObservers();
         OutlinerListView.MarkTreeDirty();
+
+        EnterActiveMode();
     }
 
     void FWorldEditorTool::OnEntityDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity)
@@ -3676,7 +3682,7 @@ namespace Lumina
         }
 
         // Order must match ENetMode, so Standalone, Client, ListenServer, then DedicatedServer.
-        const char* NetModeNames[] = { LOC("Standalone"), LOC("Client"), LOC("Listen Server"), LOC("Dedicated Server") };
+        static const char* const NetModeNames[] = { LOC("Standalone"), LOC("Client"), LOC("Listen Server"), LOC("Dedicated Server") };
         int32 ModeIdx = (int32)PlaySettings.NetMode;
         ImGui::SetNextItemWidth(170.0f);
         if (ImGui::Combo(LOC("Net Mode"), &ModeIdx, NetModeNames, IM_ARRAYSIZE(NetModeNames)))
@@ -3813,7 +3819,7 @@ namespace Lumina
         return World != nullptr && World->GetWorldType() == EWorldType::Editor;
     }
 
-    namespace
+    namespace WorldEditorToolInternal
     {
         FORCEINLINE void SetTreeNodeSelected(FTreeListView& Tree, FTreeNodeID Node, bool bSelected)
         {
@@ -4011,7 +4017,9 @@ namespace Lumina
         EditorEntity = ECS::NullEntity;
 
         // ProxyWorld is untouched, so stopping play can still restore the editor's source map.
+        ExitActiveMode();
         RebindToWorld(NewWorld);
+        EnterActiveMode();
 
         WorldSettingsPropertyTable = MakeUnique<FPropertyTable>(&World->GetDefaultWorldSettings(), SDefaultWorldSettings::StaticStruct());
 
@@ -4063,6 +4071,9 @@ namespace Lumina
             World->GetEntityRegistry().ClearComponent<FSelectedInEditorComponent>();
             World->GetEntityRegistry().ClearComponent<FLastSelectedTag>();
 
+            // Before the copy, so whatever the mode spawned or posed stays out of the play world.
+            ExitActiveMode();
+
             World->SetActive(false);
             ProxyWorld = World;
             ProxyEditorEntity = EditorEntity;
@@ -4092,9 +4103,11 @@ namespace Lumina
                 ProxyWorld = nullptr;
                 ProxyEditorEntity = ECS::NullEntity;
                 bGamePreviewRunning = false;
+                EnterActiveMode();
                 return;
             }
             RebindToWorld(PIEWorld);
+            EnterActiveMode();
             EditorEntity = ECS::NullEntity;
 
             WorldSettingsPropertyTable = MakeUnique<FPropertyTable>(&World->GetDefaultWorldSettings(), SDefaultWorldSettings::StaticStruct());
@@ -4219,6 +4232,8 @@ namespace Lumina
             World->GetEntityRegistry().ClearComponent<FSelectedInEditorComponent>();
             World->GetEntityRegistry().ClearComponent<FLastSelectedTag>();
 
+            ExitActiveMode();
+
             FTransform TransformCopy = World->GetEntityRegistry().Get<STransformComponent>(EditorEntity).GetWorldTransform();
             SCameraComponent CameraCopy = World->GetEntityRegistry().Get<SCameraComponent>(EditorEntity);
 
@@ -4236,6 +4251,7 @@ namespace Lumina
                 ProxyWorld = nullptr;
                 ProxyEditorEntity = ECS::NullEntity;
                 bSimulatingWorld = false;
+                EnterActiveMode();
                 return;
             }
             RebindToWorld(SimWorld);
@@ -4263,6 +4279,7 @@ namespace Lumina
             OutlinerListView.MarkTreeDirty();
 
             RebindRegistryObservers();
+            EnterActiveMode();
         }
         else
         {
@@ -4430,7 +4447,7 @@ namespace Lumina
     }
 
     // Lists up to three stages, otherwise a count.
-    namespace
+    namespace WorldEditorToolInternal
     {
         struct FSystemStageDesc
         {
@@ -4505,18 +4522,6 @@ namespace Lumina
             return Name;
         }
 
-        FString SystemPriorityLabel(uint8 Priority)
-        {
-            switch ((EUpdatePriority)Priority)
-            {
-            case EUpdatePriority::Highest: return LOC("Highest priority");
-            case EUpdatePriority::High:    return LOC("High priority");
-            case EUpdatePriority::Medium:  return LOC("Medium priority");
-            case EUpdatePriority::Low:     return LOC("Low priority");
-            default:                       return Format(LOCF("Priority {}"), Priority);
-            }
-        }
-
         // A small rounded label, laid out inline and wrapped onto the next line when the row is full.
         void DrawSystemChip(const FString& Text, const ImVec4& TextColor, const ImVec4& Fill)
         {
@@ -4544,7 +4549,7 @@ namespace Lumina
         }
 
         const double Now = ImGui::GetTime();
-        if (CachedSystemsWorld != World.Get() || CachedSystemInfos.empty() || Now - CachedSystemsTime > kSystemListRefreshSeconds)
+        if (CachedSystemsWorld != World.Get() || CachedSystemInfos.empty() || Now - CachedSystemsTime > WorldEditorToolInternal::kSystemListRefreshSeconds)
         {
             World->GetAllSystems(CachedSystemInfos);
             CachedSystemsWorld = World.Get();
@@ -4574,15 +4579,6 @@ namespace Lumina
 
         ImGuiX::SearchBar("##SystemSearch", SystemsFilter, LOC_ICON(LE_ICON_MAGNIFY, "Search systems..."));
 
-        const auto MatchesSystem = [&](const CWorld::FSystemInfo& Info, uint8 Stage)
-        {
-            const FString InternalName = Info.Name.ToString();
-            const FString SourceName = FriendlySystemName(InternalName);
-            return ImGuiX::PassSearchFilter(SystemsFilter,
-                {SourceName, LOC(SourceName.c_str()), InternalName,
-                 kSystemStages[Stage].Label, LOC(kSystemStages[Stage].Label)});
-        };
-
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
         const int32 DisabledCount = (int32)CachedSystemInfos.size() - EnabledCount;
         if (DisabledCount > 0)
@@ -4605,7 +4601,7 @@ namespace Lumina
         if (ImGui::BeginChild("##SystemsList", ImVec2(0.0f, -DetailHeight), ImGuiChildFlags_None))
         {
             bool bAnyRow = false;
-            for (uint8 Stage = 0; Stage <= kNoUpdateStage; ++Stage)
+            for (uint8 Stage = 0; Stage <= WorldEditorToolInternal::kNoUpdateStage; ++Stage)
             {
                 // Scheduled systems in the order they run, then this stage's turned-off systems, which have no slot.
                 struct FStageRow
@@ -4617,7 +4613,7 @@ namespace Lumina
                 for (const FSystemScheduleEntry& Entry : Schedule)
                 {
                     const CWorld::FSystemInfo* Info = Entry.Stage == Stage ? FindInfo(Entry.Name) : nullptr;
-                    if (Info != nullptr && MatchesSystem(*Info, Stage))
+                    if (Info != nullptr && ImGuiX::PassSearchFilter(SystemsFilter, WorldEditorToolInternal::FriendlySystemName(Info->Name.ToString()).c_str()))
                     {
                         Rows.push_back({ Info, &Entry });
                     }
@@ -4628,16 +4624,16 @@ namespace Lumina
                 const size_t FirstUnscheduled = Rows.size();
                 for (const CWorld::FSystemInfo& Info : CachedSystemInfos)
                 {
-                    const bool bInStage = Stage == kNoUpdateStage ? Info.Stages.empty() : Algo::Contains(Info.Stages, (EUpdateStage)Stage);
+                    const bool bInStage = Stage == WorldEditorToolInternal::kNoUpdateStage ? Info.Stages.empty() : Algo::Contains(Info.Stages, (EUpdateStage)Stage);
                     const bool bScheduled = Algo::AnyOf(Rows, [&Info](const FStageRow& Row) { return Row.Info == &Info; });
-                    if (bInStage && !bScheduled && MatchesSystem(Info, Stage))
+                    if (bInStage && !bScheduled && ImGuiX::PassSearchFilter(SystemsFilter, WorldEditorToolInternal::FriendlySystemName(Info.Name.ToString()).c_str()))
                     {
                         Rows.push_back({ &Info, nullptr });
                     }
                 }
                 Algo::Sort(Rows.begin() + FirstUnscheduled, Rows.end(), [](const FStageRow& A, const FStageRow& B)
                 {
-                    return FriendlySystemName(A.Info->Name.ToString()) < FriendlySystemName(B.Info->Name.ToString());
+                    return WorldEditorToolInternal::FriendlySystemName(A.Info->Name.ToString()) < WorldEditorToolInternal::FriendlySystemName(B.Info->Name.ToString());
                 });
                 if (Rows.empty())
                 {
@@ -4651,16 +4647,15 @@ namespace Lumina
                 ImGui::PushStyleColor(ImGuiCol_Header, EditorColors::ComponentHeader());
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorColors::Lighten(EditorColors::ComponentHeader(), 0.05f));
                 ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorColors::Lighten(EditorColors::ComponentHeader(), 0.08f));
-                const FString HeaderLabel = Format("{}  {}###Stage", LE_ICON_TIMELINE_CLOCK_OUTLINE, LOC_VIEW(kSystemStages[Stage].Label));
+                const FString HeaderLabel = Format("{}  {}###Stage", LE_ICON_TIMELINE_CLOCK_OUTLINE, WorldEditorToolInternal::kSystemStages[Stage].Label);
                 const bool bOpen = ImGui::CollapsingHeader(HeaderLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
                 ImGui::PopStyleColor(3);
                 ImGui::PopStyleVar();
-                const FString StageDescription = LOC_VIEW(kSystemStages[Stage].Description);
-                ImGuiX::TextTooltip("{}", bStageRunning || Stage == (uint8)EUpdateStage::Paused || Stage == kNoUpdateStage
-                    ? StageDescription
-                    : Format(LOCF("{} Nothing runs here until the world simulates."), StageDescription));
+                ImGuiX::TextTooltip("{}", bStageRunning || Stage == (uint8)EUpdateStage::Paused || Stage == WorldEditorToolInternal::kNoUpdateStage
+                    ? FString(WorldEditorToolInternal::kSystemStages[Stage].Description)
+                    : Format(LOCF("{} Nothing runs here until the world simulates."), WorldEditorToolInternal::kSystemStages[Stage].Description));
 
-                const FString Count = bStageRunning || Stage == (uint8)EUpdateStage::Paused || Stage == kNoUpdateStage
+                const FString Count = bStageRunning || Stage == (uint8)EUpdateStage::Paused || Stage == WorldEditorToolInternal::kNoUpdateStage
                     ? Format("{}", Rows.size())
                     : Format(LOCF("{}  {} play only"), Rows.size(), LE_ICON_PLAY);
                 ImGui::SameLine(HeaderRight - ImGui::CalcTextSize(Count.c_str()).x - ImGui::GetStyle().FramePadding.x * 2.0f);
@@ -4672,7 +4667,7 @@ namespace Lumina
                     for (const FStageRow& Row : Rows)
                     {
                         const CWorld::FSystemInfo& Info = *Row.Info;
-                        const FString Friendly = FriendlySystemName(Info.Name.ToString());
+                        const FString Friendly = WorldEditorToolInternal::FriendlySystemName(Info.Name.ToString());
                         const bool bManaged = Row.Entry != nullptr ? Row.Entry->bManaged : Info.Name.ToString().find('.') != FString::npos;
 
                         ImGui::PushID(Info.Name.c_str());
@@ -4696,7 +4691,7 @@ namespace Lumina
                         // The badge column is measured first, so a long name gives way to it rather than running under it.
                         FString Badge;
                         ImVec4 BadgeColor = EditorColors::TextMuted();
-                        FString BadgeHelp;
+                        const char* BadgeHelp = nullptr;
                         if (!Info.bEnabled)
                         {
                             Badge = LOC("Off");
@@ -4730,7 +4725,7 @@ namespace Lumina
                             ImGui::SameLine();
                             ImGui::AlignTextToFramePadding();
                             ImGui::TextColored(BadgeColor, "%s", Badge.c_str());
-                            ImGuiX::TextTooltip("{}", BadgeHelp.c_str());
+                            ImGuiX::TextTooltip("{}", BadgeHelp);
                         }
                         ImGui::PopID();
                     }
@@ -4771,7 +4766,7 @@ namespace Lumina
         const bool bManaged = Info.Name.ToString().find('.') != FString::npos;
 
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
-        ImGui::TextUnformatted(FriendlySystemName(Info.Name.ToString()).c_str());
+        ImGui::TextUnformatted(WorldEditorToolInternal::FriendlySystemName(Info.Name.ToString()).c_str());
         ImGuiX::Font::PopFont();
         ImGui::TextColored(EditorColors::TextMuted(), "%s  %s", bManaged ? LOC("C# system") : LOC("C++ system"), Info.Name.c_str());
 
@@ -4795,7 +4790,7 @@ namespace Lumina
         Field(LOC("Runs in"));
         if (!Info.bEnabled)
         {
-            ImGui::TextColored(EditorColors::Warning(), "%s", LOC("Turned off in this world"));
+            ImGui::TextColored(EditorColors::Warning(), LOC("Turned off in this world"));
         }
         ImGui::PushTextWrapPos(0.0f);
         for (size_t StageIndex = 0; StageIndex < Info.Stages.size(); ++StageIndex)
@@ -4811,21 +4806,34 @@ namespace Lumina
                 }
             }
 
-            FString Line = LOC_VIEW(kSystemStages[(uint8)Stage].Label);
-            if (StageIndex < Info.Priorities.size())
-            {
-                Line += Format(", {}", SystemPriorityLabel(Info.Priorities[StageIndex]));
-            }
+            FString Line = WorldEditorToolInternal::kSystemStages[(uint8)Stage].Label;
             if (Entry != nullptr)
             {
                 Line += Entry->BatchSize > 1
-                    ? Format(LOCF(", batch {} alongside {} other{}"), Entry->Batch + 1, Entry->BatchSize - 1, Entry->BatchSize == 2 ? "" : LOC_S)
+                    ? Format(LOCF(", batch {} alongside {} other{}"), Entry->Batch + 1, Entry->BatchSize - 1, Entry->BatchSize == 2 ? "" : "s")
                     : Format(LOCF(", batch {} on its own"), Entry->Batch + 1);
             }
             ImGui::Bullet();
             ImGui::TextWrapped("%s", Line.c_str());
         }
         ImGui::PopTextWrapPos();
+
+        auto DrawOrder = [](const char* Label, const TVector<FName>& Systems)
+        {
+            if (Systems.empty())
+            {
+                return;
+            }
+            ImGui::Spacing();
+            ImGui::TextColored(EditorColors::TextMuted(), "%s", Label);
+            for (FName System : Systems)
+            {
+                WorldEditorToolInternal::DrawSystemChip(WorldEditorToolInternal::FriendlySystemName(System.ToString()), EditorColors::TextPrimary(), EditorColors::WithAlpha(EditorColors::TextMuted(), 0.25f));
+            }
+            ImGui::NewLine();
+        };
+        DrawOrder("Runs after", Info.RunsAfter);
+        DrawOrder("Runs before", Info.RunsBefore);
 
         const FSystemScheduleEntry* Any = nullptr;
         for (const FSystemScheduleEntry& Candidate : Schedule)
@@ -4841,32 +4849,32 @@ namespace Lumina
         Field(LOC("Writes"));
         if (Any == nullptr)
         {
-            ImGui::TextColored(EditorColors::TextMuted(), "%s", LOC("Shown once the system is running."));
+            ImGui::TextColored(EditorColors::TextMuted(), LOC("Shown once the system is running."));
         }
         else if (Any->bExclusive)
         {
-            ImGui::TextColored(EditorColors::TextDim(), "%s", LOC("Everything. It declares no access, so it runs alone."));
+            ImGui::TextColored(EditorColors::TextDim(), LOC("Everything. It declares no access, so it runs alone."));
         }
         else
         {
             for (uint32 Id : Any->Writes)
             {
-                DrawSystemChip(FriendlyAccessName(Id), EditorColors::TextPrimary(), EditorColors::WithAlpha(EditorColors::Warning(), 0.25f));
+                WorldEditorToolInternal::DrawSystemChip(WorldEditorToolInternal::FriendlyAccessName(Id), EditorColors::TextPrimary(), EditorColors::WithAlpha(EditorColors::Warning(), 0.25f));
             }
             if (Any->Writes.empty())
             {
-                ImGui::TextColored(EditorColors::TextMuted(), "%s", LOC("Nothing"));
+                ImGui::TextColored(EditorColors::TextMuted(), LOC("Nothing"));
             }
             ImGui::NewLine();
 
             Field(LOC("Reads"));
             for (uint32 Id : Any->Reads)
             {
-                DrawSystemChip(FriendlyAccessName(Id), EditorColors::TextPrimary(), EditorColors::WithAlpha(EditorColors::Accent(), 0.25f));
+                WorldEditorToolInternal::DrawSystemChip(WorldEditorToolInternal::FriendlyAccessName(Id), EditorColors::TextPrimary(), EditorColors::WithAlpha(EditorColors::Accent(), 0.25f));
             }
             if (Any->Reads.empty())
             {
-                ImGui::TextColored(EditorColors::TextMuted(), "%s", LOC("Nothing"));
+                ImGui::TextColored(EditorColors::TextMuted(), LOC("Nothing"));
             }
             ImGui::NewLine();
         }
@@ -4921,7 +4929,7 @@ namespace Lumina
         ECS::FRegistry& Registry = World->GetEntityRegistry();
         for (ECS::FEntity Entity : SelectedEntities)
         {
-            if (!Registry.IsValid(Entity) || IsLockedPrefabChild(Registry, Entity))
+            if (!Registry.IsValid(Entity) || WorldEditorToolInternal::IsLockedPrefabChild(Registry, Entity))
             {
                 continue;
             }
@@ -4958,10 +4966,10 @@ namespace Lumina
         }
 
         SetSingleSelectedEntity(Group);
-        EndTransaction("Group Selected");
+        EndTransaction(LOC("Group Selected"));
     }
 
-    namespace
+    namespace WorldEditorToolInternal
     {
         // Writes a world-space transform onto an entity, converting through the parent when it has one.
         void ApplyWorldTransform(ECS::FRegistry& Registry, ECS::FEntity Entity, const FTransform& DesiredWorld)
@@ -4996,7 +5004,7 @@ namespace Lumina
             return;
         }
 
-        ToolContext->PushModal(LOC("Transform"), ImVec2(420.0f, 300.0f), [this]() -> bool
+        ToolContext->PushModal(LOC_ICON(LE_ICON_AXIS_ARROW, "Transform"), ImVec2(420.0f, 300.0f), [this]() -> bool
         {
             ImGui::TextUnformatted(LOC("Applied to every selected entity, in its own local space."));
             ImGui::Separator();
@@ -5052,7 +5060,7 @@ namespace Lumina
         for (ECS::FEntity Entity : GetSelectedEntities())
         {
             if (Registry.IsValid(Entity) && Registry.HasAll<STransformComponent>(Entity)
-                && !IsLockedPrefabChild(Registry, Entity))
+                && !WorldEditorToolInternal::IsLockedPrefabChild(Registry, Entity))
             {
                 Targets.push_back(Entity);
             }
@@ -5094,7 +5102,7 @@ namespace Lumina
             Transform.SetLocalScale(Scale);
         }
 
-        EndTransaction("Transform Dialog");
+        EndTransaction(LOC("Transform Dialog"));
     }
 
     void FWorldEditorTool::AlignSelectionToView(bool bRotationOnly)
@@ -5117,7 +5125,7 @@ namespace Lumina
         for (ECS::FEntity Entity : GetSelectedEntities())
         {
             if (Registry.IsValid(Entity) && Registry.HasAll<STransformComponent>(Entity)
-                && !IsLockedPrefabChild(Registry, Entity))
+                && !WorldEditorToolInternal::IsLockedPrefabChild(Registry, Entity))
             {
                 Targets.push_back(Entity);
             }
@@ -5139,10 +5147,10 @@ namespace Lumina
                 Desired.SetLocation(ViewTransform.GetLocation());
             }
 
-            ApplyWorldTransform(Registry, Entity, Desired);
+            WorldEditorToolInternal::ApplyWorldTransform(Registry, Entity, Desired);
         }
 
-        EndTransaction(bRotationOnly ? "Align Rotation with View" : "Align Transform with View");
+        EndTransaction(bRotationOnly ? LOC("Align Rotation with View") : LOC("Align Transform with View"));
     }
 
     void FWorldEditorTool::AlignViewToSelection()
@@ -5188,7 +5196,7 @@ namespace Lumina
         Targets.reserve(SelectedEntities.size());
         for (ECS::FEntity Entity : SelectedEntities)
         {
-            if (Registry.IsValid(Entity) && !IsLockedPrefabChild(Registry, Entity))
+            if (Registry.IsValid(Entity) && !WorldEditorToolInternal::IsLockedPrefabChild(Registry, Entity))
             {
                 Targets.push_back(Entity);
             }
@@ -5238,7 +5246,7 @@ namespace Lumina
             for (const FCandidate& C : Candidates)
             {
                 float T;
-                if (CastDownToAABB(Origin, C.Box, T) && T < BestT)
+                if (WorldEditorToolInternal::CastDownToAABB(Origin, C.Box, T) && T < BestT)
                 {
                     BestT = T;
                 }
@@ -5282,7 +5290,7 @@ namespace Lumina
 
         if (bAnyMoved)
         {
-            EndTransaction("Drop to Floor");
+            EndTransaction(LOC("Drop to Floor"));
         }
         else
         {
@@ -5371,7 +5379,7 @@ namespace Lumina
         Targets.reserve(SelectedEntities.size());
         for (ECS::FEntity Entity : SelectedEntities)
         {
-            if (Registry.IsValid(Entity) && !IsLockedPrefabChild(Registry, Entity))
+            if (Registry.IsValid(Entity) && !WorldEditorToolInternal::IsLockedPrefabChild(Registry, Entity))
             {
                 Targets.push_back(Entity);
             }
@@ -5407,7 +5415,7 @@ namespace Lumina
             }
         }
 
-        EndTransaction("Paste Transform");
+        EndTransaction(LOC("Paste Transform"));
     }
 
     void FWorldEditorTool::SaveCameraBookmark(int32 Slot)
@@ -5541,7 +5549,7 @@ namespace Lumina
             }
 
             ImVec2 Screen;
-            if (!ProjectPointToScreen(WorldPos, ViewProj, ViewportSize, Screen))
+            if (!WorldEditorToolInternal::ProjectPointToScreen(WorldPos, ViewProj, ViewportSize, Screen))
             {
                 continue;
             }
