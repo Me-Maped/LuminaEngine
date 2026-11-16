@@ -1,8 +1,8 @@
 # Lumina ImGui vendor
 
-The core is **Dear ImGui 1.93.1 WIP (docking)**, integrated on 2026-10-16 from:
+The core is **Dear ImGui 1.93.1 WIP (docking)**, `IMGUI_VERSION_NUM` 19303. The 2026-11-16 sync brought Me-Maped/imgui master forward and three-way merged it onto the existing docking vendor:
 
-- Me-Maped/imgui master: `101bb0511ad5a0fa5b7fe95182245ecc4521854a`.
+- Me-Maped/imgui master: `b6482210fef3a99c9d8e3d1c28874bbf4fbd79af` (previous pin `101bb0511ad5a0fa5b7fe95182245ecc4521854a`).
 - ocornut/imgui docking: `d88f238d1d363ef387382b2e29ad12cf96f826ac`.
 - Old docking baseline for the engine patch: `b48d1afbe8ee8b238e2961dc363a949dd7304e23`.
 
@@ -25,8 +25,8 @@ Trailing whitespace introduced by upstream patches was cleaned.
   multi-viewport cache regression in the new upstream code is fixed locally.
 - ImPlot, ImGuizmo and node-editor are independent vendored add-ons; they were not
   replaced by an ImGui directory copy. Their affected drawing/API calls are migrated.
-- `misc/themes` is the separately imported application-side theme module. Its
-  source and original tests remain pinned to the fork commit above.
+- `misc/themes` is the separately imported application-side theme module. This sync
+  did not change it; source and original tests remain pinned to `101bb0511ad5a0fa5b7fe95182245ecc4521854a`.
 
 The engine renders through `Lumina_RHI`, not the official Vulkan renderer. The latter
 and other optional backends are updated as coherent source sets but only the selected

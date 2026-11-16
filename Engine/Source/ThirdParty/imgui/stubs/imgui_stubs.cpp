@@ -283,7 +283,7 @@ bool ImGui::CollapsingHeader(const char* label, ImGuiTreeNodeFlags flags) { retu
 bool ImGui::CollapsingHeader(const char* label, bool* p_visible, ImGuiTreeNodeFlags flags) { return {}; }
 void ImGui::SetNextItemOpen(bool is_open, ImGuiCond cond) {}
 void ImGui::SetNextItemStorageID(ImGuiID storage_id) {}
-bool ImGui::TreeNodeGetOpen(ImGuiID storage_id) { return {}; }
+bool ImGui::TreeNodeGetOpen(ImGuiID storage_id, ImGuiTreeNodeFlags) { return {}; }
 bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags flags, const ImVec2& size) { return {}; }
 bool ImGui::Selectable(const char* label, bool* p_selected, ImGuiSelectableFlags flags, const ImVec2& size) { return {}; }
 ImGuiMultiSelectIO* ImGui::BeginMultiSelect(ImGuiMultiSelectFlags flags, int selection_size, int items_count) { return nullptr; }
