@@ -1034,7 +1034,7 @@ namespace Lumina
             if (bOver && DragMode == EDragMode::None)
             {
                 ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                ImGui::SetTooltip("%s  %.3fs (frame %d)", *Notify.Name, Notify.Time, (int)roundf(Notify.Time * (float)FrameRate));
+                ImGui::SetTooltip(LOC("%s  %.3fs (frame %d)"), *Notify.Name, Notify.Time, (int)roundf(Notify.Time * (float)FrameRate));
             }
             if (DragMode == EDragMode::None && bOver && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             {
@@ -1366,7 +1366,7 @@ namespace Lumina
             }
 
             SAnimMontageSegment& Segment = Track.Segments[SelectedIndex];
-            ImGui::TextDisabled(LE_ICON_ANIMATION " Segment on '%s'", *Track.SlotName);
+            ImGui::TextDisabled(LOC_ICON(LE_ICON_ANIMATION, "Segment on '%s'"), *Track.SlotName);
 
             const float ClipDuration = Segment.Animation.IsValid() ? Segment.Animation->GetDuration() : 0.0f;
 
@@ -1415,7 +1415,7 @@ namespace Lumina
             if (ImGui::DragFloat("Start##Sec", &Section.StartTime, 0.01f, 0.0f, Duration, LOC("%.3fs"))) { MarkMontageDirty(); }
 
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::BeginCombo("Next", Section.NextSection.IsNone() ? "<end montage>" : *Section.NextSection))
+            if (ImGui::BeginCombo(LOC_ID("Next"), Section.NextSection.IsNone() ? "<end montage>" : *Section.NextSection))
             {
                 if (ImGui::Selectable(LOC("<end montage>"), Section.NextSection.IsNone()))
                 {

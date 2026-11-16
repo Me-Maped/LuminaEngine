@@ -150,7 +150,7 @@ namespace Lumina
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), "%s saved", *ImGuiX::FormatSize(Saved));
+        ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), LOC("%s saved"), *ImGuiX::FormatSize(Saved));
 
         if (Stats.NumLoadsInFlight > 0 || Stats.NumPromotedLastFrame > 0 || Stats.NumDemotedLastFrame > 0)
         {
@@ -170,11 +170,11 @@ namespace Lumina
             TotalBytes += EstimateTextureBytes(Info.Desc);
         }
 
-        ImGui::Text("%u sampled slots in use", (uint32)Textures.Num());
+        ImGui::Text(LOC("%u sampled slots in use"), (uint32)Textures.Num());
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::Text("~%s estimated", *ImGuiX::FormatSize(TotalBytes));
+        ImGui::Text(LOC("~%s estimated"), *ImGuiX::FormatSize(TotalBytes));
 
         DrawStreamingStats();
 

@@ -398,12 +398,12 @@ namespace Lumina
         TVector<FString> Problems;
         const bool bValid = Validate(Problems);
 
-        ImGui::TextColored(ImVec4(0.55f, 0.58f, 0.64f, 1.0f), "%d in / %d out - %d line%s",
+        ImGui::TextColored(ImVec4(0.55f, 0.58f, 0.64f, 1.0f), LOC("%d in / %d out - %d line%s"),
                            Inputs.Num(), Outputs.Num(), Lines, Lines == 1 ? "" : "s");
 
         if (!bValid)
         {
-            ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.0f), "%d problem%s",
+            ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.0f), LOC("%d problem%s"),
                                Problems.Num(), Problems.Num() == 1 ? "" : "s");
             if (ImGui::IsItemHovered() && !Problems.IsEmpty() && GetOwningGraph() != nullptr)
             {

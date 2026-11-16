@@ -404,12 +404,12 @@ namespace Lumina::PropertyTableInternal
 
     void CollectRowProbes(const FPropertyRow* Row, TVector<FPropertyTable::FRowProbe>& Out, size_t Depth = 0)
     {
-        FPropertyTable::FRowProbe& Probe = Out.emplace_back();
+        FPropertyTable::FRowProbe& Probe = Out.EmplaceGetRef();
         Probe.InternalName = FString(Row->GetFilterInternalName());
         Probe.FilterLabel  = FString(Row->GetFilterLabel());
         Probe.bPassesFilter = Row->PassesFilter();
         Probe.bExpanded     = Row->IsExpanded();
-        Probe.ChildCount    = Row->GetChildren().size();
+        Probe.ChildCount    = Row->GetChildren().Num();
         Probe.Depth         = Depth;
         for (const TUniquePtr<FPropertyRow>& Child : Row->GetChildren())
         {
@@ -822,6 +822,7 @@ namespace Lumina::PropertyTableInternal
             return;
         }
 
+        const FCStringView Name = Property->GetPropertyDisplayName();
         const FStringView Tooltip = Property->GetMetadata("ToolTip");
         if (Tooltip.IsEmpty())
         {
@@ -1734,6 +1735,8 @@ namespace Lumina::PropertyTableInternal
 
         const FStringView Label = GetFilterLabel();
         const bool bSelfMatches = bFilterActive && !Label.IsEmpty() && ImGuiX::PassSearchFilter(Filter, Label);
+        // A matching ancestor, or this row, already shows the subtree. Children inherit that.
+        const bool bShowSubtree = bAncestorMatches || bSelfMatches;
 
         // Not short-circuited, since every descendant needs its own flag updated.
         bool bDescendantMatches = false;
@@ -2322,7 +2325,7 @@ namespace Lumina::PropertyTableInternal
 
     void FMapPropertyRow::DrawEditor(const FPropertyDrawArgs& Args)
     {
-        ImGui::TextColored(EditorColors::TextMuted(), "%d Entries", Children.Num());
+        ImGui::TextColored(EditorColors::TextMuted(), LOC("%d Entries"), Children.Num());
     }
 
     float FMapPropertyRow::GetMeasuredHeaderTextWidth() const
@@ -3080,12 +3083,12 @@ namespace Lumina
 
     void FPropertyTable::SetSearchContext(std::initializer_list<FStringView> Fields)
     {
-        SearchContext.clear();
+        SearchContext.Reset();
         for (FStringView Field : Fields)
         {
-            if (!Field.empty())
+            if (!Field.IsEmpty())
             {
-                SearchContext.emplace_back(Field.data(), Field.size());
+                SearchContext.Add(FString(Field));
             }
         }
     }
@@ -3098,7 +3101,7 @@ namespace Lumina
 
     void FPropertyTable::ProbeRows(TVector<FRowProbe>& Out)
     {
-        Out.clear();
+        Out.Reset();
         EnsureTreeBuilt();
         ApplyFilterState();
         for (const TUniquePtr<PropertyTableInternal::FCategoryPropertyRow>& Category : Categories)
@@ -3266,7 +3269,7 @@ namespace Lumina
         TVector<FStringView> ContextFields;
         for (const FString& Field : SearchContext)
         {
-            ContextFields.push_back(Field);
+            ContextFields.Add(Field);
         }
         for (const TUniquePtr<PropertyTableInternal::FCategoryPropertyRow>& Row : Categories)
         {

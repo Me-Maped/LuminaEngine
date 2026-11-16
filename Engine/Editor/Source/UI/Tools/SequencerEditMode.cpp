@@ -950,7 +950,7 @@ namespace Lumina
         ImGuiX::TextTooltip(LOCF("Key a bound entity automatically whenever you move it. Scrub, pose with the gizmo, repeat."));
 
         ImGui::SameLine();
-        ImGui::TextDisabled("%d bindings, %d tracks", Sequence->Bindings.Num(), Sequence->Tracks.Num());
+        ImGui::TextDisabled(LOC("%d bindings, %d tracks"), Sequence->Bindings.Num(), Sequence->Tracks.Num());
     }
 
     void FSequencerEditMode::DrawAddTrackMenu(CWorld* World)

@@ -79,6 +79,7 @@
 #include "UI/Widgets/ComponentPicker.h"
 #include "UI/Widgets/EntityScriptPicker.h"
 #include "World/Entity/Systems/SystemAccess.h"
+#include "Localization/Localization.h"
 
 
 namespace Lumina
@@ -413,7 +414,7 @@ namespace Lumina
             {
                 const SNameComponent* Name = Registry.TryGet<SNameComponent>(Data.Entity);
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
-                ImGui::TextUnformatted(Name ? *Name->Name : "<unnamed>");
+                ImGui::TextUnformatted(Name ? *Name->Name : LOC("<unnamed>"));
                 ImGui::PopStyleColor();
                 ImGui::SameLine();
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
@@ -483,7 +484,7 @@ namespace Lumina
                 BuildSocketPickerData(Data.Entity, SocketData);
                 const SSocketAttachmentComponent* Attachment = Registry.TryGet<SSocketAttachmentComponent>(Data.Entity);
 
-                if (!SocketData.Sockets.IsEmpty() && ImGui::BeginMenu(LE_ICON_LINK " Attach to Socket"))
+                if (!SocketData.Sockets.IsEmpty() && ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_LINK, "Attach to Socket")))
                 {
                     for (const FName& Socket : SocketData.Sockets)
                     {
@@ -2305,7 +2306,7 @@ namespace Lumina
                     {
                         ImGui::SameLine();
                         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
-                        ImGui::Text("+%d more", NumSelected - 1);
+                        ImGui::Text(LOC("+%d more"), NumSelected - 1);
                         ImGui::PopStyleColor();
                     }
                 }
@@ -2775,7 +2776,7 @@ namespace Lumina
 
         ENewAssetDialogResult DrawNewAssetDialogFields(FNewAssetDialogState& State, const char* ConfirmLabel)
         {
-            ImGui::TextUnformatted("Folder");
+            ImGui::TextUnformatted(LOC("Folder"));
             ImGui::SetNextItemWidth(-1.0f);
             ImGuiX::InputText("##Folder", State.Folder);
 
@@ -2800,7 +2801,7 @@ namespace Lumina
 
             const bool bConfirm = ImGui::Button(ConfirmLabel, ImVec2(ButtonWidth, 0.0f)) || bEnter;
             ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(ButtonWidth, 0.0f)))
+            if (ImGui::Button(LOC_ID("Cancel"), ImVec2(ButtonWidth, 0.0f)))
             {
                 return ENewAssetDialogResult::Cancel;
             }
@@ -2846,8 +2847,8 @@ namespace Lumina
 
         ToolContext->PushModal("Save World As Asset", ImVec2(550.0f, 240.0f), [this, State = Move(State)]() mutable -> bool
         {
-            ImGui::TextUnformatted("This world is not saved as an asset yet.");
-            ImGui::TextUnformatted("Pick a name and content folder to save it.");
+            ImGui::TextUnformatted(LOC("This world is not saved as an asset yet."));
+            ImGui::TextUnformatted(LOC("Pick a name and content folder to save it."));
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
@@ -2989,9 +2990,9 @@ namespace Lumina
         ToolContext->PushModal("Create Prefab From Selection", ImVec2(560.0f, 290.0f),
             [this, Req = Move(Req), State = Move(State)]() mutable -> bool
         {
-            ImGui::TextUnformatted("Save the selection as a reusable prefab asset.");
+            ImGui::TextUnformatted(LOC("Save the selection as a reusable prefab asset."));
             ImGui::TextColored(EditorColors::TextDim(),
-                "Capturing %u entities total (%d top-level + descendants).",
+                LOC("Capturing %u entities total (%d top-level + descendants)."),
                 Req.TotalEntityCount, Req.Roots.Num());
 
             ImGui::Spacing();
@@ -4421,12 +4422,12 @@ namespace Lumina
     void FWorldEditorTool::DrawWorldSettings(bool bFocused)
     {
         ImGui::BeginDisabled(!CanTransact() || World->GetPackage() == nullptr);
-        if (ImGui::Button(ExternalEntities::IsEnabled(World->GetEntityRegistry()) ? LE_ICON_EARTH " Store Entities In World" : LE_ICON_FILE_MULTIPLE " Store One File Per Entity"))
+        if (ImGui::Button(ExternalEntities::IsEnabled(World->GetEntityRegistry()) ? LOC_ICON_ID(LE_ICON_EARTH, "Store Entities In World") : LOC_ICON_ID(LE_ICON_FILE_MULTIPLE, "Store One File Per Entity")))
         {
             ConvertEntityStorage();
         }
         ImGui::EndDisabled();
-        ImGui::SetItemTooltip("Switches how the world stores its entities. Saving carries it out, and it can be undone until then.");
+        ImGui::SetItemTooltip(LOC("Switches how the world stores its entities. Saving carries it out, and it can be undone until then."));
 
         WorldSettingsPropertyTable->DrawTree();
     }
@@ -4568,11 +4569,11 @@ namespace Lumina
         const int32 DisabledCount = CachedSystemInfos.Num() - EnabledCount;
         if (DisabledCount > 0)
         {
-            ImGui::Text("%d systems, %d turned off in this world", CachedSystemInfos.Num(), DisabledCount);
+            ImGui::Text(LOC("%d systems, %d turned off in this world"), CachedSystemInfos.Num(), DisabledCount);
         }
         else
         {
-            ImGui::Text("%d systems, none turned off", CachedSystemInfos.Num());
+            ImGui::Text(LOC("%d systems, none turned off"), CachedSystemInfos.Num());
         }
         ImGui::PopStyleColor();
         ImGui::SameLine();
@@ -4827,7 +4828,7 @@ namespace Lumina
                 if (Algo::Contains(Info.UnknownOrder, System))
                 {
                     WorldEditorToolInternal::DrawSystemChip(Format("{} {}", LE_ICON_ALERT, System), EditorColors::Warning(), EditorColors::WithAlpha(EditorColors::Warning(), 0.2f));
-                    ImGuiX::TextTooltip("No system class or set is named {}, so this order is ignored. A renamed system keeps its old name here until the declaration is updated.", System);
+                    ImGuiX::TextTooltip(LOCF("No system class or set is named {}, so this order is ignored. A renamed system keeps its old name here until the declaration is updated."), System);
                     continue;
                 }
                 WorldEditorToolInternal::DrawSystemChip(WorldEditorToolInternal::FriendlySystemName(System.ToString()), EditorColors::TextPrimary(), EditorColors::WithAlpha(EditorColors::TextMuted(), 0.25f));

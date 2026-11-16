@@ -673,7 +673,7 @@ namespace Lumina
         
         if (CanUndo())
         {
-            ImGuiX::TextTooltip("Undo {} (Ctrl+Z)", *PeekUndoLabel());
+            ImGuiX::TextTooltip(LOCF("Undo {} (Ctrl+Z)"), *PeekUndoLabel());
         }
         else
         {
@@ -690,7 +690,7 @@ namespace Lumina
         
         if (CanRedo())
         {
-            ImGuiX::TextTooltip("Redo {} (Ctrl+Y)", *PeekRedoLabel());
+            ImGuiX::TextTooltip(LOCF("Redo {} (Ctrl+Y)"), *PeekRedoLabel());
         }
         else
         {

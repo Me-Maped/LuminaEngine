@@ -16,6 +16,7 @@
 #include "Containers/Algorithm.h"
 #include "Containers/StringFormat.h"
 #include "Log/Log.h"
+#include "Localization/Localization.h"
 
 
 namespace Lumina
@@ -51,8 +52,8 @@ namespace Lumina
             
             ImGui::Spacing();
 
-            ImGui::Text("Number of Bones: %i", SkeletonResource->GetNumBones());
-            ImGui::Text("Skeleton Name: %s", *SkeletonResource->Name.ToString());
+            ImGui::Text(LOC("Number of Bones: %i"), SkeletonResource->GetNumBones());
+            ImGui::Text(LOC("Skeleton Name: %s"), *SkeletonResource->Name.ToString());
             
             ImGui::Spacing();
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
@@ -61,13 +62,13 @@ namespace Lumina
             
             FBoneDepthStatistics Stats = ComputeBoneDepthStatistics(*SkeletonResource);
 
-            ImGui::Text("Root Bones: %i", Stats.NumRootBones);
-            ImGui::Text("Maximum Hierarchy Depth: %i", Stats.MaxDepth);
-            ImGui::Text("Average Bone Depth: %.2f", Stats.AverageDepth);
+            ImGui::Text(LOC("Root Bones: %i"), Stats.NumRootBones);
+            ImGui::Text(LOC("Maximum Hierarchy Depth: %i"), Stats.MaxDepth);
+            ImGui::Text(LOC("Average Bone Depth: %.2f"), Stats.AverageDepth);
 
             if (!Stats.bConsistentHierarchy)
             {
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Broken hierarchy: a bone's ParentIndex is cyclic, self-parented or out of range");
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), LOC("Broken hierarchy: a bone's ParentIndex is cyclic, self-parented or out of range"));
 
                 if (!bLoggedInconsistentHierarchy)
                 {
@@ -240,7 +241,7 @@ namespace Lumina
     {
         FAssetEditorTool::DrawToolMenu(UpdateContext);
         
-        if (ImGui::BeginMenu(LE_ICON_MOVE_RESIZE " Gizmo Control"))
+        if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_MOVE_RESIZE, "Gizmo Control")))
         {
             DrawGizmoOperationCombo(GuizmoOp);
             ImGui::EndMenu();

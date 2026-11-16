@@ -802,7 +802,7 @@ namespace Lumina
         void DrawScriptHoverContent(const FScriptHoverInfo& Info)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, kMenuAccentScript);
-            ImGui::TextUnformatted(Info.ClassName.IsEmpty() ? "C# Script" : *Info.ClassName);
+            ImGui::TextUnformatted(Info.ClassName.IsEmpty() ? LOC("C# Script") : *Info.ClassName);
             ImGui::PopStyleColor();
             if (!Info.BaseClass.IsEmpty())
             {
@@ -811,7 +811,7 @@ namespace Lumina
             }
             if (!Info.Namespace.IsEmpty())
             {
-                ImGui::TextColored(EditorColors::TextDim(), "namespace %s", *Info.Namespace);
+                ImGui::TextColored(EditorColors::TextDim(), LOC("namespace %s"), *Info.Namespace);
             }
 
             if (!Info.Summary.IsEmpty())
@@ -823,7 +823,7 @@ namespace Lumina
             if (!Info.Lifecycle.IsEmpty())
             {
                 ImGui::Spacing();
-                ImGui::TextColored(EditorColors::SectionHeader(), "Lifecycle");
+                ImGui::TextColored(EditorColors::SectionHeader(), LOC("Lifecycle"));
                 FString Line;
                 for (int32 i = 0; i < Info.Lifecycle.Num(); ++i)
                 {
@@ -836,7 +836,7 @@ namespace Lumina
             if (!Info.Properties.IsEmpty())
             {
                 ImGui::Spacing();
-                ImGui::TextColored(EditorColors::SectionHeader(), "Properties");
+                ImGui::TextColored(EditorColors::SectionHeader(), LOC("Properties"));
                 const int32 Max = 12;
                 for (int32 i = 0; i < Info.Properties.Num() && i < Max; ++i)
                 {
@@ -850,13 +850,13 @@ namespace Lumina
                 }
                 if (Info.Properties.Num() > Max)
                 {
-                    ImGui::TextColored(EditorColors::TextDim(), "(+%d more)", Info.Properties.Num() - Max);
+                    ImGui::TextColored(EditorColors::TextDim(), LOC("(+%d more)"), Info.Properties.Num() - Max);
                 }
             }
 
             if (Info.Summary.IsEmpty() && Info.Lifecycle.IsEmpty() && Info.Properties.IsEmpty())
             {
-                ImGui::TextColored(EditorColors::TextDim(), "C# script source");
+                ImGui::TextColored(EditorColors::TextDim(), LOC("C# script source"));
             }
         }
 
@@ -867,10 +867,10 @@ namespace Lumina
             if (!Stat.IsFile()) { return; }
             const uint64 Bytes = Stat.Size;
             const double B = (double)Bytes;
-            if (Bytes < Constants::kKiB)            { ImGui::TextColored(EditorColors::TextDim(), "Size: %llu B", (unsigned long long)Bytes); }
-            else if (Bytes < Constants::kMiB)       { ImGui::TextColored(EditorColors::TextDim(), "Size: %.1f KB", B / double(Constants::kKiB)); }
-            else if (Bytes < Constants::kGiB)       { ImGui::TextColored(EditorColors::TextDim(), "Size: %.1f MB", B / double(Constants::kMiB)); }
-            else                                    { ImGui::TextColored(EditorColors::TextDim(), "Size: %.2f GB", B / double(Constants::kGiB)); }
+            if (Bytes < Constants::kKiB)            { ImGui::TextColored(EditorColors::TextDim(), LOC("Size: %llu B"), (unsigned long long)Bytes); }
+            else if (Bytes < Constants::kMiB)       { ImGui::TextColored(EditorColors::TextDim(), LOC("Size: %.1f KB"), B / double(Constants::kKiB)); }
+            else if (Bytes < Constants::kGiB)       { ImGui::TextColored(EditorColors::TextDim(), LOC("Size: %.1f MB"), B / double(Constants::kMiB)); }
+            else                                    { ImGui::TextColored(EditorColors::TextDim(), LOC("Size: %.2f GB"), B / double(Constants::kGiB)); }
         }
 
         // The rich tooltip body for a .lasset, covering type, plugin, refs, flags, size and GUID.
@@ -880,28 +880,28 @@ namespace Lumina
             const FAssetDataPtr Data = FAssetRegistry::Get().GetAssetByPath(VPath);
             if (Data == nullptr)
             {
-                ImGui::TextColored(EditorColors::TextDim(), "Asset (not yet indexed)");
+                ImGui::TextColored(EditorColors::TextDim(), LOC("Asset (not yet indexed)"));
                 DrawItemSizeLine(Info);
                 return;
             }
 
             ImGui::PushStyleColor(ImGuiCol_Text, kMenuAccentScript);
-            ImGui::TextUnformatted(Data->AssetClass.IsNone() ? "Asset" : *Data->AssetClass);
+            ImGui::TextUnformatted(Data->AssetClass.IsNone() ? LOC("Asset") : *Data->AssetClass);
             ImGui::PopStyleColor();
 
             if (Data->IsClassMissing())
             {
-                ImGui::TextColored(EditorColors::Danger(), LE_ICON_FILE_ALERT_OUTLINE " The type '%s' no longer exists.", *Data->AssetClass);
-                ImGui::TextColored(EditorColors::TextDim(), "This asset cannot be loaded or opened. Delete it, or restore the type or the plugin that defines it.");
+                ImGui::TextColored(EditorColors::Danger(), LOC_ICON(LE_ICON_FILE_ALERT_OUTLINE, "The type '%s' no longer exists."), *Data->AssetClass);
+                ImGui::TextColored(EditorColors::TextDim(), LOC("This asset cannot be loaded or opened. Delete it, or restore the type or the plugin that defines it."));
             }
 
             if (!Data->OwningPlugin.IsNone())
             {
-                ImGui::TextColored(EditorColors::TextDim(), "Plugin: %s", *Data->OwningPlugin);
+                ImGui::TextColored(EditorColors::TextDim(), LOC("Plugin: %s"), *Data->OwningPlugin);
             }
             if (!Data->Dependencies.IsEmpty())
             {
-                ImGui::TextColored(EditorColors::TextDim(), "References: %d", Data->Dependencies.Num());
+                ImGui::TextColored(EditorColors::TextDim(), LOC("References: %d"), Data->Dependencies.Num());
             }
 
             FString Flags;
@@ -916,15 +916,15 @@ namespace Lumina
             if (HasFlag(Data->Flags, EAssetFlags::NeverCook))   { AddFlag("Never Cook"); }
             if (!Flags.IsEmpty())
             {
-                ImGui::TextColored(EditorColors::TextDim(), "Flags: %s", *Flags);
+                ImGui::TextColored(EditorColors::TextDim(), LOC("Flags: %s"), *Flags);
             }
             if (const FName Group = FAssetManager::Get().GetGroupOfClass(Data->AssetClass); !Group.IsNone())
             {
-                ImGui::TextColored(EditorColors::TextDim(), "Group: %s", *Group);
+                ImGui::TextColored(EditorColors::TextDim(), LOC("Group: %s"), *Group);
             }
 
             DrawItemSizeLine(Info);
-            ImGui::TextColored(EditorColors::TextDim(), "GUID: %s", *Data->AssetGUID.ToString(false, true));
+            ImGui::TextColored(EditorColors::TextDim(), LOC("GUID: %s"), *Data->AssetGUID.ToString(false, true));
         }
 
     }
@@ -964,24 +964,24 @@ namespace Lumina
             {
                 ContentBrowserEditorToolInternal::UpdateFolderHoverCache(TooltipCache, FStringView(*FileInfo.VirtualPath, FileInfo.VirtualPath.Len()));
                 const int32 Count = TooltipCache.FolderItemCount;
-                ImGui::TextColored(EditorColors::TextDim(), "Folder - %d item%s", Count, Count == 1 ? "" : "s");
+                ImGui::TextColored(EditorColors::TextDim(), LOC("Folder - %d item%s"), Count, Count == 1 ? "" : "s");
                 break;
             }
         case ContentBrowserEditorToolInternal::EIconKind::Markup:
             {
-                ImGui::TextColored(EditorColors::TextDim(), "UI Document (.rml)");
+                ImGui::TextColored(EditorColors::TextDim(), LOC("UI Document (.rml)"));
                 ContentBrowserEditorToolInternal::DrawItemSizeLine(FileInfo);
                 break;
             }
         case ContentBrowserEditorToolInternal::EIconKind::Stylesheet:
             {
-                ImGui::TextColored(EditorColors::TextDim(), "UI Stylesheet (.rcss)");
+                ImGui::TextColored(EditorColors::TextDim(), LOC("UI Stylesheet (.rcss)"));
                 ContentBrowserEditorToolInternal::DrawItemSizeLine(FileInfo);
                 break;
             }
         case ContentBrowserEditorToolInternal::EIconKind::Audio:
             {
-                ImGui::TextColored(EditorColors::TextDim(), "Audio Clip (%s)", *FileInfo.GetExt());
+                ImGui::TextColored(EditorColors::TextDim(), LOC("Audio Clip (%s)"), *FileInfo.GetExt());
                 ContentBrowserEditorToolInternal::DrawItemSizeLine(FileInfo);
                 break;
             }
@@ -990,7 +990,7 @@ namespace Lumina
                 const FString Ext = FileInfo.GetExt();
                 if (!Ext.IsEmpty())
                 {
-                    ImGui::TextColored(EditorColors::TextDim(), "%s file", *Ext);
+                    ImGui::TextColored(EditorColors::TextDim(), LOC("%s file"), *Ext);
                 }
                 ContentBrowserEditorToolInternal::DrawItemSizeLine(FileInfo);
                 break;
@@ -2243,7 +2243,7 @@ namespace Lumina
                 }
             }
             ImGui::Separator();
-            bSortChanged |= ImGui::MenuItem("Ascending", nullptr, &Settings->bSortAscending);
+            bSortChanged |= ImGui::MenuItem(LOC_ID("Ascending"), nullptr, &Settings->bSortAscending);
             if (bSortChanged)
             {
                 Global::GConfig->SaveSettings(CContentBrowserSettings::StaticClass());
@@ -3851,19 +3851,19 @@ namespace Lumina
 
         ContentBrowserEditorToolInternal::DrawMenuSection("BULK");
 
-        if (ImGui::MenuItem(LE_ICON_TABLE_EDIT " Edit in Property Matrix", nullptr, false, !Assets.IsEmpty()))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_TABLE_EDIT, "Edit in Property Matrix"), nullptr, false, !Assets.IsEmpty()))
         {
             ToolContext->OpenPropertyMatrix(Assets);
         }
         ImGuiX::TextTooltip(LOCF("Compare and edit the selected assets' properties side by side. Folders and other files are skipped."));
 
-        if (ImGui::MenuItem(LE_ICON_RENAME " Bulk Rename...", "F2", false, ProtectedCount < Items.Num() && !bWorldActive))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_RENAME, "Bulk Rename..."), "F2", false, ProtectedCount < Items.Num() && !bWorldActive))
         {
             BulkRenameItems(Items);
         }
         ImGuiX::TextTooltip(LOCF("Find and replace, prefix, suffix and numbering across the selection, previewed before anything moves."));
 
-        if (ImGui::MenuItem(LE_ICON_CONTENT_SAVE " Save Selected", nullptr, false, !Assets.IsEmpty()))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_SAVE, "Save Selected"), nullptr, false, !Assets.IsEmpty()))
         {
             TVector<CPackage*> Packages;
             for (const FGuid& Asset : Assets)

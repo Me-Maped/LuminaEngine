@@ -535,7 +535,7 @@ namespace Lumina
                 }
                 else
                 {
-                    ImGui::TextColored(EditorColors::TextDim(), "%d exit%s", Outgoing.Num(), Outgoing.Num() == 1 ? "" : "s");
+                    ImGui::TextColored(EditorColors::TextDim(), LOC("%d exit%s"), Outgoing.Num(), Outgoing.Num() == 1 ? "" : "s");
                 }
                 ImGui::Spring(1.0f, 12.0f);
                 if (State->BlendTree.IsValid())
@@ -788,10 +788,10 @@ namespace Lumina
         if (CAnimStateTransition* Transition = FindTransition(FromNode->GetNodeID(), ToNode->GetNodeID()))
         {
             ImGui::Separator();
-            ImGui::Text("Condition   %s", *Transition->GetConditionText());
-            ImGui::Text("Blend       %.2fs", Transition->BlendDuration);
-            ImGui::Text("Priority    %d", Transition->Priority);
-            ImGui::Text("Interrupt   %s", Transition->bCanInterrupt ? "can pre-empt an in-flight blend" : "runs to completion");
+            ImGui::Text(LOC("Condition   %s"), *Transition->GetConditionText());
+            ImGui::Text(LOC("Blend       %.2fs"), Transition->BlendDuration);
+            ImGui::Text(LOC("Priority    %d"), Transition->Priority);
+            ImGui::Text(LOC("Interrupt   %s"), Transition->bCanInterrupt ? "can pre-empt an in-flight blend" : "runs to completion");
             if (FromNode->IsA<CAnimGraphNode_StateAny>())
             {
                 ImGui::TextColored(EditorColors::Warning(), LOC("Checked from every state."));

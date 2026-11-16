@@ -567,7 +567,7 @@ namespace Lumina
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.75f, 0.75f, 1.0f));
         if (CompilationResult.bIsError)
         {
-            ImGui::Text(LE_ICON_ALERT " Material failed to compile (%d error%s), so it and every instance of it render nothing.",
+            ImGui::Text(LOC_ICON(LE_ICON_ALERT, "Material failed to compile (%d error%s), so it and every instance of it render nothing."),
                 CompilationResult.Errors.Num(), CompilationResult.Errors.Num() == 1 ? "" : "s");
         }
         else
@@ -737,7 +737,7 @@ namespace Lumina
             CodeEditor.OpenFind(false);
         }
         const CCodeEditorShortcuts& Keys = *GetDefault<CCodeEditorShortcuts>();
-        ImGui::SetItemTooltip("Find (%s), or find and replace (%s)", *Keys.Find.GetLabel(), *Keys.Replace.GetLabel());
+        ImGui::SetItemTooltip(LOC("Find (%s), or find and replace (%s)"), *Keys.Find.GetLabel(), *Keys.Replace.GetLabel());
 
         ImGui::SameLine();
         if (ImGui::SmallButton(LOC_ICON_ID(LE_ICON_CODE_BRACES, "View")))
@@ -1059,7 +1059,7 @@ namespace Lumina
             ImGui::BeginChild("##stats_error", ImVec2(0, 0), true);
 
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
-            ImGui::Text("Compilation failed (%d error%s)",
+            ImGui::Text(LOC("Compilation failed (%d error%s)"),
                 CompilationResult.Errors.Num(),
                 CompilationResult.Errors.Num() == 1 ? "" : "s");
             ImGui::PopStyleColor();
@@ -1073,7 +1073,7 @@ namespace Lumina
             {
                 ImGui::Spacing();
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.72f, 0.30f, 1.0f));
-                ImGui::Text("%d warning%s", CompilationResult.Warnings.Num(),
+                ImGui::Text(LOC("%d warning%s"), CompilationResult.Warnings.Num(),
                     CompilationResult.Warnings.Num() == 1 ? "" : "s");
                 ImGui::PopStyleColor();
                 ImGui::Separator();
@@ -1119,7 +1119,7 @@ namespace Lumina
         if (!CompilationResult.Warnings.IsEmpty())
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.72f, 0.30f, 1.0f));
-            ImGui::Text("%d warning%s", CompilationResult.Warnings.Num(),
+            ImGui::Text(LOC("%d warning%s"), CompilationResult.Warnings.Num(),
                 CompilationResult.Warnings.Num() == 1 ? "" : "s");
             ImGui::PopStyleColor();
             ImGui::Separator();

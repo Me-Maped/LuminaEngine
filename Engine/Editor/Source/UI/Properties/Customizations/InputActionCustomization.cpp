@@ -113,7 +113,7 @@ namespace Lumina
             if (bDangling)
             {
                 ImGui::PopStyleColor();
-                ImGuiX::TextTooltip("No action named '{}' in Settings > Engine > Input", *Value);
+                ImGuiX::TextTooltip(LOCF("No action named '{}' in Settings > Engine > Input"), *Value);
             }
 
             if (!bOpen)
@@ -131,7 +131,7 @@ namespace Lumina
             ImGui::Separator();
 
             bool bPicked = false;
-            if (ImGui::Selectable(LE_ICON_CLOSE_CIRCLE_OUTLINE "  None", Value.IsEmpty()))
+            if (ImGui::Selectable(LOC_ICON_ID(LE_ICON_CLOSE_CIRCLE_OUTLINE, "None"), Value.IsEmpty()))
             {
                 Value.Reset();
                 bPicked = true;
@@ -166,8 +166,7 @@ namespace Lumina
             if (Shown == 0)
             {
                 ImGui::TextDisabled(Actions.IsEmpty()
-                    ? "No input actions. Add them in Settings > Engine > Input."
-                    : "No matching actions.");
+                    ? LOC("No input actions. Add them in Settings > Engine > Input.") : LOC("No matching actions."));
             }
 
             ImGui::EndCombo();

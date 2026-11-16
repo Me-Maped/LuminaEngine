@@ -1634,20 +1634,20 @@ namespace Lumina
             ImPlot::TagX(Angles[Samples - 1], EditorColors::Danger(), "hard");
             ImPlot::EndPlot();
         }
-        ImGuiX::TextTooltip("Angular pull the ligament gives the limb, per unit of the inertia it swings, up to its Max Limit Torque.");
+        ImGuiX::TextTooltip(LOCF("Angular pull the ligament gives the limb, per unit of the inertia it swings, up to its Max Limit Torque."));
 
-        if (ImGui::Button(LE_ICON_CONTENT_COPY " Apply To All"))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_CONTENT_COPY, "Apply To All")))
         {
             ApplySelectedSoftLimits(false);
         }
-        ImGuiX::TextTooltip("Copy this joint's soft limit settings onto every constraint.");
+        ImGuiX::TextTooltip(LOCF("Copy this joint's soft limit settings onto every constraint."));
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_SITEMAP " Apply To Subtree"))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_SITEMAP, "Apply To Subtree")))
         {
             ApplySelectedSoftLimits(true);
         }
-        ImGuiX::TextTooltip("Copy this joint's soft limit settings onto the constraints at and below its child bone.");
+        ImGuiX::TextTooltip(LOCF("Copy this joint's soft limit settings onto the constraints at and below its child bone."));
     }
 
     void FPhysicsAssetEditorTool::SyncDetailsTable()
@@ -1707,7 +1707,7 @@ namespace Lumina
         else
         {
             ImGui::BeginDisabled(PhysicsAsset->Bodies.IsEmpty() || MeshEntity == ECS::NullEntity);
-            if (ImGui::Button(LE_ICON_PLAY " Simulate"))
+            if (ImGui::Button(LOC_ICON_ID(LE_ICON_PLAY, "Simulate")))
             {
                 StartSimulation();
             }
@@ -1762,7 +1762,7 @@ namespace Lumina
         }
 
         ImGui::SameLine();
-        ImGui::TextDisabled("%d bodies, %d constraints", PhysicsAsset->Bodies.Num(), PhysicsAsset->Constraints.Num());
+        ImGui::TextDisabled(LOC("%d bodies, %d constraints"), PhysicsAsset->Bodies.Num(), PhysicsAsset->Constraints.Num());
 
         ImGui::Separator();
         ImGui::Spacing();
@@ -1844,7 +1844,7 @@ namespace Lumina
         const bool bEditingConstraint = SelectionMode == EPhysicsAssetSelection::Constraint;
         if (bSimulating)
         {
-            ImGui::TextDisabled(bEditingConstraint ? "Limit edits retune the running ragdoll." : "Stop simulating to edit.");
+            ImGui::TextDisabled(bEditingConstraint ? LOC("Limit edits retune the running ragdoll.") : LOC("Stop simulating to edit."));
         }
 
         int32 Orphaned = 0;

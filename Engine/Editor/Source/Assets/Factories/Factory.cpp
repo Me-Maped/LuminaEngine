@@ -13,6 +13,7 @@
 #include "Tools/UI/ImGui/EditorColors.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Log/Log.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -186,11 +187,11 @@ namespace Lumina
         ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - ButtonWidth * 2 - Spacing);
 
         ImGui::BeginDisabled(!bCanCreate);
-        const bool bConfirm = ImGui::Button(LE_ICON_CHECK " Create", ImVec2(ButtonWidth, 0));
+        const bool bConfirm = ImGui::Button(LOC_ICON_ID(LE_ICON_CHECK, "Create"), ImVec2(ButtonWidth, 0));
         ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_CLOSE " Cancel", ImVec2(ButtonWidth, 0)))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_CLOSE, "Cancel"), ImVec2(ButtonWidth, 0)))
         {
             bShouldClose = true;
         }

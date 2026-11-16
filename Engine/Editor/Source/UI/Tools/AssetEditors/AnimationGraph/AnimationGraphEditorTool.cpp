@@ -1687,7 +1687,7 @@ namespace Lumina
 
         ImGui::Separator();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(EditorColors::TextPrimary(), "%d tasks", Snap.Entries.Num());
+        ImGui::TextColored(EditorColors::TextPrimary(), LOC("%d tasks"), Snap.Entries.Num());
         ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::TextMuted(), "|");
         ImGui::SameLine(0.0f, 6.0f); ImGui::TextColored(EditorColors::Success(), LOC("%d ran"), Snap.ReachableCount);
         if (SkippedCount > 0)
@@ -1922,9 +1922,9 @@ namespace Lumina
                 ImGui::BeginTooltip();
                 ImGui::TextColored(Category, "%s", AnimationGraphEditorToolInternal::TaskTypeName(Entry.Type));
                 ImGui::Separator();
-                ImGui::Text("Task index    %d%s", i, bIsOutput ? "   (graph output)" : "");
-                ImGui::Text("Level         %d", (int32)Entry.Level);
-                ImGui::Text("Dependencies  %s", *AnimationGraphEditorToolInternal::BuildDepText(Entry));
+                ImGui::Text(LOC("Task index    %d%s"), i, bIsOutput ? "   (graph output)" : "");
+                ImGui::Text(LOC("Level         %d"), (int32)Entry.Level);
+                ImGui::Text(LOC("Dependencies  %s"), *AnimationGraphEditorToolInternal::BuildDepText(Entry));
                 ImGui::Separator();
                 if (Entry.bReachable)
                 {

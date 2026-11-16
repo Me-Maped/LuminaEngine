@@ -308,9 +308,9 @@ namespace Lumina
         }
 
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), "%d systems", Schedule.Num());
+        ImGui::TextColored(EditorColors::TextDim(), LOC("%d systems"), Schedule.Num());
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), "%d batches", ScheduleColumns.Num());
+        ImGui::TextColored(EditorColors::TextDim(), LOC("%d batches"), ScheduleColumns.Num());
         InsightsDetail::StripSeparator();
 
         constexpr double BudgetMs = 16.667;
@@ -397,7 +397,7 @@ namespace Lumina
 
         ImGui::Separator();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(EditorColors::TextPrimary(), "%d systems", Schedule.Num());
+        ImGui::TextColored(EditorColors::TextPrimary(), LOC("%d systems"), Schedule.Num());
         InsightsDetail::StripSeparator();
         ImGui::TextColored(EditorColors::Success(), LOC("%d run in parallel"), ParallelCount);
         if (ExclusiveCount > 0)
@@ -406,7 +406,7 @@ namespace Lumina
             ImGui::TextColored(EditorColors::Warning(), LOC("%d exclusive"), ExclusiveCount);
         }
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), "%d batches", ScheduleColumns.Num());
+        ImGui::TextColored(EditorColors::TextDim(), LOC("%d batches"), ScheduleColumns.Num());
         InsightsDetail::StripSeparator();
         ImGui::TextColored(EditorColors::TextDim(), LOC("widest x%d"), WidestBatch);
 
@@ -700,7 +700,7 @@ namespace Lumina
                 ImGui::Text(LOC("Stage       %s"), InsightsDetail::StageName(Entry.Stage));
                 ImGui::Text(LOC("Batch       %d   (%d system%s)"), (int32)Entry.Batch, (int32)Entry.BatchSize,
                             Entry.BatchSize == 1 ? "" : "s");
-                ImGui::Text("Runs after  %s", *InsightsDetail::RunsAfterList(Entry));
+                ImGui::Text(LOC("Runs after  %s"), *InsightsDetail::RunsAfterList(Entry));
                 ImGui::Separator();
                 if (Entry.bExclusive)
                 {
@@ -711,8 +711,8 @@ namespace Lumina
                 {
                     const FString Writes = InsightsDetail::AccessList(Entry.Writes);
                     const FString Reads  = InsightsDetail::AccessList(Entry.Reads);
-                    ImGui::TextColored(EditorColors::Danger(), "Writes      %s", Writes.IsEmpty() ? "(none)" : *Writes);
-                    ImGui::TextColored(EditorColors::Accent(), "Reads       %s", Reads.IsEmpty() ? "(none)" : *Reads);
+                    ImGui::TextColored(EditorColors::Danger(), LOC("Writes      %s"), Writes.IsEmpty() ? "(none)" : *Writes);
+                    ImGui::TextColored(EditorColors::Accent(), LOC("Reads       %s"), Reads.IsEmpty() ? "(none)" : *Reads);
                 }
                 if (Stat != nullptr)
                 {
@@ -756,7 +756,7 @@ namespace Lumina
         InsightsDetail::StripSeparator();
         ImGui::TextColored(HotColor, LOC("%.0f%% of 16.7 ms"), Share * 100.0);
         InsightsDetail::StripSeparator();
-        ImGui::TextColored(EditorColors::TextDim(), "%d scopes", GameplayFrame.Entries.Num());
+        ImGui::TextColored(EditorColors::TextDim(), LOC("%d scopes"), GameplayFrame.Entries.Num());
         InsightsDetail::StripSeparator();
         ImGui::TextColored(EditorColors::TextDim(), LOC("%d calls"), (int32)TotalCalls);
 
@@ -901,7 +901,7 @@ namespace Lumina
         InsightsDetail::StripSeparator();
         if (!Entry.RunsAfter.IsEmpty())
         {
-            ImGui::TextColored(EditorColors::TextDim(), "after %s", *InsightsDetail::RunsAfterList(Entry));
+            ImGui::TextColored(EditorColors::TextDim(), LOC("after %s"), *InsightsDetail::RunsAfterList(Entry));
             InsightsDetail::StripSeparator();
         }
         if (Entry.bExclusive)
@@ -930,11 +930,11 @@ namespace Lumina
         {
             const FString Writes = InsightsDetail::AccessList(Entry.Writes);
             const FString Reads  = InsightsDetail::AccessList(Entry.Reads);
-            ImGui::TextColored(EditorColors::Danger(), "Writes");
-            ImGui::TextUnformatted(Writes.IsEmpty() ? "(none)" : *Writes);
+            ImGui::TextColored(EditorColors::Danger(), LOC("Writes"));
+            ImGui::TextUnformatted(Writes.IsEmpty() ? LOC("(none)") : *Writes);
             ImGui::Spacing();
-            ImGui::TextColored(EditorColors::Accent(), "Reads");
-            ImGui::TextUnformatted(Reads.IsEmpty() ? "(none)" : *Reads);
+            ImGui::TextColored(EditorColors::Accent(), LOC("Reads"));
+            ImGui::TextUnformatted(Reads.IsEmpty() ? LOC("(none)") : *Reads);
         }
 
         // Cross-stage pairs are omitted, since a stage barrier already serializes those.
@@ -960,7 +960,7 @@ namespace Lumina
         else
         {
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-            ImGui::TextWrapped("These %d system%s can never share a batch with this one. Each row is a serialization point.",
+            ImGui::TextWrapped(LOC("These %d system%s can never share a batch with this one. Each row is a serialization point."),
                                ConflictIndices.Num(), ConflictIndices.Num() == 1 ? "" : "s");
             ImGui::PopStyleColor();
 

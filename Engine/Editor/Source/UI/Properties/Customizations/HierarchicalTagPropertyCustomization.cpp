@@ -14,6 +14,7 @@
 #include "Tools/UI/ImGui/EditorColors.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -387,7 +388,7 @@ namespace Lumina
         }
         if (ImGui::BeginPopupContextItem("##rowmenu"))
         {
-            if (ImGui::MenuItem(LE_ICON_PLUS "  Add Sub Tag"))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_PLUS, "Add Sub Tag")))
             {
                 const FString Prefix = Node.Path + ".";
                 ImStrncpy(NewTag, *Prefix, sizeof(NewTag));
@@ -395,7 +396,7 @@ namespace Lumina
                 bAdding = true;
                 bFocusNewTag = true;
             }
-            if (ImGui::MenuItem(LE_ICON_CONTENT_COPY "  Copy Name"))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_COPY, "Copy Name")))
             {
                 ImGui::SetClipboardText(*Node.Path);
             }
@@ -425,7 +426,7 @@ namespace Lumina
             bFocusNewTag = false;
         }
         ImGui::SetNextItemWidth(ImMax(ImGui::GetContentRegionAvail().x - ButtonSize - Style.ItemSpacing.x - Style.FramePadding.x, 48.0f));
-        const bool bEnter = ImGui::InputTextWithHint("##newtagname", "Ability.Fire.Fireball", NewTag, sizeof(NewTag), ImGuiInputTextFlags_EnterReturnsTrue);
+        const bool bEnter = ImGui::InputTextWithHint("##newtagname", LOC("Ability.Fire.Fireball"), NewTag, sizeof(NewTag), ImGuiInputTextFlags_EnterReturnsTrue);
         if (ImGui::IsItemEdited())
         {
             NewTagError.Reset();
@@ -437,7 +438,7 @@ namespace Lumina
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("Add tag");
+            ImGui::SetTooltip(LOC("Add tag"));
         }
         if (!NewTagError.IsEmpty())
         {
@@ -513,7 +514,7 @@ namespace Lumina
             if (Rows.IsEmpty())
             {
                 ImGui::AlignTextToFramePadding();
-                ImGui::TextColored(EditorColors::TextMuted(), Nodes.IsEmpty() ? "  No tags yet." : "  Nothing matches.");
+                ImGui::TextColored(EditorColors::TextMuted(), Nodes.IsEmpty() ? LOC("  No tags yet.") : LOC("  Nothing matches."));
             }
         }
         ImGui::EndChild();
@@ -591,7 +592,7 @@ namespace Lumina
 
         if (bHovered && !bKnown)
         {
-            ImGui::SetTooltip("%s is not a registered tag.", *Value.TagName.ToString());
+            ImGui::SetTooltip(LOC("%s is not a registered tag."), *Value.TagName.ToString());
         }
 
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
@@ -743,7 +744,7 @@ namespace Lumina
                 DrawList->AddText(ImVec2(Remove.GetCenter().x - Size.x * 0.5f, TextY), Col(bOverRemove ? EditorColors::Danger() : EditorColors::TextMuted()), LE_ICON_CLOSE);
                 if (!bKnown && !bOverRemove)
                 {
-                    ImGui::SetTooltip("%s is not a registered tag. Right-click to add it to the project.", *Tag);
+                    ImGui::SetTooltip(LOC("%s is not a registered tag. Right-click to add it to the project."), *Tag);
                 }
             }
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && bOverRemove)
@@ -752,15 +753,15 @@ namespace Lumina
             }
             if (ImGui::BeginPopupContextItem("##tagmenu"))
             {
-                if (!bKnown && ImGui::MenuItem(LE_ICON_PLUS "  Add To Project Tags"))
+                if (!bKnown && ImGui::MenuItem(LOC_ICON_ID(LE_ICON_PLUS, "Add To Project Tags")))
                 {
                     AddProjectTag(Tag);
                 }
-                if (ImGui::MenuItem(LE_ICON_CONTENT_COPY "  Copy"))
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_COPY, "Copy")))
                 {
                     ImGui::SetClipboardText(*Tag);
                 }
-                if (ImGui::MenuItem(LE_ICON_CLOSE "  Remove"))
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CLOSE, "Remove")))
                 {
                     RemoveIndex = Index;
                 }

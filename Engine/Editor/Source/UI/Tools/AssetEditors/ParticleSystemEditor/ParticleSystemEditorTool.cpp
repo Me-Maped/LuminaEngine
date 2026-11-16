@@ -702,7 +702,7 @@ namespace Lumina
         if (bShared)
         {
             ImGui::TextColored(EditorColors::AccentAlt(), LE_ICON_LINK);
-            ImGuiX::TextTooltip("Shared emitter asset {}. Edits here change every system that uses it.", *Emitter->GetPackage()->GetPackagePath());
+            ImGuiX::TextTooltip(LOCF("Shared emitter asset {}. Edits here change every system that uses it."), *Emitter->GetPackage()->GetPackagePath());
             ImGui::SameLine(0.0f, 4.0f);
         }
         ImGui::TextColored(bEnabled ? EditorColors::TextPrimary() : EditorColors::TextMuted(), "%s", *Emitter->EmitterName);
@@ -757,7 +757,7 @@ namespace Lumina
             SyncEmitterStacks();
             MarkEdited(PS);
         }
-        if (ImGui::MenuItem(LE_ICON_ARROW_DOWN " Move Down", nullptr, false, EmitterIndex < PS->Emitters.Num() - 1))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_ARROW_DOWN, "Move Down"), nullptr, false, EmitterIndex < PS->Emitters.Num() - 1))
         {
             PS->MoveEmitter(Emitter, 1);
             SyncEmitterStacks();
@@ -773,7 +773,7 @@ namespace Lumina
         ImGui::Separator();
         // A system with no emitters renders nothing and every consumer would need a special case.
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::Danger());
-        if (ImGui::MenuItem(LE_ICON_DELETE " Remove Emitter", nullptr, false, PS->Emitters.Num() > 1))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_DELETE, "Remove Emitter"), nullptr, false, PS->Emitters.Num() > 1))
         {
             PendingRemoveEmitter = Emitter;
         }

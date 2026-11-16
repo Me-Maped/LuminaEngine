@@ -13,6 +13,7 @@
 #include "World/WorldManager.h"
 #include "World/Entity/Components/NameComponent.h"
 #include "World/Entity/Components/StateTreeComponent.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -227,7 +228,7 @@ namespace Lumina
         }
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(LE_ICON_BUG " Entity");
+        ImGui::TextUnformatted(LOC_ICON(LE_ICON_BUG, "Entity"));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-FLT_MIN);
         const FFixedString Preview = FindInstance(Tree) != nullptr ? EntityLabel(*World.Get(), Entity) : FFixedString("None");
@@ -244,14 +245,14 @@ namespace Lumina
         const TRingBuffer<FStateTreeTraceRecord>& Records = Trace.GetRecords();
         if (Records.IsEmpty())
         {
-            ImGui::TextDisabled("Waiting for the next state change.");
+            ImGui::TextDisabled(LOC("Waiting for the next state change."));
             return;
         }
 
         const double First = Records.First().Time;
         const double Last = Records.Last().Time;
         double Shown = bLive ? Last : Math::Clamp(ScrubTime, First, Last);
-        if (ImGui::Button(bLive ? LE_ICON_PAUSE " Pause" : LE_ICON_PLAY " Live"))
+        if (ImGui::Button(bLive ? LOC_ICON_ID(LE_ICON_PAUSE, "Pause") : LOC_ICON_ID(LE_ICON_PLAY, "Live")))
         {
             if (bLive)
             {
@@ -262,7 +263,7 @@ namespace Lumina
                 ResumeLive();
             }
         }
-        ImGuiX::TextTooltip("Pausing holds the outline at the selected change while the trace keeps recording.");
+        ImGuiX::TextTooltip(LOCF("Pausing holds the outline at the selected change while the trace keeps recording."));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-FLT_MIN);
         if (ImGui::SliderScalar("##Scrub", ImGuiDataType_Double, &Shown, &First, &Last, "%.3f s"))
@@ -278,10 +279,10 @@ namespace Lumina
             return;
         }
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Time");
-        ImGui::TableSetupColumn("Change");
-        ImGui::TableSetupColumn("State");
-        ImGui::TableSetupColumn("Detail");
+        ImGui::TableSetupColumn(LOC_ID("Time"));
+        ImGui::TableSetupColumn(LOC_ID("Change"));
+        ImGui::TableSetupColumn(LOC_ID("State"));
+        ImGui::TableSetupColumn(LOC_ID("Detail"));
         ImGui::TableHeadersRow();
 
         ImGuiListClipper Clipper;
@@ -312,7 +313,7 @@ namespace Lumina
                     case EStateTreeTraceKind::Transition:
                         if (Record.Value < (uint32)Runtime.Transitions.Num() && Runtime.Transitions[Record.Value].Target != EStateTreeTransitionTarget::State)
                         {
-                            ImGui::TextUnformatted(Runtime.Transitions[Record.Value].Target == EStateTreeTransitionTarget::Succeeded ? "Succeed" : "Fail");
+                            ImGui::TextUnformatted(Runtime.Transitions[Record.Value].Target == EStateTreeTransitionTarget::Succeeded ? LOC("Succeed") : LOC("Fail"));
                         }
                         break;
                     default:

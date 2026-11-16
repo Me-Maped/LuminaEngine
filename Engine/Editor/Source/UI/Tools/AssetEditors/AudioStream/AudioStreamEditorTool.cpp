@@ -352,7 +352,7 @@ namespace Lumina
 
         if (!Stream->SourcePath.IsEmpty())
         {
-            ImGui::TextDisabled("Source: %s", *Stream->SourcePath);
+            ImGui::TextDisabled(LOC("Source: %s"), *Stream->SourcePath);
         }
     }
 

@@ -2467,9 +2467,11 @@ namespace Lumina
         // A menu whose entries come and go is harder to learn than one that says there is nothing to do.
         ImGui::BeginDisabled(Dead.IsEmpty());
         if (ImGui::MenuItem(Dead.IsEmpty()
-                ? LE_ICON_SELECTION_OFF " No Unused Nodes"
-                : *FormatAs<FFixedString>(LE_ICON_SELECTION " Select {} Unused Node{}",
-                    Dead.Num(), Dead.Num() == 1 ? "" : "s")))
+                ? LOC_ICON_ID(LE_ICON_SELECTION_OFF, "No Unused Nodes")
+                : *FormatAs<FFixedString>("{} {}",
+                    LE_ICON_SELECTION,
+                    *FormatAs<FFixedString>(LOCF("Select {} Unused Node{}"),
+                        Dead.Num(), Dead.Num() == 1 ? "" : LOC_S))))
         {
             SelectDeadNodes();
         }

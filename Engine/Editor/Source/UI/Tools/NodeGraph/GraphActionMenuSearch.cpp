@@ -70,7 +70,7 @@ namespace Lumina
     static bool FuzzyMatchView(std::string_view Query, std::string_view Target, int32& OutScore, TVector<uint16>& OutMatchIndices)
     {
         OutScore = 0;
-        OutMatchIndices.clear();
+        OutMatchIndices.Reset();
 
         if (Query.empty())
         {
@@ -111,7 +111,7 @@ namespace Lumina
 
             if (TC.Value != InvalidCodepoint && ToLowerCharacter(QC.Value) == ToLowerCharacter(TC.Value))
             {
-                OutMatchIndices.push_back(static_cast<uint16>(TargetIdx));
+                OutMatchIndices.Add(static_cast<uint16>(TargetIdx));
 
                 if (CharacterIndex == 0)
                 {
@@ -163,7 +163,7 @@ namespace Lumina
 
         if (QueryIdx != QueryLength)
         {
-            OutMatchIndices.clear();
+            OutMatchIndices.Reset();
             OutScore = 0;
             return false;
         }
@@ -182,7 +182,7 @@ namespace Lumina
         int32& OutScore, TVector<uint16>& OutDisplayMatches)
     {
         OutScore = 0;
-        OutDisplayMatches.clear();
+        OutDisplayMatches.Reset();
         if (!Query.IsValid())
         {
             return false;
@@ -205,22 +205,23 @@ namespace Lumina
                 {
                     for (uint16 Match : Matches)
                     {
-                        OutDisplayMatches.push_back(Match);
+                        OutDisplayMatches.Add(Match);
                     }
                 }
             }
             if (!bMatched)
             {
                 OutScore = 0;
-                OutDisplayMatches.clear();
+                OutDisplayMatches.Reset();
                 return false;
             }
             OutScore += BestScore;
         }
-        if (!OutDisplayMatches.empty())
+        if (!OutDisplayMatches.IsEmpty())
         {
             std::sort(OutDisplayMatches.begin(), OutDisplayMatches.end());
-            OutDisplayMatches.erase(std::unique(OutDisplayMatches.begin(), OutDisplayMatches.end()), OutDisplayMatches.end());
+            const uint16* UniqueEnd = std::unique(OutDisplayMatches.begin(), OutDisplayMatches.end());
+            OutDisplayMatches.SetNum(static_cast<int32>(UniqueEnd - OutDisplayMatches.begin()));
         }
         return true;
     }
@@ -239,21 +240,21 @@ namespace Lumina
         while (Cursor < Length)
         {
             const FUtf8Character Character = DecodeCharacter(Text + Cursor, Length - Cursor);
-            while (MatchIdx < MatchIndices.size() && MatchIndices[MatchIdx] < Cursor)
+            while (MatchIdx < static_cast<size_t>(MatchIndices.Num()) && MatchIndices[MatchIdx] < Cursor)
             {
                 ++MatchIdx;
             }
             const bool bInMatch = Character.Value != InvalidCodepoint
-                && MatchIdx < MatchIndices.size() && MatchIndices[MatchIdx] == Cursor;
+                && MatchIdx < static_cast<size_t>(MatchIndices.Num()) && MatchIndices[MatchIdx] == Cursor;
             const size_t SpanEnd = Cursor + Character.ByteCount;
 
-            if (!Spans.empty() && Spans.back().bMatched == bInMatch)
+            if (!Spans.IsEmpty() && Spans.Last().bMatched == bInMatch)
             {
-                Spans.back().End = SpanEnd;
+                Spans.Last().End = SpanEnd;
             }
             else
             {
-                Spans.push_back({Cursor, SpanEnd, bInMatch});
+                Spans.Add(FGraphActionTextSpan{Cursor, SpanEnd, bInMatch});
             }
             Cursor = SpanEnd;
         }

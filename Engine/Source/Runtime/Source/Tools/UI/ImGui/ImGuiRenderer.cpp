@@ -320,8 +320,8 @@ namespace Lumina
         // Every merged source shares these bytes. Dynamic glyph loading needs them until the
         // atlas is destroyed, so the renderer owns the buffer rather than a local or static cache.
         constexpr const char* CJKFontPath = "/Engine/Resources/Fonts/NotoSansCJK/NotoSansCJKsc-Regular.otf";
-        CJKFontData.clear();
-        if (!VFS::ReadFile(CJKFontData, CJKFontPath) || CJKFontData.empty())
+        CJKFontData.Reset();
+        if (!VFS::ReadFile(CJKFontData, CJKFontPath) || CJKFontData.IsEmpty())
         {
             PANIC("Failed to load bundled Chinese font '{}'. Check engine resources / LUMINA_DIR.", CJKFontPath);
         }
@@ -363,7 +363,7 @@ namespace Lumina
             // Merged last, so Latin keeps the primary face and icons keep their own. Merge-mode sources
             // are tried in order until one has the codepoint, so a face without Chinese is skipped by
             // the loader and one without icons is never reached for them.
-            if (!CJKFontData.empty())
+            if (!CJKFontData.IsEmpty())
             {
                 ImFontConfig CJKConfig;
                 CJKConfig.FontDataOwnedByAtlas = false;  // CJKFontData owns the bytes.
@@ -371,7 +371,7 @@ namespace Lumina
                 CJKConfig.PixelSnapH = true;
 
                 // Size 0 in merge mode inherits the source font's size, so Chinese matches the Latin text.
-                if (io.Fonts->AddFontFromMemoryTTF(CJKFontData.data(), static_cast<int>(CJKFontData.size()), 0.0f, &CJKConfig) == nullptr)
+                if (io.Fonts->AddFontFromMemoryTTF(CJKFontData.GetData(), static_cast<int>(CJKFontData.Num()), 0.0f, &CJKConfig) == nullptr)
                 {
                     PANIC("Failed to merge bundled Chinese font '{}'.", CJKFontPath);
                 }
@@ -518,7 +518,7 @@ namespace Lumina
         GBaseStyleValid = false;
         Context = nullptr;
         PlotContext = nullptr;
-        CJKFontData.clear();
+        CJKFontData.Reset();
     }
 
     void IImGuiRenderer::Deinitialize()

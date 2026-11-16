@@ -365,10 +365,10 @@ namespace Lumina
                 }
             }
 
-            ImGui::TextColored(EditorColors::TextDim(), "%d of %d will be renamed.", Ready.Num(), Entries.Num());
+            ImGui::TextColored(EditorColors::TextDim(), LOC("%d of %d will be renamed."), Ready.Num(), Entries.Num());
 
             ImGui::BeginDisabled(Ready.IsEmpty());
-            const bool bRename = ImGui::Button("Rename");
+            const bool bRename = ImGui::Button(LOC_ID("Rename"));
             ImGui::EndDisabled();
             ImGui::SameLine();
             if (ImGui::Button(LOC_ID("Cancel")))

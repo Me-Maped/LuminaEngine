@@ -1177,7 +1177,7 @@ namespace Lumina
         {
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::AccentAlt());
-            ImGui::TextUnformatted(LE_ICON_LOCK "  Read-only on disk");
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_LOCK, "Read-only on disk"));
             ImGui::PopStyleColor();
             ImGuiX::Font::PopFont();
 
@@ -2006,7 +2006,7 @@ namespace Lumina
         {
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::AccentAlt());
-            ImGui::TextUnformatted(LE_ICON_ALERT_CIRCLE_OUTLINE "  Stop Play In Editor?");
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "Stop Play In Editor?"));
             ImGui::PopStyleColor();
             ImGuiX::Font::PopFont();
 
@@ -2015,7 +2015,7 @@ namespace Lumina
             ImGui::Spacing();
 
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextDim());
-            ImGui::TextWrapped("A play session is running in '%s'. Opening '%s' will stop it.",
+            ImGui::TextWrapped(LOC("A play session is running in '%s'. Opening '%s' will stop it."),
                 *CurrentName, *WorldName);
             ImGui::PopStyleColor();
 
@@ -2023,7 +2023,7 @@ namespace Lumina
             {
                 ImGui::Spacing();
                 ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::Danger());
-                ImGui::TextWrapped(LE_ICON_ALERT "  '%s' has unsaved changes. Cancel and save it first if you want to keep them.",
+                ImGui::TextWrapped(LOC_ICON(LE_ICON_ALERT, "'%s' has unsaved changes. Cancel and save it first if you want to keep them."),
                     *CurrentName);
                 ImGui::PopStyleColor();
             }
@@ -3520,7 +3520,7 @@ namespace Lumina
             }
             ImGui::EndChild();
 
-            ImGuiX::Text("{} asset(s)", (uint32)Matches.Num());
+            ImGuiX::Text(LOCF("{} asset(s)"), (uint32)Matches.Num());
             ImGui::SameLine();
             ImGui::TextColored(EditorColors::TextMuted(), "  %s", LOC("Enter to open, Esc to cancel"));
 
@@ -3865,7 +3865,7 @@ namespace Lumina
         {
             const auto IsOpen = [this](FEditorTool* Tool) { return Algo::Contains(EditorTools, Tool); };
 
-            ImGui::TextUnformatted(Unsaved.Num() == 1 ? "This tab has unsaved changes:" : "These tabs have unsaved changes:");
+            ImGui::TextUnformatted(Unsaved.Num() == 1 ? LOC("This tab has unsaved changes:") : LOC("These tabs have unsaved changes:"));
             ImGui::Spacing();
             for (int32 Index = 0; Index < Unsaved.Num(); ++Index)
             {
@@ -4404,7 +4404,7 @@ namespace Lumina
 
         // Read from the binding rather than written out, so rebinding the chord relabels the menu with it.
         const FString ReloadChord = GetDefault<CEditorSettings>()->ReloadScriptsHotkey.GetDisplayName();
-        if (ImGui::MenuItem(LE_ICON_LANGUAGE_CSHARP " Recompile C# Assemblies", *ReloadChord))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LANGUAGE_CSHARP, "Recompile C# Assemblies"), *ReloadChord))
         {
             DotNet::RequestScriptReload();
         }
@@ -4443,12 +4443,12 @@ namespace Lumina
 
         if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_HAMMER, "Shaders")))
         {
-            if (ImGui::MenuItem(LE_ICON_MATERIAL_DESIGN " Recompile Default Material", "F5"))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_MATERIAL_DESIGN, "Recompile Default Material"), "F5"))
             {
                 CMaterial::CreateDefaultMaterial();
             }
 
-            if (ImGui::MenuItem(LE_ICON_FOLDER " Open Shaders Directory"))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_FOLDER, "Open Shaders Directory")))
             {
                 Platform::LaunchURL(UTF8_TO_TCHAR(*Paths::GetEngineShadersDirectory()));
             }
@@ -4473,7 +4473,7 @@ namespace Lumina
             return;
         }
         
-        if (ImGui::MenuItem(LE_ICON_FOLDER_PLUS " New Project..."))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_FOLDER_PLUS, "New Project...")))
         {
             NewProjectDialog();
         }
@@ -4507,7 +4507,7 @@ namespace Lumina
         ImGui::Separator();
 
         DrawToolMenuItem(MakeToolPanel<FTerminalEditorTool>(LE_ICON_CONSOLE_LINE " Terminal"));
-        if (ImGui::MenuItem(LE_ICON_CODE_BRACES " Code", nullptr, IsToolActive<FCodeWorkspaceTool>()))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CODE_BRACES, "Code"), nullptr, IsToolActive<FCodeWorkspaceTool>()))
         {
             if (FCodeWorkspaceTool* Workspace = FindTool<FCodeWorkspaceTool>())
             {
@@ -4565,7 +4565,7 @@ namespace Lumina
             LaunchTracyProfiler();
         }
         
-        if (ImGui::MenuItem(LE_ICON_CAMERA " RenderDoc Capture"))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CAMERA, "RenderDoc Capture")))
         {
             FRenderDoc::Get().TriggerCapture();
         }
@@ -4680,7 +4680,7 @@ namespace Lumina
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextPrimary());
-            ImGui::TextUnformatted(LE_ICON_FOLDER_OPEN " Open Project");
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_FOLDER_OPEN, "Open Project"));
             ImGui::PopStyleColor();
             ImGuiX::Font::PopFont();
             ImGui::Spacing();
@@ -4801,7 +4801,7 @@ namespace Lumina
         {
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextPrimary());
-            ImGui::TextUnformatted(LE_ICON_FOLDER_PLUS " Create New Project");
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_FOLDER_PLUS, "Create New Project"));
             ImGui::PopStyleColor();
             ImGuiX::Font::PopFont();
             ImGui::Spacing();
@@ -4965,7 +4965,7 @@ namespace Lumina
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
             ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextPrimary());
-            ImGui::TextUnformatted(LE_ICON_CHECK_CIRCLE " Project Created");
+            ImGui::TextUnformatted(LOC_ICON(LE_ICON_CHECK_CIRCLE, "Project Created"));
             ImGui::PopStyleColor();
             ImGuiX::Font::PopFont();
             ImGui::Spacing();
@@ -5014,7 +5014,7 @@ namespace Lumina
             else
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
-                ImGui::TextUnformatted(LE_ICON_CLOCK_OUTLINE " Waiting for premake to finish...");
+                ImGui::TextUnformatted(LOC_ICON(LE_ICON_CLOCK_OUTLINE, "Waiting for premake to finish..."));
                 ImGui::PopStyleColor();
             }
 

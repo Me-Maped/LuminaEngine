@@ -162,12 +162,12 @@ namespace Lumina
 
             if (RequiredRowStruct != nullptr && RowStruct != RequiredRowStruct)
             {
-                ImGui::TextColored(GWarnText, LE_ICON_ALERT_CIRCLE_OUTLINE " Needs rows of %s, table holds %s.",
+                ImGui::TextColored(GWarnText, LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "Needs rows of %s, table holds %s."),
                     *RequiredRowStruct->GetName(), RowStruct != nullptr ? *RowStruct->GetName() : "nothing");
             }
             else if (!DisplayValue.RowName.IsNone() && Table->FindRowIndex(DisplayValue.RowName) == Constants::kIndexNone)
             {
-                ImGui::TextColored(GWarnText, LE_ICON_ALERT_CIRCLE_OUTLINE " '%s' is not a row in this table.",
+                ImGui::TextColored(GWarnText, LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "'%s' is not a row in this table."),
                     *DisplayValue.RowName);
             }
         }

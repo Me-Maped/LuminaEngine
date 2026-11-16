@@ -20,6 +20,7 @@
 #include "UI/Properties/Customizations/AssetPickerFilter.h"
 #include <imgui.h>
 #include "Containers/StringFormat.h"
+#include "Localization/Localization.h"
 
 namespace Lumina::ReplaceReferences
 {
@@ -100,7 +101,7 @@ namespace Lumina::ReplaceReferences
 
             if (Entry.AssetClass == nullptr)
             {
-                ImGui::TextColored(EditorColors::TextDim(), "Unknown asset type, no replacement can be offered.");
+                ImGui::TextColored(EditorColors::TextDim(), LOC("Unknown asset type, no replacement can be offered."));
                 ImGui::EndCombo();
                 return;
             }
@@ -346,7 +347,7 @@ namespace Lumina::ReplaceReferences
 
             if (bDeleting)
             {
-                ImGui::TextColored(EditorColors::AccentAlt(), LE_ICON_ALERT " %u asset(s) you are deleting are still in use.",
+                ImGui::TextColored(EditorColors::AccentAlt(), LOC_ICON(LE_ICON_ALERT, "%u asset(s) you are deleting are still in use."),
                     (uint32)State.Entries.Num());
 
                 ImGui::Spacing();
@@ -357,7 +358,7 @@ namespace Lumina::ReplaceReferences
             }
             else
             {
-                ImGui::TextColored(EditorColors::AccentAlt(), LE_ICON_LINK " %u asset(s) reference the selection.", ReferencerCount);
+                ImGui::TextColored(EditorColors::AccentAlt(), LOC_ICON(LE_ICON_LINK, "%u asset(s) reference the selection."), ReferencerCount);
 
                 ImGui::Spacing();
                 ImGui::TextWrapped(LOC(
@@ -367,11 +368,11 @@ namespace Lumina::ReplaceReferences
             }
 
             ImGui::Spacing();
-            ImGui::TextColored(EditorColors::TextDim(), "Replacements are limited to the original asset's own type or a subclass of it.");
+            ImGui::TextColored(EditorColors::TextDim(), LOC("Replacements are limited to the original asset's own type or a subclass of it."));
 
             if (State.DirtyReferencerCount > 0)
             {
-                ImGui::TextColored(EditorColors::AccentAlt(), LE_ICON_ALERT " %u referencing asset(s) have unsaved changes, which this saves too.",
+                ImGui::TextColored(EditorColors::AccentAlt(), LOC_ICON(LE_ICON_ALERT, "%u referencing asset(s) have unsaved changes, which this saves too."),
                     State.DirtyReferencerCount);
             }
 
@@ -403,7 +404,7 @@ namespace Lumina::ReplaceReferences
             ImGui::PopStyleColor();
 
             ImGui::SameLine();
-            ImGui::TextColored(EditorColors::TextDim(), "%u replace, %u clear", ReplacedCount, (uint32)State.Entries.Num() - ReplacedCount);
+            ImGui::TextColored(EditorColors::TextDim(), LOC("%u replace, %u clear"), ReplacedCount, (uint32)State.Entries.Num() - ReplacedCount);
 
             if (bCanceled)
             {
@@ -431,7 +432,7 @@ namespace Lumina::ReplaceReferences
                 ? 1.0f
                 : (float)((double)State.WorkIndex / (double)State.Work.Num());
 
-            ImGui::Text("Updating referencing assets... %u / %u", State.WorkIndex, (uint32)State.Work.Num());
+            ImGui::Text(LOC("Updating referencing assets... %u / %u"), State.WorkIndex, (uint32)State.Work.Num());
             ImGui::Spacing();
             ImGui::ProgressBar(Progress, ImVec2(-1.0f, 0.0f));
             ImGui::Spacing();
@@ -449,7 +450,7 @@ namespace Lumina::ReplaceReferences
             if (State.Failed > 0)
             {
                 ImGui::Spacing();
-                ImGui::TextColored(EditorColors::Danger(), LE_ICON_ALERT " %u reference(s) could not be updated.", State.Failed);
+                ImGui::TextColored(EditorColors::Danger(), LOC_ICON(LE_ICON_ALERT, "%u reference(s) could not be updated."), State.Failed);
                 ImGui::TextWrapped(bDeleting
                     ? LOC("Deleting now leaves them pointing at a missing asset. See the log for which ones failed.")
                     : LOC("Those references still point at the original asset. See the log for which ones failed."));

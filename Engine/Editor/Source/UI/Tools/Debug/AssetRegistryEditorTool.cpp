@@ -804,7 +804,7 @@ namespace Lumina
             {
             case EResavePhase::Confirm:
             {
-                ImGui::TextWrapped("Rewrite %u asset(s)?", (uint32)ResaveQueue.Num());
+                ImGui::TextWrapped(LOC("Rewrite %u asset(s)?"), (uint32)ResaveQueue.Num());
                 ImGui::Spacing();
                 ImGui::TextWrapped(
                     LOC("Every package is saved whether or not it is dirty, and anything not currently in "
@@ -837,7 +837,7 @@ namespace Lumina
                     ? 1.0f
                     : (float)((double)ResaveIndex / (double)ResaveQueue.Num());
 
-                ImGui::Text("Resaving... %u / %u", ResaveIndex, (uint32)ResaveQueue.Num());
+                ImGui::Text(LOC("Resaving... %u / %u"), ResaveIndex, (uint32)ResaveQueue.Num());
                 ImGui::Spacing();
                 ImGui::ProgressBar(Progress, ImVec2(-1.0f, 0.0f));
                 ImGui::Spacing();
@@ -871,7 +871,7 @@ namespace Lumina
                 }
                 if (ResaveIndex < static_cast<uint32>(ResaveQueue.Num()))
                 {
-                    ImGui::TextDisabled("Stopped with %u remaining.", (uint32)ResaveQueue.Num() - ResaveIndex);
+                    ImGui::TextDisabled(LOC("Stopped with %u remaining."), (uint32)ResaveQueue.Num() - ResaveIndex);
                 }
 
                 ImGui::Spacing();
@@ -1224,7 +1224,7 @@ namespace Lumina
                     ImGui::TextUnformatted(*Ref.Name);
                     if (ImGui::IsItemHovered())
                     {
-                        ImGui::SetTooltip("Package %s", *Ref.Package);
+                        ImGui::SetTooltip(LOC("Package %s"), *Ref.Package);
                     }
                     ImGui::TableSetColumnIndex(1);
                     ImGui::PushStyleColor(ImGuiCol_Text, CategoryColor(Ref.Class));

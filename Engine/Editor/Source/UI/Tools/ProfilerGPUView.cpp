@@ -94,7 +94,7 @@ namespace Lumina
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::Text("%d passes", GPUFrame.Scopes.Num());
+        ImGui::Text(LOC("%d passes"), GPUFrame.Scopes.Num());
 
         if (SelectedScope >= 0 && SelectedScope < GPUFrame.Scopes.Num())
         {
@@ -102,7 +102,7 @@ namespace Lumina
             ImGui::SameLine();
             ImGui::TextDisabled("|");
             ImGui::SameLine();
-            ImGui::Text("Selected: %s (%.3f ms)", *Scope.Name, Scope.DurationMs());
+            ImGui::Text(LOC("Selected: %s (%.3f ms)"), *Scope.Name, Scope.DurationMs());
         }
     }
 

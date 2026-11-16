@@ -146,7 +146,7 @@ namespace Lumina
         {
             const FStringView Source(*Mesh.SourcePath, Mesh.SourcePath.Len());
             const FStringView FileName = VFS::FileName(Source);
-            ImGui::TextDisabled("Imported from %.*s", FileName.Len(), FileName.GetData());
+            ImGui::TextDisabled(LOC("Imported from %.*s"), FileName.Len(), FileName.GetData());
             ImGuiX::TextTooltip("{}", Mesh.SourcePath);
         }
 
@@ -680,7 +680,7 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu(LE_ICON_CUBE_OUTLINE " Virtual Geometry"))
+        if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_CUBE_OUTLINE, "Virtual Geometry")))
         {
             CStaticMesh* Mesh = Cast<CStaticMesh>(Asset.Get());
             const FMeshResource& Resource = Mesh->GetMeshResource();
@@ -698,16 +698,16 @@ namespace Lumina
 
             if (Mesh->HasClusterLOD())
             {
-                ImGuiX::Text("Cluster hierarchy, {0} slots, {1} meshlets", Slots, Resource.MeshletData.Meshlets.Num());
+                ImGuiX::Text(LOCF("Cluster hierarchy, {0} slots, {1} meshlets"), Slots, Resource.MeshletData.Meshlets.Num());
             }
             else
             {
-                ImGuiX::Text("Discrete LODs, {0} slots", Slots);
+                ImGuiX::Text(LOCF("Discrete LODs, {0} slots"), Slots);
             }
-            ImGuiX::Text("Voxel levels: {0}", VoxelSlots);
+            ImGuiX::Text(LOCF("Voxel levels: {0}"), VoxelSlots);
             ImGui::Separator();
 
-            if (ImGui::MenuItem(LE_ICON_REFRESH " Rebuild Virtual Geometry"))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_REFRESH, "Rebuild Virtual Geometry")))
             {
                 // Rebuilt from the baked finest level, so it needs no source file.
                 if (Mesh->RebuildVirtualGeometry())

@@ -25,6 +25,7 @@
 #include "World/Entity/Components/LightComponent.h"
 #include "World/Entity/Components/StaticMeshComponent.h"
 #include "World/Entity/Components/TransformComponent.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -276,14 +277,13 @@ namespace Lumina
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.80f, 0.80f, 1.0f));
         if (Root == nullptr)
         {
-            ImGui::TextWrapped("'%s' does not resolve to a base material, so there is nothing to inherit "
-                               "parameters from. Reassign the parent above.", *Instance->GetName());
+            ImGui::TextWrapped(LOC("'%s' does not resolve to a base material, so there is nothing to inherit parameters from. Reassign the parent above."), *Instance->GetName());
         }
         else
         {
             ImGui::TextWrapped(LOC("'%s' has no usable shaders, so this instance renders nothing and exposes no "
                                "parameters. Open it to see the compile errors, which are marked on the failing "
-                               "nodes in its graph.", *Root->GetName());
+                               "nodes in its graph."), *Root->GetName());
         }
         ImGui::PopStyleColor();
 
@@ -393,7 +393,7 @@ namespace Lumina
                     if (!bEnabled && ImGui::IsItemHovered())
                     {
                         const CMaterialInterface* Source = FindOverridingAncestor(Instance, Param);
-                        ImGui::SetTooltip("Inherited from %s",
+                        ImGui::SetTooltip(LOC("Inherited from %s"),
                             Source != nullptr ? *Source->GetName() : "the base material's default");
                     }
 

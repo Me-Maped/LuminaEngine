@@ -393,7 +393,7 @@ namespace Lumina
             Preview = FSpritePlayback{};
         }
         ImGui::SameLine();
-        ImGui::Text("Frame %d / %d", Preview.Frame + 1, Clip->Frames.Num());
+        ImGui::Text(LOC("Frame %d / %d"), Preview.Frame + 1, Clip->Frames.Num());
 
         // The same stepper the runtime system uses, so the preview cannot drift from playback.
         if (bPreviewPlaying)

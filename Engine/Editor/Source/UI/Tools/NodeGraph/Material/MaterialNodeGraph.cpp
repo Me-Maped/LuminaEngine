@@ -1040,7 +1040,7 @@ namespace Lumina
         if (SourcePin != nullptr && SourcePin->GetOwningNode() != nullptr)
         {
             ImGui::SameLine();
-            ImGui::TextDisabled("from %s", *SourcePin->GetOwningNode()->GetNodeFullName());
+            ImGui::TextDisabled(LOC("from %s"), *SourcePin->GetOwningNode()->GetNodeFullName());
         }
     }
 

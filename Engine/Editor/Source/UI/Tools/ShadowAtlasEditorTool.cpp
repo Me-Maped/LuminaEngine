@@ -116,8 +116,8 @@ namespace Lumina
 
         const float UsedPct = AtlasPixels > 0 ? (float)((double)UsedPixels / (double)AtlasPixels * 100.0) : 0.0f;
 
-        ImGui::Text("Atlas: %u x %u", Cfg.AtlasResolution, Cfg.AtlasResolution);
-        ImGui::Text("Tiles allocated: %u   Utilization: %.1f%% (%llu / %llu px)",
+        ImGui::Text(LOC("Atlas: %u x %u"), Cfg.AtlasResolution, Cfg.AtlasResolution);
+        ImGui::Text(LOC("Tiles allocated: %u   Utilization: %.1f%% (%llu / %llu px)"),
             (uint32)Tiles.Num(), UsedPct, (unsigned long long)UsedPixels, (unsigned long long)AtlasPixels);
 
         // Counts only power-of-two buckets the allocator can produce, keeping the UI compact.

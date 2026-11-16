@@ -66,7 +66,7 @@ namespace Lumina
         DrawTaskStats();
 
         ImGui::Spacing();
-        if (ImGui::CollapsingHeader("Timeline", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader(LOC_ID("Timeline"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             DrawTaskTimeline();
         }
@@ -99,7 +99,7 @@ namespace Lumina
         FJobProfiler& P = FJobProfiler::Get();
         ImGui::TextDisabled(LOC("Jobs / frame"));
         MiniPlot("##jobs", P.JobsHistory(), ImVec4(0.40f, 0.75f, 0.95f, 1.0f));
-        ImGui::TextDisabled("Jobs run while helping / frame");
+        ImGui::TextDisabled(LOC("Jobs run while helping / frame"));
         MiniPlot("##helped", P.HelpedHistory(), ImVec4(0.90f, 0.65f, 0.30f, 1.0f));
 
         ImGui::Columns(1);
@@ -112,7 +112,7 @@ namespace Lumina
         const double T1 = F.FrameEndMs;
         if (T1 <= T0 || F.Spans.IsEmpty())
         {
-            ImGui::TextDisabled("Enable span recording to capture the per-thread timeline.");
+            ImGui::TextDisabled(LOC("Enable span recording to capture the per-thread timeline."));
             return;
         }
 
@@ -145,7 +145,7 @@ namespace Lumina
             LaneTop[Slot] = TotalLanes;
             TotalLanes += LaneCount[Slot];
         }
-        if (TotalLanes == 0) { ImGui::TextDisabled("No spans."); return; }
+        if (TotalLanes == 0) { ImGui::TextDisabled(LOC("No spans.")); return; }
 
         const float LabelW = 52.0f;
         const float RowH   = ProfilerView::RowHeight(RowHeight);
@@ -205,14 +205,14 @@ namespace Lumina
             ImGui::BeginTooltip();
             if (Hover->Kind == EJobSpanKind::Idle)
             {
-                ImGui::TextDisabled("idle");
+                ImGui::TextDisabled(LOC("idle"));
             }
             else
             {
-                ImGui::TextUnformatted(Hover->Name ? Hover->Name : "job");
-                ImGui::Text("Depth %u", (uint32)Hover->Depth);
+                ImGui::TextUnformatted(Hover->Name ? Hover->Name : LOC("job"));
+                ImGui::Text(LOC("Depth %u"), (uint32)Hover->Depth);
             }
-            ImGui::Text("Thread %s", Lbl);
+            ImGui::Text(LOC("Thread %s"), Lbl);
             ImGui::Text("%.4f ms", Hover->EndMs - Hover->StartMs);
             ImGui::TextDisabled("at +%.3f ms", Hover->StartMs - T0);
             ImGui::EndTooltip();

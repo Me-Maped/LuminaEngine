@@ -346,7 +346,7 @@ namespace Lumina
         ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), LOC_ICON(LE_ICON_PACKAGE_VARIANT, "Package Project"));
         ImGui::Separator();
 
-        ImGui::Text("Project:    %.*s", Global::GEngine->GetProjectName().Len(), Global::GEngine->GetProjectName().GetData());
+        ImGui::Text(LOC("Project:    %.*s"), Global::GEngine->GetProjectName().Len(), Global::GEngine->GetProjectName().GetData());
 
         const TVector<FCookRoot> Roots = Global::GEngine->GetCookRoots();
         if (Roots.IsEmpty())
@@ -359,7 +359,7 @@ namespace Lumina
         else
         {
             const int32 ShownLimit = 6;
-            ImGui::Text("Cook Roots: %d", Roots.Num());
+            ImGui::Text(LOC("Cook Roots: %d"), Roots.Num());
             const int32 Count = Roots.Num();
             for (int32 i = 0; i < Count && i < ShownLimit; ++i)
             {
@@ -389,7 +389,7 @@ namespace Lumina
         ImGui::Spacing();
 
         // Editable fields.
-        ImGui::Text("Output Directory");
+        ImGui::Text(LOC("Output Directory"));
         ImGui::SetNextItemWidth(-1);
         ImGuiX::InputText("##out", OutputDir);
 
@@ -398,7 +398,7 @@ namespace Lumina
         ImGui::SetNextItemWidth(220.0f);
         ImGui::Combo("##cfg", &ConfigIndex, Configs, IM_ARRAYSIZE(Configs));
 
-        ImGui::Text("Target Platform");
+        ImGui::Text(LOC("Target Platform"));
         const char* Platforms[] = { "Windows64", "Linux64" };
         ImGui::SetNextItemWidth(220.0f);
         ImGui::Combo("##platform", &PlatformIndex, Platforms, IM_ARRAYSIZE(Platforms));
@@ -413,8 +413,7 @@ namespace Lumina
         if (ImGui::IsItemHovered())
         {
             const FString ServerName = FPackagePlatformRules::For(static_cast<EPackagePlatform>(PlatformIndex)).ExecutableFileName(*PackageName());
-            ImGui::SetTooltip("Builds the Server target as %s, a headless host that\n"
-                              "loads the startup map and listens without -server.", *ServerName);
+            ImGui::SetTooltip(LOC("Builds the Server target as %s, a headless host that\nloads the startup map and listens without -server."), *ServerName);
         }
 
         ImGui::Spacing();
@@ -471,8 +470,8 @@ namespace Lumina
         {
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.55f, 1.0f),
-                LE_ICON_FILE_OUTLINE " Last cook output (%d chunk%s):",
-                LastChunks.Num(), LastChunks.Num() == 1 ? "" : "s");
+                LOC_ICON(LE_ICON_FILE_OUTLINE, "Last cook output (%d chunk%s):"),
+                LastChunks.Num(), LastChunks.Num() == 1 ? "" : LOC_S);
 
             if (ImGui::BeginTable("##chunks", 4,
                 ImGuiTableFlags_BordersInner | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX))
@@ -593,7 +592,7 @@ namespace Lumina
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(SelectedExtraFile < 0 || SelectedExtraFile >= ExtraFiles.Num());
-        if (ImGui::Button(LE_ICON_MINUS " Remove File", ImVec2(140, 0)))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_MINUS, "Remove File"), ImVec2(140, 0)))
         {
             ExtraFiles.RemoveAt(SelectedExtraFile);
             SelectedExtraFile = -1;
@@ -627,7 +626,7 @@ namespace Lumina
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(SelectedExtraDirectory < 0 || SelectedExtraDirectory >= ExtraDirectories.Num());
-        if (ImGui::Button(LE_ICON_MINUS " Remove Directory", ImVec2(180, 0)))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_MINUS, "Remove Directory"), ImVec2(180, 0)))
         {
             ExtraDirectories.RemoveAt(SelectedExtraDirectory);
             SelectedExtraDirectory = -1;

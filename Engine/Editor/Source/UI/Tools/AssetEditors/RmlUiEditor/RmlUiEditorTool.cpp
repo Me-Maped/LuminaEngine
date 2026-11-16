@@ -849,7 +849,7 @@ namespace Lumina
 
         ToolContext->PushModal("File Changed On Disk", ImVec2(520.0f, 0.0f), [this]() -> bool
         {
-            ImGui::TextWrapped("'%s' was changed by another program after you started editing it here.", *VirtualPath);
+            ImGui::TextWrapped(LOC("'%s' was changed by another program after you started editing it here."), *VirtualPath);
             ImGui::Spacing();
             if (ImGui::Button(LOC_ID("Overwrite")))
             {
@@ -980,14 +980,14 @@ namespace Lumina
         {
             CodeEditor.OpenFind(false);
         }
-        ImGui::SetItemTooltip("Open the find bar (%s), or find and replace (%s).", *Keys.Find.GetLabel(), *Keys.Replace.GetLabel());
+        ImGui::SetItemTooltip(LOC("Open the find bar (%s), or find and replace (%s)."), *Keys.Find.GetLabel(), *Keys.Replace.GetLabel());
 
         ImGui::SameLine();
         if (ImGui::Button(LOC_ICON_ID(LE_ICON_FORMAT_LINE_SPACING, "Goto")))
         {
             bRequestOpenGoto = true;
         }
-        ImGui::SetItemTooltip("Jump to a specific line number (%s).", *Keys.GoToLine.GetLabel());
+        ImGui::SetItemTooltip(LOC("Jump to a specific line number (%s)."), *Keys.GoToLine.GetLabel());
 
         ImGui::SameLine();
         if (ImGui::Button(LOC_ICON_ID(LE_ICON_CODE_BRACES, "Snippets")))
@@ -1092,12 +1092,12 @@ namespace Lumina
         ImGui::TextDisabled(LOC("Lines"));
         ImGui::Separator();
         const CCodeEditorShortcuts& Keys = *GetDefault<CCodeEditorShortcuts>();
-        if (ImGui::MenuItem("Indent",          *Keys.Indent.GetLabel()))             CodeEditor.Indent();
-        if (ImGui::MenuItem("Outdent",         *Keys.Outdent.GetLabel()))            CodeEditor.Outdent();
-        if (ImGui::MenuItem("Move up",         *Keys.MoveLinesUp.GetLabel()))        CodeEditor.MoveLines(-1);
-        if (ImGui::MenuItem("Move down",       *Keys.MoveLinesDown.GetLabel()))      CodeEditor.MoveLines(1);
-        if (ImGui::MenuItem("Duplicate",       *Keys.DuplicateLinesDown.GetLabel())) CodeEditor.DuplicateLines(1);
-        if (ImGui::MenuItem("Toggle comment",  *Keys.ToggleLineComment.GetLabel()))  CodeEditor.ToggleLineComment();
+        if (ImGui::MenuItem(LOC_ID("Indent"),          *Keys.Indent.GetLabel()))             CodeEditor.Indent();
+        if (ImGui::MenuItem(LOC_ID("Outdent"),         *Keys.Outdent.GetLabel()))            CodeEditor.Outdent();
+        if (ImGui::MenuItem(LOC_ID("Move up"),         *Keys.MoveLinesUp.GetLabel()))        CodeEditor.MoveLines(-1);
+        if (ImGui::MenuItem(LOC_ID("Move down"),       *Keys.MoveLinesDown.GetLabel()))      CodeEditor.MoveLines(1);
+        if (ImGui::MenuItem(LOC_ID("Duplicate"),       *Keys.DuplicateLinesDown.GetLabel())) CodeEditor.DuplicateLines(1);
+        if (ImGui::MenuItem(LOC_ID("Toggle comment"),  *Keys.ToggleLineComment.GetLabel()))  CodeEditor.ToggleLineComment();
 
         ImGui::Spacing();
         ImGui::TextDisabled(LOC("Selection"));
@@ -1244,7 +1244,7 @@ namespace Lumina
                 const FCodeRange Selection = CodeEditor.GetSelection();
                 const int32 SelectionLines = Selection.End.Line - Selection.Start.Line + 1;
                 ImGui::SameLine(0, 12);
-                ImGui::TextColored(ImVec4(0.85f, 0.75f, 0.45f, 1.0f), "(sel %d chars / %d lines)", CodeEditor.GetSelectedText().Len(), SelectionLines);
+                ImGui::TextColored(ImVec4(0.85f, 0.75f, 0.45f, 1.0f), LOC("(sel %d chars / %d lines)"), CodeEditor.GetSelectedText().Len(), SelectionLines);
             }
             if (CodeEditor.GetCursorCount() > 1)
             {
@@ -2223,7 +2223,7 @@ namespace Lumina
             if (!Slot->AssignedSrc.IsEmpty())
             {
                 ImGui::Spacing();
-                ImGui::TextDisabled(LE_ICON_PUZZLE " Widget");
+                ImGui::TextDisabled(LOC_ICON(LE_ICON_PUZZLE, "Widget"));
                 ImGui::TextWrapped("%s", *Slot->AssignedSrc);
             }
         }

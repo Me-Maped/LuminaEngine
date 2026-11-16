@@ -836,7 +836,7 @@ namespace Lumina
             if (bOver && DragMode == EDragMode::None)
             {
                 ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                ImGui::SetTooltip("%s  %.3fs (frame %d)", *Notify.NotifyName, Notify.Time, (int)roundf(Notify.Time * (float)FrameRate));
+                ImGui::SetTooltip(LOC("%s  %.3fs (frame %d)"), *Notify.NotifyName, Notify.Time, (int)roundf(Notify.Time * (float)FrameRate));
             }
             if (DragMode == EDragMode::None && bOver && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             {
@@ -984,7 +984,7 @@ namespace Lumina
         auto TrackCombo = [&](FName& Track)
         {
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::BeginCombo("Track", *Track))
+            if (ImGui::BeginCombo(LOC_ID("Track"), *Track))
             {
                 for (const FName& Lane : Resource->NotifyTracks)
                 {

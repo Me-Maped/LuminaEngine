@@ -401,7 +401,7 @@ namespace Lumina
         // CPU card
         ImGui::BeginChild("##CPUCard", ImVec2(CardW, CardH), true);
         {
-            ImGui::TextColored(EditorColors::SectionHeader(), LE_ICON_CPU_64_BIT " CPU MEMORY");
+            ImGui::TextColored(EditorColors::SectionHeader(), LOC_ICON(LE_ICON_CPU_64_BIT, "CPU MEMORY"));
             ImGui::Separator();
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
             ImGui::TextUnformatted(*ImGuiX::FormatSize(CPU.Process));
@@ -411,14 +411,12 @@ namespace Lumina
             ImGui::TextDisabled(LOC("process (RSS)"));
 
             ImGui::Spacing();
-            ImGui::TextColored(kTrackedSeries, "%s tracked", *ImGuiX::FormatSize(CPU.Tracked));
+            ImGui::TextColored(kTrackedSeries, LOC("%s tracked"), *ImGuiX::FormatSize(CPU.Tracked));
             ImGui::SameLine();
-            ImGui::TextColored(kRetainedSeries, "  %s retained", *ImGuiX::FormatSize(CPU.Retained));
+            ImGui::TextColored(kRetainedSeries, LOC("  %s retained"), *ImGuiX::FormatSize(CPU.Retained));
             ImGui::SameLine();
-            ImGui::TextColored(kExternalSeries, "  %s external", *ImGuiX::FormatSize(CPU.External));
-            ImGuiX::TextTooltip("tracked = ledger live bytes\n"
-                                "retained = rpmalloc committed - tracked (caches + fragmentation; freed, not returned to OS)\n"
-                                "external = RSS - rpmalloc committed (GPU driver host memory, CRT malloc, code/stacks)");
+            ImGui::TextColored(kExternalSeries, LOC("  %s external"), *ImGuiX::FormatSize(CPU.External));
+            ImGuiX::TextTooltip(LOCF("tracked = ledger live bytes\nretained = rpmalloc committed - tracked (caches + fragmentation; freed, not returned to OS)\nexternal = RSS - rpmalloc committed (GPU driver host memory, CRT malloc, code/stacks)"));
         }
         ImGui::EndChild();
 
@@ -427,7 +425,7 @@ namespace Lumina
         // GPU card
         ImGui::BeginChild("##GPUCard", ImVec2(CardW, CardH), true);
         {
-            ImGui::TextColored(EditorColors::SectionHeader(), LE_ICON_EXPANSION_CARD " GPU MEMORY");
+            ImGui::TextColored(EditorColors::SectionHeader(), LOC_ICON(LE_ICON_EXPANSION_CARD, "GPU MEMORY"));
             ImGui::SameLine();
             ImGui::TextDisabled("%s", bDeviceInfoValid ? *DeviceInfo.Name : "");
 
@@ -465,14 +463,14 @@ namespace Lumina
         const float HalfW = (ImGui::GetContentRegionAvail().x - Spacing) * 0.5f;
 
         ImGui::BeginChild("##VRAMTL", ImVec2(HalfW, 200), false);
-        ImGui::TextColored(EditorColors::SectionHeader(), "VRAM usage");
+        ImGui::TextColored(EditorColors::SectionHeader(), LOC("VRAM usage"));
         DrawTimeline("##VRAMPlot", HistVRAM, kVRAMSeries, 160.0f);
         ImGui::EndChild();
 
         ImGui::SameLine();
 
         ImGui::BeginChild("##RSSTL", ImVec2(0, 200), false);
-        ImGui::TextColored(EditorColors::SectionHeader(), "Process RSS");
+        ImGui::TextColored(EditorColors::SectionHeader(), LOC("Process RSS"));
         DrawTimeline("##RSSPlot", HistRSS, kRSSSeries, 160.0f);
         ImGui::EndChild();
     }
@@ -481,7 +479,7 @@ namespace Lumina
 
     void FMemoryProfilerEditorTool::DrawGPUHeaps()
     {
-        ImGui::TextColored(EditorColors::SectionHeader(), "Device heaps");
+        ImGui::TextColored(EditorColors::SectionHeader(), LOC("Device heaps"));
         ImGui::Spacing();
 
         const ImGuiTableFlags Flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg;
@@ -537,7 +535,7 @@ namespace Lumina
             ImGui::EndTable();
         }
 
-        ImGui::TextDisabled("Allocator: %s in %u allocations across %u blocks.",
+        ImGui::TextDisabled(LOC("Allocator: %s in %u allocations across %u blocks."),
             *ImGuiX::FormatSize((size_t)GPUStats.TotalAllocated),
             GPUStats.TotalAllocations, GPUStats.TotalBlocks);
     }
@@ -594,12 +592,8 @@ namespace Lumina
     {
         const uint64 Attributed = GPUTextureBytes + GPUBufferBytes;
 
-        ImGui::TextColored(EditorColors::SectionHeader(), "Memory by purpose  " LE_ICON_INFORMATION);
-        ImGuiX::TextTooltip("Every live buffer and texture the RHI owns, grouped by the name its creating "
-                            "site gave it (the part before the first dot). The heap totals above are device "
-                            "truth and stay larger: they also carry the driver's own allocations, descriptor "
-                            "pools, swapchain images and allocator fragmentation, none of which the engine owns.\n\n"
-                            "Editor only -- game builds keep neither the names nor the texture ledger."));
+        ImGui::TextColored(EditorColors::SectionHeader(), "%s  %s", LOC("Memory by purpose"), LE_ICON_INFORMATION);
+        ImGuiX::TextTooltip(LOCF("Every live buffer and texture the RHI owns, grouped by the name its creating site gave it (the part before the first dot). The heap totals above are device truth and stay larger: they also carry the driver's own allocations, descriptor pools, swapchain images and allocator fragmentation, none of which the engine owns.\n\nEditor only -- game builds keep neither the names nor the texture ledger."));
         ImGui::Spacing();
 
         ImGui::TextColored(kTextureSeries, "%s", *ImGuiX::FormatSize(GPUTextureBytes));
@@ -610,7 +604,7 @@ namespace Lumina
         ImGui::SameLine();
         ImGui::TextDisabled(LOC("buffers"));
         ImGui::SameLine();
-        ImGui::TextDisabled("  =  %s attributed of %s the allocator holds",
+        ImGui::TextDisabled(LOC("  =  %s attributed of %s the allocator holds"),
             *ImGuiX::FormatSize(Attributed),
             *ImGuiX::FormatSize((size_t)GPUStats.TotalAllocated));
 
@@ -720,7 +714,7 @@ namespace Lumina
             VisibleBytes += Alloc->Size;
         }
 
-        ImGui::TextDisabled("%d allocations, %s", Visible.Num(), *ImGuiX::FormatSize(VisibleBytes));
+        ImGui::TextDisabled(LOC("%d allocations, %s"), Visible.Num(), *ImGuiX::FormatSize(VisibleBytes));
 
         const ImGuiTableFlags Flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg
                                     | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY;
@@ -761,11 +755,11 @@ namespace Lumina
                     ImGui::TableSetColumnIndex(1);
                     if (bTexture)
                     {
-                        ImGui::TextColored(kTextureSeries, "Texture");
+                        ImGui::TextColored(kTextureSeries, LOC("Texture"));
                     }
                     else
                     {
-                        ImGui::TextColored(kBufferSeries, "Buffer");
+                        ImGui::TextColored(kBufferSeries, LOC("Buffer"));
                     }
 
                     ImGui::TableSetColumnIndex(2);
@@ -817,10 +811,8 @@ namespace Lumina
         const size_t Cached = Memory::GetCachedMemory();
 
         ImGui::Spacing();
-        ImGui::TextColored(EditorColors::SectionHeader(), "Composition  " LE_ICON_INFORMATION);
-        ImGuiX::TextTooltip("Where Process RSS lives. If 'retained' climbs, it's allocation churn -- rpmalloc "
-                            "holding freed/fragmented spans (rank Top Call Sites by Total Allocs to find it). "
-                            "If 'external' climbs, it's outside rpmalloc: GPU driver host memory or the CRT allocator."));
+        ImGui::TextColored(EditorColors::SectionHeader(), "%s  %s", LOC("Composition"), LE_ICON_INFORMATION);
+        ImGuiX::TextTooltip(LOCF("Where Process RSS lives. If 'retained' climbs, it's allocation churn -- rpmalloc holding freed/fragmented spans (rank Top Call Sites by Total Allocs to find it). If 'external' climbs, it's outside rpmalloc: GPU driver host memory or the CRT allocator."));
         ImGui::Spacing();
 
         auto Row = [](const char* Label, size_t Bytes, const ImVec4& Color, const char* Note)
@@ -846,7 +838,7 @@ namespace Lumina
         if (CPU.Mapped == 0)
         {
             ImGui::TextColored(EditorColors::Warning(),
-                LE_ICON_ALERT " rpmalloc statistics are zero -- build with ENABLE_STATISTICS (Debug/Development).");
+                LOC_ICON(LE_ICON_ALERT, "rpmalloc statistics are zero -- build with ENABLE_STATISTICS (Debug/Development)."));
         }
 
         ImGui::Spacing();
@@ -854,14 +846,14 @@ namespace Lumina
         const float HalfW = (ImGui::GetContentRegionAvail().x - Spacing) * 0.5f;
 
         ImGui::BeginChild("##MappedTL", ImVec2(HalfW, 150), false);
-        ImGui::TextColored(kMappedSeries, "rpmalloc mapped (address space)");
+        ImGui::TextColored(kMappedSeries, LOC("rpmalloc mapped (address space)"));
         DrawTimeline("##MappedPlot", HistMapped, kMappedSeries, 110.0f);
         ImGui::EndChild();
 
         ImGui::SameLine();
 
         ImGui::BeginChild("##ExternalTL", ImVec2(0, 150), false);
-        ImGui::TextColored(kExternalSeries, "external (driver / CRT)");
+        ImGui::TextColored(kExternalSeries, LOC("external (driver / CRT)"));
         DrawTimeline("##ExternalPlot", HistExternal, kExternalSeries, 110.0f);
         ImGui::EndChild();
 
@@ -882,10 +874,8 @@ namespace Lumina
     void FMemoryProfilerEditorTool::DrawAddressSpace()
     {
         ImGui::Spacing();
-        ImGui::TextColored(EditorColors::SectionHeader(), "Address Space  " LE_ICON_INFORMATION);
-        ImGuiX::TextTooltip("Asks the OS what's actually mapped, so it covers memory the category "
-                            "tracker structurally cannot see. 'NT / CRT heap' is the bucket for every "
-                            "DLL that doesn't route through Memory::Malloc."));
+        ImGui::TextColored(EditorColors::SectionHeader(), "%s  %s", LOC("Address Space"), LE_ICON_INFORMATION);
+        ImGuiX::TextTooltip(LOCF("Asks the OS what's actually mapped, so it covers memory the category tracker structurally cannot see. 'NT / CRT heap' is the bucket for every DLL that doesn't route through Memory::Malloc."));
         ImGui::Spacing();
 
         if (ImGui::Button(LOC_ICON(LE_ICON_MAGNIFY, "Scan")))
@@ -925,7 +915,7 @@ namespace Lumina
         };
 
         ImGui::Spacing();
-        ImGui::TextDisabled("Committed");
+        ImGui::TextDisabled(LOC("Committed"));
         Row("private", AddressSpace.PrivateCommitted, EditorColors::TextPrimary(), "this process only");
         Row("image", AddressSpace.ImageCommitted, EditorColors::TextDim(), "code + data of loaded modules");
         Row("mapped", AddressSpace.MappedCommitted, EditorColors::TextDim(), "file mappings and shared sections");
@@ -939,20 +929,20 @@ namespace Lumina
                                   ? AddressSpace.PrivateCommitted - Accounted : 0;
 
         ImGui::Spacing();
-        ImGui::TextDisabled("Private commit, by owner");
+        ImGui::TextDisabled(LOC("Private commit, by owner"));
         Row("rpmalloc", Rpmalloc, kMappedSeries, "engine allocator (the category table below)");
 
         if (AddressSpace.bHeapWalkValid)
         {
             Row("NT / CRT heap", Heap, kCRTHeapSeries, "foreign DLLs: Slang, GPU driver, basisu, ucrtbase");
-            ImGui::TextDisabled("%14s of that live, %s block overhead",
+            ImGui::TextDisabled(LOC("%14s of that live, %s block overhead"),
                 *ImGuiX::FormatSize((size_t)AddressSpace.HeapAllocated),
                 *ImGuiX::FormatSize((size_t)AddressSpace.HeapOverhead));
         }
         else if (bScanHeaps)
         {
             ImGui::TextColored(EditorColors::Warning(),
-                LE_ICON_ALERT " Heap walk failed (a heap refused to lock); CRT bytes are folded into unattributed.");
+                LOC_ICON(LE_ICON_ALERT, "Heap walk failed (a heap refused to lock); CRT bytes are folded into unattributed."));
         }
         else
         {
@@ -973,7 +963,7 @@ namespace Lumina
 #if !LUMINA_MEMORY_TRACKING
         ImGui::Spacing();
         ImGui::TextColored(EditorColors::Warning(),
-            LE_ICON_ALERT " CPU category tracking is compiled out in Shipping builds.");
+            LOC_ICON(LE_ICON_ALERT, "CPU category tracking is compiled out in Shipping builds."));
 #else
         DrawControls();
         ImGui::Separator();
@@ -993,7 +983,7 @@ namespace Lumina
         {
             ImGui::Spacing();
             ImGui::TextColored(EditorColors::Warning(),
-                LE_ICON_ALERT " Enable 'Capture call stacks' to see what allocates inside '%s'.",
+                LOC_ICON(LE_ICON_ALERT, "Enable 'Capture call stacks' to see what allocates inside '%s'."),
                 *CallSiteCategory);
         }
 #endif
@@ -1167,7 +1157,7 @@ namespace Lumina
         if (bHasBaseline && !Rows.IsEmpty() && Rows[0].DeltaBytes > 0)
         {
             ImGui::TextColored(EditorColors::Warning(),
-                LE_ICON_ALERT " Growing fastest: %s  (+%s)",
+                LOC_ICON(LE_ICON_ALERT, "Growing fastest: %s  (+%s)"),
                 Rows[0].S->Name, *ImGuiX::FormatSize((size_t)Rows[0].DeltaBytes));
         }
         else if (!bHasBaseline)
@@ -1321,7 +1311,7 @@ namespace Lumina
             }
             else
             {
-                ImGui::TextDisabled("Nothing captured for '%s' yet -- its allocations predate the capture.",
+                ImGui::TextDisabled(LOC("Nothing captured for '%s' yet -- its allocations predate the capture."),
                     *CallSiteCategory);
             }
             return;

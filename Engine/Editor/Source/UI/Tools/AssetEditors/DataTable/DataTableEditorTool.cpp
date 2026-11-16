@@ -204,25 +204,26 @@ namespace Lumina
         {
             const SDataTableRow& Row = Table->Rows[i];
 
-            if (bFiltering && !ImGuiX::PassSearchFilter(Filter, Row.Name.c_str()))
+            if (bFiltering)
             {
                 // Matches every visible cell, so searching for a value finds the row holding it.
-                bool bMatched = ImGuiX::PassSearchFilter(Filter, *Row.Name);
+                bool bMatched = ImGuiX::PassSearchFilter(Filter, FStringView(Row.Name.c_str()));
                 if (!bMatched)
                 {
-                    for (FProperty* Property : Columns)
+                    const void* RowMemory = Row.Value.GetMemory();
+                    if (RowMemory != nullptr)
                     {
-                        return ImGuiX::PassSearchFilter(Filter, *Reflection::ToText(Property, RowMemory));
-                    });
+                        for (FProperty* Property : Columns)
+                        {
+                            if (ImGuiX::PassSearchFilter(Filter, Reflection::ToText(Property, RowMemory)))
+                            {
+                                bMatched = true;
+                                break;
+                            }
+                        }
+                    }
                 }
-                TVector<FStringView> Fields;
-                Fields.reserve(CellText.size() + 1);
-                Fields.emplace_back(Row.Name.c_str());
-                for (const FString& Text : CellText)
-                {
-                    Fields.emplace_back(Text);
-                }
-                if (!ImGuiX::PassSearchFilter(Filter, TSpan<const FStringView>(Fields.data(), Fields.size())))
+                if (!bMatched)
                 {
                     continue;
                 }
@@ -527,7 +528,7 @@ namespace Lumina
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled(LOC("Row Struct:"));
         ImGui::SameLine();
-        if (ImGui::Button(bHasRowStruct ? *RowStruct->GetName() : "<none>"))
+        if (ImGui::Button(bHasRowStruct ? *RowStruct->GetName() : LOC_ID("<none>")))
         {
             PendingRowStruct = RowStruct;
             bShowChangeRowStruct = true;
@@ -867,7 +868,7 @@ namespace Lumina
                 RebuildDisplayOrder();
             }
 
-            ImGui::TextDisabled("%d row%s%s", DisplayOrder.Num(),
+            ImGui::TextDisabled(LOC("%d row%s%s"), DisplayOrder.Num(),
                 DisplayOrder.Num() == 1 ? "" : "s",
                 Filter.IsActive() ? " (filtered)" : "");
 

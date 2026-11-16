@@ -17,7 +17,7 @@ namespace Lumina::CodeEditorPreferences
         CCodeEditorSettings* Settings = GetMutableDefault<CCodeEditorSettings>();
         bool bSave = false;
 
-        if (ImGui::BeginCombo("Theme", *Settings->Theme.Name))
+        if (ImGui::BeginCombo(LOC_ID("Theme"), *Settings->Theme.Name))
         {
             for (const FString& Theme : CodeEditorThemes::List())
             {

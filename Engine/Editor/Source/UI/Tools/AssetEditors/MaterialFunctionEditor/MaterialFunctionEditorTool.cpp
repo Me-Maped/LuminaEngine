@@ -142,7 +142,7 @@ namespace Lumina
         if (bHasErrors)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
-            ImGui::TextWrapped("Last compile reported errors:\n%s", *CompilationLog);
+            ImGui::TextWrapped(LOC("Last compile reported errors:\n%s"), *CompilationLog);
             ImGui::PopStyleColor();
             ImGui::Separator();
         }

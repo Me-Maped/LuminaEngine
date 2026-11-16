@@ -18,6 +18,7 @@
 #include "World/Entity/Components/SkyLightComponent.h"
 #include "imgui.h"
 #include "Renderer/SkeletonResource.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -595,7 +596,7 @@ namespace Lumina
         ImGuiX::TextTooltip(LOCF("How many increments each axis is divided into. Drives the gridlines as well as the snap step."));
 
         ImGui::SameLine();
-        ImGui::TextDisabled("%d samples", BlendSpace->Samples.Num());
+        ImGui::TextDisabled(LOC("%d samples"), BlendSpace->Samples.Num());
 
         ImGui::Separator();
 

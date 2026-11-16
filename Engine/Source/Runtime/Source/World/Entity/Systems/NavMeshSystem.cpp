@@ -294,6 +294,23 @@ namespace Lumina
                      TMax.z < BMin.z || TMin.z > BMax.z);
         }
 
+        // Tag bit packed into the cache key, so one entity may track one collider of each type.
+        enum class ENavColliderType : uint8
+        {
+            Box = 0,
+            Sphere = 1,
+            Mesh = 2,
+            CharacterCapsule = 3,
+            Capsule = 4,
+            Cylinder = 5,
+            Terrain = 6,
+            TriangleSoup = 7,
+            DynamicMesh = 8,
+            AreaVolume = 9,
+            OffMeshLink = 10,
+            Foliage = 11,
+        };
+
         // Compound children reuse the primitive types, so their sub-indices sit above any mesh collision primitive's.
         constexpr uint32 CompoundSubIndexBase = 1u << 23;
 
@@ -735,6 +752,26 @@ namespace Lumina
             TSharedPtr<const TVector<FNavSourcePrim>> Children;
             // A dynamic mesh collider wrapped in one hull, as its physics body is.
             bool                            bConvex = false;
+        };
+
+        struct FNavSourceEntry
+        {
+            uint64          Key = 0;
+            FNavSourcePrim  Prim;
+            FVector3        AABBMin = FVector3( FLT_MAX);
+            FVector3        AABBMax = FVector3(-FLT_MAX);
+
+            // Identifies the geometry behind the AABB; a change dirties the tiles exactly like a move.
+            uint64          ContentId = 0;
+        };
+
+        // A species' collision in its own space, built once per scan and placed per instance.
+        struct FFoliageNavTemplate
+        {
+            TSharedPtr<const TVector<FNavSourcePrim>> Children;
+            FVector3 LocalMin = FVector3( FLT_MAX);
+            FVector3 LocalMax = FVector3(-FLT_MAX);
+            uint64   ContentId = 0;
         };
 
         bool IsAnnotation(ENavColliderType Type)

@@ -329,13 +329,13 @@ namespace Lumina
             return;
         }
 
-        ImGui::Text("Skeleton: %s", *Skeleton->GetName());
-        ImGui::Text("Bones: %u", BoneCount);
-        ImGui::Text("Bones this mesh needs: %u", Skinning.RequiredBones);
-        ImGui::Text("Bones per meshlet: %.1f average, %u peak", Skinning.AvgPaletteBones, Skinning.MaxPaletteBones);
+        ImGui::Text(LOC("Skeleton: %s"), *Skeleton->GetName());
+        ImGui::Text(LOC("Bones: %u"), BoneCount);
+        ImGui::Text(LOC("Bones this mesh needs: %u"), Skinning.RequiredBones);
+        ImGui::Text(LOC("Bones per meshlet: %.1f average, %u peak"), Skinning.AvgPaletteBones, Skinning.MaxPaletteBones);
         ImGuiX::TextTooltip("{}", "The skinning dispatch stages one meshlet's bones into groupshared memory and "
                                   "blends every vertex out of that, so this is what the pass actually reads per "
-                                  "workgroup rather than the skeleton's whole bone count."));
+                                  "workgroup rather than the skeleton's whole bone count.");
 
         if (Skinning.PaletteOverflows > 0)
         {
@@ -522,12 +522,12 @@ namespace Lumina
             RebuildSelectedBonePoints();
 
             ImGui::Spacing();
-            ImGui::Text("'%s' drives %u vertices.",
+            ImGui::Text(LOC("'%s' drives %u vertices."),
                         *SkeletonResource->GetBone(SelectedBoneIndex).Name, SelectedBoneTotalPoints);
 
             if (SelectedBoneTotalPoints > (uint32)SelectedBonePoints.Num())
             {
-                ImGui::TextDisabled("Overlay shows the first %d.", SelectedBonePoints.Num());
+                ImGui::TextDisabled(LOC("Overlay shows the first %d."), SelectedBonePoints.Num());
             }
         }
     }
@@ -1267,7 +1267,7 @@ namespace Lumina
     {
         FAssetEditorTool::DrawToolMenu(UpdateContext);
 
-        if (ImGui::BeginMenu(LE_ICON_MOVE_RESIZE " Gizmo Control"))
+        if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_MOVE_RESIZE, "Gizmo Control")))
         {
             DrawGizmoOperationCombo(GuizmoOp);
             ImGui::EndMenu();
@@ -1281,7 +1281,7 @@ namespace Lumina
             if (Skeleton != nullptr && Skeleton->GetSkeletonResource() != nullptr)
             {
                 ImGuiX::Text("{0}", *Skeleton->GetName());
-                ImGuiX::Text("{0} bones, {1} skeleton sockets, {2} mesh sockets",
+                ImGuiX::Text(LOCF("{0} bones, {1} skeleton sockets, {2} mesh sockets"),
                              Skeleton->GetSkeletonResource()->GetNumBones(), Skeleton->Sockets.Num(), SkeletalMesh->Sockets.Num());
             }
             else

@@ -15,6 +15,7 @@
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "UI/Tools/EditorAssetActions.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -498,11 +499,11 @@ namespace Lumina
 
             if (ImGui::BeginPopupContextWindow("##OutlineMenu", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
             {
-                if (ImGui::MenuItem(LE_ICON_PLUS " Add State"))
+                if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_PLUS, "Add State")))
                 {
                     DeferredEdit = [this] { AddState(FName(), Constants::kIndexNone); };
                 }
-                if (ImGui::MenuItem("Paste", "Ctrl+V", false, !ClipboardStates.IsEmpty()))
+                if (ImGui::MenuItem(LOC_ID("Paste"), "Ctrl+V", false, !ClipboardStates.IsEmpty()))
                 {
                     DeferredEdit = [this] { Select({}); PasteClipboard(); };
                 }
@@ -523,15 +524,15 @@ namespace Lumina
     void FStateTreeEditorTool::DrawOutlineToolbar(CStateTree& Tree)
     {
         const bool bHasState = Tree.States.IsValidIndex(Selection.State);
-        if (ImGui::Button(LE_ICON_PLUS " State"))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_PLUS, "State")))
         {
             AddState(bHasState ? Tree.States[Selection.State].Parent : FName(), bHasState ? Selection.State + 1 : Constants::kIndexNone);
         }
-        ImGuiX::TextTooltip("Adds a state after the selected one, or at the top level.");
+        ImGuiX::TextTooltip(LOCF("Adds a state after the selected one, or at the top level."));
 
         ImGui::BeginDisabled(!bHasState);
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_PLUS " Child"))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_PLUS, "Child")))
         {
             AddState(Tree.States[Selection.State].Name, Constants::kIndexNone);
         }
@@ -547,9 +548,9 @@ namespace Lumina
         {
             AddNode(ConditionSlot, Type);
         }
-        ImGuiX::TextTooltip("Adds to the selected transition's conditions, or to the selected state's enter conditions.");
+        ImGuiX::TextTooltip(LOCF("Adds to the selected transition's conditions, or to the selected state's enter conditions."));
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_PLUS " Transition"))
+        if (ImGui::Button(LOC_ICON_ID(LE_ICON_PLUS, "Transition")))
         {
             AddTransition(Selection.State);
         }
@@ -688,7 +689,7 @@ namespace Lumina
         {
             DrawList->AddRectFilled(Min, Max, EditorColors::U32(EditorColors::WithAlpha(ActiveColor, 0.16f)), CardRounding);
         }
-        DrawList->AddRectFilled(Min, ImVec2(Min.x + 3.0f, Max.y), EditorColors::U32(KindColor(Source.Kind)), CardRounding, ImDrawFlags_RoundCornersLeft);
+        DrawList->AddRectFilled(Min, ImVec2(Min.x + 3.0f, Max.y), EditorColors::U32(KindColor(Source.Kind)), CardRounding, ImDrawFlags_RoundLeft);
         const bool bOutlined = Active || Selection.State == State;
         DrawList->AddRect(Min, Max, EditorColors::U32(Active ? ActiveColor : bOutlined ? EditorColors::Accent() : EditorColors::Border()), CardRounding, bOutlined ? 2.0f : 1.0f);
         if (bSelectedState)
@@ -806,44 +807,44 @@ namespace Lumina
         const FName Parent = Source.Parent;
         const bool bHasChildren = Algo::Contains(Tree.States, Name, &SStateTreeState::Parent);
 
-        if (ImGui::MenuItem(LE_ICON_PLUS " Add Child"))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_PLUS, "Add Child")))
         {
             DeferredEdit = [this, Name] { AddState(Name, Constants::kIndexNone); };
         }
-        if (ImGui::MenuItem(LE_ICON_PLUS " Add Sibling"))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_PLUS, "Add Sibling")))
         {
             DeferredEdit = [this, Parent, State] { AddState(Parent, State + 1); };
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Rename", "F2"))
+        if (ImGui::MenuItem(LOC_ID("Rename"), "F2"))
         {
             BeginRename(State);
         }
-        if (ImGui::MenuItem("Duplicate", "Ctrl+D"))
+        if (ImGui::MenuItem(LOC_ID("Duplicate"), "Ctrl+D"))
         {
             DeferredEdit = [this, State] { Select({ State }); DuplicateSelection(); };
         }
-        if (ImGui::MenuItem("Copy", "Ctrl+C"))
+        if (ImGui::MenuItem(LOC_ID("Copy"), "Ctrl+C"))
         {
             Select({ State });
             CopySelection();
         }
-        if (ImGui::MenuItem("Paste", "Ctrl+V", false, !ClipboardStates.IsEmpty() || ClipboardNode.IsValid()))
+        if (ImGui::MenuItem(LOC_ID("Paste"), "Ctrl+V", false, !ClipboardStates.IsEmpty() || ClipboardNode.IsValid()))
         {
             DeferredEdit = [this, State] { Select({ State }); PasteClipboard(); };
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Convert to Group", nullptr, false, Source.Kind != EStateTreeStateKind::Group))
+        if (ImGui::MenuItem(LOC_ID("Convert to Group"), nullptr, false, Source.Kind != EStateTreeStateKind::Group))
         {
             DeferredEdit = [this, State] { GetTree()->States[State].Kind = EStateTreeStateKind::Group; Edit(); };
         }
-        if (ImGui::MenuItem("Extract to Linked Subtree", nullptr, false, bHasChildren && HasAsset() && GetTree()->GetPackage() != nullptr))
+        if (ImGui::MenuItem(LOC_ID("Extract to Linked Subtree"), nullptr, false, bHasChildren && HasAsset() && GetTree()->GetPackage() != nullptr))
         {
             DeferredEdit = [this, State] { ExtractToLinkedSubtree(State); };
         }
-        ImGuiX::TextTooltip("Moves the children into a new state tree beside this one, which this state then links.");
+        ImGuiX::TextTooltip(LOCF("Moves the children into a new state tree beside this one, which this state then links."));
         ImGui::Separator();
-        if (ImGui::MenuItem("Delete", "Del"))
+        if (ImGui::MenuItem(LOC_ID("Delete"), "Del"))
         {
             DeferredEdit = [this, State] { Select({ State }); DeleteSelection(); };
         }
@@ -1163,7 +1164,7 @@ namespace Lumina
                     Bound = Constants::kIndexNone;
                     Edit();
                 }
-                ImGuiX::TextTooltip("Unbind");
+                ImGuiX::TextTooltip(LOCF("Unbind"));
             }
 
             const FFunction* Function = Bound != Constants::kIndexNone ? StateTreeEditing::FindBoundFunction(Tree, (*Bindings)[Bound]) : nullptr;
@@ -1235,7 +1236,7 @@ namespace Lumina
         {
             AddNode(EStateTreeSlot::Evaluator, Type);
         }
-        ImGuiX::TextTooltip("Evaluators tick before the states and publish their data for bindings.");
+        ImGuiX::TextTooltip(LOCF("Evaluators tick before the states and publish their data for bindings."));
 
         for (int32 Index = 0; Index < Tree->Evaluators.Num(); ++Index)
         {
@@ -1256,16 +1257,16 @@ namespace Lumina
             if (ImGui::BeginPopup("##EvaluatorMenu"))
             {
                 Select(Node);
-                if (ImGui::MenuItem("Duplicate", "Ctrl+D"))
+                if (ImGui::MenuItem(LOC_ID("Duplicate"), "Ctrl+D"))
                 {
                     DuplicateSelection();
                     bRemoved = true;
                 }
-                if (ImGui::MenuItem("Copy", "Ctrl+C"))
+                if (ImGui::MenuItem(LOC_ID("Copy"), "Ctrl+C"))
                 {
                     CopySelection();
                 }
-                if (ImGui::MenuItem("Delete", "Del"))
+                if (ImGui::MenuItem(LOC_ID("Delete"), "Del"))
                 {
                     DeleteSelection();
                     bRemoved = true;

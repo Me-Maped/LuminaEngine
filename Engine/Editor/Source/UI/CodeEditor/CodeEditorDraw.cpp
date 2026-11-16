@@ -1665,8 +1665,8 @@ namespace Lumina
         if (Item(LE_ICON_LIGHTBULB_OUTLINE " Quick Fix", Keys.QuickFix, bEditable && Language != nullptr)) { ShowCodeActions(); }
         ImGui::Separator();
         if (Item(LE_ICON_FORMAT_ALIGN_LEFT " Format Document", Keys.FormatDocument, bEditable && Language != nullptr)) { FormatDocument(); }
-        if (ImGui::MenuItem(LE_ICON_UNFOLD_LESS_HORIZONTAL " Fold All", nullptr, false, !Folds.IsEmpty())) { FoldAll(); }
-        if (ImGui::MenuItem(LE_ICON_UNFOLD_MORE_HORIZONTAL " Unfold All", nullptr, false, !Collapsed.IsEmpty())) { UnfoldAll(); }
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_UNFOLD_LESS_HORIZONTAL, "Fold All"), nullptr, false, !Folds.IsEmpty())) { FoldAll(); }
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_UNFOLD_MORE_HORIZONTAL, "Unfold All"), nullptr, false, !Collapsed.IsEmpty())) { UnfoldAll(); }
         ImGuiX::Font::PopFont();
         ImGui::EndPopup();
     }
@@ -1800,7 +1800,7 @@ namespace Lumina
                 ImGui::InputTextWithHint("##replace", LOC("Replace"), Find.Replacement, sizeof(Find.Replacement));
                 ImGui::SameLine();
                 ImGui::BeginDisabled(Settings.bReadOnly || Find.Matches.IsEmpty());
-                if (ImGui::Button("Replace"))
+                if (ImGui::Button(LOC_ID("Replace")))
                 {
                     if (Current > 0)
                     {

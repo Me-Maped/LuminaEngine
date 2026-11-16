@@ -9,10 +9,15 @@
 
 namespace Lumina { class CWorld; }
 
-// LUMINA_DOTNET_EXPORT stamps the LuminaSharp_ prefix and C linkage a [NativeCall] resolves by name, and silences C4190 for a blittable struct return.
+// LUMINA_DOTNET_EXPORT stamps the LuminaSharp_ prefix and C linkage a [NativeCall] resolves by name, and silences
+// the blittable-struct-return diagnostic (MSVC C4190, Clang -Wreturn-type-c-linkage). Both sides are C++.
 #if defined(_MSC_VER)
     #define LUMINA_DOTNET_EXPORT(ReturnType, Name)  \
         __pragma(warning(suppress: 4190))           \
+        extern "C" LUMINA_SCRIPT_API ReturnType LuminaSharp_##Name
+#elif defined(__clang__)
+    #define LUMINA_DOTNET_EXPORT(ReturnType, Name)  \
+        _Pragma("clang diagnostic ignored \"-Wreturn-type-c-linkage\"") \
         extern "C" LUMINA_SCRIPT_API ReturnType LuminaSharp_##Name
 #else
     #define LUMINA_DOTNET_EXPORT(ReturnType, Name)  \

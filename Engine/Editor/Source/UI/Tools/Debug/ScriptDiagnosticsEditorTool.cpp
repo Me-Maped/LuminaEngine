@@ -170,7 +170,7 @@ namespace Lumina
                 Snapshot.AliveScriptAlcCount, Snapshot.OldestAliveGeneration);
         }
         ImGui::SameLine(0.0f, 18.0f);
-        ImGui::TextDisabled("Gen %d  |  %d type(s): %s",
+        ImGui::TextDisabled(LOC("Gen %d  |  %d type(s): %s"),
             Snapshot.Generation, Snapshot.LoadedTypeCount, *MintedClassSummary);
 
         ImGui::Separator();

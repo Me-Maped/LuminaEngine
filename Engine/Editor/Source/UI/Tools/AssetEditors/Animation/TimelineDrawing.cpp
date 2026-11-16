@@ -6,6 +6,7 @@
 
 #include "Containers/Algorithm.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
+#include "Localization/Localization.h"
 
 namespace Lumina::Timeline
 {
@@ -201,7 +202,7 @@ namespace Lumina::Timeline
         const FStringView Typed = Buffer.View();
         if (Typed.IsEmpty())
         {
-            ImGui::TextDisabled("A name is required");
+            ImGui::TextDisabled(LOC("A name is required"));
             return FName();
         }
         // FName compares case-insensitively, so a case-only difference names the same lane.
@@ -211,7 +212,7 @@ namespace Lumina::Timeline
         }
         if (Algo::AnyOf(Taken, [&](const FName& Name) { return EqualsIgnoreCase(Typed, FStringView(*Name)); }))
         {
-            ImGui::TextDisabled("Another track already uses this name");
+            ImGui::TextDisabled(LOC("Another track already uses this name"));
             return FName();
         }
         return bEntered ? FName(Typed) : FName();

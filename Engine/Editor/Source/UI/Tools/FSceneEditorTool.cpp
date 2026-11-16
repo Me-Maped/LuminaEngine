@@ -1051,7 +1051,7 @@ namespace Lumina
             }
 
             const bool bCanPaste = Data != nullptr && Clipboard.Type == Type && !Clipboard.Bytes.IsEmpty();
-            if (ImGui::MenuItem(LE_ICON_CONTENT_PASTE " Paste Values", nullptr, false, bCanPaste))
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_PASTE, "Paste Values"), nullptr, false, bCanPaste))
             {
                 ApplyTransacted("Paste Component Values", Clipboard.Bytes);
             }
@@ -2622,17 +2622,17 @@ namespace Lumina
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem(LE_ICON_SELECT_GROUP " Select Contents", nullptr, false, !Contents.IsEmpty()))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_SELECT_GROUP, "Select Contents"), nullptr, false, !Contents.IsEmpty()))
         {
             SelectFolderContents(FolderID);
         }
 
-        if (ImGui::MenuItem(LE_ICON_EYE_OFF " Hide Contents", nullptr, false, !Contents.IsEmpty()))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_EYE_OFF, "Hide Contents"), nullptr, false, !Contents.IsEmpty()))
         {
             SetFolderContentsHidden(FolderID, true);
         }
 
-        if (ImGui::MenuItem(LE_ICON_EYE " Show Contents", nullptr, false, !Contents.IsEmpty()))
+        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_EYE, "Show Contents"), nullptr, false, !Contents.IsEmpty()))
         {
             SetFolderContentsHidden(FolderID, false);
         }
@@ -3254,8 +3254,7 @@ namespace Lumina
                         if (bEveryTargetHasIt && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                         {
                             ImGui::SetTooltip(Targets.Num() == 1
-                                ? "This entity already has this component."
-                                : "Every selected entity already has this component.");
+                                ? LOC("This entity already has this component.") : LOC("Every selected entity already has this component."));
                         }
                     }
 
@@ -3563,7 +3562,7 @@ namespace Lumina
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGui::SetTooltip("Gizmo: %s (R)", ImGuiX::ImGuizmoOpToString(GuizmoOp).GetData());
+            ImGui::SetTooltip(LOC("Gizmo: %s (R)"), ImGuiX::ImGuizmoOpToString(GuizmoOp).GetData());
         }
 
         ImGui::SameLine();
@@ -4123,7 +4122,7 @@ namespace Lumina
 
             ImGui::SameLine();
 
-            if (ImGui::Button("Cancel", ImVec2(ButtonWidth, 0.0f)))
+            if (ImGui::Button(LOC_ID("Cancel"), ImVec2(ButtonWidth, 0.0f)))
             {
                 return true;
             }
@@ -4259,7 +4258,7 @@ namespace Lumina
                 Removed = Tag;
             }
             ImGui::PopStyleColor(2);
-            ImGuiX::TextTooltip("Remove {}", *Tag);
+            ImGuiX::TextTooltip(LOCF("Remove {}"), *Tag);
 
             ImGui::PopID();
         }
@@ -4306,7 +4305,7 @@ namespace Lumina
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::LargeBold);
             if (bMultiSelect)
             {
-                ImGuiX::Text("{} Entities Selected", (uint32)SelectedEntities.Num());
+                ImGuiX::Text(LOCF("{} Entities Selected"), (uint32)SelectedEntities.Num());
             }
             else
             {
@@ -4580,7 +4579,7 @@ namespace Lumina
             const int32 ListedCount = CountOutlinerEntities();
             ImGui::AlignTextToFramePadding();
             ImGui::TextDisabled("%d %s", ListedCount, ListedCount == 1 ? "entity" : "entities");
-            ImGui::SetItemTooltip("%d in the world, counting those hidden from the outliner.", GetSceneRegistry().NumEntities());
+            ImGui::SetItemTooltip(LOC("%d in the world, counting those hidden from the outliner."), GetSceneRegistry().NumEntities());
             ImGui::SameLine(RefreshButtonOffset);
             if (ImGui::Button(LE_ICON_REFRESH))
             {
@@ -4636,7 +4635,7 @@ namespace Lumina
             }
             else if (SelectedEntities.Num() > 1 && IsEntitySelected(Entity))
             {
-                ImGui::TextColored(EditorColors::AccentAlt(), LE_ICON_SELECT_GROUP " Add to %llu selected entities",
+                ImGui::TextColored(EditorColors::AccentAlt(), LOC_ICON(LE_ICON_SELECT_GROUP, "Add to %llu selected entities"),
                     (unsigned long long)SelectedEntities.Num());
                 ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
             }

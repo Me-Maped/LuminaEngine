@@ -182,7 +182,7 @@ namespace Lumina
             ImGui::EndCombo();
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("(%d networked world%s)", NetWorlds.Num(), NetWorlds.Num() == 1 ? "" : "s");
+        ImGui::TextDisabled(LOC("(%d networked world%s)"), NetWorlds.Num(), NetWorlds.Num() == 1 ? "" : "s");
 
         ImGui::Separator();
 
@@ -297,8 +297,8 @@ namespace Lumina
             {
                 ImGui::BulletText(LOC("Connected to server: %s"), State->bClientConnected ? LOC("yes") : LOC("no"));
             }
-            ImGui::BulletText("Networked Entities: %d", NetworkedEntities);
-            ImGui::BulletText("NetGUID Table: %d entries", State->GuidTable.GuidToEntity.Num());
+            ImGui::BulletText(LOC("Networked Entities: %d"), NetworkedEntities);
+            ImGui::BulletText(LOC("NetGUID Table: %d entries"), State->GuidTable.GuidToEntity.Num());
             uint32 DynamicSpawns = 0;
             for (const auto& [Guid, Entity] : State->GuidTable.GuidToEntity)
             {
@@ -326,9 +326,9 @@ namespace Lumina
             const float CurRecv = H.RecvRate[(H.Head + FNetHistory::Capacity - 1) % FNetHistory::Capacity];
 
             ImGui::Spacing();
-            ImGui::Text("Send: %s/s", *FormatBytesNice(CurSend));
+            ImGui::Text(LOC("Send: %s/s"), *FormatBytesNice(CurSend));
             ImGui::PlotLines("##Send", H.SendRate, FNetHistory::Capacity, H.Head, nullptr, 0.0f, FLT_MAX, ImVec2(-1, 60));
-            ImGui::Text("Recv: %s/s", *FormatBytesNice(CurRecv));
+            ImGui::Text(LOC("Recv: %s/s"), *FormatBytesNice(CurRecv));
             ImGui::PlotLines("##Recv", H.RecvRate, FNetHistory::Capacity, H.Head, nullptr, 0.0f, FLT_MAX, ImVec2(-1, 60));
         }
 
@@ -373,19 +373,19 @@ namespace Lumina
             // The snapshot is split into as many <=64 KB frames as needed, so any entity count replicates.
             const float BytesPerEnt = RepStats.MovementEntityCount
                 ? static_cast<float>(RepStats.MovementTotalBytes) / static_cast<float>(RepStats.MovementEntityCount) : 0.0f;
-            ImGui::BulletText("Snapshot total: %s across %u frame%s  (%u entities, %.1f B/entity)",
+            ImGui::BulletText(LOC("Snapshot total: %s across %u frame%s  (%u entities, %.1f B/entity)"),
                 *FormatBytesNice((double)RepStats.MovementTotalBytes),
                 RepStats.MovementChunks, RepStats.MovementChunks == 1 ? "" : "s",
                 RepStats.MovementEntityCount, BytesPerEnt);
-            ImGui::BulletText("Peak frame: %s", *FormatBytesNice((double)RepStats.PeakMovementFrameBytes));
+            ImGui::BulletText(LOC("Peak frame: %s"), *FormatBytesNice((double)RepStats.PeakMovementFrameBytes));
             if (RepStats.OversizedSnapshotDrops > 0)
             {
                 ImGui::TextColored(ColBad, LOC("  Oversized frame drops: %u"), RepStats.OversizedSnapshotDrops);
             }
-            ImGui::BulletText("Datagrams: unreliable %s, reliable %s",
+            ImGui::BulletText(LOC("Datagrams: unreliable %s, reliable %s"),
                 *FormatBytesNice((double)RepStats.UnreliableBatchBytes),
                 *FormatBytesNice((double)RepStats.ReliableBatchBytes));
-            ImGui::BulletText("Last tick: %u spawns, %u despawns, %u property updates%s",
+            ImGui::BulletText(LOC("Last tick: %u spawns, %u despawns, %u property updates%s"),
                 RepStats.SpawnsSent, RepStats.DespawnsSent, RepStats.PropertyUpdatesSent,
                 RepStats.bKeyframeThisTick ? LOC("  (keyframe)") : "");
             ImGui::BulletText(LOC("Roles: Authority %d, Simulated %d, Autonomous %d, None %d"),
@@ -394,7 +394,7 @@ namespace Lumina
             // With chunking this stays under the cap, since the snapshot just splits into more frames.
             const float CurSnap = H.MovementBytes[(H.Head + FNetHistory::Capacity - 1) % FNetHistory::Capacity];
             ImGui::Spacing();
-            ImGui::Text("Largest frame (cap = top of plot): %s", *FormatBytesNice(CurSnap));
+            ImGui::Text(LOC("Largest frame (cap = top of plot): %s"), *FormatBytesNice(CurSnap));
             ImGui::PlotLines("##Snap", H.MovementBytes, FNetHistory::Capacity, H.Head, nullptr,
                 0.0f, static_cast<float>(Net::MaxFramedMessageSize), ImVec2(-1, 60));
         }
@@ -403,8 +403,8 @@ namespace Lumina
         if (ImGui::CollapsingHeader(LOC_ID("Interpolation"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             const CNetworkSettings* NS = GetDefault<CNetworkSettings>();
-            ImGui::BulletText("Interp delay: %.0f ms", (NS ? NS->InterpDelay : 0.1f) * 1000.0f);
-            ImGui::BulletText("Latest server time: %.2f s", State->LatestServerTime);
+            ImGui::BulletText(LOC("Interp delay: %.0f ms"), (NS ? NS->InterpDelay : 0.1f) * 1000.0f);
+            ImGui::BulletText(LOC("Latest server time: %.2f s"), State->LatestServerTime);
             if (RingCount > 0)
             {
                 ImGui::BulletText(LOC("Proxy rings: %d active, avg %.1f samples (min %d, cap %d)"),

@@ -582,7 +582,7 @@ namespace Lumina
         {
             ImGui::Spacing();
             const int32 NumShapes = Collision->IsConcave() ? 1 : Collision->Primitives.Num();
-            ImGui::TextDisabled("%d %s, %d hull points", NumShapes, NumShapes == 1 ? "shape" : "shapes", Collision->NumHullPoints());
+            ImGui::TextDisabled(LOC("%d %s, %d hull points"), NumShapes, NumShapes == 1 ? "shape" : "shapes", Collision->NumHullPoints());
             ImGui::SameLine();
             if (ImGui::SmallButton(LOC_ICON(LE_ICON_BROOM, "Clear All")))
             {

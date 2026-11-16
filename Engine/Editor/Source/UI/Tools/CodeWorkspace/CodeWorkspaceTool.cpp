@@ -1479,7 +1479,7 @@ namespace Lumina
         const bool bAppearing = bNewFileAppearing;
         bNewFileAppearing = false;
 
-        ImGui::TextColored(EditorColors::SectionHeader(), "New file in %s", *NewFileFolder);
+        ImGui::TextColored(EditorColors::SectionHeader(), LOC("New file in %s"), *NewFileFolder);
         if (bAppearing)
         {
             ImGui::SetKeyboardFocusHere();
@@ -1665,7 +1665,7 @@ namespace Lumina
                 ImGui::SetItemTooltip("%s", *Document.VirtualPath);
                 if (ImGui::BeginPopupContextItem())
                 {
-                    if (ImGui::MenuItem("Close", *GetDefault<CCodeEditorShortcuts>()->CloseFile.GetLabel()))
+                    if (ImGui::MenuItem(LOC_ID("Close"), *GetDefault<CCodeEditorShortcuts>()->CloseFile.GetLabel()))
                     {
                         RequestClose(Index);
                     }
@@ -1850,7 +1850,7 @@ namespace Lumina
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(Errors > 0 ? EditorColors::Danger() : EditorColors::TextDim(), LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "%d errors"), Errors);
         ImGui::SameLine(0.0f, 16.0f);
-        ImGui::TextColored(EditorColors::TextDim(), LE_ICON_ALERT_OUTLINE " %d warnings", Rows.Num() - Errors);
+        ImGui::TextColored(EditorColors::TextDim(), LOC_ICON(LE_ICON_ALERT_OUTLINE, "%d warnings"), Rows.Num() - Errors);
         ImGui::SameLine(0.0f, 16.0f);
         if (ImGui::SmallButton(LOC_ICON_ID(LE_ICON_REFRESH, "Check Scripts")))
         {
@@ -1940,7 +1940,7 @@ namespace Lumina
         ImGui::InputTextWithHint("##replace", LOC_ICON(LE_ICON_SWAP_HORIZONTAL, "Replace with"), SearchReplace, sizeof(SearchReplace));
         ImGui::SameLine();
         ImGui::BeginDisabled(Results.IsEmpty() || bShowingReferences);
-        if (ImGui::Button("All", ImVec2(ToggleWidth * 2.0f + Style.ItemSpacing.x, 0.0f)))
+        if (ImGui::Button(LOC_ID("All"), ImVec2(ToggleWidth * 2.0f + Style.ItemSpacing.x, 0.0f)))
         {
             bConfirmReplace = true;
         }
@@ -1957,7 +1957,7 @@ namespace Lumina
 
         if (bConfirmReplace)
         {
-            ImGui::TextColored(EditorColors::Warning(), "Replace %d matches with '%s'?", Results.Num(), SearchReplace);
+            ImGui::TextColored(EditorColors::Warning(), LOC("Replace %d matches with '%s'?"), Results.Num(), SearchReplace);
             ImGui::SameLine();
             if (ImGui::SmallButton(LOC_ID("Replace")))
             {
@@ -2252,8 +2252,8 @@ namespace Lumina
         {
             FileCount += Index == 0 || RenameTargets[Index].DiskPath != RenameTargets[Index - 1].DiskPath ? 1 : 0;
         }
-        ImGui::TextColored(EditorColors::SectionHeader(), "Rename '%s'", *RenameFrom);
-        ImGui::TextColored(EditorColors::TextDim(), "%d places in %d files. Open files keep the change unsaved.", RenameTargets.Num(), FileCount);
+        ImGui::TextColored(EditorColors::SectionHeader(), LOC("Rename '%s'"), *RenameFrom);
+        ImGui::TextColored(EditorColors::TextDim(), LOC("%d places in %d files. Open files keep the change unsaved."), RenameTargets.Num(), FileCount);
         if (bAppearing)
         {
             ImGui::SetKeyboardFocusHere();
@@ -2312,7 +2312,7 @@ namespace Lumina
             return;
         }
         FDocument& Document = *Documents[PendingClose];
-        ImGui::TextColored(EditorColors::Warning(), LE_ICON_ALERT_CIRCLE_OUTLINE " '%s' has unsaved changes.", *Document.Name);
+        ImGui::TextColored(EditorColors::Warning(), LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "'%s' has unsaved changes."), *Document.Name);
         bool bClose = false;
         if (ImGui::Button(LOC_ICON_ID(LE_ICON_CONTENT_SAVE, "Save")))
         {

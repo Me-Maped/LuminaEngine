@@ -151,7 +151,7 @@ namespace Lumina
         }
 
         ImGui::SameLine();
-        ImGui::TextDisabled("%u nodes, %u inputs, %u outputs",
+        ImGui::TextDisabled(LOC("%u nodes, %u inputs, %u outputs"),
             (uint32)Graph->GetProgram().Nodes.Num(),
             (uint32)Graph->GetInputs().Num(),
             (uint32)Graph->GetOutputs().Num());

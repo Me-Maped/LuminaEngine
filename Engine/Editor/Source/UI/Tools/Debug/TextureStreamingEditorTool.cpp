@@ -177,7 +177,7 @@ namespace Lumina
             ImGui::SameLine();
             ImGui::TextDisabled("->");
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), "%s saved", *ImGuiX::FormatSize(Saved));
+            ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), LOC("%s saved"), *ImGuiX::FormatSize(Saved));
 
             ImGui::TableSetColumnIndex(1);
 
@@ -201,7 +201,7 @@ namespace Lumina
             ImGui::SameLine();
             ImGui::TextDisabled("|");
             ImGui::SameLine();
-            ImGui::Text("%s read", *ImGuiX::FormatSize(Stats.TotalBytesRead));
+            ImGui::Text(LOC("%s read"), *ImGuiX::FormatSize(Stats.TotalBytesRead));
 
             // Loud, since a failed load means a bulk ref did not resolve rather than a policy outcome.
             if (Stats.TotalFailedLoads > 0)
@@ -248,7 +248,7 @@ namespace Lumina
                 ImGui::TableNextRow();
 
                 ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(Row.Name.IsNone() ? "<destroyed>" : *Row.Name);
+                ImGui::TextUnformatted(Row.Name.IsNone() ? LOC("<destroyed>") : *Row.Name);
 
                 ImGui::TableSetColumnIndex(1);
                 ImGui::Text("%u", Row.SourceFirstMip);
@@ -288,18 +288,18 @@ namespace Lumina
         }
 
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Texture", ImGuiTableColumnFlags_WidthStretch, 0.0f, Column_Texture);
-        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 100.0f, Column_Size);
-        ImGui::TableSetupColumn("Format", ImGuiTableColumnFlags_WidthFixed, 110.0f, Column_Format);
-        ImGui::TableSetupColumn("Mips", ImGuiTableColumnFlags_WidthFixed, 130.0f, Column_Mips);
-        ImGui::TableSetupColumn("Residency", ImGuiTableColumnFlags_WidthFixed, 120.0f, Column_Residency);
-        ImGui::TableSetupColumn("Resident",
+        ImGui::TableSetupColumn(LOC_ID("Texture"), ImGuiTableColumnFlags_WidthStretch, 0.0f, Column_Texture);
+        ImGui::TableSetupColumn(LOC_ID("Size"), ImGuiTableColumnFlags_WidthFixed, 100.0f, Column_Size);
+        ImGui::TableSetupColumn(LOC_ID("Format"), ImGuiTableColumnFlags_WidthFixed, 110.0f, Column_Format);
+        ImGui::TableSetupColumn(LOC_ID("Mips"), ImGuiTableColumnFlags_WidthFixed, 130.0f, Column_Mips);
+        ImGui::TableSetupColumn(LOC_ID("Residency"), ImGuiTableColumnFlags_WidthFixed, 120.0f, Column_Residency);
+        ImGui::TableSetupColumn(LOC_ID("Resident"),
             ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_PreferSortDescending,
             85.0f, Column_Resident);
-        ImGui::TableSetupColumn("Full", ImGuiTableColumnFlags_WidthFixed, 85.0f, Column_Full);
-        ImGui::TableSetupColumn("CPU", ImGuiTableColumnFlags_WidthFixed, 85.0f, Column_CPU);
-        ImGui::TableSetupColumn("Coverage", ImGuiTableColumnFlags_WidthFixed, 85.0f, Column_Coverage);
-        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 90.0f, Column_State);
+        ImGui::TableSetupColumn(LOC_ID("Full"), ImGuiTableColumnFlags_WidthFixed, 85.0f, Column_Full);
+        ImGui::TableSetupColumn(LOC_ID("CPU"), ImGuiTableColumnFlags_WidthFixed, 85.0f, Column_CPU);
+        ImGui::TableSetupColumn(LOC_ID("Coverage"), ImGuiTableColumnFlags_WidthFixed, 85.0f, Column_Coverage);
+        ImGui::TableSetupColumn(LOC_ID("State"), ImGuiTableColumnFlags_WidthFixed, 90.0f, Column_State);
         ImGui::TableHeadersRow();
 
         if (ImGuiTableSortSpecs* Specs = ImGui::TableGetSortSpecs())
@@ -370,7 +370,7 @@ namespace Lumina
             ImGui::TextUnformatted(*Row->Name);
             if (ImGui::IsItemHovered() && !Row->PackagePath.IsEmpty())
             {
-                ImGui::SetTooltip("%s\nbindless slot %d", *Row->PackagePath, Row->ResourceID);
+                ImGui::SetTooltip(LOC("%s\nbindless slot %d"), *Row->PackagePath, Row->ResourceID);
             }
 
             ImGui::TableSetColumnIndex(1);

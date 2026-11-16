@@ -370,7 +370,7 @@ namespace Lumina
             // A texture created empty has no image until one is imported into it.
             if (Texture->TextureResource == nullptr)
             {
-                ImGui::TextDisabled("%s has no image yet. Import one to see its details.", *Texture->GetName());
+                ImGui::TextDisabled(LOC("%s has no image yet. Import one to see its details."), *Texture->GetName());
                 return;
             }
         
@@ -613,7 +613,7 @@ namespace Lumina
                     ImGui::PushID((int)i);
                     ImGui::Text("%2d", i);
                     ImGui::SameLine(40);
-                    ImGui::TextUnformatted(Layer.IsValid() ? *Layer->GetName() : "<missing>");
+                    ImGui::TextUnformatted(Layer.IsValid() ? *Layer->GetName() : LOC("<missing>"));
 
                     // Slice order is the material's Slice index, so reordering must not need a clear and re-add.
                     ImGui::SameLine(ImGui::GetContentRegionAvail().x - 66.0f);
@@ -743,9 +743,7 @@ namespace Lumina
                 }
                 else
                 {
-                    ImGuiX::TextTooltip("Re-reads the source file and re-encodes it with the settings above: color space, "
-                                        "compression quality, mip policy, size cap and every source adjustment. "
-                                        "Source: %s", *Texture->SourcePath);
+                    ImGuiX::TextTooltip(LOCF("Re-reads the source file and re-encodes it with the settings above: color space, compression quality, mip policy, size cap and every source adjustment. Source: {}"), *Texture->SourcePath);
                 }
 
                 ImGui::Spacing();
@@ -795,7 +793,7 @@ namespace Lumina
                     }
                 }
             }
-            ImGuiX::TextTooltip("Write the image this texture was imported from to a folder on disk.");
+            ImGuiX::TextTooltip(LOCF("Write the image this texture was imported from to a folder on disk."));
         });
     }
 

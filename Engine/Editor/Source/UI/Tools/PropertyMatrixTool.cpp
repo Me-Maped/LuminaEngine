@@ -343,7 +343,7 @@ namespace Lumina
             RefreshSelection();
         }
         ImGui::SameLine();
-        ImGui::TextColored(EditorColors::TextDim(), "%d of %d selected", Selection.Num(), Rows.Num());
+        ImGui::TextColored(EditorColors::TextDim(), LOC("%d of %d selected"), Selection.Num(), Rows.Num());
 
         TVector<int32> Visible;
         Visible.Reserve(Rows.Num());
@@ -478,11 +478,11 @@ namespace Lumina
 
         if (Selection.Num() == 1)
         {
-            ImGui::TextColored(EditorColors::TextDim(), "Editing %s", *Selection[0]->GetName());
+            ImGui::TextColored(EditorColors::TextDim(), LOC("Editing %s"), *Selection[0]->GetName());
         }
         else
         {
-            ImGui::TextColored(EditorColors::TextDim(), "Editing %d assets", Selection.Num());
+            ImGui::TextColored(EditorColors::TextDim(), LOC("Editing %d assets"), Selection.Num());
         }
         Details.DrawTree();
     }

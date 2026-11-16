@@ -425,7 +425,7 @@ namespace Lumina
         ImGui::SameLine();
 
         ImGui::BeginDisabled(Foliage == nullptr || !Foliage->IsValidType(ActiveType));
-        if (ImGui::Button("Duplicate"))
+        if (ImGui::Button(LOC_ID("Duplicate")))
         {
             RunModeTransaction("Duplicate Foliage Type", [&]
             {

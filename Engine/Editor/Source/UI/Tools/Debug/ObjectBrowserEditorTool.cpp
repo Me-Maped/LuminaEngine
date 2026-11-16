@@ -244,7 +244,7 @@ namespace Lumina
         // Counts come from the snapshot, so they describe what is actually on screen.
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("%d shown", VisibleRows.Num());
+        ImGui::Text(LOC("%d shown"), VisibleRows.Num());
         ImGui::SameLine();
         ImGui::TextDisabled(LOC("of %d live / %d slots"), TotalAlive, TotalSlots);
 
@@ -435,12 +435,12 @@ namespace Lumina
 
         if (CPackage* Package = Object->GetPackage())
         {
-            ImGui::TextColored(EditorColors::TextMuted(), "Package: %s", *Package->GetName());
+            ImGui::TextColored(EditorColors::TextMuted(), LOC("Package: %s"), *Package->GetName());
         }
 
-        ImGui::TextColored(EditorColors::TextMuted(), "GUID: %s", *Object->GetGUID().ToString());
+        ImGui::TextColored(EditorColors::TextMuted(), LOC("GUID: %s"), *Object->GetGUID().ToString());
         ImGui::TextColored(FlagsTint(Object->GetFlags()), "%s", *ObjectFlagsToString(Object->GetFlags()));
-        ImGui::TextColored(EditorColors::TextMuted(), "Strong: %d", Object->GetStrongRefCount());
+        ImGui::TextColored(EditorColors::TextMuted(), LOC("Strong: %d"), Object->GetStrongRefCount());
 
         ImGui::Separator();
         ImGui::Spacing();

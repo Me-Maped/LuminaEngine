@@ -1988,7 +1988,7 @@ namespace Lumina
             if (SourceData.SourceNodeCount > static_cast<uint32>(SourceData.Resources.Num()))
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextDim());
-                ImGui::Text("%u source nodes collapsed to %d unique meshes",
+                ImGui::Text(LOC("%u source nodes collapsed to %d unique meshes"),
                             SourceData.SourceNodeCount, SourceData.Resources.Num());
                 ImGui::PopStyleColor();
             }
@@ -2136,7 +2136,7 @@ namespace Lumina
                     Matched += MeshTarget->FindBoneIndex(Bone.Name) >= 0 ? 1 : 0;
                 }
 
-                ImGui::TextDisabled("Skinned meshes bind to %s; no skeleton is created from this file.",
+                ImGui::TextDisabled(LOC("Skinned meshes bind to %s; no skeleton is created from this file."),
                                     *TargetSkeleton->GetName());
 
                 if (Matched == FileSkeleton.Bones.Num())
@@ -2147,7 +2147,7 @@ namespace Lumina
                 else if (Matched > 0)
                 {
                     ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f),
-                        LE_ICON_ALERT_CIRCLE_OUTLINE " %d of %d bones match; unmatched influences are dropped.",
+                        LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "%d of %d bones match; unmatched influences are dropped."),
                         Matched, FileSkeleton.Bones.Num());
                 }
                 else
@@ -2214,7 +2214,7 @@ namespace Lumina
             const FSkeletonResource* Target = TargetSkeleton != nullptr ? TargetSkeleton->GetSkeletonResource() : nullptr;
             if (TargetSkeleton != nullptr)
             {
-                ImGui::TextDisabled("Binding to %s", *TargetSkeleton->GetName());
+                ImGui::TextDisabled(LOC("Binding to %s"), *TargetSkeleton->GetName());
             }
 
             for (int32 i = 0; i < SourceData.Animations.Num(); ++i)
@@ -2223,7 +2223,7 @@ namespace Lumina
                 ImGui::PushID((int)i);
                 if (ImGui::TreeNodeEx(*Anim.Name, ImGuiTreeNodeFlags_SpanAvailWidth))
                 {
-                    ImGui::TextDisabled("Duration: %.2fs   Channels: %d", Anim.Duration, Anim.Channels.Num());
+                    ImGui::TextDisabled(LOC("Duration: %.2fs   Channels: %d"), Anim.Duration, Anim.Channels.Num());
 
                     // An unmatched channel silently freezes its bone at bind pose, so surface it here.
                     if (Target != nullptr)
@@ -2242,7 +2242,7 @@ namespace Lumina
                         else
                         {
                             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f),
-                                LE_ICON_ALERT_CIRCLE_OUTLINE " %d of %d channels have no bone of that name.",
+                                LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "%d of %d channels have no bone of that name."),
                                 Unmatched, Anim.Channels.Num());
                         }
                     }

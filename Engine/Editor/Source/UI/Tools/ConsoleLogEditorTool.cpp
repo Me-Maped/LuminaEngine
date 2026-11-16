@@ -218,7 +218,7 @@ namespace Lumina
         }
 
         ImGui::Separator();
-        ImGui::Text("Messages: %d / %d", VisibleRows.Indices.Num(), PreviousMessageSize);
+        ImGui::Text(LOC("Messages: %d / %d"), VisibleRows.Indices.Num(), PreviousMessageSize);
     }
 
     void FConsoleLogEditorTool::DrawLogWindow(bool bIsFocused)
@@ -326,7 +326,7 @@ namespace Lumina
                 if (bHasSource)
                 {
                     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                    ImGui::SetTooltip("Double-click to open %s at line %d", *SourcePath, SourceLine);
+                    ImGui::SetTooltip(LOC("Double-click to open %s at line %d"), *SourcePath, SourceLine);
                 }
 
                 if (bHasSource && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
@@ -810,7 +810,7 @@ namespace Lumina
             ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
             ImGuiWindowFlags_NoNavFocus))
         {
-            ImGui::TextColored(EditorColors::TextDim(), "Auto-Complete (%d matches)", AutoCompleteCandidates.Num());
+            ImGui::TextColored(EditorColors::TextDim(), LOC("Auto-Complete (%d matches)"), AutoCompleteCandidates.Num());
             ImGui::Separator();
 
             for (int32 i = 0; i < AutoCompleteCandidates.Num(); ++i)
@@ -857,7 +857,7 @@ namespace Lumina
             }
 
             ImGui::Separator();
-            ImGui::TextColored(EditorColors::TextMuted(), LE_ICON_ARROW_UP_DOWN " Navigate  " LE_ICON_KEYBOARD_TAB " Accept  " LE_ICON_KEYBOARD_ESC " Cancel");
+            ImGui::TextColored(EditorColors::TextMuted(), "%s %s  %s %s  %s %s", LE_ICON_ARROW_UP_DOWN, LOC("Navigate"), LE_ICON_KEYBOARD_TAB, LOC("Accept"), LE_ICON_KEYBOARD_ESC, LOC("Cancel"));
         }
         AutoCompleteOverlayHeight = ImGui::GetWindowHeight();
         ImGui::EndChild();
@@ -881,7 +881,7 @@ namespace Lumina
         if (ImGui::BeginChild("##CommandHistory", ImVec2(InputWidth, Height),
             ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding))
         {
-            ImGui::TextColored(EditorColors::TextDim(), LE_ICON_HISTORY " Command History (%d)", CommandHistory.Num());
+            ImGui::TextColored(EditorColors::TextDim(), LOC_ICON(LE_ICON_HISTORY, "Command History (%d)"), CommandHistory.Num());
             
             ImGui::SameLine();
             if (ImGui::SmallButton(LOC("Clear")))
@@ -896,7 +896,7 @@ namespace Lumina
 
             if (CommandHistory.IsEmpty())
             {
-                ImGui::TextColored(EditorColors::TextMuted(), "No command history");
+                ImGui::TextColored(EditorColors::TextMuted(), LOC("No command history"));
             }
             else
             {

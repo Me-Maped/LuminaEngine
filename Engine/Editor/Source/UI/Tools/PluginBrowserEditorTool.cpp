@@ -20,6 +20,7 @@
 #include "UI/Tools/EditorToolContext.h"
 
 #include "imgui.h"
+#include "Localization/Localization.h"
 
 namespace Lumina
 {
@@ -410,7 +411,10 @@ namespace Lumina
         if (!Broken.IsEmpty())
         {
             ImGui::TextColored(ImVec4(0.96f, 0.36f, 0.38f, 1.0f),
-                LE_ICON_ALERT " %d broken dependenc%s", Broken.Num(), Broken.Num() == 1 ? "y" : "ies");
+                Broken.Num() == 1
+                    ? LOC_ICON(LE_ICON_ALERT, "%d broken dependency")
+                    : LOC_ICON(LE_ICON_ALERT, "%d broken dependencies"),
+                Broken.Num());
             if (ImGui::IsItemHovered())
             {
                 ImGui::BeginTooltip();

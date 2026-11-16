@@ -20,27 +20,14 @@ namespace Lumina
         // Up to this many items, every category starts open, since collapsing a short list only hides it.
         constexpr int32 kOpenAllBelowCount = 24;
 
+        // Display text changes with the locale. The key, then the untranslated name, stays the row id.
         const FString& PickerItemIdentity(const FPickerItem& Item)
         {
-            const int32 NeedleLength = static_cast<int32>(strlen(Needle));
-            if (NeedleLength == 0 || NeedleLength > Haystack.Len())
+            if (!Item.Key.IsEmpty())
             {
-                ++Cursor;
+                return Item.Key;
             }
-            for (int32 Start = 0; Start + NeedleLength <= Haystack.Len(); ++Start)
-            {
-                int32 Index = 0;
-                while (Index < NeedleLength
-                    && std::tolower((unsigned char)Haystack[Start + Index]) == std::tolower((unsigned char)Needle[Index]))
-                {
-                    ++Index;
-                }
-                if (Index == NeedleLength)
-                {
-                    return true;
-                }
-            }
-            return Path.substr(Begin, Cursor - Begin);
+            return Item.SourceName.IsEmpty() ? Item.Name : Item.SourceName;
         }
 
         // The matched characters of a fuzzy search drawn in the accent color, coalesced into runs.
@@ -78,16 +65,18 @@ namespace Lumina
                 {
                     ImGui::SameLine(0.0f, 0.0f);
                 }
+                bFirstRun = false;
 
-                if (Span.bMatched)
+                if (bMatched)
                 {
                     ImGui::PushStyleColor(ImGuiCol_Text, MatchColor);
                 }
-                ImGui::TextUnformatted(Text + Span.Begin, Text + Span.End);
-                if (Span.bMatched)
+                ImGui::TextUnformatted(Text + Cursor, Text + RunEnd);
+                if (bMatched)
                 {
                     ImGui::PopStyleColor();
                 }
+                Cursor = RunEnd;
             }
         }
     }
@@ -130,7 +119,7 @@ namespace Lumina
         const FLocalizationSnapshot Snapshot = FLocalization::Get().ReadForCurrentFrame();
         if (bAppearing || !ItemsSnapshot.HasSameTable(Snapshot))
         {
-            const FString SelectedIdentity = !bAppearing && SelectedItem >= 0 && SelectedItem < static_cast<int32>(Items.size())
+            const FString SelectedIdentity = !bAppearing && SelectedItem >= 0 && SelectedItem < Items.Num()
                 ? PickerItemIdentity(Items[SelectedItem]) : FString();
             if (bAppearing)
             {
@@ -140,7 +129,7 @@ namespace Lumina
             Rescore();
             if (!SelectedIdentity.empty())
             {
-                for (int32 Index = 0; Index < static_cast<int32>(Items.size()); ++Index)
+                for (int32 Index = 0; Index < Items.Num(); ++Index)
                 {
                     if (PickerItemIdentity(Items[Index]) == SelectedIdentity && ItemScores[Index] >= 0)
                     {
@@ -210,7 +199,7 @@ namespace Lumina
             if (DrawingOrder.IsEmpty())
             {
                 ImGui::Spacing();
-                ImGui::TextDisabled(Items.IsEmpty() ? "Nothing to pick from." : "No matches.");
+                ImGui::TextDisabled(Items.IsEmpty() ? LOC("Nothing to pick from.") : LOC("No matches."));
             }
         }
         ImGui::EndChild();
@@ -258,7 +247,11 @@ namespace Lumina
         {
             int32 Category = 0;
             const FStringView Path(Items[Index].Category);
+            const FStringView SourcePath = Items[Index].SourceCategory.IsEmpty()
+                ? FStringView(Items[Index].Category)
+                : FStringView(Items[Index].SourceCategory);
             int32 Start = 0;
+            int32 SourceStart = 0;
             while (Start < Path.Len())
             {
                 int32 End = Path.Find('/', Start);
@@ -266,11 +259,21 @@ namespace Lumina
                 {
                     End = Path.Len();
                 }
+                int32 SourceEnd = SourcePath.Find('/', SourceStart);
+                if (SourceEnd == Constants::kIndexNone)
+                {
+                    SourceEnd = SourcePath.Len();
+                }
                 if (End > Start)
                 {
-                    Category = FindOrAddChild(Category, Path.Mid(Start, End - Start));
+                    const FStringView Label = Path.Mid(Start, End - Start);
+                    const FStringView SourceLabel = SourceEnd > SourceStart
+                        ? SourcePath.Mid(SourceStart, SourceEnd - SourceStart)
+                        : Label;
+                    Category = FindOrAddChild(Category, Label, SourceLabel);
                 }
                 Start = End + 1;
+                SourceStart = SourceEnd + 1;
             }
             Categories[Category].Items.Add(Index);
         }
@@ -305,6 +308,7 @@ namespace Lumina
         const int32 Added = Categories.Num();
         FCategory& Category = Categories.EmplaceGetRef();
         Category.Label = FString(Label.GetData(), Label.Len());
+        Category.Identity = Identity;
         Categories[Parent].Children.Add(Added);
         return Added;
     }
