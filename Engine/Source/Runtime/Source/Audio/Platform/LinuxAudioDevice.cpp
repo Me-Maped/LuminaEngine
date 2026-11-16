@@ -22,7 +22,7 @@ namespace Lumina
 		constexpr uint32 kDefaultPeriodFrames = 480;
 		constexpr uint32 kPeriodsPerBuffer    = 4;
 
-		/** libasound resolved at runtime, so a machine without it loses audio rather than failing to launch. */
+		// libasound resolved at runtime, so a machine without it loses audio rather than failing to launch.
 		struct FAlsaApi
 		{
 			void* Library = nullptr;
@@ -221,7 +221,7 @@ namespace Lumina
 			Channels     = (uint32)WantedChannels;
 			PeriodFrames = (uint32)WantedPeriod;
 
-			Scratch.assign((size_t)PeriodFrames * Channels, 0.0f);
+			Scratch.Init(0.0f, IntCastChecked<int32>(static_cast<int64>(PeriodFrames) * Channels));
 
 			LOG_INFO("[Audio] ALSA at {0} Hz, {1} channels, {2} frame period", SampleRate, Channels, PeriodFrames);
 			return true;
@@ -272,9 +272,9 @@ namespace Lumina
 		{
 			while (!Stop.ShouldStop())
 			{
-				Callback->RenderAudio(Scratch.data(), PeriodFrames);
+				Callback->RenderAudio(Scratch.GetData(), PeriodFrames);
 
-				const float* At = Scratch.data();
+				const float* At = Scratch.GetData();
 				unsigned long Remaining = PeriodFrames;
 
 				while (Remaining > 0 && !Stop.ShouldStop())
@@ -287,6 +287,7 @@ namespace Lumina
 						{
 							LOG_ERROR("[Audio] ALSA write failed ({0})", Alsa.StrError((int)Written));
 							bNeedsRestart.store(true, Atomic::MemoryOrderRelease);
+							bRunning.store(false, Atomic::MemoryOrderRelease);
 							return;
 						}
 						break;

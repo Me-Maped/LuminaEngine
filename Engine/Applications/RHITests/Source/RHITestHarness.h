@@ -27,8 +27,8 @@ namespace Lumina::RHITests
             {
                 return true;
             }
-            Failf("%s == %s  (got %llu, want %llu)  [%s:%d]", Expression, "expected",
-                  (unsigned long long)Actual, (unsigned long long)Expected, File, Line);
+            Failf("%s(%d): error: %s == expected  (got %llu, want %llu)", File, Line, Expression,
+                  (unsigned long long)Actual, (unsigned long long)Expected);
             return false;
         }
 
@@ -62,7 +62,7 @@ namespace Lumina::RHITests
         RHI::FPipelineH TrackPipeline(RHI::FPipelineH Pipeline);
 
         const TVector<FString>& GetFailures() const { return Failures; }
-        bool HasFailures() const { return !Failures.empty(); }
+        bool HasFailures() const { return !Failures.IsEmpty(); }
 
         /** Runner-only: retires everything taken through Malloc/CreateTexture. Called after the body
          *  returns, before the frames that let the retire queue reach it. */
@@ -83,8 +83,8 @@ namespace Lumina::RHITests
     {
         return RHI::FShaderSource
         {
-            .Source     = TSpan<const std::byte>(reinterpret_cast<const std::byte*>(Spirv.data()),
-                                                 Spirv.size() * sizeof(uint32)),
+            .Source     = TSpan<const std::byte>(reinterpret_cast<const std::byte*>(Spirv.GetData()),
+                                                 Spirv.Num() * sizeof(uint32)),
             .EntryPoint = EntryPoint,
         };
     }
@@ -102,10 +102,8 @@ namespace Lumina::RHITests
         FTestRegistrar(const char* Group, const char* Name, FTestFn Fn, bool bExpectValidationError = false);
     };
 
-    /** Runs every registered test in registration order. Returns the number that failed.
-     *  TestFilter, when set, selects a single "Group.Name" -- the smallest unit that can be put in front
-     *  of a driver, which matters when the thing being bisected takes the device down. */
-    int32 RunAll(const char* GroupFilter, const char* TestFilter = nullptr);
+    // Returns the failure count. Filter takes --gtest_filter's colon-separated Group.Name wildcard patterns.
+    int32 RunAll(const char* Filter);
 
     /** Registered names, for --list. */
     void ForEachTest(void (*Visitor)(const char* Group, const char* Name));

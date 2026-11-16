@@ -202,7 +202,7 @@ namespace Lumina
 
         if (CachedValue.bUseAsset != Actual.bUseAsset
             || CachedValue.Asset.Get() != Actual.Asset.Get()
-            || CachedValue.Curve.Keys.size() != Actual.Curve.Keys.size())
+            || CachedValue.Curve.Keys.Num() != Actual.Curve.Keys.Num())
         {
             CachedValue = Value = Actual;
         }
@@ -415,7 +415,7 @@ namespace Lumina
         SGradient Actual;
         Property->GetValue(&Actual);
 
-        if (CachedValue.Keys.size() != Actual.Keys.size())
+        if (CachedValue.Keys.Num() != Actual.Keys.Num())
         {
             CachedValue = Value = Actual;
             SelectedStop = Constants::kIndexNone;

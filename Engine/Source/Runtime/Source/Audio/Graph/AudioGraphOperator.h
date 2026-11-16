@@ -11,35 +11,35 @@
 namespace Lumina
 {
 
-    /** Typed storage every wire in a live graph instance points into. */
+    // Typed storage every wire in a live graph instance points into.
     class RUNTIME_API FAudioGraphArena
     {
     public:
 
         void Initialize(const FAudioGraphSlotCounts& Counts, uint32 InBlockFrames);
 
-        /** Drops the previous block's trigger events. Audio slots are not recleared, see Execute. */
+        // Drops the previous block's trigger events. Audio slots are not recleared, see Execute.
         void BeginBlock();
 
         uint32 GetBlockFrames() const { return BlockFrames; }
 
-        float* AudioRead(uint16 Slot)  { return AudioStorage.data() + (size_t)ResolveRead(Slot, AudioCount) * BlockFrames; }
-        float* AudioWrite(uint16 Slot) { return AudioStorage.data() + (size_t)ResolveWrite(Slot, AudioCount) * BlockFrames; }
+        float* AudioRead(uint16 Slot)  { return AudioStorage.GetData() + (size_t)ResolveRead(Slot, AudioCount) * BlockFrames; }
+        float* AudioWrite(uint16 Slot) { return AudioStorage.GetData() + (size_t)ResolveWrite(Slot, AudioCount) * BlockFrames; }
 
-        float* FloatRead(uint16 Slot)  { return FloatStorage.data() + ResolveRead(Slot, FloatCount); }
-        float* FloatWrite(uint16 Slot) { return FloatStorage.data() + ResolveWrite(Slot, FloatCount); }
+        float* FloatRead(uint16 Slot)  { return FloatStorage.GetData() + ResolveRead(Slot, FloatCount); }
+        float* FloatWrite(uint16 Slot) { return FloatStorage.GetData() + ResolveWrite(Slot, FloatCount); }
 
-        int32* IntRead(uint16 Slot)  { return IntStorage.data() + ResolveRead(Slot, IntCount); }
-        int32* IntWrite(uint16 Slot) { return IntStorage.data() + ResolveWrite(Slot, IntCount); }
+        int32* IntRead(uint16 Slot)  { return IntStorage.GetData() + ResolveRead(Slot, IntCount); }
+        int32* IntWrite(uint16 Slot) { return IntStorage.GetData() + ResolveWrite(Slot, IntCount); }
 
-        uint8* BoolRead(uint16 Slot)  { return BoolStorage.data() + ResolveRead(Slot, BoolCount); }
-        uint8* BoolWrite(uint16 Slot) { return BoolStorage.data() + ResolveWrite(Slot, BoolCount); }
+        uint8* BoolRead(uint16 Slot)  { return BoolStorage.GetData() + ResolveRead(Slot, BoolCount); }
+        uint8* BoolWrite(uint16 Slot) { return BoolStorage.GetData() + ResolveWrite(Slot, BoolCount); }
 
-        FAudioGraphTriggerBuffer* TriggerRead(uint16 Slot)  { return TriggerStorage.data() + ResolveRead(Slot, TriggerCount); }
-        FAudioGraphTriggerBuffer* TriggerWrite(uint16 Slot) { return TriggerStorage.data() + ResolveWrite(Slot, TriggerCount); }
+        FAudioGraphTriggerBuffer* TriggerRead(uint16 Slot)  { return TriggerStorage.GetData() + ResolveRead(Slot, TriggerCount); }
+        FAudioGraphTriggerBuffer* TriggerWrite(uint16 Slot) { return TriggerStorage.GetData() + ResolveWrite(Slot, TriggerCount); }
 
-        const FAudioGraphWaveResource** WaveRead(uint16 Slot)  { return WaveStorage.data() + ResolveRead(Slot, WaveCount); }
-        const FAudioGraphWaveResource** WaveWrite(uint16 Slot) { return WaveStorage.data() + ResolveWrite(Slot, WaveCount); }
+        const FAudioGraphWaveResource** WaveRead(uint16 Slot)  { return WaveStorage.GetData() + ResolveRead(Slot, WaveCount); }
+        const FAudioGraphWaveResource** WaveWrite(uint16 Slot) { return WaveStorage.GetData() + ResolveWrite(Slot, WaveCount); }
 
     private:
 
@@ -65,7 +65,7 @@ namespace Lumina
         uint32 WaveCount     = 0;
     };
 
-    /** Everything an operator needs to bind its pins at construction. */
+    // Everything an operator needs to bind its pins at construction.
     struct RUNTIME_API FAudioGraphOperatorBuildParams
     {
         const FAudioGraphNodeInstance*  Node       = nullptr;
@@ -98,17 +98,14 @@ namespace Lumina
         uint16 OutputSlot(uint32 Pin) const;
     };
 
-    /** One block of DSP for one node. Constructed once per instance, executed once per block. */
+    // One block of DSP for one node. Constructed once per instance, executed once per block.
     class RUNTIME_API IAudioGraphOperator
     {
     public:
 
         virtual ~IAudioGraphOperator() = default;
 
-        /** Returns the operator to its start state without reallocating. */
-        virtual void Reset() {}
-
-        /** Runs on the audio device thread, so it must not allocate, lock or block. */
+        // Runs on the audio device thread, so it must not allocate, lock or block.
         virtual void Execute(const FAudioGraphBlockContext& Context) = 0;
 
         // Every audio output must be written in full each block; the arena does not reclear them.
@@ -116,7 +113,7 @@ namespace Lumina
 
     using FAudioGraphOperatorFactory = TFunction<TUniquePtr<IAudioGraphOperator>(const FAudioGraphOperatorBuildParams&)>;
 
-    /** Pin types an operator reads and writes, in the order its Execute indexes them. */
+    // Pin types an operator reads and writes, in the order its Execute indexes them.
     struct FAudioGraphOperatorSignature
     {
         TVector<EAudioGraphType> Inputs;
@@ -126,18 +123,18 @@ namespace Lumina
         EAudioGraphType Variadic = EAudioGraphType::Invalid;
     };
 
-    /** A runtime operator, addressed by the name compiled programs store. */
+    // A runtime operator, addressed by the name compiled programs store.
     struct FAudioGraphNodeClass
     {
         FName Name;
 
-        /** The editor node declaring this operator must present pins matching it, or the compile errors. */
+        // The editor node declaring this operator must present pins matching it, or the compile errors.
         FAudioGraphOperatorSignature Signature;
 
         FAudioGraphOperatorFactory Factory;
     };
 
-    /** Every node type the engine and its plugins offer, keyed by the name compiled programs store. */
+    // Every node type the engine and its plugins offer, keyed by the name compiled programs store.
     class RUNTIME_API FAudioGraphNodeRegistry
     {
     public:
@@ -157,11 +154,11 @@ namespace Lumina
 
     namespace AudioGraph
     {
-        /** Builds the operator for Params.Node, or null when the program names a node this build lacks. */
+        // Builds the operator for Params.Node, or null when the program names a node this build lacks.
         RUNTIME_API TUniquePtr<IAudioGraphOperator> CreateOperator(const FAudioGraphOperatorBuildParams& Params);
     }
 
-    /** Declares a node class at static init; the registrar's name only has to be unique in its file. */
+    // Declares a node class at static init; the registrar's name only has to be unique in its file.
     struct RUNTIME_API FAudioGraphNodeRegistrar
     {
         FAudioGraphNodeRegistrar(FAudioGraphNodeClass&& NodeClass);

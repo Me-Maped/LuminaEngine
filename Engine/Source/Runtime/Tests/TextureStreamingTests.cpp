@@ -8,8 +8,8 @@
 #include "FileSystem/FileSystem.h"
 #include "Paths/Paths.h"
 #include "Renderer/TextureData.h"
-
-#include <filesystem>
+#include "Renderer/TextureStreamingManager.h"
+#include "ScopedTempMountTestUtil.h"
 
 using namespace Lumina;
 
@@ -26,8 +26,8 @@ namespace
         Mip.RowPitch   = Width * 4;
         Mip.SlicePitch = Width * Height * 4;
 
-        Mip.Pixels.resize((size_t)Width * Height * 4);
-        for (size_t i = 0; i < Mip.Pixels.size(); ++i)
+        Mip.Pixels.SetNum(Lumina::IntCastChecked<Lumina::int32>(static_cast<int64>(Width) * Height * 4));
+        for (int32 i = 0; i < Mip.Pixels.Num(); ++i)
         {
             Mip.Pixels[i] = (uint8)((i * 31u + Seed * 7u) & 0xFF);
         }
@@ -47,7 +47,7 @@ namespace
         Resource.ImageDescription.Format     = EFormat::RGBA8_UNORM;
         Resource.ImageDescription.LayerCount = 1;
 
-        Resource.Mips.resize(NumMips);
+        Resource.Mips.SetNum(NumMips);
         for (uint32 Mip = 0; Mip < NumMips; ++Mip)
         {
             const uint32 Size = BaseSize >> Mip;
@@ -55,29 +55,36 @@ namespace
         }
     }
 
-    // Scoped writable mount + on-disk directory for the package under test.
-    struct FScopedPackageMount
+    // What the streamer leaves behind once the image holds the streamed mips.
+    void EvictStreamedMips(FTextureResource& Resource)
     {
-        FFixedString Alias = "/StreamTest";
-        std::filesystem::path Dir;
-
-        FScopedPackageMount()
+        for (uint32 Mip = 0; Mip < Resource.ImageDescription.FirstInlineMip; ++Mip)
         {
-            Dir = std::filesystem::temp_directory_path() / "LuminaTextureStreamingTests";
-            std::filesystem::remove_all(Dir);
-            std::filesystem::create_directories(Dir);
-
-            VFS::Mount<VFS::FNativeFileSystem>(Alias, FStringView(Dir.string().c_str()));
+            Resource.Mips[Mip].Pixels.Reset();
+            Resource.Mips[Mip].Pixels.Shrink();
         }
+    }
 
-        ~FScopedPackageMount()
-        {
-            VFS::Unmount(Alias);
-            std::error_code Ec;
-            std::filesystem::remove_all(Dir, Ec);
-        }
+    TStrongObjectPtr<CTexture> NewStreamableTexture()
+    {
+        TStrongObjectPtr<CTexture> Texture(NewObject<CTexture>(nullptr, NAME_None, FGuid::New(), OF_Transient));
+        Texture->TextureResource = MakeUnique<FTextureResource>();
+        BuildChain(*Texture->TextureResource);
+        Texture->TextureResource->ImageDescription.FirstInlineMip = 2;
+        Texture->TextureResource->ResidentFirstMip = 2;
+        return Texture;
+    }
+}
+
+namespace Lumina
+{
+    struct FTextureStreamingTestAccess
+    {
+        using FPendingLoad = FTextureStreamingManager::FPendingLoad;
     };
 }
+
+using FPendingLoad = FTextureStreamingTestAccess::FPendingLoad;
 
 TEST(TextureStreaming, ComputeFirstInlineMipSplitsAtThreshold)
 {
@@ -135,11 +142,11 @@ TEST(TextureStreaming, NonPackageArchiveKeepsEveryMipInline)
     FMemoryReader Reader(Bytes);
     Reader << Loaded;
 
-    ASSERT_EQ(Loaded.Mips.size(), Source.Mips.size());
+    ASSERT_EQ(Loaded.Mips.Num(), Source.Mips.Num());
     EXPECT_EQ(Loaded.ImageDescription.FirstInlineMip, 0);
     EXPECT_FALSE(Loaded.IsStreamable());
 
-    for (size_t i = 0; i < Loaded.Mips.size(); ++i)
+    for (int32 i = 0; i < Loaded.Mips.Num(); ++i)
     {
         EXPECT_EQ(Loaded.Mips[i].Pixels, Source.Mips[i].Pixels) << "mip " << i << " did not round-trip";
     }
@@ -147,7 +154,7 @@ TEST(TextureStreaming, NonPackageArchiveKeepsEveryMipInline)
 
 TEST(TextureStreaming, PackageSaveWritesRecoverableBulkMips)
 {
-    FScopedPackageMount Mount;
+    TestUtil::FScopedTempMount Mount("/StreamTest", "LuminaTextureStreamingTests");
 
     CPackage* Package = CPackage::CreatePackage("/StreamTest/BulkTexture");
     ASSERT_NE(Package, nullptr);
@@ -162,7 +169,7 @@ TEST(TextureStreaming, PackageSaveWritesRecoverableBulkMips)
     TVector<TVector<uint8>> Expected;
     for (const FTextureResource::FMip& Mip : Texture->TextureResource->Mips)
     {
-        Expected.push_back(Mip.Pixels);
+        Expected.Add(Mip.Pixels);
     }
 
     const FFixedString Path = Package->GetPackagePath();
@@ -179,7 +186,7 @@ TEST(TextureStreaming, PackageSaveWritesRecoverableBulkMips)
     uint64 ExpectedBulkBytes = 0;
     for (uint32 Mip = 0; Mip < FirstInlineMip; ++Mip)
     {
-        ExpectedBulkBytes += Expected[Mip].size();
+        ExpectedBulkBytes += Expected[Mip].Num();
     }
     EXPECT_EQ((uint64)Region.Size, ExpectedBulkBytes);
 
@@ -188,7 +195,7 @@ TEST(TextureStreaming, PackageSaveWritesRecoverableBulkMips)
     {
         const FBulkDataRef& Ref = Texture->TextureResource->Mips[Mip].BulkRef;
         ASSERT_TRUE(Ref.IsValid()) << "mip " << Mip << " has no bulk ref";
-        EXPECT_EQ((uint64)Ref.Size, (uint64)Expected[Mip].size());
+        EXPECT_EQ((uint64)Ref.Size, (uint64)Expected[Mip].Num());
 
         TVector<uint8> Read;
         ASSERT_TRUE(Package->ReadBulkData(Ref, Read)) << "mip " << Mip << " could not be read back";
@@ -196,7 +203,7 @@ TEST(TextureStreaming, PackageSaveWritesRecoverableBulkMips)
     }
 
     // Inline mips must NOT have been diverted to the region.
-    for (uint32 Mip = FirstInlineMip; Mip < (uint32)Texture->TextureResource->Mips.size(); ++Mip)
+    for (uint32 Mip = FirstInlineMip; Mip < (uint32)Texture->TextureResource->Mips.Num(); ++Mip)
     {
         EXPECT_FALSE(Texture->TextureResource->Mips[Mip].BulkRef.IsValid())
             << "mip " << Mip << " is inline and should carry no bulk ref";
@@ -208,7 +215,7 @@ TEST(TextureStreaming, PackageSaveWritesRecoverableBulkMips)
     ASSERT_TRUE(CPackage::ReadPackageFile(Path, Container, &ReadRegion));
     EXPECT_EQ(ReadRegion.FileOffset, Region.FileOffset);
     EXPECT_EQ(ReadRegion.Size, Region.Size);
-    EXPECT_LT((uint64)Container.size(), ExpectedBulkBytes)
+    EXPECT_LT((uint64)Container.Num(), ExpectedBulkBytes)
         << "the inflated container should be far smaller than the mips it no longer holds";
 
     ASSERT_TRUE(CPackage::DestroyPackage(Package));
@@ -217,7 +224,7 @@ TEST(TextureStreaming, PackageSaveWritesRecoverableBulkMips)
 TEST(TextureStreaming, ReSaveAfterStreamOutPreservesMips)
 {
     // A texture whose streamed mips were evicted has empty Pixels, which PreSave must catch.
-    FScopedPackageMount Mount;
+    TestUtil::FScopedTempMount Mount("/StreamTest", "LuminaTextureStreamingTests");
 
     CPackage* Package = CPackage::CreatePackage("/StreamTest/ResaveTexture");
     ASSERT_NE(Package, nullptr);
@@ -231,7 +238,7 @@ TEST(TextureStreaming, ReSaveAfterStreamOutPreservesMips)
     TVector<TVector<uint8>> Expected;
     for (const FTextureResource::FMip& Mip : Texture->TextureResource->Mips)
     {
-        Expected.push_back(Mip.Pixels);
+        Expected.Add(Mip.Pixels);
     }
 
     const FFixedString Path = Package->GetPackagePath();
@@ -240,12 +247,7 @@ TEST(TextureStreaming, ReSaveAfterStreamOutPreservesMips)
     const uint8 FirstInlineMip = Texture->TextureResource->ImageDescription.FirstInlineMip;
     ASSERT_GT(FirstInlineMip, 0);
 
-    // Simulate the streamer evicting every streamed mip's CPU copy.
-    for (uint32 Mip = 0; Mip < FirstInlineMip; ++Mip)
-    {
-        Texture->TextureResource->Mips[Mip].Pixels.clear();
-        Texture->TextureResource->Mips[Mip].Pixels.shrink_to_fit();
-    }
+    EvictStreamedMips(*Texture->TextureResource);
 
     ASSERT_TRUE(CPackage::SavePackage(Package, Path));
 
@@ -261,4 +263,93 @@ TEST(TextureStreaming, ReSaveAfterStreamOutPreservesMips)
     }
 
     ASSERT_TRUE(CPackage::DestroyPackage(Package));
+}
+
+TEST(TextureStreaming, PendingLoadReadsThroughItsPinnedPackage)
+{
+    TestUtil::FScopedTempMount Mount("/StreamTest", "LuminaTextureStreamingTests");
+
+    CPackage* Package = CPackage::CreatePackage("/StreamTest/PinnedTexture");
+    ASSERT_NE(Package, nullptr);
+
+    CTexture* Texture = NewObject<CTexture>(Package, "PinnedTexture");
+    ASSERT_NE(Texture, nullptr);
+
+    Texture->TextureResource = MakeUnique<FTextureResource>();
+    BuildChain(*Texture->TextureResource);
+    const TVector<uint8> ExpectedMip0 = Texture->TextureResource->Mips[0].Pixels;
+
+    const FFixedString Path = Package->GetPackagePath();
+    ASSERT_TRUE(CPackage::SavePackage(Package, Path));
+
+    const uint8 FirstInlineMip = Texture->TextureResource->ImageDescription.FirstInlineMip;
+    ASSERT_GT(FirstInlineMip, 0);
+
+    EvictStreamedMips(*Texture->TextureResource);
+    {
+        FPendingLoad Load(Texture, 0, FirstInlineMip, 1);
+        Load.Read();
+        ASSERT_FALSE(Load.bFailed);
+        EXPECT_EQ(Load.MipBytes[Load.SliceIndex(0, 0)], ExpectedMip0);
+    }
+
+    EvictStreamedMips(*Texture->TextureResource);
+    {
+        FPendingLoad Load(Texture, 0, FirstInlineMip, 1);
+        ASSERT_TRUE(CPackage::SavePackage(Package, Path));
+        Load.Read();
+        EXPECT_TRUE(Load.bFailed) << "refs taken before a save name a layout that is gone";
+    }
+
+    EvictStreamedMips(*Texture->TextureResource);
+    const int32 RefsBeforeLoad = Package->GetStrongRefCount();
+    TUniquePtr<FPendingLoad> Load = MakeUnique<FPendingLoad>(Texture, 0, FirstInlineMip, 1);
+    ASSERT_EQ(Package->GetStrongRefCount(), RefsBeforeLoad + 1) << "the read must hold the package alive";
+
+    // Drops the root reference, which without the pin frees the package the worker is about to read through.
+    ASSERT_TRUE(CPackage::DestroyPackage(Package));
+    EXPECT_EQ(Load->Package.Get(), Package);
+
+    Load->Read();
+    EXPECT_TRUE(Load->bComplete.load());
+    EXPECT_TRUE(Load->bFailed) << "the destroyed package's file is gone";
+}
+
+TEST(TextureStreaming, UnregisterKeepsIndexOfTextureMarkedForDestroy)
+{
+    FTextureStreamingManager Manager;
+
+    TStrongObjectPtr<CTexture> A = NewStreamableTexture();
+    TStrongObjectPtr<CTexture> B = NewStreamableTexture();
+    TStrongObjectPtr<CTexture> C = NewStreamableTexture();
+    TStrongObjectPtr<CTexture> D = NewStreamableTexture();
+
+    Manager.RegisterTexture(A.Get());
+    Manager.RegisterTexture(B.Get());
+    Manager.RegisterTexture(C.Get());
+
+    // DestroyPackage leaves an export a holder keeps alive in this state until its OnDestroy unregisters it.
+    C->SetFlag(OF_MarkedDestroy);
+
+    // Swaps C into A's slot, then D takes the slot C used to hold.
+    Manager.UnregisterTexture(A.Get());
+    Manager.RegisterTexture(D.Get());
+    Manager.UnregisterTexture(C.Get());
+
+    TVector<FTextureStreamingManager::FTextureSnapshot> Snapshot;
+    TVector<FTextureStreamingManager::FPendingSnapshot> Pending;
+    Manager.GetSnapshot(Snapshot, Pending);
+
+    TVector<FName> Names;
+    for (const FTextureStreamingManager::FTextureSnapshot& Row : Snapshot)
+    {
+        Names.Add(Row.Name);
+    }
+    EXPECT_EQ(Names.Num(), 2);
+    EXPECT_TRUE(Algo::Contains(Names, B->GetName()));
+    EXPECT_TRUE(Algo::Contains(Names, D->GetName())) << "unregistering C removed the entry of the texture that took its old slot";
+
+    C->ClearFlags(OF_MarkedDestroy);
+    Manager.UnregisterTexture(B.Get());
+    Manager.UnregisterTexture(D.Get());
 }

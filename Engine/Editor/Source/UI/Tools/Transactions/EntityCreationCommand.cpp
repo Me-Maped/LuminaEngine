@@ -3,10 +3,10 @@
 
 #include <algorithm>
 
-#include "Core/Object/Package/Package.h"
 #include "Core/Serialization/MemoryArchiver.h"
 #include "Core/Serialization/ObjectArchiver.h"
 #include "World/World.h"
+#include "World/ExternalEntities/ExternalEntities.h"
 #include "World/Entity/EntityUtils.h"
 #include "World/Entity/Components/EditorComponent.h"
 
@@ -20,7 +20,7 @@ namespace Lumina
 
     void FEntityCreationCommand::CaptureLiveEntities(TVector<ECS::FEntity>& Out) const
     {
-        Out.clear();
+        Out.Reset();
 
         CWorld* W = World.Get();
         if (W == nullptr)
@@ -31,8 +31,8 @@ namespace Lumina
         ECS::FRegistry& Registry = W->GetEntityRegistry();
 
         // Excluded for the same reason the registry snapshot excludes them, they are not the document.
-        Out.reserve(Registry.NumEntities());
-        Registry.ForEachEntityExcept<FEditorComponent>([&](ECS::FEntity E) { Out.push_back(E); });
+        Out.Reserve(Registry.NumEntities());
+        Registry.ForEachEntityExcept<FEditorComponent>([&](ECS::FEntity E) { Out.Add(E); });
 
         // Sorted so Finalize's diff is a binary search, and handles only with no component data touched.
         Algo::Sort(Out);
@@ -40,8 +40,9 @@ namespace Lumina
 
     void FEntityCreationCommand::Finalize()
     {
-        Created.clear();
-        CreatedData.clear();
+        Created.Reset();
+        CreatedGuids.Reset();
+        CreatedData.Reset();
 
         CWorld* W = World.Get();
         if (W == nullptr)
@@ -58,12 +59,13 @@ namespace Lumina
         {
             if (!Algo::BinarySearch(LiveBefore, E))
             {
-                Created.push_back(E);
+                Created.Add(E);
+                CreatedGuids.Add(ExternalEntities::GuidOf(Registry, E));
             }
         }
 
         // Any shortfall means entities went away, and this command has no before-image to restore them.
-        const int64 DestroyedCount = (int64)LiveBefore.size() + (int64)Created.size() - (int64)LiveAfter.size();
+        const int64 DestroyedCount = (int64)LiveBefore.Num() + (int64)Created.Num() - (int64)LiveAfter.Num();
         if (DestroyedCount != 0)
         {
             LOG_ERROR("FEntityCreationCommand: {} entities were destroyed inside a creation-only "
@@ -71,7 +73,7 @@ namespace Lumina
                       DestroyedCount);
         }
 
-        if (Created.empty())
+        if (Created.IsEmpty())
         {
             return;
         }
@@ -80,7 +82,7 @@ namespace Lumina
         FMemoryWriter Writer(CreatedData);
         FObjectProxyArchiver Ar(Writer, false);
 
-        int32 NumCreated = (int32)Created.size();
+        int32 NumCreated = Created.Num();
         Ar << NumCreated;
 
         for (ECS::FEntity E : Created)
@@ -108,17 +110,12 @@ namespace Lumina
                 ECS::Utils::DestroyEntityHierarchy(Registry, E);
             }
         }
-
-        if (W->GetPackage())
-        {
-            W->GetPackage()->MarkDirty();
-        }
     }
 
     void FEntityCreationCommand::Redo()
     {
         CWorld* W = World.Get();
-        if (W == nullptr || CreatedData.empty())
+        if (W == nullptr || CreatedData.IsEmpty())
         {
             return;
         }
@@ -138,10 +135,10 @@ namespace Lumina
             ECS::Utils::SerializeEntity(Ar, Registry, Entity, &Links);
         }
         Links.Apply(Registry);
+    }
 
-        if (W->GetPackage())
-        {
-            W->GetPackage()->MarkDirty();
-        }
+    void FEntityCreationCommand::MarkChanged() const
+    {
+        ExternalEntities::MarkChanged(World.Get(), Created, CreatedGuids);
     }
 }

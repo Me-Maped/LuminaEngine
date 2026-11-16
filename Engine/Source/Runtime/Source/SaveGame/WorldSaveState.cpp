@@ -48,34 +48,6 @@ namespace Lumina::SaveGame
             CStruct*         Struct = nullptr;
         };
 
-        template<typename TBody>
-        void WriteSized(FArchive& Ar, TBody&& Body)
-        {
-            const int64 SizePosition = Ar.Tell();
-            int64 Size = 0;
-            Ar << Size;
-            const int64 Start = Ar.Tell();
-            Body();
-            const int64 End = Ar.Tell();
-            Size = End - Start;
-            Ar.Seek(SizePosition);
-            Ar << Size;
-            Ar.Seek(End);
-        }
-
-        template<typename TBody>
-        void WriteCounted(FArchive& Ar, TBody&& Body)
-        {
-            const int64 CountPosition = Ar.Tell();
-            uint32 Count = 0;
-            Ar << Count;
-            Count = Body();
-            const int64 End = Ar.Tell();
-            Ar.Seek(CountPosition);
-            Ar << Count;
-            Ar.Seek(End);
-        }
-
         bool ReadCount(FArchive& Ar, uint32& Count, const char* What)
         {
             Ar << Count;
@@ -164,7 +136,7 @@ namespace Lumina::SaveGame
                 {
                     continue;
                 }
-                Entries.push_back({ Set, Struct });
+                Entries.Emplace(Set, Struct);
             }
             return Entries;
         }
@@ -197,7 +169,7 @@ namespace Lumina::SaveGame
                 }
                 if (!bUnderAnother)
                 {
-                    Roots.push_back(Entity);
+                    Roots.Add(Entity);
                 }
             }
             return Roots;
@@ -209,29 +181,89 @@ namespace Lumina::SaveGame
             return Name != nullptr ? Name->Name : FName();
         }
 
-        // Earlier same-named siblings, or for a root the same-named roots with a lower slot, which is creation order.
-        uint32 NameOrdinal(ECS::FRegistry& Registry, ECS::FEntity Entity, const FName& Name)
+        // The key a runtime-built entity is found by when it has no SaveKey, its names from the root down.
+        class FEntityNamePaths
         {
-            const ECS::FHierarchy& Hierarchy = Registry.GetHierarchy();
-            const ECS::FEntity Parent = Hierarchy.GetParent(Entity);
-            uint32 Ordinal = 0;
-            if (!Parent.IsNull())
+        public:
+
+            explicit FEntityNamePaths(ECS::FRegistry& InRegistry)
+                : Registry(InRegistry)
+            {}
+
+            FString Get(ECS::FEntity Entity)
             {
+                TVector<FString> Segments;
+                for (ECS::FEntity Current = Entity; !Current.IsNull(); Current = Registry.GetHierarchy().GetParent(Current))
+                {
+                    const FName Name = EntityName(Registry, Current);
+                    FString Segment = Name.IsNone() ? FString("?") : FString(*Name);
+                    if (const uint32 Ordinal = NameOrdinal(Current, Name); Ordinal > 0)
+                    {
+                        Segment += Format("#{}", Ordinal);
+                    }
+                    Segments.Add(Move(Segment));
+                }
+
+                FString Path;
+                for (int32 Index = Segments.Num(); Index-- > 0;)
+                {
+                    Path += Segments[Index];
+                    if (Index > 0)
+                    {
+                        Path += "/";
+                    }
+                }
+                return Path;
+            }
+
+        private:
+
+            // Earlier same-named siblings, or for a root the same-named roots created before it.
+            uint32 NameOrdinal(ECS::FEntity Entity, const FName& Name)
+            {
+                const ECS::FHierarchy& Hierarchy = Registry.GetHierarchy();
+                const ECS::FEntity Parent = Hierarchy.GetParent(Entity);
+                if (Parent.IsNull())
+                {
+                    CountRoots();
+                    const auto Found = RootOrdinals.Find(Entity);
+                    return Found != nullptr ? (*Found) : 0u;
+                }
+                uint32 Ordinal = 0;
                 for (ECS::FEntity Sibling = Hierarchy.GetFirstChild(Parent); !Sibling.IsNull() && Sibling != Entity; Sibling = Hierarchy.GetNextSibling(Sibling))
                 {
                     Ordinal += EntityName(Registry, Sibling) == Name ? 1u : 0u;
                 }
                 return Ordinal;
             }
-            for (ECS::FEntity Other : Registry.View<SNameComponent>())
+
+            void CountRoots()
             {
-                if (Other.GetIndex() < Entity.GetIndex() && Hierarchy.GetParent(Other).IsNull() && EntityName(Registry, Other) == Name)
+                if (bRootsCounted)
                 {
-                    ++Ordinal;
+                    return;
+                }
+                bRootsCounted = true;
+                TVector<ECS::FEntity> Roots;
+                for (ECS::FEntity Entity : Registry.View<SNameComponent>())
+                {
+                    if (Registry.GetHierarchy().GetParent(Entity).IsNull())
+                    {
+                        Roots.Add(Entity);
+                    }
+                }
+                Algo::Sort(Roots, [&](ECS::FEntity A, ECS::FEntity B) { return Registry.GetCreationSerial(A) < Registry.GetCreationSerial(B); });
+                THashMap<FName, uint32> Seen;
+                for (ECS::FEntity Root : Roots)
+                {
+                    RootOrdinals.TryAdd(Root, Seen[EntityName(Registry, Root)]++);
                 }
             }
-            return Ordinal;
-        }
+
+            ECS::FRegistry&                Registry;
+            THashMap<ECS::FEntity, uint32> RootOrdinals;
+            bool                           bRootsCounted = false;
+        };
 
         class FEntityMatcher
         {
@@ -239,6 +271,7 @@ namespace Lumina::SaveGame
 
             explicit FEntityMatcher(ECS::FRegistry& InRegistry)
                 : Registry(InRegistry)
+                , NamePaths(InRegistry)
             {}
 
             ECS::FEntity Find(const FRecord& Record)
@@ -250,14 +283,14 @@ namespace Lumina::SaveGame
                 case EMatch::SaveKey:
                     {
                         BuildKeys();
-                        const auto Found = ByKey.find(Record.Key);
-                        return Found != ByKey.end() ? Found->second : ECS::NullEntity;
+                        const auto Found = ByKey.Find(Record.Key);
+                        return Found != nullptr ? (*Found) : ECS::NullEntity;
                     }
                 case EMatch::NamePath:
                     {
                         BuildPaths();
-                        const auto Found = ByPath.find(Record.Key);
-                        return Found != ByPath.end() ? Found->second : ECS::NullEntity;
+                        const auto Found = ByPath.Find(Record.Key);
+                        return Found != nullptr ? (*Found) : ECS::NullEntity;
                     }
                 default:
                     return ECS::NullEntity;
@@ -278,7 +311,7 @@ namespace Lumina::SaveGame
                     const FName& Key = Registry.Get<SSaveGameComponent>(Entity).SaveKey;
                     if (!Key.IsNone())
                     {
-                        ByKey.emplace(FString(Key.c_str()), Entity);
+                        ByKey.TryAdd(FString(*Key), Entity);
                     }
                 }
             }
@@ -292,11 +325,12 @@ namespace Lumina::SaveGame
                 bPathsBuilt = true;
                 for (ECS::FEntity Entity : Registry.View<SNameComponent>())
                 {
-                    ByPath.emplace(GetEntityNamePath(Registry, Entity), Entity);
+                    ByPath.TryAdd(NamePaths.Get(Entity), Entity);
                 }
             }
 
             ECS::FRegistry&              Registry;
+            FEntityNamePaths             NamePaths;
             THashMap<FString, ECS::FEntity> ByKey;
             THashMap<FString, ECS::FEntity> ByPath;
             bool                         bKeysBuilt  = false;
@@ -352,7 +386,7 @@ namespace Lumina::SaveGame
                 Ar << StructName << Size;
                 const int64 Start = Ar.Tell();
 
-                CStruct* Struct = FindComponentStruct(StructName.c_str());
+                CStruct* Struct = FindComponentStruct(*StructName);
                 const FComponentOps* Ops = Struct != nullptr ? Struct->GetComponentOps() : nullptr;
                 void* Data = Ops != nullptr ? Ops->Emplace(Registry, Entity) : nullptr;
                 if (Data != nullptr)
@@ -362,7 +396,7 @@ namespace Lumina::SaveGame
                 }
                 else
                 {
-                    LOG_WARN("Save game: component '{}' is gone, so its saved fields are skipped.", StructName.c_str());
+                    LOG_WARN("Save game: component '{}' is gone, so its saved fields are skipped.", *StructName);
                 }
                 Ar.Seek(Start + Size);
             }
@@ -389,11 +423,11 @@ namespace Lumina::SaveGame
                 if (Script != nullptr)
                 {
                     SerializeProperties(Ar, Class, Script, ESaveGameProperties::SaveGame);
-                    OutRestoredScripts.push_back(Script);
+                    OutRestoredScripts.Add(Script);
                 }
                 else
                 {
-                    LOG_WARN("Save game: script '{}' could not be found or attached, so its saved fields are skipped.", ClassName.c_str());
+                    LOG_WARN("Save game: script '{}' could not be found or attached, so its saved fields are skipped.", *ClassName);
                 }
                 Ar.Seek(Start + Size);
             }
@@ -404,7 +438,7 @@ namespace Lumina::SaveGame
             TVector<TStrongObjectPtr<CEntityScript>> Saving;
             for (ECS::FEntity Entity : Registry.View<SEntityScriptComponent>())
             {
-                ForEachSavedScript(Registry, Entity, [&](CEntityScript* Script, uint32) { Saving.push_back(Script); });
+                ForEachSavedScript(Registry, Entity, [&](CEntityScript* Script, uint32) { Saving.Add(Script); });
             }
             for (const TStrongObjectPtr<CEntityScript>& Script : Saving)
             {
@@ -427,23 +461,24 @@ namespace Lumina::SaveGame
             {
                 auto AddRespawn = [&](ECS::FEntity Entity)
                 {
-                    Records.push_back({ Entity, EMatch::Respawn, FString(), Hierarchy.GetParent(Entity) });
-                    Covered.insert(Entity);
+                    Records.Emplace(Entity, EMatch::Respawn, FString(), Hierarchy.GetParent(Entity));
+                    Covered.Add(Entity);
                 };
                 AddRespawn(Root);
                 Hierarchy.ForEachDescendant(Root, AddRespawn);
             }
 
+            FEntityNamePaths NamePaths(Registry);
             uint32 Unmatchable = 0;
             Registry.ForEachEntity([&](ECS::FEntity Entity)
             {
-                if (Covered.contains(Entity))
+                if (Covered.Contains(Entity))
                 {
                     return;
                 }
                 const SSaveGameComponent* Marker = Registry.TryGet<SSaveGameComponent>(Entity);
                 bool bHasData = Marker != nullptr;
-                for (size_t Index = 0; !bHasData && Index < SaveGameComponents.size(); ++Index)
+                for (int32 Index = 0; !bHasData && Index < SaveGameComponents.Num(); ++Index)
                 {
                     bHasData = SaveGameComponents[Index].Set->Contains(Entity);
                 }
@@ -461,7 +496,7 @@ namespace Lumina::SaveGame
                 if (Marker != nullptr && !Marker->SaveKey.IsNone())
                 {
                     Record.Match = EMatch::SaveKey;
-                    Record.Key   = Marker->SaveKey.c_str();
+                    Record.Key   = *Marker->SaveKey;
                 }
                 else if (IsLevelEntity(Registry, Entity))
                 {
@@ -470,14 +505,14 @@ namespace Lumina::SaveGame
                 else if (!EntityName(Registry, Entity).IsNone())
                 {
                     Record.Match = EMatch::NamePath;
-                    Record.Key   = GetEntityNamePath(Registry, Entity);
+                    Record.Key   = NamePaths.Get(Entity);
                 }
                 else
                 {
                     ++Unmatchable;
                     return;
                 }
-                Records.push_back(Move(Record));
+                Records.Add(Move(Record));
             });
 
             if (Unmatchable > 0)
@@ -489,7 +524,7 @@ namespace Lumina::SaveGame
             uint32 Version = WorldStateVersion;
             Ar << Magic << Version;
 
-            uint32 RecordCount = (uint32)Records.size();
+            uint32 RecordCount = (uint32)Records.Num();
             Ar << RecordCount;
             for (FRecord& Record : Records)
             {
@@ -508,17 +543,17 @@ namespace Lumina::SaveGame
             TVector<ECS::FEntity> Destroyed;
             if (const FLevelEntities* Level = Registry.Ctx().Find<FLevelEntities>())
             {
-                for (uint32 Index = 0; Index < (uint32)Level->VersionPlusOne.size(); ++Index)
+                for (int32 Index = 0; Index < Level->VersionPlusOne.Num(); ++Index)
                 {
                     const uint32 Stored = Level->VersionPlusOne[Index];
                     const ECS::FEntity Entity(Index, Stored - 1u);
                     if (Stored != 0 && !Registry.IsValid(Entity))
                     {
-                        Destroyed.push_back(Entity);
+                        Destroyed.Add(Entity);
                     }
                 }
             }
-            uint32 DestroyedCount = (uint32)Destroyed.size();
+            uint32 DestroyedCount = (uint32)Destroyed.Num();
             Ar << DestroyedCount;
             for (ECS::FEntity& Entity : Destroyed)
             {
@@ -538,7 +573,7 @@ namespace Lumina::SaveGame
                             THashSet<CStruct*> Written;
                             for (const FComponentEntry& Entry : AllComponents)
                             {
-                                if (!Entry.Set->Contains(Entity) || !Written.insert(Entry.Struct).second)
+                                if (!Entry.Set->Contains(Entity) || !Written.TryAdd(Entry.Struct))
                                 {
                                     continue;
                                 }
@@ -663,9 +698,9 @@ namespace Lumina::SaveGame
 
             Ar.TranslateEntity = [&](ECS::FEntity Saved)
             {
-                if (const auto Found = Map.find(Saved); Found != Map.end())
+                if (const auto Found = Map.Find(Saved); Found != nullptr)
                 {
-                    return Found->second;
+                    return (*Found);
                 }
                 return Registry.IsValid(Saved) && IsLevelEntity(Registry, Saved) ? Saved : ECS::NullEntity;
             };
@@ -699,10 +734,14 @@ namespace Lumina::SaveGame
                         int64 ComponentSize = 0;
                         Ar << StructName << ComponentSize;
                         const int64 ComponentStart = Ar.Tell();
-                        CStruct* Struct = FindComponentStruct(StructName.c_str());
+                        CStruct* Struct = FindComponentStruct(*StructName);
                         if (const FComponentOps* Ops = Struct != nullptr ? Struct->GetComponentOps() : nullptr)
                         {
                             Ops->EmplaceSerialized(Registry, Target, Ar);
+                        }
+                        else
+                        {
+                            LOG_WARN("Save game: component '{}' is gone, so its saved fields are skipped.", *StructName);
                         }
                         Ar.Seek(ComponentStart + ComponentSize);
                     }
@@ -766,9 +805,9 @@ namespace Lumina::SaveGame
         Registry.ForEachEntity([&](ECS::FEntity Entity)
         {
             const uint32 Index = Entity.GetIndex();
-            if (Index >= Level.VersionPlusOne.size())
+            if (Index >= static_cast<uint32>(Level.VersionPlusOne.Num()))
             {
-                Level.VersionPlusOne.resize(Index + 1, 0u);
+                Level.VersionPlusOne.SetNum(Index + 1, 0u);
             }
             Level.VersionPlusOne[Index] = Entity.GetVersion() + 1u;
         });
@@ -778,34 +817,8 @@ namespace Lumina::SaveGame
     {
         const FLevelEntities* Level = Registry.Ctx().Find<FLevelEntities>();
         const uint32 Index = Entity.GetIndex();
-        return Level != nullptr && !Entity.IsNull() && Index < Level->VersionPlusOne.size()
+        return Level != nullptr && !Entity.IsNull() && Index < static_cast<uint32>(Level->VersionPlusOne.Num())
             && Level->VersionPlusOne[Index] == Entity.GetVersion() + 1u;
-    }
-
-    FString GetEntityNamePath(ECS::FRegistry& Registry, ECS::FEntity Entity)
-    {
-        TVector<FString> Segments;
-        for (ECS::FEntity Current = Entity; !Current.IsNull(); Current = Registry.GetHierarchy().GetParent(Current))
-        {
-            const FName Name = EntityName(Registry, Current);
-            FString Segment = Name.IsNone() ? FString("?") : FString(Name.c_str());
-            if (const uint32 Ordinal = NameOrdinal(Registry, Current, Name); Ordinal > 0)
-            {
-                Segment += Format("#{}", Ordinal);
-            }
-            Segments.push_back(Move(Segment));
-        }
-
-        FString Path;
-        for (size_t Index = Segments.size(); Index-- > 0;)
-        {
-            Path += Segments[Index];
-            if (Index > 0)
-            {
-                Path += "/";
-            }
-        }
-        return Path;
     }
 
     bool SerializeRegistry(FArchive& Ar, ECS::FRegistry& Registry)

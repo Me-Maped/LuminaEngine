@@ -48,7 +48,7 @@ namespace Lumina
         NODISCARD ECS::FRegistry& GetSceneEntityRegistry() const { return GetSceneRegistry(); }
 
         // Mutations from outside the tool, so an agent edit lands on the same undo stack as a panel edit.
-        void RunTransacted(FName Label, const TFunction<void()>& Mutate);
+        void RunTransacted(FName Label, const TFunction<void()>& Mutate, TVector<ECS::FEntity> Edited = {});
         void RunCreationTransacted(FName Label, const TFunction<void()>& Mutate);
         void RunDestroyTransacted(FName Label, const TVector<ECS::FEntity>& Doomed, const TFunction<void()>& Mutate);
         void RunComponentTransacted(FName Label, ECS::FEntity Entity, CStruct* ComponentType, const TFunction<void()>& Mutate);
@@ -82,7 +82,7 @@ namespace Lumina
         NODISCARD bool HasVisualizerSubSelection() const;
         void BeginVisualizerTransaction(ECS::FEntity Entity, CStruct* ComponentType) override;
         void EndVisualizerTransaction(FName Label) override;
-        void MarkVisualizerSceneDirty() override;
+        void MarkVisualizerSceneDirty(ECS::FEntity Entity) override;
 
         // Public so a subclass can bind them on its registry through &FSceneEditorTool::On..., which protected access blocks.
         void OnOutlinerEntityConstructed(ECS::FRegistry& Registry, ECS::FEntity Entity);
@@ -166,10 +166,13 @@ namespace Lumina
 
         void MarkSceneDirty();
 
+        // Records Entities as edited in a world saved in place, whose transactions already mark theirs, or dirties the package of a scene saved elsewhere such as a prefab.
+        void MarkSceneEntitiesDirty(TSpan<const ECS::FEntity> Entities = {});
+
         // The world the outliner, details and selection inspect, which the world editor can point at another live world.
         NODISCARD CWorld* GetObservedWorld() const { return ObservedWorld != nullptr ? ObservedWorld : World.Get(); }
         NODISCARD bool IsInspectingForeignWorld() const { return ObservedWorld != nullptr && ObservedWorld != World.Get(); }
-        NODISCARD ECS::FRegistry& GetSceneRegistry() const { return GetObservedWorld()->GetEntityRegistry(); }
+        NODISCARD ECS::FRegistry& GetSceneRegistry() const;
 
         void SetSingleSelectedEntity(ECS::FEntity Entity);
         void AddSelectedEntity(ECS::FEntity Entity);
@@ -186,7 +189,7 @@ namespace Lumina
         // Restamps the unserialized selection tags from the CPU set, since a true restore keeps handles but drops tags.
         void ReapplySelectionTags();
 
-        NODISCARD bool IsEntitySelected(ECS::FEntity Entity) const { return SelectedEntities.find(Entity) != SelectedEntities.end(); }
+        NODISCARD bool IsEntitySelected(ECS::FEntity Entity) const { return SelectedEntities.Contains(Entity); }
         NODISCARD const THashSet<ECS::FEntity>& GetSelectedEntities() const { return SelectedEntities; }
         NODISCARD ECS::FEntity GetLastSelectedEntity() const { return LastSelectedEntity; }
 
@@ -212,7 +215,7 @@ namespace Lumina
         void SyncOutlinerRowSelection(ECS::FEntity Entity, bool bSelected);
         void DrawOutliner(bool bFocused);
         void DrawFilterOptions();
-        NODISCARD size_t CountOutlinerEntities() const;
+        NODISCARD int32 CountOutlinerEntities() const;
         void DrawAddToEntityOrWorldPopup(ECS::FEntity Entity = ECS::NullEntity);
 
         // The folder table lives on the world's singleton entity, which the outliner hides.
@@ -266,7 +269,6 @@ namespace Lumina
 
         void DrawDetailsPanel(bool bFocused);
         void DrawEntityProperties(ECS::FEntity Entity);
-        void DrawEmptyState();
         void DrawComponentList(ECS::FEntity Entity);
 
         // One search box over the whole panel, matching a component by title and otherwise filtering into its table.
@@ -283,11 +285,11 @@ namespace Lumina
 
         void ProcessComponentEditRequests();
 
-        void OnPrePropertyChangeEvent(const FPropertyChangedEvent& Event);
         void OnPostPropertyChangeEvent(const FPropertyChangedEvent& Event);
         void BeginPropertyEditTransaction(CStruct* ComponentType);
         void RecordPrefabOverrideSnapshot(const TVector<ECS::FEntity>& Entities);
         void PushRenameEntityModal(ECS::FEntity Entity);
+        void RenameEntityTransacted(ECS::FEntity Entity, FStringView NewName);
         void PushAddTagModal(ECS::FEntity Entity);
         void DrawTagSection(ECS::FEntity Entity);
 

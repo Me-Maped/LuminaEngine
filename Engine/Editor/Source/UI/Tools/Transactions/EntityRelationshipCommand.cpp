@@ -1,8 +1,8 @@
 #include "EntityRelationshipCommand.h"
 #include "World/ECS/Registry.h"
 
-#include "Core/Object/Package/Package.h"
 #include "World/World.h"
+#include "World/ExternalEntities/ExternalEntities.h"
 #include "World/Entity/EntityUtils.h"
 #include "World/Entity/Components/TransformComponent.h"
 
@@ -60,7 +60,7 @@ namespace Lumina
         LUMINA_PROFILE_SCOPE();
 
         // Index-aligned even if an entity dies mid-edit, which records no parent and is skipped.
-        Out.assign(Entities.size(), FRecord());
+        Out.Init(FRecord(), Entities.Num());
 
         CWorld* W = World.Get();
         if (W == nullptr)
@@ -70,7 +70,7 @@ namespace Lumina
 
         ECS::FRegistry& Registry = W->GetEntityRegistry();
 
-        for (SIZE_T i = 0; i < Entities.size(); ++i)
+        for (int32 i = 0; i < Entities.Num(); ++i)
         {
             const ECS::FEntity Entity = Entities[i];
             if (!Registry.IsValid(Entity))
@@ -89,7 +89,7 @@ namespace Lumina
         LUMINA_PROFILE_SCOPE();
 
         CWorld* W = World.Get();   // null once the map is closed/swapped -> a stale undo safely no-ops
-        if (W == nullptr || In.size() != Entities.size())
+        if (W == nullptr || In.Num() != Entities.Num())
         {
             return;
         }
@@ -98,7 +98,7 @@ namespace Lumina
 
         // Every sibling of each affected parent is in the set, so detaching them all and reattaching by index reproduces the image.
         ECS::Utils::FParentLinks Links;
-        for (SIZE_T i = 0; i < Entities.size(); ++i)
+        for (int32 i = 0; i < Entities.Num(); ++i)
         {
             const ECS::FEntity Entity = Entities[i];
             if (!Registry.IsValid(Entity))
@@ -109,7 +109,7 @@ namespace Lumina
             Registry.DetachFromParent(Entity);
             if (!In[i].Parent.IsNull())
             {
-                Links.Links.push_back({ Entity, In[i].Parent, In[i].SiblingIndex });
+                Links.Links.Emplace(Entity, In[i].Parent, In[i].SiblingIndex);
             }
 
             // The parent chain moved, so every restored entity owes a world-matrix recompute.
@@ -119,11 +119,11 @@ namespace Lumina
             }
         }
         Links.Apply(Registry);
+    }
 
-        if (W->GetPackage())
-        {
-            W->GetPackage()->MarkDirty();
-        }
+    void FEntityRelationshipCommand::MarkChanged() const
+    {
+        ExternalEntities::MarkChanged(World.Get(), Entities);
     }
 
     void FEntityRelationshipCommand::Undo() { Apply(Before); }

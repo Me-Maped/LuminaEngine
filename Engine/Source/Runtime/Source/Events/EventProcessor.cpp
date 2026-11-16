@@ -16,17 +16,22 @@ namespace Lumina
             }
         }
 
-        // Sorted descending; equal priorities keep registration order.
+        // Sorted descending, equal priorities keep registration order.
         FEntry NewEntry{ InHandler, Priority };
-        auto It = EventHandlers.begin();
-        for (; It != EventHandlers.end(); ++It)
+        int32 Index = 0;
+        for (; Index < EventHandlers.Num(); ++Index)
         {
-            if (It->Priority < Priority)
+            if (EventHandlers[Index].Priority < Priority)
             {
                 break;
             }
         }
-        EventHandlers.insert(It, NewEntry);
+        EventHandlers.Insert(NewEntry, Index);
+
+        if (Index <= DispatchCursor)
+        {
+            ++DispatchCursor;
+        }
     }
 
     void FEventProcessor::UnregisterEventHandler(IEventHandler* InHandler)
@@ -35,7 +40,13 @@ namespace Lumina
         {
             if (It->Handler == InHandler)
             {
-                EventHandlers.erase(It);
+                const int32 RemovedIndex = static_cast<int32>(It - EventHandlers.begin());
+                EventHandlers.RemoveAt(RemovedIndex);
+
+                if (RemovedIndex <= DispatchCursor)
+                {
+                    --DispatchCursor;
+                }
                 return;
             }
         }
@@ -43,19 +54,21 @@ namespace Lumina
 
     void FEventProcessor::Clear()
     {
-        EventHandlers.clear();
+        EventHandlers.Reset();
     }
 
     void FEventProcessor::DispatchEvent(FEvent& Event)
     {
-        // Handlers may unregister mid-dispatch; iterate a snapshot.
-        TVector<FEntry> Snapshot = EventHandlers;
-        for (const FEntry& Entry : Snapshot)
+        const int32 SavedCursor = DispatchCursor;
+
+        for (DispatchCursor = 0; DispatchCursor < EventHandlers.Num(); ++DispatchCursor)
         {
-            if (Entry.Handler->OnEvent(Event))
+            if (EventHandlers[DispatchCursor].Handler->OnEvent(Event))
             {
-                return;
+                break;
             }
         }
+
+        DispatchCursor = SavedCursor;
     }
 }

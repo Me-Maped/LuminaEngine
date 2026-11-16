@@ -3,15 +3,16 @@
 #include "Containers/HashTable.h"
 #include "Containers/Vector.h"
 #include "Containers/ContainerOps.h"
+#include "Containers/FunctionRef.h"
 #include "Containers/Name.h"
 #include "Containers/String.h"
 #include "Core/LuminaMacros.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/Field.h"
 #include "Core/Object/ScriptClass.h"
-#include "Core/Object/ScriptEnum.h"
 #include "Core/Object/ObjectHandleTyped.h"
 #include "Core/Object/ObjectMacros.h"
+#include "Memory/SmartPtr.h"
 #include "Platform/GenericPlatform.h"
 #include "Scripting/ScriptExports.h"
 
@@ -127,6 +128,7 @@ namespace Lumina
         RUNTIME_API void ConstructInto(void* Buffer) const;
         RUNTIME_API void DestructIn(void* Buffer) const;
         RUNTIME_API void CopyInto(void* Dst, const void* Src) const;
+        RUNTIME_API void RelocateInto(void* Dst, void* Src) const;
 
         bool RequiresValueLifecycle() const override { return bRequiresLifecycle; }
 
@@ -140,6 +142,7 @@ namespace Lumina
         }
         void DestroyStruct(void* Dest) const override { DestructIn(Dest); }
         void CopyStruct(void* Dest, const void* Src) const override { CopyInto(Dest, Src); }
+        void RelocateStruct(void* Dest, void* Source) const override { RelocateInto(Dest, Source); }
 
         // The layout's defaults buffer, so editor diff and reset-to-default work for script fields.
         void* GetDefaultInstance() override { return const_cast<void*>(GetDefaults()); }
@@ -189,9 +192,9 @@ namespace Lumina
         TVector<FProperty*>                            OwnProperties;
         CStruct*                                       NativeBase = nullptr;
 
-        TVector<Scripting::FScriptArrayElementDesc*>   ElementDescs;
-        TVector<Scripting::FScriptMapElementDesc*>     MapDescs;
-        TVector<Scripting::FScriptOptionalDesc*>       OptionalDescs;
+        TVector<TUniquePtr<Scripting::FScriptArrayElementDesc>>   ElementDescs;
+        TVector<TUniquePtr<Scripting::FScriptMapElementDesc>>     MapDescs;
+        TVector<TUniquePtr<Scripting::FScriptOptionalDesc>>       OptionalDescs;
         bool                                           bRuntimeFreed = false;
     };
 
@@ -202,7 +205,7 @@ namespace Lumina::Scripting
     // Appends a script type's properties to its minted class as real FPropertys in the trailing block, so it must run before the class's CDO exists.
     RUNTIME_API uint32 AppendScriptPropertiesToClass(CScriptClass* Target, const FScriptExportSchema& Schema);
 
-    /** Drops a minted class's layout records. Only safe once the class has no live instances. */
+    // Drops a minted class's layout records. Only safe once the class has no live instances.
     RUNTIME_API void ForgetScriptClassLayout(CScriptClass* Target);
 
     // Resets every [SkipHotReload] property on Object to its class default after a reload carried the rest across.
@@ -210,6 +213,9 @@ namespace Lumina::Scripting
 
     // What differs between Target's block and Schema, a layout change needing a new class and a metadata one reapplied in place.
     RUNTIME_API EScriptTypeDirty DiffScriptClassLayout(const CScriptClass* Target, const FScriptExportSchema& Schema);
+
+    // True when Property, or an element or key inside it, is typed by a struct or enum Match accepts.
+    RUNTIME_API bool PropertyReferencesType(const FProperty* Property, TFunctionRef<bool(const CField*)> Match);
 
     // What changed between a block laid out from Applied, whose properties are Emitted, and Schema.
     RUNTIME_API EScriptTypeDirty DiffScriptLayout(const FScriptExportSchema& Applied, TSpan<FProperty* const> Emitted, const FScriptExportSchema& Schema);

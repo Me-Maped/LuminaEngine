@@ -19,7 +19,7 @@ namespace Lumina
 
     FString CAnimGraphNode_SaveCachedPose::GetNodeTitleText() const
     {
-        return CacheName.IsNone() ? FString(LOC("Save Cached Pose")) : Format(LOCF("Save {}"), CacheName.c_str());
+        return CacheName.IsNone() ? FString("Save Cached Pose") : Format("Save {}", *CacheName);
     }
 
     void CAnimGraphNode_UseCachedPose::BuildNode()
@@ -68,6 +68,6 @@ namespace Lumina
 
     FString CAnimGraphNode_UseCachedPose::GetNodeTitleText() const
     {
-        return CacheName.IsNone() ? FString(LOC("Use Cached Pose")) : FString(CacheName.c_str());
+        return CacheName.IsNone() ? FString("Use Cached Pose") : FString(*CacheName);
     }
 }

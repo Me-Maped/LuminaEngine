@@ -22,7 +22,7 @@ namespace Lumina
         FCObjectAllocator(FCObjectAllocator&&) = delete;
         FCObjectAllocator& operator=(FCObjectAllocator&&) = delete;
 
-        /** Raw allocation; does not construct. */
+        // Raw allocation that does not construct.
         RUNTIME_API void* AllocateCObject(uint32 Size, uint32 Alignment);
 
         // Runs the destructor, then returns the memory.
@@ -47,6 +47,9 @@ namespace Lumina
         FCounterShard Counters[kCounterShards];
     };
 
-    extern RUNTIME_API FCObjectAllocator GCObjectAllocator;
+    namespace Global
+    {
+        extern RUNTIME_API FCObjectAllocator GCObjectAllocator;
+    }
 
 }

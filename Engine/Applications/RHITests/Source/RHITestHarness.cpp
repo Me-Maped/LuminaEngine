@@ -1,13 +1,12 @@
 #include "RHITestHarness.h"
 
-#include "Log/Log.h"
 #include "Renderer/RHITexture.h"
 #include "Renderer/RHIUpload.h"
 #include "Renderer/ShaderCompiler.h"
 
 #include <cstdarg>
 #include <cstdio>
-#include "Containers/StringFormat.h"
+#include <cstring>
 
 namespace Lumina::RHITests
 {
@@ -43,14 +42,14 @@ namespace Lumina::RHITests
             FScopeLock Lock(GValidationMutex);
             if (GCapturing)
             {
-                GValidationMessages.push_back(FString(Message));
+                GValidationMessages.Emplace(Message);
             }
         }
 
         void BeginCapture()
         {
             FScopeLock Lock(GValidationMutex);
-            GValidationMessages.clear();
+            GValidationMessages.Reset();
             GCapturing = true;
         }
 
@@ -60,14 +59,49 @@ namespace Lumina::RHITests
             FScopeLock Lock(GValidationMutex);
             GCapturing = false;
             TVector<FString> Out = Move(GValidationMessages);
-            GValidationMessages.clear();
+            GValidationMessages.Reset();
             return Out;
+        }
+
+        bool MatchesPattern(const char* Pattern, const char* PatternEnd, const char* Name)
+        {
+            if (Pattern == PatternEnd)
+            {
+                return *Name == '\0';
+            }
+            if (*Pattern == '*')
+            {
+                return MatchesPattern(Pattern + 1, PatternEnd, Name) || (*Name != '\0' && MatchesPattern(Pattern, PatternEnd, Name + 1));
+            }
+            return *Name != '\0' && (*Pattern == '?' || *Pattern == *Name) && MatchesPattern(Pattern + 1, PatternEnd, Name + 1);
+        }
+
+        // The positive half of a --gtest_filter, colon-separated patterns of '*' and '?'.
+        bool MatchesFilter(const char* Filter, const char* Name)
+        {
+            for (const char* Pattern = Filter;;)
+            {
+                const char* End = std::strchr(Pattern, ':');
+                if (End == nullptr)
+                {
+                    End = Pattern + std::strlen(Pattern);
+                }
+                if (MatchesPattern(Pattern, End, Name))
+                {
+                    return true;
+                }
+                if (*End == '\0')
+                {
+                    return false;
+                }
+                Pattern = End + 1;
+            }
         }
     }
 
     FTestRegistrar::FTestRegistrar(const char* Group, const char* Name, FTestFn Fn, bool bExpectValidationError)
     {
-        Registry().push_back(FRegisteredTest{ Group, Name, Fn, bExpectValidationError });
+        Registry().Emplace(Group, Name, Fn, bExpectValidationError);
     }
 
     RHI::FTextureDesc MakeSampledDesc(uint32 Size, EFormat Format, RHI::EImageUsageFlags Extra)
@@ -85,7 +119,7 @@ namespace Lumina::RHITests
     {
         if (!bCondition)
         {
-            Failf("CHECK failed: %s  [%s:%d]", Expression, File, Line);
+            Failf("%s(%d): error: CHECK failed: %s", File, Line, Expression);
         }
         return bCondition;
     }
@@ -99,7 +133,7 @@ namespace Lumina::RHITests
         std::vsnprintf(Buffer, sizeof(Buffer), Format, Args);
         va_end(Args);
 
-        Failures.push_back(FString(Buffer));
+        Failures.Emplace(Buffer);
     }
 
     RHI::FGPUAllocation FTestContext::Malloc(uint64 Size, RHI::EMemoryType Type, const char* DebugName)
@@ -108,7 +142,7 @@ namespace Lumina::RHITests
         if (Allocation.Gpu != 0)
         {
             RHI::SetDebugName(Allocation.Gpu, DebugName);
-            ScratchBuffers.push_back(Allocation);
+            ScratchBuffers.Add(Allocation);
         }
         return Allocation;
     }
@@ -119,7 +153,7 @@ namespace Lumina::RHITests
         if (RHI::IsValid(Texture))
         {
             RHI::SetDebugName(Texture, DebugName);
-            ScratchTextures.push_back(Texture);
+            ScratchTextures.Add(Texture);
         }
         return Texture;
     }
@@ -148,7 +182,7 @@ namespace Lumina::RHITests
 
     TVector<uint32> FTestContext::TryCompileShader(const char* Source, const char* DebugName, const char* EntryPoint)
     {
-        if (GShaderCompiler == nullptr)
+        if (Global::GShaderCompiler == nullptr)
         {
             Failf("no shader compiler (GShaderCompiler is null)");
             return {};
@@ -166,10 +200,10 @@ namespace Lumina::RHITests
         }
 
         // Flush below is the join, so nothing reads Spirv until every pending task has drained.
-        GShaderCompiler->CompilerShaderRaw(FString(Source), Options,
+        Global::GShaderCompiler->CompilerShaderRaw(FString(Source), Options,
             [&Spirv](FShaderHeader Header) { Spirv = Move(Header.Binaries); });
 
-        GShaderCompiler->Flush();
+        Global::GShaderCompiler->Flush();
 
         return Spirv;
     }
@@ -178,14 +212,14 @@ namespace Lumina::RHITests
     {
         TVector<uint32> Spirv = TryCompileShader(Source, DebugName, EntryPoint);
 
-        if (Spirv.empty())
+        if (Spirv.IsEmpty())
         {
             Failf("shader '%s' failed to compile (see the Slang diagnostics above)", DebugName);
         }
         else if (Spirv[0] != 0x07230203u)
         {
             Failf("shader '%s' produced %zu words with a bad SPIR-V magic (%#x)",
-                  DebugName, (size_t)Spirv.size(), Spirv[0]);
+                  DebugName, (size_t)Spirv.Num(), Spirv[0]);
         }
 
         return Spirv;
@@ -195,7 +229,7 @@ namespace Lumina::RHITests
     {
         if (RHI::IsValid(Pipeline))
         {
-            ScratchPipelines.push_back(Pipeline);
+            ScratchPipelines.Add(Pipeline);
         }
         return Pipeline;
     }
@@ -215,9 +249,9 @@ namespace Lumina::RHITests
         {
             RHI::Retire(*It);
         }
-        ScratchPipelines.clear();
-        ScratchTextures.clear();
-        ScratchBuffers.clear();
+        ScratchPipelines.Reset();
+        ScratchTextures.Reset();
+        ScratchBuffers.Reset();
     }
 
     void ForEachTest(void (*Visitor)(const char* Group, const char* Name))
@@ -228,7 +262,7 @@ namespace Lumina::RHITests
         }
     }
 
-    int32 RunAll(const char* GroupFilter, const char* TestFilter)
+    int32 RunAll(const char* Filter)
     {
         RHI::SetValidationHandler(&OnValidationMessage, nullptr);
 
@@ -236,37 +270,27 @@ namespace Lumina::RHITests
         int32 Failed  = 0;
         int32 Skipped = 0;
 
-        const bool bGroupFiltered = GroupFilter != nullptr && *GroupFilter != '\0';
-        const bool bTestFiltered  = TestFilter  != nullptr && *TestFilter  != '\0';
-        const bool bFiltered      = bGroupFiltered || bTestFiltered;
+        const bool bFiltered = Filter != nullptr && *Filter != '\0';
+
+        // SelfTest provokes real faults, so it runs only when a filter names it outright.
+        const bool bSelfTestNamed = bFiltered && std::strstr(Filter, "SelfTest") != nullptr;
+
+        // Unprefixed gtest lines, since LuminaBuild Test and lumi verify read results from them.
+        std::printf("[==========] Running RHITests\n");
 
         for (const FRegisteredTest& Test : Registry())
         {
-            if (bGroupFiltered && strcmp(GroupFilter, Test.Group) != 0)
+            char Qualified[256];
+            std::snprintf(Qualified, sizeof(Qualified), "%s.%s", Test.Group, Test.Name);
+
+            if ((bFiltered && !MatchesFilter(Filter, Qualified)) || (!bSelfTestNamed && std::strcmp(Test.Group, "SelfTest") == 0))
             {
                 ++Skipped;
                 continue;
             }
 
-            if (bTestFiltered)
-            {
-                char Qualified[256];
-                std::snprintf(Qualified, sizeof(Qualified), "%s.%s", Test.Group, Test.Name);
-                if (strcmp(TestFilter, Qualified) != 0)
-                {
-                    ++Skipped;
-                    continue;
-                }
-            }
-
-            // SelfTest provokes real faults, so it runs only when the group is named outright.
-            if (!bFiltered && strcmp(Test.Group, "SelfTest") == 0)
-            {
-                ++Skipped;
-                continue;
-            }
-
-            LOG_INFO("[ RUN      ] {}.{}", Test.Group, Test.Name);
+            std::printf("[ RUN      ] %s\n", Qualified);
+            std::fflush(stdout);
 
             FTestContext Ctx;
             BeginCapture();
@@ -283,21 +307,21 @@ namespace Lumina::RHITests
             if (Test.bExpectValidationError)
             {
                 // The driver complaining IS the pass condition, so silence means the check went dark.
-                if (Validation.empty())
+                if (Validation.IsEmpty())
                 {
                     Ctx.Failf("expected a validation error, but none was reported "
                               "(GPU-AV off, or the capture path is broken)");
                 }
                 else
                 {
-                    LOG_INFO("             caught: {}", Validation.front());
+                    std::printf("             caught: %s\n", *Validation[0]);
                 }
             }
             else
             {
                 for (const FString& Message : Validation)
                 {
-                    Ctx.Failf("validation: %s", Message.c_str());
+                    Ctx.Failf("validation: %s", *Message);
                 }
             }
 
@@ -306,22 +330,23 @@ namespace Lumina::RHITests
                 ++Failed;
                 for (const FString& Failure : Ctx.GetFailures())
                 {
-                    LOG_ERROR("             {}", Failure);
+                    std::printf("             %s\n", *Failure);
                 }
-                LOG_ERROR("[   FAILED ] {}.{}", Test.Group, Test.Name);
+                std::printf("[  FAILED  ] %s\n", Qualified);
             }
             else
             {
                 ++Passed;
-                LOG_INFO("[       OK ] {}.{}", Test.Group, Test.Name);
+                std::printf("[       OK ] %s\n", Qualified);
             }
+            std::fflush(stdout);
         }
 
         RHI::SetValidationHandler(nullptr, nullptr);
 
-        LOG_INFO("");
-        LOG_INFO("[==========] {} passed, {} failed{}", Passed, Failed,
-                 Skipped > 0 ? FString(" (" + Format("{}", Skipped) + " filtered out)") : FString());
+        std::printf("[==========] %d tests ran. %d filtered out.\n", Passed + Failed, Skipped);
+        std::printf("[  PASSED  ] %d tests.\n", Passed);
+        std::fflush(stdout);
 
         return Failed;
     }

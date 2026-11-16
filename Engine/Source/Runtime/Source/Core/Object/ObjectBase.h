@@ -16,7 +16,7 @@ namespace Lumina
         class FCObjectArray;
     }
 
-    /** Publishes what is being constructed, so an object's own constructor can read its class, name and package. */
+    // Publishes what is being constructed, so an object's own constructor can read its class, name and package.
     class RUNTIME_API FScopedObjectConstruction
     {
     public:
@@ -37,7 +37,6 @@ namespace Lumina
     class CEnum;
     class CStruct;
     
-    /** Low-level CObject implementation. */
     class CObjectBase
     {
     public:
@@ -74,25 +73,27 @@ namespace Lumina
         RUNTIME_API void ConditionalBeginDestroy();
         RUNTIME_API int32 GetStrongRefCount() const;
 
-        /** Low-level rename; rewires hash buckets. Caller must guarantee safety. */
+        // Rewires hash buckets without any safety checks, which the caller must guarantee.
         RUNTIME_API void HandleNameChange(const FName& NewName, CPackage* NewPackage = nullptr) noexcept;
 
-        /** Called just before destructor + free. */
+        // Takes this object out of its package, which a null package in HandleNameChange or Rename cannot do.
+        RUNTIME_API void ClearPackage() noexcept;
+
+        // Called just before the destructor and free.
         RUNTIME_API virtual void OnDestroy() { }
 
         RUNTIME_API int32 GetInternalIndex() const { return InternalIndex; }
 
-        /** Roots the object, preventing destruction. */
-        /** Re-keys this object's GUID in the object hash, so another object can take the one it had. */
+        // Re-keys this object's GUID in the object hash, so another object can take the one it had.
         RUNTIME_API void HandleGUIDChange(const FGuid& NewGUID) noexcept;
 
         RUNTIME_API void AddToRoot();
         RUNTIME_API void RemoveFromRoot();
 
-        /** Strips common CObject prefixes. */
+        // Strips common CObject prefixes.
         RUNTIME_API virtual FFixedString MakeDisplayName() const;
 
-        /** Claims an object array slot and enters the hash tables, once the constructor has run. */
+        // Claims an object array slot and enters the hash tables, once the constructor has run.
         RUNTIME_API void AddObject();
 
     private:
@@ -107,7 +108,7 @@ namespace Lumina
 
     public:
 
-        /** Force base classes to register first. */
+        // Forces base classes to register first.
         RUNTIME_API virtual void RegisterDependencies() { }
 
         CClass* GetClass() const
@@ -176,7 +177,7 @@ namespace Lumina
         FGuid                   GUIDPrivate;
         int32                   InternalIndex = -1;
         
-        /** Index into this object's package export map. */
+        // Index into this object's package export map.
         int32                   LoaderIndex = 0;
     };
 
@@ -219,8 +220,8 @@ namespace Lumina
     // Runs RegisterPendingTypes unless it is already running, for a caller that may be inside that pass.
     RUNTIME_API void SettlePendingTypes();
 
-    RUNTIME_API size_t SnapshotPendingTypes();
+    RUNTIME_API int32 SnapshotPendingTypes();
 
     // Drops modules queued since the snapshot, whose constructors point into a DLL that is about to be freed.
-    RUNTIME_API void RollbackPendingTypes(size_t Snapshot);
+    RUNTIME_API void RollbackPendingTypes(int32 Snapshot);
 }

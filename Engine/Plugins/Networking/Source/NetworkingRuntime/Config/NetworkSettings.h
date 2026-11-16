@@ -21,17 +21,26 @@ namespace Lumina
         PROPERTY(Editable, Category = "Session", ClampMin = 1.0f, Units = "s")
         float ConnectTimeout = 10.0f;
 
+        // Shared with the null-fallback at NetMovementInterpSystem's call site, so a rename can't silently diverge.
+        static constexpr float kDefaultInterpDelay = 0.04f;
+
         /** Floor for how many seconds a SimulatedProxy renders behind the newest received server time. */
         PROPERTY(Editable, Category = "Replication", ClampMin = 0.0f, ClampMax = 1.0f)
-        float InterpDelay = 0.04f;
+        float InterpDelay = kDefaultInterpDelay;
+
+        // Shared with the null-fallback at NetMovementInterpSystem's call site, so a rename can't silently diverge.
+        static constexpr bool kDefaultEnableExtrapolation = false;
 
         /** Dead-reckon a proxy's position from its last velocity when render time runs past the newest sample. */
         PROPERTY(Editable, Category = "Replication")
-        bool bEnableExtrapolation = false;
+        bool bEnableExtrapolation = kDefaultEnableExtrapolation;
+
+        // Shared with the null-fallback at NetMovementInterpSystem's call site, so a rename can't silently diverge.
+        static constexpr float kDefaultTeleportDistance = 3.0f;
 
         // A proxy that moved farther than this between two updates snaps instead of interpolating, so a teleport stays a teleport.
         PROPERTY(Editable, Category = "Replication", ClampMin = 0.0f, Units = "m")
-        float TeleportDistance = 3.0f;
+        float TeleportDistance = kDefaultTeleportDistance;
 
         // Most entities one client holds at once, keeping the nearest. Zero holds everything in range.
         PROPERTY(Editable, Category = "Replication", ClampMin = 0, ClampMax = 65535)
@@ -49,25 +58,37 @@ namespace Lumina
         PROPERTY(Editable, Category = "Replication", ClampMin = 1.0f, ClampMax = 120.0f, Units = "Hz")
         float MoveAckRate = 20.0f;
 
+        // Shared with the null-fallback at NetMovementInterpSystem's call site, so a rename can't silently diverge.
+        static constexpr float kDefaultMaxExtrapolation = 0.25f;
+
         /** Maximum seconds to extrapolate past the newest sample before clamping. */
         PROPERTY(Editable, Category = "Replication", ClampMin = 0.0f, ClampMax = 1.0f)
-        float MaxExtrapolation = 0.25f;
+        float MaxExtrapolation = kDefaultMaxExtrapolation;
+
+        // Shared with the null-fallback at NetMovementInterpSystem's call site, so a rename can't silently diverge.
+        static constexpr float kDefaultInterpBufferIntervals = 1.5f;
 
         /** Per-entity interpolation buffer depth, in multiples of the entity's measured send interval. */
         PROPERTY(Editable, Category = "Replication", ClampMin = 1.0f, ClampMax = 3.0f)
-        float InterpBufferIntervals = 1.5f;
+        float InterpBufferIntervals = kDefaultInterpBufferIntervals;
+
+        // Shared with the null-fallback at NetworkSystem::ReplicateDirtyProperties, so a rename can't silently diverge.
+        static constexpr int32 kDefaultMaxReliablePropertyBytesPerTick = 32768;
 
         /** Per-server-tick cap on reliable property-update bytes (0 = unlimited). When a burst of dirty
          *  entities would exceed this, the over-budget ones stay dirty and replicate on a later tick
          *  (oldest-first, so none starve) -- this bounds the reliable queue. Delivery is still guaranteed:
          *  the reliable channel acks + retransmits. */
         PROPERTY(Editable, Category = "Replication|Flow Control", ClampMin = 0)
-        int32 MaxReliablePropertyBytesPerTick = 32768;
+        int32 MaxReliablePropertyBytesPerTick = kDefaultMaxReliablePropertyBytesPerTick;
+
+        // Shared with the null-fallback at NetworkSystem::ReplicateDirtyProperties, so a rename can't silently diverge.
+        static constexpr int32 kDefaultReliableBacklogPauseBytes = 65536;
 
         /** If a client's un-acked reliable backlog reaches this many bytes, the server pauses sending NEW
          *  property updates until it drains, so a slow/congested client can't make the reliable queue grow
          *  without bound (0 = never pause). Dirty entities persist, so nothing is lost -- it just waits. */
         PROPERTY(Editable, Category = "Replication|Flow Control", ClampMin = 0)
-        int32 ReliableBacklogPauseBytes = 65536;
+        int32 ReliableBacklogPauseBytes = kDefaultReliableBacklogPauseBytes;
     };
 }

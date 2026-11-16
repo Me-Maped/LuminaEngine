@@ -17,7 +17,7 @@ namespace Lumina
     struct FSkeletonResource;
     class CSkeletalMesh;
 
-    class FSkeletonEditorTool : public FAssetEditorTool
+    class EDITOR_API FSkeletonEditorTool : public FAssetEditorTool
     {
     public:
         
@@ -32,7 +32,6 @@ namespace Lumina
         void SetupWorldForTool() override;
         void Update(const FUpdateContext& UpdateContext) override;
         void OnDeinitialize(const FUpdateContext& UpdateContext) override;
-        void OnAssetLoadFinished() override;
         void OnPropertyEditFinished(const FPropertyChangedEvent& Event) override;
         void OnPostUndoRedo() override;
         void OnAssetDataChangedExternally() override;
@@ -41,6 +40,16 @@ namespace Lumina
         void DrawHelpMenu() override;
         void InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const override;
         static void DrawBoneHierarchy(CWorld* DrawWorld, FSkeletonResource* SkeletonResource, const TVector<FMatrix4>& WorldTransforms, int32 BoneIndex);
+
+        struct FBoneDepthStatistics
+        {
+            int32 NumRootBones = 0;
+            int32 MaxDepth = 0;
+            float AverageDepth = 0.0f;
+            bool bConsistentHierarchy = true;
+        };
+
+        static FBoneDepthStatistics ComputeBoneDepthStatistics(const FSkeletonResource& SkeletonResource);
 
 
         ImGuizmo::OPERATION GuizmoOp = ImGuizmo::TRANSLATE;
@@ -57,5 +66,8 @@ namespace Lumina
 
         // Bind pose in world space, rebuilt each Update for the bone overlay and the socket hierarchy.
         TVector<FMatrix4> BoneWorldTransforms;
+
+        // Set once the Statistics panel has logged this skeleton's broken ParentIndex chain, so it doesn't repeat every frame.
+        bool bLoggedInconsistentHierarchy = false;
     };
 }

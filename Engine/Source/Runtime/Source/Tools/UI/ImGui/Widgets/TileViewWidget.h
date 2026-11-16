@@ -61,10 +61,10 @@ namespace Lumina
             if (!bDisplayNameCached)
             {
                 const FFixedString Resolved = GetDisplayName();
-                CachedDisplayName.assign(Resolved.c_str(), Resolved.size());
+                CachedDisplayName = FStringView(*Resolved, Resolved.Len());
                 bDisplayNameCached = true;
             }
-            return FStringView(CachedDisplayName.data(), CachedDisplayName.size());
+            return FStringView(CachedDisplayName.GetData(), CachedDisplayName.Len());
         }
 
         bool IsSelected() const { return bSelected; }
@@ -120,7 +120,7 @@ namespace Lumina
     public:
         
         FTileViewWidget() = default;
-        ~FTileViewWidget() = default;
+        ~FTileViewWidget() { ClearTree(); }
         LE_NO_COPYMOVE(FTileViewWidget);
 
         void Draw(const FTileViewContext& Context);
@@ -228,7 +228,7 @@ namespace Lumina
         // Origin a shift-click ranges from. An index, so a rebuild has to clear it.
         int32                                   SelectionAnchorIndex = -1;
 
-        char                                    RenameBuffer[128] = {};
+        FString                                 RenameText;
 
 		float                                   TileSize = 84.0f;
 
@@ -244,7 +244,7 @@ namespace Lumina
     T* FTileViewWidget::AddItemToTree(Args&&... args)
     {
         T* New = Allocator.TAlloc<T>(std::forward<Args>(args)...);
-        ListItems.push_back(New);
+        ListItems.Add(New);
         return New;
     }
 }

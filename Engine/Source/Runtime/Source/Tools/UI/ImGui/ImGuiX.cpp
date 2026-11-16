@@ -205,13 +205,11 @@ namespace Lumina::ImGuiX
         ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-        	if (!ImGui::BeginTooltipEx(ImGuiTooltipFlags_OverridePrevious, ImGuiWindowFlags_None))
-        	{
-        		return;
-        	}
-        	
-        	ImGui::TextUnformatted(String.data());
-        	ImGui::EndTooltip();
+            if (ImGui::BeginTooltipEx(ImGuiTooltipFlags_OverridePrevious, ImGuiWindowFlags_None))
+            {
+                ImGui::TextUnformatted(String.GetData());
+                ImGui::EndTooltip();
+            }
         }
         ImGui::PopStyleVar();
     }
@@ -224,7 +222,7 @@ namespace Lumina::ImGuiX
             if (ImGui::BeginTooltipEx(ImGuiTooltipFlags_OverridePrevious, ImGuiWindowFlags_None))
             {
                 ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-                ImGui::TextUnformatted(String.data(), String.data() + String.size());
+                ImGui::TextUnformatted(String.GetData(), String.GetData() + String.Len());
                 ImGui::PopTextWrapPos();
                 ImGui::EndTooltip();
             }
@@ -249,13 +247,13 @@ namespace Lumina::ImGuiX
     void TextColoredUnformatted(const ImVec4& Color, const FFixedString& String)
     {
     	ImGui::PushStyleColor(ImGuiCol_Text, Color);
-    	ImGui::TextUnformatted(String.c_str());
+    	ImGui::TextUnformatted(*String);
     	ImGui::PopStyleColor();
     }
 
     void TextUnformatted(FStringView String)
     {
-    	ImGui::TextUnformatted(String.data(), String.data() + String.size());
+    	ImGui::TextUnformatted(String.GetData(), String.GetData() + String.Len());
     }
 
     FStringView ImGuizmoOpToString(ImGuizmo::OPERATION Op)
@@ -734,10 +732,10 @@ namespace Lumina::ImGuiX
 
     bool PassSearchFilter(FStringView Query, FStringView Text)
     {
-        const char* Word      = Query.data();
-        const char* QueryEnd  = Query.data() + Query.size();
-        const char* TextBegin = Text.data();
-        const char* TextEnd   = Text.data() + Text.size();
+        const char* Word      = Query.GetData();
+        const char* QueryEnd  = Query.GetData() + Query.Len();
+        const char* TextBegin = Text.GetData();
+        const char* TextEnd   = Text.GetData() + Text.Len();
 
         while (Word < QueryEnd)
         {
@@ -814,7 +812,7 @@ namespace Lumina::ImGuiX
         int32 Result = Constants::kIndexNone;
         if (OutCreatedText != nullptr)
         {
-            OutCreatedText->clear();
+            OutCreatedText->Reset();
         }
         const ImGuiStyle& Style = ImGui::GetStyle();
 
@@ -835,7 +833,7 @@ namespace Lumina::ImGuiX
             float ContentWidth = 0.0f;
             for (int32 i = 0; i < ItemCount; ++i)
             {
-                ContentWidth = ImMax(ContentWidth, ImGui::CalcTextSize(GetItemLabel(i).c_str()).x);
+                ContentWidth = ImMax(ContentWidth, ImGui::CalcTextSize(*GetItemLabel(i)).x);
             }
             if (ItemIcon != nullptr)
             {
@@ -848,7 +846,7 @@ namespace Lumina::ImGuiX
             ImGui::SetNextWindowSizeConstraints(ImVec2(FitWidth, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
         }
 
-        if (ImGui::BeginCombo(StrId, PreviewStr.c_str(), ImGuiComboFlags_HeightLargest))
+        if (ImGui::BeginCombo(StrId, *PreviewStr, ImGuiComboFlags_HeightLargest))
         {
             const float PopupWidth = ImGui::GetContentRegionAvail().x;
 
@@ -889,7 +887,7 @@ namespace Lumina::ImGuiX
                     bool bExists = false;
                     for (int32 i = 0; i < ItemCount && !bExists; ++i)
                     {
-                        bExists = strcmp(GetItemLabel(i).c_str(), Filter.InputBuf) == 0;
+                        bExists = strcmp(*GetItemLabel(i), Filter.InputBuf) == 0;
                     }
 
                     if (!bExists)
@@ -898,7 +896,7 @@ namespace Lumina::ImGuiX
                         Row += Filter.InputBuf;
                         Row += "\"";
 
-                        if (ImGui::Selectable(Row.c_str()))
+                        if (ImGui::Selectable(*Row))
                         {
                             *OutCreatedText = Filter.InputBuf;
                             Filter.Clear();
@@ -912,7 +910,7 @@ namespace Lumina::ImGuiX
                 {
                     const FFixedString Label = GetItemLabel(i);
                     const FFixedString Alias = GetSearchAlias ? GetSearchAlias(i) : FFixedString();
-                    if (!PassSearchFilter(Filter, {Label.c_str(), Alias.c_str()}))
+                    if (!PassSearchFilter(Filter, {*Label, *Alias}))
                     {
                         continue;
                     }
@@ -932,7 +930,7 @@ namespace Lumina::ImGuiX
 
                     ImGui::PushID(i);
                     const bool bSelected = (i == CurrentIndex);
-                    if (ImGui::Selectable(Row.c_str(), bSelected))
+                    if (ImGui::Selectable(*Row, bSelected))
                     {
                         Result = i;
                         ImGui::CloseCurrentPopup();
@@ -974,32 +972,32 @@ namespace Lumina::ImGuiX
         // A closed combo only shows the current asset, so the registry scan waits until the list is open.
         if (!IsComboListOpen(StrId))
         {
-            const FAssetData* Current = InOutGUID.IsValid() ? FAssetRegistry::Get().GetAssetByGUID(InOutGUID) : nullptr;
-            const char* ClosedPreview = Current != nullptr ? Current->AssetName.c_str() : "Select an asset...";
+            const FAssetDataPtr Current = InOutGUID.IsValid() ? FAssetRegistry::Get().GetAssetByGUID(InOutGUID) : nullptr;
+            const char* ClosedPreview = Current != nullptr ? *Current->AssetName : "Select an asset...";
             SearchableCombo(StrId, ClosedPreview, 0, Current != nullptr ? 0 : Constants::kIndexNone, [](int32) { return FFixedString(); }, ItemIcon);
             return false;
         }
 
         // Every asset whose class is-a FilterClass, sorted by name, with the class test memoized since a project has few classes.
         THashMap<FName, bool> ClassMatches;
-        TVector<FAssetData*> Assets = FAssetRegistry::Get().FindByPredicate([FilterClass, &ClassMatches](const FAssetData& Data)
+        TVector<FAssetDataPtr> Assets = FAssetRegistry::Get().FindByPredicate([FilterClass, &ClassMatches](const FAssetData& Data)
         {
-            auto Known = ClassMatches.find(Data.AssetClass);
-            if (Known == ClassMatches.end())
+            auto Known = ClassMatches.Find(Data.AssetClass);
+            if (Known == nullptr)
             {
                 CClass* DataClass = FindObject<CClass>(Data.AssetClass);
-                Known = ClassMatches.emplace(Data.AssetClass, DataClass != nullptr && DataClass->IsChildOf(FilterClass)).first;
+                Known = &ClassMatches.FindOrAdd(Data.AssetClass, DataClass != nullptr && DataClass->IsChildOf(FilterClass));
             }
-            return Known->second;
+            return (*Known);
         });
 
-        Algo::Sort(Assets, [](const FAssetData* A, const FAssetData* B)
+        Algo::Sort(Assets, [](const FAssetDataPtr& A, const FAssetDataPtr& B)
         {
-            return strcmp(A->AssetName.c_str(), B->AssetName.c_str()) < 0;
+            return strcmp(*A->AssetName, *B->AssetName) < 0;
         });
 
         int32 CurrentIndex = Constants::kIndexNone;
-        for (int32 i = 0; i < (int32)Assets.size(); ++i)
+        for (int32 i = 0; i < Assets.Num(); ++i)
         {
             if (Assets[i]->AssetGUID == InOutGUID)
             {
@@ -1008,10 +1006,10 @@ namespace Lumina::ImGuiX
             }
         }
 
-        const char* Preview = (CurrentIndex != Constants::kIndexNone) ? Assets[CurrentIndex]->AssetName.c_str() : "Select an asset...";
+        const char* Preview = (CurrentIndex != Constants::kIndexNone) ? *Assets[CurrentIndex]->AssetName : "Select an asset...";
 
-        const int32 Picked = SearchableCombo(StrId, Preview, (int32)Assets.size(), CurrentIndex,
-            [&Assets](int32 Index) { return FFixedString(Assets[Index]->AssetName.c_str()); }, ItemIcon);
+        const int32 Picked = SearchableCombo(StrId, Preview, Assets.Num(), CurrentIndex,
+            [&Assets](int32 Index) { return FFixedString(*Assets[Index]->AssetName); }, ItemIcon);
 
         if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
         {
@@ -1026,9 +1024,9 @@ namespace Lumina::ImGuiX
         // A closed combo only shows the current class, so the object walk waits until the list is open.
         if (!IsComboListOpen(StrId))
         {
-            const FFixedString ClosedPreview = InOutClass ? FFixedString(InOutClass->GetName().c_str())
+            const FFixedString ClosedPreview = InOutClass ? FFixedString(*InOutClass->GetName())
                                                           : FFixedString(bAllowNone ? LOC("None") : "Select a class...");
-            SearchableCombo(StrId, ClosedPreview.c_str(), 0, (InOutClass != nullptr || bAllowNone) ? 0 : Constants::kIndexNone,
+            SearchableCombo(StrId, *ClosedPreview, 0, (InOutClass != nullptr || bAllowNone) ? 0 : Constants::kIndexNone,
                 [](int32) { return FFixedString(); }, ItemIcon);
             return false;
         }
@@ -1039,20 +1037,20 @@ namespace Lumina::ImGuiX
             CClass* Candidate = *It;
             if (Candidate->CanInstantiate() && (BaseClass == nullptr || Candidate->IsChildOf(BaseClass)))
             {
-                Candidates.push_back(Candidate);
+                Candidates.Add(Candidate);
             }
         }
 
         Algo::Sort(Candidates, [](CClass* A, CClass* B)
         {
-            return strcmp(A->GetName().c_str(), B->GetName().c_str()) < 0;
+            return strcmp(*A->GetName(), *B->GetName()) < 0;
         });
 
         // LOC("None") occupies index 0 when allowed, so every candidate sits one slot further along.
         const int32 Offset = bAllowNone ? 1 : 0;
 
         int32 CurrentIndex = bAllowNone ? 0 : Constants::kIndexNone;
-        for (int32 i = 0; i < (int32)Candidates.size(); ++i)
+        for (int32 i = 0; i < Candidates.Num(); ++i)
         {
             if (Candidates[i] == InOutClass)
             {
@@ -1061,14 +1059,14 @@ namespace Lumina::ImGuiX
             }
         }
 
-        // Copied, since c_str hands back a rotating buffer the per-item labels below would overwrite.
-        const FFixedString Preview = InOutClass ? FFixedString(InOutClass->GetName().c_str())
+        // Copied, since operator* hands back a rotating buffer the per-item labels below would overwrite.
+        const FFixedString Preview = InOutClass ? FFixedString(*InOutClass->GetName())
                                                 : FFixedString(bAllowNone ? LOC("None") : "Select a class...");
 
-        const int32 Picked = SearchableCombo(StrId, Preview.c_str(), (int32)Candidates.size() + Offset, CurrentIndex,
+        const int32 Picked = SearchableCombo(StrId, *Preview, Candidates.Num() + Offset, CurrentIndex,
             [&Candidates, Offset](int32 Index) -> FFixedString
             {
-                return (Index < Offset) ? FFixedString(LOC("None")) : FFixedString(Candidates[Index - Offset]->GetName().c_str());
+                return (Index < Offset) ? FFixedString(LOC("None")) : FFixedString(*Candidates[Index - Offset]->GetName());
             }, ItemIcon);
 
         if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
@@ -1079,41 +1077,29 @@ namespace Lumina::ImGuiX
         return false;
     }
 
-    bool StructCombo(const char* StrId, CStruct* BaseStruct, CStruct*& InOutStruct, bool bAllowNone, const char* ItemIcon)
+    bool StructCombo(const char* StrId, CStruct* BaseStruct, CStruct*& InOutStruct, bool bAllowNone, const char* ItemIcon, bool bIncludeBase)
     {
         // A closed combo only shows the current struct, so the object walk waits until the list is open.
         if (!IsComboListOpen(StrId))
         {
-            const FFixedString ClosedPreview = InOutStruct ? FFixedString(InOutStruct->GetName().c_str())
+            const FFixedString ClosedPreview = InOutStruct ? FFixedString(*InOutStruct->GetName())
                                                            : FFixedString(bAllowNone ? LOC("None") : "Select a type...");
-            SearchableCombo(StrId, ClosedPreview.c_str(), 0, (InOutStruct != nullptr || bAllowNone) ? 0 : Constants::kIndexNone,
+            SearchableCombo(StrId, *ClosedPreview, 0, (InOutStruct != nullptr || bAllowNone) ? 0 : Constants::kIndexNone,
                 [](int32) { return FFixedString(); }, ItemIcon);
             return false;
         }
 
-        TVector<CStruct*> Candidates;
-        for (TObjectIterator<CStruct> It; It; ++It)
-        {
-            CStruct* Candidate = *It;
-            if (Candidate == BaseStruct || !IsInstancableStructType(Candidate))
-            {
-                continue;
-            }
-            if (BaseStruct == nullptr || Candidate->IsChildOf(BaseStruct))
-            {
-                Candidates.push_back(Candidate);
-            }
-        }
+        TVector<CStruct*> Candidates = GatherInstancableStructSubtypes(BaseStruct, bIncludeBase);
 
         Algo::Sort(Candidates, [](CStruct* A, CStruct* B)
         {
-            return strcmp(A->GetName().c_str(), B->GetName().c_str()) < 0;
+            return strcmp(*A->GetName(), *B->GetName()) < 0;
         });
 
         const int32 Offset = bAllowNone ? 1 : 0;
 
         int32 CurrentIndex = bAllowNone ? 0 : Constants::kIndexNone;
-        for (int32 i = 0; i < (int32)Candidates.size(); ++i)
+        for (int32 i = 0; i < Candidates.Num(); ++i)
         {
             if (Candidates[i] == InOutStruct)
             {
@@ -1122,14 +1108,14 @@ namespace Lumina::ImGuiX
             }
         }
 
-        // Copied for the same reason ClassCombo copies, since c_str reuses a thread-local buffer.
-        const FFixedString Preview = InOutStruct ? FFixedString(InOutStruct->GetName().c_str())
+        // Copied for the same reason ClassCombo copies, since operator* reuses a thread-local buffer.
+        const FFixedString Preview = InOutStruct ? FFixedString(*InOutStruct->GetName())
                                                  : FFixedString(bAllowNone ? LOC("None") : "Select a type...");
 
-        const int32 Picked = SearchableCombo(StrId, Preview.c_str(), (int32)Candidates.size() + Offset, CurrentIndex,
+        const int32 Picked = SearchableCombo(StrId, *Preview, Candidates.Num() + Offset, CurrentIndex,
             [&Candidates, Offset](int32 Index) -> FFixedString
             {
-                return (Index < Offset) ? FFixedString(LOC("None")) : FFixedString(Candidates[Index - Offset]->GetName().c_str());
+                return (Index < Offset) ? FFixedString(LOC("None")) : FFixedString(*Candidates[Index - Offset]->GetName());
             }, ItemIcon);
 
         if (Picked != Constants::kIndexNone && Picked != CurrentIndex)

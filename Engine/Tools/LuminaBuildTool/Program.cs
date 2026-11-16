@@ -132,6 +132,7 @@ public static class Program
               Tidy [PathFilter]         Run clang-tidy with the workspace .clang-tidy over first-party sources
                                         (-Checks=<list>, -Jobs=<n>, -WarningsAsErrors, -ClangTidy=<path>)
               GenerateProjectFiles      Write IDE project and solution files
+                                        (-SolutionFormat=Slnx | Sln, default Slnx)
               Package                   Build and zip a prebuilt editor that runs without sources or a toolchain
 
             Profile options:
@@ -154,6 +155,7 @@ public static class Program
               -List                     List the discovered suites and where they live
               -Filter=<pattern>         Passed on as --gtest_filter
               -BuildOnly                Compile the suites without running them
+              -SuiteTimeoutSeconds=<n>  Kill and fail a suite that runs longer (default: 1800, 0 for none)
               -Benchmarks               Run the Benchmarks suites instead of the Tests ones
 
             Includes options (reads the graph the last build recorded):
@@ -162,7 +164,7 @@ public static class Program
               -All                      Include toolchain and SDK headers
 
             Clean options (with no target, whole trees are cleaned rather than one target):
-              -Full                     Also delete Binaries and .sln files, and the engine tree
+              -Full                     Also delete Binaries and solution files, and the engine tree
                                         alongside the project when -Project is given
               -Regenerate               Rewrite both IDE workspaces once every delete succeeded
             -DryRun lists what would go instead. A delete an open IDE is blocking fails the command,
@@ -170,6 +172,7 @@ public static class Program
 
             Options:
               -Platform=<name>          Windows64 | Linux64 (default: host platform)
+                                        A Windows host builds Linux64 inside WSL, see Package options
               -Configuration=<name>     Debug | Development | Shipping (default: Development)
               -TargetType=<name>        Editor | Game | Program (default: from the target rules)
               -EngineRoot=<path>        Engine installation root (default: the tree this tool lives in)
@@ -207,11 +210,14 @@ public static class Program
 
             Package options (output in Saved/Packages unless -Output is given):
               -Configuration=<name>     Development (default) or Shipping
-              -Output=<dir>             Where the staged folder and the .zip are written
+              -Platform=<name>          Windows64 (zip) or Linux64 (.tar.gz), default is the host
+                                        On Windows, Linux64 builds inside WSL's default distribution from a
+                                        mirror under ~/.lumina/wsl, fetching the Linux dependencies on first use
+              -Output=<dir>             Where the staged folder and the archive are written
               -NoBuild                  Package what is already built
               -NoGame                   Leave out the standalone game binaries that Play Standalone runs
               -NoZip                    Stage the folder without compressing it
-              -Symbols                  Include .pdb files beside the binaries
+              -Symbols                  Include .pdb or .debug symbol files beside the binaries
 
             Setup options:
               -Force                    Re-download the dependency bundle even if External/ exists

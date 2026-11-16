@@ -17,6 +17,7 @@
 
 namespace Lumina
 {
+    class CMesh;
     class IImGuiRenderer;
     class FSpirVShaderCompiler;
     class FShaderLibrary;
@@ -108,10 +109,11 @@ namespace Lumina
 
         void Initialize();
 
-        /** Blocks until the GPU has finished with the slot this frame is about to record into. Called at
-         *  the top of the application loop, BEFORE input is pumped: everything between sampling the mouse
-         *  and submitting is input latency, and this wait is the longest thing in that window. */
+        // Called before input is pumped, so this longest wait in the frame does not count as input latency.
         void WaitForFrameSlot();
+
+        // Called right after the event pump, as the start of the input latency plots.
+        void MarkInputRead();
 
         // ImGui::NewFrame (and any other backend per-frame init).
         void FrameStart(const FUpdateContext& UpdateContext);
@@ -151,9 +153,11 @@ namespace Lumina
         NODISCARD RHI::FMaterialManager& GetMaterialManager() const { return *MaterialManager.get(); }
         NODISCARD RHI::FMaterialCollectionManager& GetCollectionManager() const { return *CollectionManager.get(); }
 
-        /** Deferred release of renderer-side state whose owner has gone away. See RenderRelease.h for
-            why this exists and what it gates on. */
+        // Deferred release of renderer-side state whose owner has gone away.
         NODISCARD RHI::FRenderReleaseQueue& GetReleaseQueue() { return ReleaseQueue; }
+
+        // Polls the mesh's staged resource every frame, since an upload batch landing marks nothing dirty. Any thread.
+        RUNTIME_API void WatchMeshPublish(CMesh* Mesh);
 
         // Lazily populated by the first render scene; aliased by all later scenes.
         NODISCARD FSharedRenderResources& GetSharedRenderResources() { return SharedRenderResources; }
@@ -170,6 +174,11 @@ namespace Lumina
         // Runs once the slot's fence has been waited, which is when its copy is complete.
         void ResolveWindowCapture(uint8 FrameIndex);
 
+        // Runs once the slot's fence has been waited, which is when its frame finished on the GPU.
+        void PlotInputToGPUComplete(uint8 FrameIndex);
+
+        void PublishPendingMeshes();
+
         #if USING(WITH_DEV_UI)
         IImGuiRenderer*                     ImGuiRenderer = nullptr;
         #endif
@@ -183,6 +192,10 @@ namespace Lumina
         TUniquePtr<RHI::FMaterialCollectionManager> CollectionManager;
 
         RHI::FRenderReleaseQueue            ReleaseQueue;
+
+        // Guarded by MeshPublishMutex, since a reimport stages its mesh from a worker.
+        FMutex                              MeshPublishMutex;
+        TVector<TWeakObjectPtr<CMesh>>      MeshesAwaitingPublish;
 
         // Backing storage for GShaderLibrary / GShaderCompiler.
         FShaderLibrary*                     ShaderLibrary = nullptr;
@@ -206,6 +219,11 @@ namespace Lumina
         // Set by WaitForFrameSlot, cleared by the FrameEnd that consumes it.
         bool                                bFrameSlotWaited = false;
 
+        // Zero means no read to measure, as in a headless or minimized frame.
+        double                              InputReadSeconds = 0.0;
+        // The read of the frame each slot last presented, cleared once its fence is waited.
+        double                              SlotInputReadSeconds[RHI::kFramesInFlight] = {};
+
         struct FInFlightWindowCapture
         {
             uint64              Ticket     = 0;
@@ -228,7 +246,7 @@ namespace Lumina
 
     namespace Internal
     {
-        /** Publishes the process-wide renderer. FEngine owns the lifetime; nothing else should call this. */
+        // FEngine owns the renderer's lifetime, so nothing else should call this.
         RUNTIME_API void SetRenderManager(FRenderManager* Manager);
     }
 }

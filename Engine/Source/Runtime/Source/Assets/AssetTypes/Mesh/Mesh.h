@@ -5,6 +5,7 @@
 #include "Core/Object/Object.h"
 #include "Core/Object/ObjectHandleTyped.h"
 #include "Renderer/MeshData.h"
+#include "Renderer/VirtualGeometrySettings.h"
 #include "Memory/SmartPtr.h"
 #include "Mesh.generated.h"
 
@@ -66,18 +67,37 @@ namespace Lumina
          *  48^3 field is well under a second, but scales cubically with Resolution. */
         void BuildDistanceField();
 
-        uint32 GetNumMaterials() const { return (uint32)Materials.size(); }
-        CMaterialInterface* GetMaterialAtSlot(size_t Slot) const;
-        void SetMaterialAtSlot(size_t Slot, CMaterialInterface* NewMaterial);
+        // Rebuilds the meshlets, LODs and virtual geometry from the baked finest level using VirtualGeometrySettings, so no source file is needed.
+        bool RebuildVirtualGeometry();
+
+        // Whether the baked meshlets carry a cluster hierarchy.
+        bool HasClusterLOD() const;
+
+        uint32 GetNumMaterials() const { return (uint32)Materials.Num(); }
+        CMaterialInterface* GetMaterialAtSlot(int32 Slot) const;
+        void SetMaterialAtSlot(int32 Slot, CMaterialInterface* NewMaterial);
         
-        FORCEINLINE const FGeometrySurface& GetSurface(size_t Slot) const { return MeshResources->GeometrySurfaces[Slot]; }
+        FORCEINLINE const FGeometrySurface& GetSurface(int32 Slot) const { return MeshResources->GeometrySurfaces[Slot]; }
         FORCEINLINE FMeshResource& GetMeshResource() const { return *MeshResources.get(); }
         FORCEINLINE const FMeshResource* TryGetMeshResource() const { return MeshResources.get(); }
 
+        // The staged resource while one waits to publish, so an edit builds on the newest geometry.
+        FORCEINLINE const FMeshResource& GetNewestMeshResource() const { return PendingMeshResources ? *PendingMeshResources : *MeshResources; }
+
+        // Stages the resource and has the renderer publish it once its upload has landed, or publishes at once with no renderer.
         void SetMeshResource(TUniquePtr<FMeshResource>&& NewResource);
 
-        // Takes the resource and bounds now, and leaves meshlets and GPU buffers to an open FMeshBuildBatchScope.
+        // Uploads the resource's geometry and holds it beside the current one, which keeps drawing until PublishPendingMeshResource.
+        void StageMeshResource(TUniquePtr<FMeshResource>&& NewResource);
+
+        // Swaps the staged resource in once its upload batch is complete. True when nothing is left pending.
+        bool PublishPendingMeshResource();
+
+        // Leaves meshlets and GPU buffers to an open FMeshBuildBatchScope, which then stages the resource like SetMeshResource.
         void SetMeshResourceBatched(TUniquePtr<FMeshResource>&& NewResource);
+
+        // Counts how often published geometry was replaced, so data built from the old geometry can tell it is stale.
+        FORCEINLINE uint32 GetGeometryVersion() const { return GeometryVersion; }
 
         // The two halves a batch runs, the first safely in parallel with other meshes and the second on the game thread.
         void BuildDeferredMeshlets();
@@ -115,6 +135,10 @@ namespace Lumina
         PROPERTY(Editable, Category = "Distance Field", DisplayName = "Settings")
         SDistanceFieldBuildSettings DistanceFieldSettings;
 
+        // Cluster hierarchy and voxel build inputs, applied by the mesh editor's Rebuild Virtual Geometry action. Seeded from the import dialog.
+        PROPERTY(Editable, Category = "Virtual Geometry", DisplayName = "Settings")
+        SVirtualGeometryBuildSettings VirtualGeometrySettings;
+
         /** File this mesh was last imported from, so "Reimport From File..." can open on it. Empty for
          *  procedurally generated meshes and for assets imported before this was recorded. Matches the
          *  SourcePath that CTexture / CFont / CAudioStream already keep. */
@@ -122,8 +146,18 @@ namespace Lumina
         FString SourcePath;
         
     private:
-        
+
+        // Creates the GPU buffers and drops the import-time scratch they were built from.
+        static void UploadGeometry(FMeshResource& Resource);
+
+        void ReplaceMeshResources(TUniquePtr<FMeshResource>&& NewResource);
+
         TUniquePtr<FMeshResource> MeshResources;
+
+        uint32 GeometryVersion = 0;
+
+        // A replacement whose upload has not landed; the live resource keeps drawing until it does.
+        TUniquePtr<FMeshResource> PendingMeshResources;
     };
 
 
@@ -134,7 +168,7 @@ namespace Lumina
         uint32 Count = 0;
         for (const FGeometrySurface& Surface : MeshResources->GeometrySurfaces)
         {
-            std::forward<TCallable>(Lambda)(Surface, Count);
+            Forward<TCallable>(Lambda)(Surface, Count);
             ++Count;
         }
     }

@@ -48,7 +48,7 @@ namespace Lumina
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,  St.Colors[ImGuiCol_FrameBgActive]);
         ImGui::PushStyleColor(ImGuiCol_Text, bCapturing ? EditorColors::Accent() : bValid ? St.Colors[ImGuiCol_Text] : EditorColors::TextMuted());
         ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
-        if (ImGui::Button(Label.c_str(), ImVec2(FieldW > 1.0f ? FieldW : 1.0f, 0.0f)) && !bCapturing)
+        if (ImGui::Button(*Label, ImVec2(FieldW > 1.0f ? FieldW : 1.0f, 0.0f)) && !bCapturing)
         {
             bCapturing      = true;
             bArmed          = false;
@@ -61,18 +61,13 @@ namespace Lumina
         // Disabled rather than hidden while listening, or the activating click would land on it.
         ImGui::SameLine(0.0f, St.ItemSpacing.x);
         ImGui::BeginDisabled(!bValid || bCapturing);
-        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.25f, 0.25f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.5f, 0.15f, 0.15f, 1.0f));
-        if (ImGui::Button(LE_ICON_CLOSE_CIRCLE "##clearskey", AssetPickerFilter::kButtonSize))
+        if (AssetPickerFilter::DrawClearButton("Clear the binding."))
         {
             Value.Clear();
             bCapturing = false;
             bCommitted = true;
         }
-        ImGui::PopStyleColor(3);
         ImGui::EndDisabled();
-        ImGuiX::TextTooltip("{}", LOC("Clear the binding."));
 
         if (!bCapturing)
         {

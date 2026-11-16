@@ -1,6 +1,7 @@
 #include <clang/AST/Type.h>
 #include <clang-c/CXString.h>
 #include <clang-c/Index.h>
+#include <cctype>
 #include <optional>
 #include <string>
 #include <vector>
@@ -58,6 +59,22 @@ namespace Lumina::Reflection::Visitor
 		}
 
 		return MacroContents.substr(Open + 1, Close - Open - 1);
+	}
+
+	// S for a value struct and C for a class, so a misnamed type fails the build instead of spreading through code and bindings.
+	static void RequireTypePrefix(const CXCursor& Cursor, const std::string& Name, char Prefix, const char* Kind)
+	{
+		const bool bUpperSecond = Name.size() > 1 && std::isupper(static_cast<unsigned char>(Name[1]));
+		if (!Name.empty() && Name[0] == Prefix && bUpperSecond)
+		{
+			return;
+		}
+
+		const bool bHasOtherPrefix = bUpperSecond && std::isupper(static_cast<unsigned char>(Name[0]));
+		const std::string Suggested = Prefix + (bHasOtherPrefix ? Name.substr(1) : Name);
+		LRT_ERROR(Cursor, EDiagId::BadTypePrefix,
+			"Reflected %s '%s' must be prefixed with '%c'. Rename it to '%s'.",
+			Kind, Name.c_str(), Prefix, Suggested.c_str());
 	}
 
 	// Lets a SIMD or unreflectable representation present its logical shape without hand-tracking layout.
@@ -759,6 +776,7 @@ namespace Lumina::Reflection::Visitor
 
 		if (NewProperty != nullptr)
 		{
+			NewProperty->LineNumber = ClangUtils::GetCursorLineNumber(FieldInfo.OwningCursor);
 			OutProperty = NewProperty.get();
 			Struct->PushProperty(std::move(NewProperty));
 		}
@@ -801,6 +819,51 @@ namespace Lumina::Reflection::Visitor
 			FSearch* State = static_cast<FSearch*>(Data);
 			if (clang_getCursorKind(Cursor) == CXCursor_CXXBaseSpecifier
 				&& DerivesFromCObject(clang_getCursorType(Cursor), State->Depth + 1))
+			{
+				State->bFound = true;
+				return CXChildVisit_Break;
+			}
+			return CXChildVisit_Continue;
+		}, &Search);
+
+		return Search.bFound;
+	}
+
+	// The marker every world resource derives from, which is not a reflected parent of its own.
+	static bool IsResourceMarker(CXType Type)
+	{
+		return ClangUtils::GetString(clang_getTypeSpelling(clang_getCanonicalType(Type))) == "Lumina::ECS::FResource";
+	}
+
+	static bool DerivesFromResource(CXType RecordType, int Depth = 0)
+	{
+		if (Depth > 16)
+		{
+			return false;
+		}
+		if (IsResourceMarker(RecordType))
+		{
+			return true;
+		}
+
+		const CXCursor Declaration = clang_getTypeDeclaration(clang_getCanonicalType(RecordType));
+		if (clang_Cursor_isNull(Declaration) != 0)
+		{
+			return false;
+		}
+
+		struct FSearch
+		{
+			bool bFound = false;
+			int  Depth  = 0;
+		};
+
+		FSearch Search{ false, Depth };
+		clang_visitChildren(Declaration, [](CXCursor Cursor, CXCursor, CXClientData Data) -> CXChildVisitResult
+		{
+			FSearch* State = static_cast<FSearch*>(Data);
+			if (clang_getCursorKind(Cursor) == CXCursor_CXXBaseSpecifier
+				&& DerivesFromResource(clang_getCursorType(Cursor), State->Depth + 1))
 			{
 				State->bFound = true;
 				return CXChildVisit_Break;
@@ -941,7 +1004,6 @@ namespace Lumina::Reflection::Visitor
 			Function.TopLevelParams.push_back(TopLevel);
 			Function.ParameterStorageTypes.push_back(std::move(StorageType));
 			Function.ParameterObjectCastTypes.push_back(std::move(ObjectCastType));
-			Function.ParameterIsReference.push_back(Kind == CXType_LValueReference);
 			Function.ParameterIsRvalue.push_back(bIsRvalueReference);
 			return true;
 		};
@@ -952,7 +1014,6 @@ namespace Lumina::Reflection::Visitor
 			Function.TopLevelParams.clear();
 			Function.ParameterStorageTypes.clear();
 			Function.ParameterObjectCastTypes.clear();
-			Function.ParameterIsReference.clear();
 			Function.ParameterIsRvalue.clear();
 			Function.ReturnIndex = -1;
 		};
@@ -985,6 +1046,7 @@ namespace Lumina::Reflection::Visitor
 		OutFunction = nullptr;
 		
 		auto NewFunction = std::make_unique<FReflectedFunction>();
+		NewFunction->LineNumber = ClangUtils::GetCursorLineNumber(Cursor);
 		NewFunction->Outer = Struct->DisplayName;
 		NewFunction->Name = ClangUtils::GetCursorSpelling(Cursor);
 		NewFunction->bIsVirtual = clang_CXXMethod_isVirtual(Cursor) != 0;
@@ -1065,7 +1127,7 @@ namespace Lumina::Reflection::Visitor
 		}
 
 		NewProperty->GenerateMetadata(Specifiers);
-		ValidateSpecifiers(Cursor, ESpecifierTarget::Property, NewProperty->Metadata);
+		ValidateSpecifiers(*Context->Specifiers, Cursor, ESpecifierTarget::Property, NewProperty->Metadata);
 		ApplyReflectAsOverride(Context, Struct, NewProperty, Cursor);
 
 		const long long OffsetInBits = clang_Cursor_getOffsetOfField(Cursor);
@@ -1150,7 +1212,7 @@ namespace Lumina::Reflection::Visitor
 		{
 		case(CXCursor_CXXBaseSpecifier):
 		{
-			if (Type->Parent.empty())
+			if (Type->Parent.empty() && !IsResourceMarker(clang_getCursorType(Cursor)))
 			{
 				Type->Parent = ClangUtils::CursorDisplayName(Cursor).Get();
 			}
@@ -1187,7 +1249,7 @@ namespace Lumina::Reflection::Visitor
 			FReflectedFunction* NewFunction;
 			CreateFunctionForType(Cursor, Context, Type, NewFunction);
 			NewFunction->GenerateMetadata(Specifiers);
-			ValidateSpecifiers(Cursor, ESpecifierTarget::Function, NewFunction->Metadata);
+			ValidateSpecifiers(*Context->Specifiers, Cursor, ESpecifierTarget::Function, NewFunction->Metadata);
 
 			std::string Comment = GetCursorComment(Cursor);
 			if (!Comment.empty())
@@ -1233,7 +1295,7 @@ namespace Lumina::Reflection::Visitor
 		Template.QualifiedName = QualifiedName;
 		Template.Namespace = Context->CurrentNamespace;
 		Template.MacroContents = Macro.MacroContents;
-		ValidateSpecifiers(Cursor, ESpecifierTarget::Reflect, FMetadataParser(Macro.MacroContents).Metadata);
+		ValidateSpecifiers(*Context->Specifiers, Cursor, ESpecifierTarget::Reflect, FMetadataParser(Macro.MacroContents).Metadata);
 		Template.Header = Context->ReflectedHeader;
 
 		Context->ReflectedTemplates.insert_or_assign(FStringHash(QualifiedName), std::move(Template));
@@ -1314,7 +1376,7 @@ namespace Lumina::Reflection::Visitor
 		ReflectedStruct->DisplayName = AliasName;
 		ReflectedStruct->bIsAlias = true;
 		ReflectedStruct->GenerateMetadata(Macro.MacroContents);
-		ValidateSpecifiers(Cursor, ESpecifierTarget::Reflect, ReflectedStruct->Metadata);
+		ValidateSpecifiers(*Context->Specifiers, Cursor, ESpecifierTarget::Reflect, ReflectedStruct->Metadata);
 		ReflectedStruct->Header = Context->ReflectedHeader;
 		ReflectedStruct->Type = FReflectedType::EType::Structure;
 		ReflectedStruct->LineNumber = ClangUtils::GetCursorLineNumber(Cursor);
@@ -1380,6 +1442,12 @@ namespace Lumina::Reflection::Visitor
 			return CXChildVisit_Continue;
 		}
 
+		// A ReflectedName deliberately registers the type under another name, such as a core math type's F name.
+		if (FindReflectedNameOverride(Macro.MacroContents).empty())
+		{
+			RequireTypePrefix(Cursor, CursorName, 'S', "struct");
+		}
+
 		// Keyed under the alias so a property naming FTransform resolves to the VTransform backing it.
 		const std::string CppName = CursorName;
 		const std::string CppQualifiedName = FullyQualifiedCursorName;
@@ -1398,11 +1466,12 @@ namespace Lumina::Reflection::Visitor
 		ReflectedStruct->CppName = CppName;
 		ReflectedStruct->CppQualifiedName = CppQualifiedName;
 		ReflectedStruct->GenerateMetadata(Macro.MacroContents);
-		ValidateSpecifiers(Cursor, ESpecifierTarget::Reflect, ReflectedStruct->Metadata);
+		ValidateSpecifiers(*Context->Specifiers, Cursor, ESpecifierTarget::Reflect, ReflectedStruct->Metadata);
 		ReflectedStruct->Header = Context->ReflectedHeader;
 		ReflectedStruct->Type = FReflectedType::EType::Structure;
 		ReflectedStruct->GeneratedBodyLineNumber = GeneratedBody.LineNumber;
 		ReflectedStruct->LineNumber = ClangUtils::GetCursorLineNumber(Cursor);
+		ReflectedStruct->bIsResource = DerivesFromResource(clang_getCursorType(Cursor));
 		RecordNativeLayout(ReflectedStruct, clang_getCursorType(Cursor));
 
 		if (!Context->CurrentNamespace.empty())
@@ -1438,6 +1507,7 @@ namespace Lumina::Reflection::Visitor
 		}
 
 		auto NewFunction = std::make_unique<FReflectedFunction>();
+		NewFunction->LineNumber = ClangUtils::GetCursorLineNumber(Cursor);
 		NewFunction->bFreeFunction = true;
 		NewFunction->Name = ClangUtils::GetCursorSpelling(Cursor);
 
@@ -1452,7 +1522,7 @@ namespace Lumina::Reflection::Visitor
 		NewFunction->QualifiedName = Qualified;
 
 		NewFunction->GenerateMetadata(Specifiers);
-		ValidateSpecifiers(Cursor, ESpecifierTarget::ScriptExport, NewFunction->Metadata);
+		ValidateSpecifiers(*Context->Specifiers, Cursor, ESpecifierTarget::ScriptExport, NewFunction->Metadata);
 		for (const FMetadataPair& Meta : NewFunction->Metadata)
 		{
 			if (Meta.Key == "Class")
@@ -1531,6 +1601,8 @@ namespace Lumina::Reflection::Visitor
 			return CXChildVisit_Continue;
 		}
 
+		RequireTypePrefix(Cursor, CursorName, 'C', "class");
+
 		FReflectedClass* ReflectedClass = Context->ReflectionDatabase.GetOrCreateReflectedType<FReflectedClass>(FStringHash(FullyQualifiedCursorName));
 		ReflectedClass->DisplayName = CursorName;
 		ReflectedClass->Header = Context->ReflectedHeader;
@@ -1539,7 +1611,7 @@ namespace Lumina::Reflection::Visitor
 		ReflectedClass->LineNumber = ClangUtils::GetCursorLineNumber(Cursor);
 		RecordNativeLayout(ReflectedClass, clang_getCursorType(Cursor));
 		ReflectedClass->GenerateMetadata(Macro.MacroContents);
-		ValidateSpecifiers(Cursor, ESpecifierTarget::Reflect, ReflectedClass->Metadata);
+		ValidateSpecifiers(*Context->Specifiers, Cursor, ESpecifierTarget::Reflect, ReflectedClass->Metadata);
 
 		if (!Context->CurrentNamespace.empty())
 		{

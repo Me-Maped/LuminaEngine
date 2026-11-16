@@ -37,9 +37,7 @@ namespace Lumina::Physics
         // A couple of seconds of fixed steps, long past any deferred collider build.
         constexpr uint32 kAwaitingGroundWarnSteps = 120;
 
-        // How often a resting character re-runs a full step anyway, so a world change that raises no wake
-        // signal cannot hold it stale. Power of two, and the phase is offset per entity so a settled crowd
-        // does not poll on the same step.
+        // Resting characters force a full step this often so an unsignalled world change cannot hold them stale; power of two, phased per entity.
         constexpr uint64 kRestPollMask = 15;
 
         // A character step is microseconds of world queries, so the fan-out pays for itself at a low count.
@@ -63,6 +61,7 @@ namespace Lumina::Physics
             SCollisionProfile   Profile{};
             bool                bPermissive = true;
             bool                bCollideWithCharacters = true;
+            ECS::FEntity        Entity{};
         };
 
         bool MoverAcceptsShape(const FMoverPlanes& Query, b3ShapeId ShapeId)
@@ -80,8 +79,7 @@ namespace Lumina::Physics
             return Box3DUtils::ShouldProfileCollideWithShape(Query.Profile, ShapeId, Query.bPermissive);
         }
 
-        // Sliding along, or pushing out of, a face too steep to walk lifts the character, so it collides as a vertical wall.
-        // The offset is rescaled so the wall holds the same contact, since penetration along it is deeper than along the face.
+        // Too-steep faces collide as a vertical wall, so the offset is rescaled to hold the same contact, since penetration along it is deeper.
         b3Plane UprightIfTooSteep(const b3Plane& Plane, float CosMaxSlope)
         {
             if (Plane.normal.y <= kMinSteepNormalY || Plane.normal.y >= CosMaxSlope)
@@ -102,12 +100,18 @@ namespace Lumina::Physics
                 return true;
             }
 
+            const int32 StartCount = Out.Count;
             for (int32 i = 0; i < PlaneCount && Out.Count < kMaxMoverPlanes; ++i)
             {
                 Out.Planes[Out.Count] = b3CollisionPlane{ UprightIfTooSteep(Results[i].plane, Out.CosMaxSlope), FLT_MAX, 0.0f, true };
                 Out.Points[Out.Count] = b3Add(Out.Origin, Results[i].point);
                 Out.Shapes[Out.Count] = ShapeId;
                 ++Out.Count;
+            }
+
+            if (Out.Count - StartCount < PlaneCount)
+            {
+                LOG_WARN_ONCE("Box3DCharacter: entity {} gathered more than {} collision planes in one mover step, the rest are dropped.", Out.Entity.Value, kMaxMoverPlanes);
             }
 
             return true;
@@ -153,7 +157,7 @@ namespace Lumina::Physics
         }
 
         // A surface facing down that reaches into the standing capsule, which is all that can stop a crouched character standing.
-        bool HasRoomToStand(const FPhysicsCharacterHandle& Character, float StandingHalfHeight)
+        bool HasRoomToStand(const FPhysicsCharacterHandle& Character, float StandingHalfHeight, ECS::FEntity Entity)
         {
             constexpr float CeilingNormalY = -0.1f;
             constexpr float StandClearance = 0.01f;
@@ -169,6 +173,7 @@ namespace Lumina::Physics
             Gathered.bCollideWithCharacters = Character.bCollideWithCharacters;
             Gathered.CosMaxSlope            = Character.CosMaxSlope;
             Gathered.Origin                 = Box3DUtils::ToB3Vec3(Character.Position);
+            Gathered.Entity                 = Entity;
             b3World_CollideMover(Character.WorldId, Gathered.Origin, &Standing, Character.Filter, &GatherPlanes, &Gathered);
 
             const FVector3 Center = Character.Position + Offset;
@@ -250,7 +255,7 @@ namespace Lumina::Physics
     {
         FBodyRecord& Record = CharacterBodies.FindOrAdd(Entity);
         Record.Revision = NextBindingRevision++;
-        PendingCharacters.push_back(Entity);
+        PendingCharacters.Add(Entity);
     }
 
     void FBox3DPhysicsScene::CreateCharacter(ECS::FRegistry& Registry, ECS::FEntity Entity)
@@ -312,7 +317,7 @@ namespace Lumina::Physics
 
     void FBox3DPhysicsScene::OnCharacterComponentUpdated(ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
-        PendingCharacterUpdates.push_back(Entity);
+        PendingCharacterUpdates.Add(Entity);
     }
 
     void FBox3DPhysicsScene::ApplyPendingCharacterUpdates(ECS::FRegistry& Registry)
@@ -326,7 +331,7 @@ namespace Lumina::Physics
                 Physics->Character->bResting = false;
             }
         }
-        PendingCharacterUpdates.clear();
+        PendingCharacterUpdates.Reset();
     }
 
     void FBox3DPhysicsScene::UpdateCrouch(ECS::FEntity Entity, SCharacterPhysicsComponent& Physics, SCharacterMovementComponent& Movement)
@@ -338,7 +343,7 @@ namespace Lumina::Physics
         }
 
         FPhysicsCharacterHandle& Character = *Physics.Character;
-        if (!bWantsCrouched && !HasRoomToStand(Character, Physics.HalfHeight))
+        if (!bWantsCrouched && !HasRoomToStand(Character, Physics.HalfHeight, Entity))
         {
             return;
         }
@@ -347,7 +352,7 @@ namespace Lumina::Physics
         ApplyCharacterShape(Character, Physics, &Movement);
         Character.bResting = false;
 
-        SCharacterCrouchEvent& Event = CrouchEvents.emplace_back();
+        SCharacterCrouchEvent& Event = CrouchEvents.EmplaceGetRef();
         Event.Entity    = Entity;
         Event.bCrouched = bWantsCrouched;
     }
@@ -358,7 +363,7 @@ namespace Lumina::Physics
         {
             if (Record->Handle != InvalidBodyHandle)
             {
-                PendingBodyDestructions.push_back(Record->Handle);
+                PendingBodyDestructions.Add(Record->Handle);
             }
             CharacterBodies.Remove(Entity);
         }
@@ -451,7 +456,7 @@ namespace Lumina::Physics
 
         if (NumControllers > kCharacterLatchParallelThreshold)
         {
-            Task::ParallelFor(NumControllers, Latch);
+            Jobs::ParallelFor(NumControllers, Latch);
         }
         else
         {
@@ -472,10 +477,9 @@ namespace Lumina::Physics
         ++CharacterStepCounter;
         int64 RestingCount = 0;
 
-        CharacterWorkScratch.clear();
+        CharacterWorkScratch.Reset();
 
-        // Resting, teleporting and unseated characters resolve here, so the fan-out below is a uniform
-        // collide-and-solve over characters that all owe the same work.
+        // Resting, teleporting and unseated characters resolve here, so the fan-out below is uniform work.
         View.ForEach([&](ECS::FEntity Entity, SCharacterPhysicsComponent& Physics, SCharacterMovementComponent& Movement)
         {
             if (!Physics.Character)
@@ -520,21 +524,21 @@ namespace Lumina::Physics
                 return;
             }
 
-            CharacterWorkScratch.push_back({ &Physics, &Movement, Entity });
+            CharacterWorkScratch.Emplace(&Physics, &Movement, Entity);
         });
 
-        if (!CrouchEvents.empty())
+        if (!CrouchEvents.IsEmpty())
         {
-            ECS::SendEvents(World->GetEvents(), TSpan<const SCharacterCrouchEvent>(CrouchEvents.data(), CrouchEvents.size()));
-            CrouchEvents.clear();
+            ECS::SendEvents(World->GetEvents(), TSpan<const SCharacterCrouchEvent>(CrouchEvents.GetData(), CrouchEvents.Num()));
+            CrouchEvents.Reset();
         }
 
-        const uint32 WorkCount = (uint32)CharacterWorkScratch.size();
+        const uint32 WorkCount = (uint32)CharacterWorkScratch.Num();
 
-        const uint32 ThreadSlots = Math::Max(GTaskSystem->GetNumTaskThreads(), 1u);
-        if (CharacterPushScratch.size() < ThreadSlots)
+        const uint32 ThreadSlots = Math::Max(Jobs::GetNumThreadSlots(), 1u);
+        if (static_cast<uint32>(CharacterPushScratch.Num()) < ThreadSlots)
         {
-            CharacterPushScratch.resize(ThreadSlots);
+            CharacterPushScratch.SetNum(ThreadSlots);
         }
 
         for (FCharacterPushBucket& Bucket : CharacterPushScratch)
@@ -544,7 +548,7 @@ namespace Lumina::Physics
 
         if (WorkCount > kCharacterParallelThreshold)
         {
-            Task::ParallelFor(WorkCount, [&](uint32 Index, uint32 Thread)
+            Jobs::ParallelFor(WorkCount, [&](uint32 Index, uint32 Thread)
             {
                 StepCharacter(CharacterWorkScratch[Index], FixedDt, Thread);
                 DriveProxy(*CharacterWorkScratch[Index].Physics->Character, FixedDt);
@@ -580,8 +584,8 @@ namespace Lumina::Physics
     void FBox3DPhysicsScene::DeliverCharacterEvents(const FCharacterPushBucket& Bucket)
     {
         ECS::FEventQueues& Events = World->GetEvents();
-        ECS::SendEvents(Events, TSpan<const SCharacterLandedEvent>(Bucket.Landings.data(), Bucket.Landings.size()));
-        ECS::SendEvents(Events, TSpan<const SCharacterJumpedEvent>(Bucket.Jumps.data(), Bucket.Jumps.size()));
+        ECS::SendEvents(Events, TSpan<const SCharacterLandedEvent>(Bucket.Landings.GetData(), Bucket.Landings.Num()));
+        ECS::SendEvents(Events, TSpan<const SCharacterJumpedEvent>(Bucket.Jumps.GetData(), Bucket.Jumps.Num()));
     }
 
     bool FBox3DPhysicsScene::ResolveCharacterPreStep(ECS::FEntity Entity, SCharacterPhysicsComponent& Physics, SCharacterMovementComponent& Movement)
@@ -769,9 +773,9 @@ namespace Lumina::Physics
         Physics->Character->bResting = false;
         if (ResolveCharacterPreStep(Entity, *Physics, *Movement))
         {
-            if (CharacterPushScratch.empty())
+            if (CharacterPushScratch.IsEmpty())
             {
-                CharacterPushScratch.resize(1);
+                CharacterPushScratch.SetNum(1);
             }
             CharacterPushScratch[0].Clear();
 
@@ -896,7 +900,7 @@ namespace Lumina::Physics
                 ++Movement.JumpCount;
                 bJumpedThisStep = true;
 
-                SCharacterJumpedEvent& Jumped = CharacterPushScratch[ThreadSlot].Jumps.emplace_back();
+                SCharacterJumpedEvent& Jumped = CharacterPushScratch[ThreadSlot].Jumps.EmplaceGetRef();
                 Jumped.Entity    = Work.Entity;
                 Jumped.JumpCount = Movement.JumpCount;
                 Jumped.Velocity  = Movement.Velocity;
@@ -941,6 +945,7 @@ namespace Lumina::Physics
         Gathered.bPermissive = Box3DUtils::UsesPermissiveCollisionFilter();
         Gathered.bCollideWithCharacters = Character.bCollideWithCharacters;
         Gathered.CosMaxSlope = Character.CosMaxSlope;
+        Gathered.Entity = Work.Entity;
 
         auto GatherAt = [&](b3Pos At)
         {
@@ -965,14 +970,10 @@ namespace Lumina::Physics
             return Best;
         };
 
-        // Box3D's documented mover order is cast and move first, then gather at the new pose, then solve.
-        // Solving before the cast would feed the depenetration push back through the cast, and on a slope
-        // that push has a horizontal component, which walks the character downhill every frame.
+        // Box3D's mover order is cast, gather at the new pose, then solve; solving first walks the character downhill on slopes.
         b3Vec3 Desired = b3MulSV(FixedDt, Box3DUtils::ToB3Vec3(Character.Velocity));
 
-        // On a walkable floor the move follows the surface instead of being bent onto it by the plane solver.
-        // Projection would shave the horizontal delta by the slope cosine and rotate it toward the contour,
-        // so solving only the vertical is what keeps the authored heading and speed exact on a ramp.
+        // On a walkable floor solve only the vertical, since projection would shave the horizontal delta by the slope cosine and bend the heading.
         if (bWasGrounded && !bJumpedThisStep && Character.GroundNormal.y >= Character.CosMaxSlope
             && Character.GroundNormal.y > kMinRampNormalY)
         {
@@ -993,9 +994,7 @@ namespace Lumina::Physics
         // A solve that barely moved the capsule leaves the planes just gathered still valid for the first recovery pass.
         bool bPlanesCurrent = b3LengthSquared(Solved.delta) < kMoveTolerance * kMoveTolerance * 0.01f;
 
-        // Overlap is resolved against a zero target so it can never become motion, which is what made the
-        // solve delta walk the character downhill when it was cast. A capsule spawned inside geometry needs
-        // several passes to escape; a resting one exits on the first because there is nothing to push out of.
+        // Overlap is resolved against a zero target so it can never become motion; a capsule spawned inside geometry needs several passes to escape.
         bool bPushedOut = false;
         for (int32 Recovery = 0; Recovery < Character.MaxCollisionIterations; ++Recovery)
         {
@@ -1063,8 +1062,7 @@ namespace Lumina::Physics
             }
         }
 
-        // Only a move that actually left the ground gets pulled back down. Settling every frame would
-        // re-seat the capsule in the floor so the next solve could push it out along the slope again.
+        // Only a move that left the ground is pulled back down, since settling every frame would re-seat the capsule in the floor.
         if (GroundPlane == Constants::kIndexNone && bWasGrounded && !bJumpedThisStep && Character.Velocity.y <= 0.0f)
         {
             const b3Vec3 Drop{ 0.0f, -Character.StickToFloorDistance, 0.0f };
@@ -1119,15 +1117,14 @@ namespace Lumina::Physics
 
         if (bLanded)
         {
-            SCharacterLandedEvent& Landed = CharacterPushScratch[ThreadSlot].Landings.emplace_back();
+            SCharacterLandedEvent& Landed = CharacterPushScratch[ThreadSlot].Landings.EmplaceGetRef();
             Landed.Entity       = Work.Entity;
             Landed.ImpactSpeed  = FallSpeed;
             Landed.GroundNormal = Character.GroundNormal;
             Landed.GroundEntity = Character.GroundEntity;
         }
 
-        // Rest is only safe against things that cannot move on their own. A neighboring character proxy
-        // counts as inert because the mover never pushes one, it is only blocked by it.
+        // Rest is only safe against things that cannot move on their own; character proxies count as inert because the mover never pushes one.
         bool bRestableContacts = true;
 
         // Push whatever the mover leaned on, so crates and props still respond to being walked into.
@@ -1171,7 +1168,7 @@ namespace Lumina::Physics
             float Impulse = Math::Max(-NormalVelocity / NormalK, 0.0f);
             Impulse = Math::Min(Impulse, Character.MaxStrength * FixedDt);
 
-            CharacterPushScratch[ThreadSlot].Pushes.push_back({ HitBody, b3MulSV(Impulse, Normal), Point });
+            CharacterPushScratch[ThreadSlot].Pushes.Emplace(HitBody, b3MulSV(Impulse, Normal), Point);
         }
 
         Character.Position = Box3DUtils::FromB3Vec3(Position);
@@ -1179,8 +1176,7 @@ namespace Lumina::Physics
         // b3ClipVector ignores planes with a zero push, and every gather rebuilds the set with zero pushes.
         b3SolvePlanes(b3Vec3_zero, Gathered.Planes, Gathered.Count);
 
-        // Only a wall may take speed away. Clipping horizontal velocity against a walkable floor removes its
-        // into-slope component every step, so a character on a ramp settles below its authored speed.
+        // Only a wall may take speed away, or clipping against a walkable floor slows a character on a ramp below its authored speed.
         for (int32 i = 0; i < Gathered.Count; ++i)
         {
             if (Gathered.Planes[i].plane.normal.y >= Character.CosMaxSlope)
@@ -1205,8 +1201,7 @@ namespace Lumina::Physics
             return;
         }
 
-        // Only static ground rests. A platform or another character can walk out from under the capsule
-        // without any signal the cheap wake check would see.
+        // Only static ground rests, since a platform or another character can move out from under the capsule without any signal the wake check sees.
         const b3BodyId GroundBody = b3Shape_GetBody(Gathered.Shapes[GroundPlane]);
         if (!b3Body_IsValid(GroundBody) || b3Body_GetType(GroundBody) != b3_staticBody)
         {

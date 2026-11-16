@@ -2,8 +2,7 @@
 #include "ScriptUnits.h"
 #include "DotNetHost.h"
 #include "Platform/Filesystem/PlatformFilesystem.h"
-#include <string>
-#include <cstring>
+#include <cstdio>
 #include "Containers/Span.h"
 #include "Containers/Vector.h"
 #include "Containers/String.h"
@@ -14,40 +13,23 @@
 #include "Log/Log.h"
 #include "Paths/Paths.h"
 #include "Platform/Process/PlatformProcess.h"
-#include "nlohmann/json.hpp"
+#include "Core/Json/Json.h"
 
 namespace Lumina::DotNet
 {
-    FString Join(FStringView Left, FStringView Right)
-    {
-        FString Result(Left.data(), Left.size());
-        if (!Result.empty() && Result.back() != '/' && Result.back() != '\\')
-        {
-            Result.push_back('/');
-        }
-        Result.append(Right.data(), Right.size());
-        return Result;
-    }
-
-    FString ParentOf(FStringView Path)
-    {
-        const size_t Slash = Path.find_last_of("/\\");
-        return Slash == FStringView::npos ? FString() : FString(Path.data(), Slash);
-    }
-
     // File name without directory or extension, which for a managed assembly is also its simple name.
     FString StemOf(FStringView Path)
     {
-        const size_t Slash = Path.find_last_of("/\\");
-        const size_t Start = Slash == FStringView::npos ? 0 : Slash + 1;
-        const size_t Dot   = Path.rfind('.');
-        const size_t End   = (Dot == FStringView::npos || Dot < Start) ? Path.size() : Dot;
-        return FString(Path.data() + Start, End - Start);
+        const int32 Slash = Path.FindLastOf("/\\");
+        const int32 Start = Slash == Constants::kIndexNone ? 0 : Slash + 1;
+        const int32 Dot   = Path.FindLast('.');
+        const size_t End   = (Dot == Constants::kIndexNone || Dot < Start) ? Path.Len() : Dot;
+        return FString(Path.GetData() + Start, IntCastChecked<int32>(End - Start));
     }
 
     FString NativePath(FStringView P)
     {
-        FString Result(P.data(), P.size());
+        FString Result(P.GetData(), P.Len());
     #if defined(_WIN32)
         Algo::Replace(Result, '/', '\\');
     #endif
@@ -58,7 +40,7 @@ namespace Lumina::DotNet
     template<typename TVisit>
     void ForEachScriptSource(const FString& DiskDir, TVisit&& Visit)
     {
-        if (DiskDir.empty() || !Filesystem::IsDirectory(DiskDir))
+        if (DiskDir.IsEmpty() || !Filesystem::IsDirectory(DiskDir))
         {
             return;
         }
@@ -71,7 +53,7 @@ namespace Lumina::DotNet
             }
 
             const FStringView P = Entry.FullPath;
-            if (P.find("/obj/") != FStringView::npos || P.find("/bin/") != FStringView::npos)
+            if (P.Find("/obj/") != Constants::kIndexNone || P.Find("/bin/") != Constants::kIndexNone)
             {
                 return;
             }
@@ -89,8 +71,8 @@ namespace Lumina::DotNet
                 return;
             }
 
-            Src.Path.assign(P.data(), P.size());
-            Out.push_back(std::move(Src));
+            Src.Path = FStringView(P.GetData(), P.Len());
+            Out.Add(Move(Src));
         });
     }
     
@@ -98,7 +80,7 @@ namespace Lumina::DotNet
     // Descriptor-declared references, resolved (restoring packages when the declaration changed).
     void ApplyScriptReferences(FScriptUnit& Unit, FStringView DescriptorPath, FStringView RootDir)
     {
-        if (DescriptorPath.empty() || !Filesystem::Exists(DescriptorPath))
+        if (DescriptorPath.IsEmpty() || !Filesystem::Exists(DescriptorPath))
         {
             return;
         }
@@ -107,7 +89,7 @@ namespace Lumina::DotNet
             return;
         }
 
-        const FString RestoreDir = Unit.IntermediateDir.empty()
+        const FString RestoreDir = Unit.IntermediateDir.IsEmpty()
             ? FString()
             : Unit.IntermediateDir + "/Packages";
 
@@ -125,7 +107,7 @@ namespace Lumina::DotNet
         {
             if (Entry.IsFile() && Entry.GetExtension() == ".lproject")
             {
-                Found.assign(Entry.FullPath.data(), Entry.FullPath.size());
+                Found = FStringView(Entry.FullPath.GetData(), Entry.FullPath.Len());
                 return Filesystem::EVisit::Stop;
             }
             return Filesystem::EVisit::Continue;
@@ -147,35 +129,35 @@ namespace Lumina::DotNet
             }
 
             FScriptUnit Unit;
-            Unit.Name.assign(Plugin->GetName().data(), Plugin->GetName().size());
-            const FString PluginDir(Plugin->GetDirectory().data(), Plugin->GetDirectory().size());
+            Unit.Name = FString(Plugin->GetName());
+            const FString PluginDir(Plugin->GetDirectory().GetData(), Plugin->GetDirectory().Len());
             Unit.DiskDir         = PluginDir + "/Scripts";
             Unit.BinaryDir       = PluginDir + "/Binaries/DotNet";
             Unit.IntermediateDir = PluginDir + "/Intermediates/DotNet/" + Unit.Name;
             Unit.AssemblyPath    = Unit.BinaryDir + "/" + Unit.Name + ".dll";
             for (const FPluginDependency& Dep : Plugin->GetDescriptor().Dependencies)
             {
-                Unit.Deps.push_back(Dep.Name);
+                Unit.Deps.Add(Dep.Name);
             }
 
             ApplyScriptReferences(Unit, Plugin->GetDescriptorPath(), PluginDir);
 
-            PluginNames.push_back(Unit.Name);
-            Units.push_back(std::move(Unit));
+            PluginNames.Add(Unit.Name);
+            Units.Add(Move(Unit));
         }
 
         {
             FScriptUnit Game;
             Game.Name = "Game";
-            if (GEngine != nullptr)
+            if (Global::GEngine != nullptr)
             {
-                const FFixedString ScriptsDir = GEngine->GetProjectScriptsDirectory();
-                Game.DiskDir.assign(ScriptsDir.data(), ScriptsDir.size());
+                const FFixedString ScriptsDir = Global::GEngine->GetProjectScriptsDirectory();
+                Game.DiskDir = FStringView(ScriptsDir.GetData(), ScriptsDir.Len());
 
-                const FStringView ProjectPath = GEngine->GetProjectPath();
-                if (!ProjectPath.empty())
+                const FStringView ProjectPath = Global::GEngine->GetProjectPath();
+                if (!ProjectPath.IsEmpty())
                 {
-                    const FString Root(ProjectPath.data(), ProjectPath.size());
+                    const FString Root(ProjectPath.GetData(), ProjectPath.Len());
                     Game.BinaryDir       = Root + "/Binaries/DotNet";
                     Game.IntermediateDir = Root + "/Intermediates/DotNet/Game";
                     Game.AssemblyPath    = Game.BinaryDir + "/Game.dll";
@@ -184,7 +166,7 @@ namespace Lumina::DotNet
                 }
             }
             Game.Deps = PluginNames;
-            Units.push_back(std::move(Game));
+            Units.Add(Move(Game));
         }
 
         {
@@ -192,11 +174,11 @@ namespace Lumina::DotNet
             Engine.Name = "Engine";
             Engine.DiskDir = Paths::GetEngineResourceDirectory() + "/Scripts";
             // Engine example scripts live next to the engine binaries (a sibling of DotNet/Managed, not in it).
-            const FString ExeDir = ParentOf(Platform::GetCurrentProcessPath());
-            Engine.BinaryDir       = NativePath(Join(ExeDir, "DotNet"));
-            Engine.IntermediateDir = NativePath(Join(ExeDir, "DotNet/obj/Engine"));
+            const FString ExeDir = Paths::Parent(Platform::GetCurrentProcessPath());
+            Engine.BinaryDir       = NativePath(Paths::Combine(ExeDir, "DotNet"));
+            Engine.IntermediateDir = NativePath(Paths::Combine(ExeDir, "DotNet/obj/Engine"));
             Engine.AssemblyPath    = Engine.BinaryDir + "/Engine.dll";
-            Units.push_back(std::move(Engine));
+            Units.Add(Move(Engine));
         }
 
         return Units;
@@ -208,8 +190,8 @@ namespace Lumina::DotNet
         TVector<FScriptUnit> Units;
 
         // A package keeps its script assemblies with LuminaSharp in the data folder's Managed directory.
-        const FString ScriptsDir   = Join(Paths::GetGameDataDirectory(), "Managed");
-        const FString ManifestPath = Join(ScriptsDir, "scripts.manifest.json");
+        const FString ScriptsDir(Paths::Combine(Paths::GetGameDataDirectory(), "Managed"));
+        const FString ManifestPath(Paths::Combine(ScriptsDir, "scripts.manifest.json"));
 
         FString Text;
         if (!Filesystem::ReadFile(Text, ManifestPath))
@@ -217,80 +199,68 @@ namespace Lumina::DotNet
             return Units;
         }
 
-        nlohmann::json J;
-        try
+        FJsonValue J;
+        FJsonParseError Error;
+        if (!FJsonValue::Parse(Text.View(), J, &Error))
         {
-            J = nlohmann::json::parse(Text.c_str());
-        }
-        catch (const std::exception& Err)
-        {
-            LOG_ERROR("C#: failed to parse cooked script manifest '{}': {}", ManifestPath, Err.what());
+            LOG_ERROR("C#: failed to parse cooked script manifest '{}': {}", ManifestPath, Error.Message);
             return Units;
         }
 
-        const nlohmann::json& Arr = J.contains("Units") ? J["Units"] : J;
-        if (!Arr.is_array())
+        const FJsonValue& Arr = J.Contains("Units") ? J["Units"] : J;
+        if (!Arr.IsArray())
         {
             return Units;
         }
 
-        for (const nlohmann::json& Entry : Arr)
+        for (const FJsonValue& Entry : Arr.AsArray())
         {
-            if (!Entry.is_object())
+            if (!Entry.IsObject())
             {
                 continue;
             }
-            const std::string Name = Entry.value("Name", std::string());
-            if (Name.empty())
+            const FString Name = Entry.GetString("Name");
+            if (Name.IsEmpty())
             {
                 continue;
             }
 
             FScriptUnit Unit;
-            Unit.Name = FString(Name.c_str());
-            const std::string Dll = Entry.value("Dll", Name + ".dll");
-            Unit.AssemblyPath = Join(ScriptsDir, FStringView(Dll.c_str(), Dll.size()));
+            Unit.Name = Name;
+            const FString Dll = Entry.GetString("Dll", (Name + ".dll").View());
+            Unit.AssemblyPath = Paths::Combine(ScriptsDir, Dll);
 
-            if (Entry.contains("Deps") && Entry["Deps"].is_array())
+            for (const FJsonValue& Dep : Entry["Deps"].AsArray())
             {
-                for (const nlohmann::json& Dep : Entry["Deps"])
+                if (Dep.IsString())
                 {
-                    if (Dep.is_string())
-                    {
-                        Unit.Deps.push_back(FString(Dep.get<std::string>().c_str()));
-                    }
+                    Unit.Deps.Emplace(Dep.AsString());
                 }
             }
 
             // Staged beside the unit DLLs, so the cooked game never needs the NuGet cache.
-            if (Entry.contains("References") && Entry["References"].is_array())
+            for (const FJsonValue& Reference : Entry["References"].AsArray())
             {
-                for (const nlohmann::json& Reference : Entry["References"])
+                if (Reference.IsString())
                 {
-                    if (Reference.is_string())
-                    {
-                        const std::string ReferenceName = Reference.get<std::string>();
-                        Unit.References.push_back(Join(ScriptsDir, FStringView(ReferenceName.c_str(), ReferenceName.size())));
-                    }
+                    Unit.References.Emplace(Paths::Combine(ScriptsDir, Reference.AsString()));
                 }
             }
-            Units.push_back(std::move(Unit));
+            Units.Add(Move(Unit));
         }
         return Units;
     }
 
     // So frequent reloads do not churn the files and the IDE does not reload projects each time.
-    void WriteTextIfChanged(FStringView Path, const std::string& Content)
+    void WriteTextIfChanged(FStringView Path, const FString& Content)
     {
         FString Existing;
-        if (Filesystem::ReadFile(Existing, Path)
-            && Existing.size() == Content.size()
-            && ::memcmp(Existing.data(), Content.data(), Content.size()) == 0)
+        if (Filesystem::ReadFile(Existing, Path) && Existing == Content)
         {
             return;
         }
 
-        const TSpan<const uint8> Bytes(reinterpret_cast<const uint8*>(Content.data()), Content.size());
+        const TSpan<const uint8> Bytes(reinterpret_cast<const uint8*>(Content.GetData()), Content.Len());
         if (Filesystem::WriteFile(Path, Bytes))
         {
             LOG_DISPLAY("Generated C# script project: {}", Path);
@@ -303,7 +273,7 @@ namespace Lumina::DotNet
     }
 
     // Stable across regenerations, so the IDE does not treat each regen as a brand-new project.
-    std::string MakeStableGuid(const FString& Seed)
+    FString MakeStableGuid(const FString& Seed)
     {
         auto Fnv = [](const char* S, uint64 Basis) -> uint64
         {
@@ -315,8 +285,8 @@ namespace Lumina::DotNet
             return H;
         };
 
-        const uint64 A = Fnv(Seed.c_str(), 14695981039346656037ULL);
-        const uint64 B = Fnv(Seed.c_str(), 14695981039346656037ULL ^ 0x9E3779B97F4A7C15ULL);
+        const uint64 A = Fnv(*Seed, 14695981039346656037ULL);
+        const uint64 B = Fnv(*Seed, 14695981039346656037ULL ^ 0x9E3779B97F4A7C15ULL);
         uint8 Bytes[16];
         for (int Index = 0; Index < 8; ++Index)
         {
@@ -329,19 +299,19 @@ namespace Lumina::DotNet
             "{%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
             Bytes[0], Bytes[1], Bytes[2], Bytes[3], Bytes[4], Bytes[5], Bytes[6], Bytes[7],
             Bytes[8], Bytes[9], Bytes[10], Bytes[11], Bytes[12], Bytes[13], Bytes[14], Bytes[15]);
-        return std::string(Buf);
+        return FString(Buf);
     }
 
     // The absolute path of the generated IDE project for a unit ("<DiskDir>/<Name>.Scripts.csproj").
     FString UnitProjectPath(const FScriptUnit& Unit)
     {
-        return NativePath(Join(Unit.DiskDir, Unit.Name + ".Scripts.csproj"));
+        return NativePath(Paths::Combine(Unit.DiskDir, Unit.Name + ".Scripts.csproj"));
     }
 
     // Matches the runtime cross-assembly references exactly, so IntelliSense sees the same graph.
-    std::string BuildCsprojXml(const FScriptUnit& Unit, const TVector<FScriptUnit>& AllUnits, const FString& LuminaSharpDll)
+    FString BuildCsprojXml(const FScriptUnit& Unit, const TVector<FScriptUnit>& AllUnits, const FString& LuminaSharpDll)
     {
-        std::string Xml;
+        FString Xml;
         Xml += "<Project Sdk=\"Microsoft.NET.Sdk\">\n";
         Xml += "  <!-- GENERATED for IDE IntelliSense only (run \"dotnet.genprojects\" to refresh).\n";
         Xml += "       Scripts are compiled at runtime by the engine; this project is never the runtime\n";
@@ -353,25 +323,25 @@ namespace Lumina::DotNet
         Xml += "    <EnableDefaultItems>true</EnableDefaultItems>\n";
         // Generated reflected-type bindings read properties through raw pointers.
         Xml += "    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n";
-        Xml += "    <AssemblyName>" + std::string(Unit.Name.c_str()) + "</AssemblyName>\n";
+        Xml += "    <AssemblyName>" + Unit.Name + "</AssemblyName>\n";
         // An IDE build produces the same artifact and nothing lands in the engine library's output.
-        if (!Unit.BinaryDir.empty())
+        if (!Unit.BinaryDir.IsEmpty())
         {
             Xml += "    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>\n";
-            Xml += "    <OutputPath>" + std::string(Unit.BinaryDir.c_str()) + "/</OutputPath>\n";
+            Xml += "    <OutputPath>" + Unit.BinaryDir + "/</OutputPath>\n";
         }
-        if (!Unit.IntermediateDir.empty())
+        if (!Unit.IntermediateDir.IsEmpty())
         {
-            Xml += "    <IntermediateOutputPath>" + std::string(Unit.IntermediateDir.c_str()) + "/</IntermediateOutputPath>\n";
+            Xml += "    <IntermediateOutputPath>" + Unit.IntermediateDir + "/</IntermediateOutputPath>\n";
         }
         Xml += "  </PropertyGroup>\n";
         Xml += "  <ItemGroup>\n";
         Xml += "    <Reference Include=\"LuminaSharp\">\n";
-        Xml += "      <HintPath>" + std::string(LuminaSharpDll.c_str()) + "</HintPath>\n";
+        Xml += "      <HintPath>" + LuminaSharpDll + "</HintPath>\n";
         Xml += "    </Reference>\n";
         // The generator the runtime compile loads; without it partial NativeCall bodies are missing.
         Xml += "    <Analyzer Include=\""
-            + std::string(NativePath(Join(ParentOf(LuminaSharpDll), "LuminaSharp.Generators.dll")).c_str())
+            + NativePath(Paths::Combine(Paths::Parent(LuminaSharpDll), "LuminaSharp.Generators.dll"))
             + "\" />\n";
         // Matches the imports ScriptCompiler adds to every runtime compile, so LoadObject<T> and bare specifiers resolve the same in the IDE.
         Xml += "    <Using Include=\"LuminaSharp.ObjectCore\" Static=\"true\" />\n";
@@ -379,25 +349,25 @@ namespace Lumina::DotNet
         Xml += "  </ItemGroup>\n";
 
         // Named as packages rather than as their restored DLLs, so the IDE restores them the usual way.
-        if (!Unit.Declared.Packages.empty() || !Unit.Declared.Assemblies.empty())
+        if (!Unit.Declared.Packages.IsEmpty() || !Unit.Declared.Assemblies.IsEmpty())
         {
             Xml += "  <ItemGroup>\n";
             for (const FScriptPackageRef& Package : Unit.Declared.Packages)
             {
-                Xml += "    <PackageReference Include=\"" + std::string(Package.Name.c_str())
-                    + "\" Version=\"" + std::string(Package.Version.c_str()) + "\" />\n";
+                Xml += "    <PackageReference Include=\"" + Package.Name
+                    + "\" Version=\"" + Package.Version + "\" />\n";
             }
             for (const FString& Assembly : Unit.Declared.Assemblies)
             {
                 const FString Stem = StemOf(Assembly);
-                Xml += "    <Reference Include=\"" + std::string(Stem.c_str()) + "\">\n";
-                Xml += "      <HintPath>" + std::string(NativePath(Assembly).c_str()) + "</HintPath>\n";
+                Xml += "    <Reference Include=\"" + Stem + "\">\n";
+                Xml += "      <HintPath>" + NativePath(Assembly) + "</HintPath>\n";
                 Xml += "    </Reference>\n";
             }
             Xml += "  </ItemGroup>\n";
         }
 
-        std::string Refs;
+        FString Refs;
         for (const FString& DepName : Unit.Deps)
         {
             const FScriptUnit* Dep = nullptr;
@@ -409,13 +379,13 @@ namespace Lumina::DotNet
                     break;
                 }
             }
-            if (Dep == nullptr || Dep->DiskDir.empty() || !Filesystem::Exists(Dep->DiskDir))
+            if (Dep == nullptr || Dep->DiskDir.IsEmpty() || !Filesystem::Exists(Dep->DiskDir))
             {
                 continue; // the dependency ships no scripts on disk; nothing to reference
             }
-            Refs += "    <ProjectReference Include=\"" + std::string(UnitProjectPath(*Dep).c_str()) + "\" />\n";
+            Refs += "    <ProjectReference Include=\"" + UnitProjectPath(*Dep) + "\" />\n";
         }
-        if (!Refs.empty())
+        if (!Refs.IsEmpty())
         {
             Xml += "  <ItemGroup>\n" + Refs + "  </ItemGroup>\n";
         }
@@ -427,16 +397,16 @@ namespace Lumina::DotNet
     // Placed at the project root, and skipped when no project is loaded.
     void WriteScriptSolution(const TVector<FScriptUnit>& Units)
     {
-        if (GEngine == nullptr || GEngine->GetProjectPath().empty())
+        if (Global::GEngine == nullptr || Global::GEngine->GetProjectPath().IsEmpty())
         {
             return;
         }
 
-        struct FSlnEntry { std::string Name; std::string Path; std::string Guid; };
+        struct FSlnEntry { FString Name; FString Path; FString Guid; };
         TVector<FSlnEntry> Entries;
         for (const FScriptUnit& Unit : Units)
         {
-            if (Unit.DiskDir.empty())
+            if (Unit.DiskDir.IsEmpty())
             {
                 continue;
             }
@@ -444,21 +414,21 @@ namespace Lumina::DotNet
             {
                 continue;
             }
-            Entries.push_back({ std::string(Unit.Name.c_str()) + ".Scripts", std::string(UnitProjectPath(Unit).c_str()), MakeStableGuid(Unit.Name) });
+            Entries.Emplace(Unit.Name + ".Scripts", UnitProjectPath(Unit), MakeStableGuid(Unit.Name));
         }
-        if (Entries.empty())
+        if (Entries.IsEmpty())
         {
             return;
         }
 
         const char* CsProjTypeGuid = "{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}";
-        std::string Sln;
+        FString Sln;
         Sln += "\xEF\xBB\xBF";
         Sln += "Microsoft Visual Studio Solution File, Format Version 12.00\n";
         Sln += "# Visual Studio Version 17\n";
         for (const FSlnEntry& Entry : Entries)
         {
-            Sln += "Project(\"" + std::string(CsProjTypeGuid) + "\") = \"" + Entry.Name + "\", \"" + Entry.Path + "\", \"" + Entry.Guid + "\"\n";
+            Sln += "Project(\"" + FString(CsProjTypeGuid) + "\") = \"" + Entry.Name + "\", \"" + Entry.Path + "\", \"" + Entry.Guid + "\"\n";
             Sln += "EndProject\n";
         }
         Sln += "Global\n";
@@ -475,53 +445,53 @@ namespace Lumina::DotNet
         Sln += "\tEndGlobalSection\n";
         Sln += "EndGlobal\n";
 
-        FString ProjectName(GEngine->GetProjectName().data(), GEngine->GetProjectName().size());
-        if (ProjectName.empty())
+        FString ProjectName(Global::GEngine->GetProjectName().GetData(), Global::GEngine->GetProjectName().Len());
+        if (ProjectName.IsEmpty())
         {
             ProjectName = "Game";
         }
-        const FString SlnPath = NativePath(Join(GEngine->GetProjectPath(), ProjectName + ".GameScripts.sln"));
+        const FString SlnPath = NativePath(Paths::Combine(Global::GEngine->GetProjectPath(), ProjectName + ".GameScripts.sln"));
         WriteTextIfChanged(SlnPath, Sln);
     }
 
     FString FindScriptSourceFile(FStringView TypeName)
     {
-        if (TypeName.empty())
+        if (TypeName.IsEmpty())
         {
             return FString();
         }
 
         // The stem, since a script is declared in a file named after it by every convention the templates set.
-        const size_t Dot = TypeName.find_last_of('.');
-        const FStringView Short = Dot == FStringView::npos ? TypeName : TypeName.substr(Dot + 1);
+        const int32 Dot = TypeName.FindLastOf('.');
+        const FStringView Short = Dot == Constants::kIndexNone ? TypeName : TypeName.Mid(Dot + 1);
 
-        FString Wanted(Short.data(), Short.size());
+        FString Wanted(Short.GetData(), Short.Len());
         Wanted += ".cs";
 
         FString Found;
         for (const FScriptUnit& Unit : BuildScriptUnits())
         {
-            if (Unit.DiskDir.empty() || !Filesystem::Exists(Unit.DiskDir))
+            if (Unit.DiskDir.IsEmpty() || !Filesystem::Exists(Unit.DiskDir))
             {
                 continue;
             }
 
             Filesystem::IterateDirectoryRecursive(Unit.DiskDir, [&](const Filesystem::FDirectoryEntry& Entry)
             {
-                if (Entry.IsDirectory() || !Found.empty())
+                if (Entry.IsDirectory() || !Found.IsEmpty())
                 {
                     return true;
                 }
-                if (Entry.Name.size() == Wanted.size()
+                if (Entry.Name.Len() == Wanted.Len()
                     && EqualsIgnoreCase(Entry.Name, FStringView(Wanted)))
                 {
-                    Found.assign(Entry.FullPath.data(), Entry.FullPath.size());
+                    Found = FStringView(Entry.FullPath.GetData(), Entry.FullPath.Len());
                     return false;
                 }
                 return true;
             });
 
-            if (!Found.empty())
+            if (!Found.IsEmpty())
             {
                 break;
             }
@@ -532,14 +502,14 @@ namespace Lumina::DotNet
 
     void GatherScriptSourceFolders(TVector<FScriptSourceFolder>& Out)
     {
-        Out.clear();
+        Out.Reset();
 
         TVector<FScriptUnit> Units;
         for (FScriptUnit& Unit : BuildScriptUnits())
         {
-            if (!Unit.DiskDir.empty() && Filesystem::Exists(Unit.DiskDir))
+            if (!Unit.DiskDir.IsEmpty() && Filesystem::Exists(Unit.DiskDir))
             {
-                Units.push_back(Move(Unit));
+                Units.Add(Move(Unit));
             }
         }
 
@@ -553,55 +523,55 @@ namespace Lumina::DotNet
         };
 
         // Collected per unit first, since the unit name only earns a folder level when more than one unit has scripts.
-        TVector<TVector<FScriptSourceFolder>> PerUnit(Units.size());
+        TVector<TVector<FScriptSourceFolder>> PerUnit(Units.Num());
         uint32 UnitsWithScripts = 0;
-        for (size_t UnitIndex = 0; UnitIndex < Units.size(); ++UnitIndex)
+        for (int32 UnitIndex = 0; UnitIndex < Units.Num(); ++UnitIndex)
         {
             const FString Root = ToForwardSlashes(Units[UnitIndex].DiskDir);
             Filesystem::IterateDirectoryRecursive(Units[UnitIndex].DiskDir, [&](const Filesystem::FDirectoryEntry& Entry)
             {
                 const FStringView Name(Entry.Name);
-                if (Entry.IsDirectory() || Name.size() <= 3 || !EqualsIgnoreCase(Name.substr(Name.size() - 3), FStringView(".cs")))
+                if (Entry.IsDirectory() || Name.Len() <= 3 || !EqualsIgnoreCase(Name.Mid(Name.Len() - 3), FStringView(".cs")))
                 {
                     return true;
                 }
 
-                FString Relative = ToForwardSlashes(FString(Entry.FullPath.data(), Entry.FullPath.size()));
-                if (Relative.size() > Root.size() && Relative.compare(0, Root.size(), Root) == 0)
+                FString Relative = ToForwardSlashes(FString(Entry.FullPath.GetData(), Entry.FullPath.Len()));
+                if (Relative.Len() > Root.Len() && Relative.StartsWith(Root))
                 {
-                    Relative.erase(0, Root.size());
+                    Relative.RemoveAt(0, Root.Len());
                 }
-                while (!Relative.empty() && Relative.front() == '/')
+                while (!Relative.IsEmpty() && Relative[0] == '/')
                 {
-                    Relative.erase(0, 1);
+                    Relative.RemoveAt(0, 1);
                 }
 
-                const size_t LastSlash = Relative.find_last_of('/');
-                FScriptSourceFolder& Found = PerUnit[UnitIndex].emplace_back();
-                Found.Stem   = FString(Name.substr(0, Name.size() - 3));
-                Found.Folder = LastSlash == FString::npos ? FString() : Relative.substr(0, LastSlash);
-                Found.Path   = FString(Entry.FullPath.data(), Entry.FullPath.size());
+                const int32 LastSlash = Relative.FindLastOf('/');
+                FScriptSourceFolder& Found = PerUnit[UnitIndex].EmplaceGetRef();
+                Found.Stem   = FString(Name.Mid(0, Name.Len() - 3));
+                Found.Folder = LastSlash == Constants::kIndexNone ? FString() : Relative.Mid(0, LastSlash);
+                Found.Path   = FString(Entry.FullPath.GetData(), Entry.FullPath.Len());
                 return true;
             });
-            UnitsWithScripts += PerUnit[UnitIndex].empty() ? 0u : 1u;
+            UnitsWithScripts += PerUnit[UnitIndex].IsEmpty() ? 0u : 1u;
         }
 
-        for (size_t UnitIndex = 0; UnitIndex < Units.size(); ++UnitIndex)
+        for (int32 UnitIndex = 0; UnitIndex < Units.Num(); ++UnitIndex)
         {
             for (FScriptSourceFolder& Found : PerUnit[UnitIndex])
             {
                 if (UnitsWithScripts > 1)
                 {
-                    Found.Folder = Found.Folder.empty() ? Units[UnitIndex].Name : Units[UnitIndex].Name + "/" + Found.Folder;
+                    Found.Folder = Found.Folder.IsEmpty() ? Units[UnitIndex].Name : Units[UnitIndex].Name + "/" + Found.Folder;
                 }
-                Out.push_back(Move(Found));
+                Out.Add(Move(Found));
             }
         }
     }
 
     void GatherScriptSourceFiles(TVector<FString>& OutPaths)
     {
-        OutPaths.clear();
+        OutPaths.Reset();
 
         // The same roots BuildScriptUnits compiles, minus the reference resolution that can restore packages.
         TVector<FString> Roots;
@@ -609,19 +579,19 @@ namespace Lumina::DotNet
         {
             if (Plugin != nullptr && Plugin->IsEnabled())
             {
-                Roots.push_back(FString(Plugin->GetDirectory().data(), Plugin->GetDirectory().size()) + "/Scripts");
+                Roots.Add(FString(Plugin->GetDirectory().GetData(), Plugin->GetDirectory().Len()) + "/Scripts");
             }
         }
-        if (GEngine != nullptr)
+        if (Global::GEngine != nullptr)
         {
-            const FFixedString ScriptsDir = GEngine->GetProjectScriptsDirectory();
-            Roots.emplace_back(ScriptsDir.data(), ScriptsDir.size());
+            const FFixedString ScriptsDir = Global::GEngine->GetProjectScriptsDirectory();
+            Roots.Emplace(ScriptsDir.GetData(), ScriptsDir.Len());
         }
-        Roots.push_back(Paths::GetEngineResourceDirectory() + "/Scripts");
+        Roots.Add(Paths::GetEngineResourceDirectory() + "/Scripts");
 
         for (const FString& Root : Roots)
         {
-            ForEachScriptSource(Root, [&OutPaths](FStringView P) { OutPaths.emplace_back(P.data(), P.size()); });
+            ForEachScriptSource(Root, [&OutPaths](FStringView P) { OutPaths.Emplace(P.GetData(), P.Len()); });
         }
     }
 
@@ -633,17 +603,16 @@ namespace Lumina::DotNet
         }
 
         const FString ExePath = NativePath(Platform::GetCurrentProcessPath());
-        const FString Dll = NativePath(Join(ParentOf(ExePath), "DotNet/Managed/LuminaSharp.dll"));
+        const FString Dll = NativePath(Paths::Combine(Paths::Parent(ExePath), "DotNet/Managed/LuminaSharp.dll"));
 
         // The same unit graph the runtime compiles, so the IDE view matches what actually builds.
         const TVector<FScriptUnit> Units = BuildScriptUnits();
         for (const FScriptUnit& Unit : Units)
         {
-            if (Unit.DiskDir.empty())
+            if (Unit.DiskDir.IsEmpty())
             {
                 continue;
             }
-            std::error_code Ec;
             if (!Filesystem::Exists(Unit.DiskDir))
             {
                 continue;

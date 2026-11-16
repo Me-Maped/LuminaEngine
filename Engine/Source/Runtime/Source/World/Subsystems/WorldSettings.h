@@ -3,6 +3,7 @@
 #include "Containers/Name.h"
 #include "Containers/Vector.h"
 #include "Containers/String.h"
+#include "World/Entity/Systems/SystemResources.h"
 #include "WorldSettings.generated.h"
 
 
@@ -18,6 +19,10 @@ namespace Lumina
             World Editor's Systems panel, not the property grid. */
         PROPERTY(Hidden)
         TVector<FName> DisabledSystems;
+
+        // Saves each entity to its own package beside the world, seeded from the project setting and switched only by the world editor's convert.
+        PROPERTY(ReadOnly, Category = "Storage")
+        bool bExternalEntities = false;
 
         /** Entities below this Y position are automatically destroyed. */
         PROPERTY(Editable)
@@ -159,5 +164,18 @@ namespace Lumina
         /** Send rate (Hz) for Tier 2 (far) entities. */
         PROPERTY(Editable, Category = "Networking|LOD", ClampMin = 0.0f)
         float TierFarRate = 3.0f;
+    };
+
+    // What systems read of the world's settings, refreshed by CWorld before each stage ticks its systems.
+    REFLECT()
+    struct RUNTIME_API SWorldSettingsState : ECS::FResource
+    {
+        GENERATED_BODY()
+
+        PROPERTY(Hidden)
+        FVector3 Gravity = FVector3(0.0f, -9.81f, 0.0f);
+
+        PROPERTY(Hidden)
+        bool bAnimatesWhilePaused = true;
     };
 }

@@ -16,6 +16,7 @@
 #include "Config/NetworkSettings.h"
 #include "Core/Object/ObjectCore.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
+#include "UI/InfoTable.h"
 #include "Containers/StringFormat.h"
 
 namespace Lumina
@@ -91,7 +92,7 @@ namespace Lumina
 
     void FNetworkEditorTool::OnDeinitialize(const FUpdateContext& UpdateContext)
     {
-        Histories.clear();
+        Histories.Reset();
     }
 
     void FNetworkEditorTool::SampleRates(CWorld* InWorld, FNetHistory& History, float DeltaSeconds)
@@ -120,7 +121,7 @@ namespace Lumina
 
     void FNetworkEditorTool::DrawNetworkWindow(bool bIsFocused)
     {
-        if (GWorldManager == nullptr)
+        if (Global::GWorldManager == nullptr)
         {
             ImGui::TextDisabled(LOC("World manager not initialized."));
             return;
@@ -129,18 +130,21 @@ namespace Lumina
         // Gather networked worlds, and keep their rate history sampled every frame (even when unselected).
         const float Dt = ImGui::GetIO().DeltaTime;
         TVector<CWorld*> NetWorlds;
-        for (const TUniquePtr<FWorldContext>& Ctx : GWorldManager->GetContexts())
+        for (const TUniquePtr<FWorldContext>& Ctx : Global::GWorldManager->GetContexts())
         {
             CWorld* ContextWorld = Ctx->World.Get();
             if (GetNetState(ContextWorld) == nullptr)
             {
                 continue;
             }
-            NetWorlds.push_back(ContextWorld);
+            NetWorlds.Add(ContextWorld);
             SampleRates(ContextWorld, Histories[ContextWorld], Dt);
         }
 
-        if (NetWorlds.empty())
+        // Prune ended sessions so a reused CWorld address never inherits a stale graph.
+        Histories.RemoveAll([&NetWorlds](const auto& Pair) { return !NetWorlds.Contains(Pair.Key); });
+
+        if (NetWorlds.IsEmpty())
         {
             ImGui::TextDisabled(LOC("No active network sessions."));
             ImGui::TextWrapped(LOC("Start a multiplayer PIE session (Play settings -> Net Mode) to see connections and stats here."));
@@ -157,19 +161,19 @@ namespace Lumina
         auto WorldLabel = [](CWorld* W) -> FString
         {
             char Buf[128];
-            snprintf(Buf, sizeof(Buf), "[%s] %s", NetModeName(W->GetNetMode()), W->GetName().c_str());
+            snprintf(Buf, sizeof(Buf), "[%s] %s", NetModeName(W->GetNetMode()), *W->GetName());
             return FString(Buf);
         };
 
         ImGui::TextUnformatted(LOC("Session:"));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(280.0f);
-        if (ImGui::BeginCombo("##NetWorld", WorldLabel(SelectedWorld).c_str()))
+        if (ImGui::BeginCombo("##NetWorld", *WorldLabel(SelectedWorld)))
         {
             for (CWorld* W : NetWorlds)
             {
                 const bool bSelected = (W == SelectedWorld);
-                if (ImGui::Selectable(WorldLabel(W).c_str(), bSelected))
+                if (ImGui::Selectable(*WorldLabel(W), bSelected))
                 {
                     SelectedWorld = W;
                 }
@@ -178,7 +182,7 @@ namespace Lumina
             ImGui::EndCombo();
         }
         ImGui::SameLine();
-        ImGui::TextDisabled(LOC("(%d networked world%s)"), (int)NetWorlds.size(), NetWorlds.size() == 1 ? "" : LOC_S);
+        ImGui::TextDisabled("(%d networked world%s)", NetWorlds.Num(), NetWorlds.Num() == 1 ? "" : "s");
 
         ImGui::Separator();
 
@@ -293,12 +297,12 @@ namespace Lumina
             {
                 ImGui::BulletText(LOC("Connected to server: %s"), State->bClientConnected ? LOC("yes") : LOC("no"));
             }
-            ImGui::BulletText(LOC("Networked Entities: %d"), NetworkedEntities);
-            ImGui::BulletText(LOC("NetGUID Table: %d entries"), (int)State->GuidTable.GuidToEntity.size());
+            ImGui::BulletText("Networked Entities: %d", NetworkedEntities);
+            ImGui::BulletText("NetGUID Table: %d entries", State->GuidTable.GuidToEntity.Num());
             uint32 DynamicSpawns = 0;
-            for (const auto& Pair : State->GuidTable.GuidToEntity)
+            for (const auto& [Guid, Entity] : State->GuidTable.GuidToEntity)
             {
-                if (Pair.first >= NetGUID_DynamicStart) { ++DynamicSpawns; }
+                if (Guid >= NetGUID_DynamicStart) { ++DynamicSpawns; }
             }
             ImGui::BulletText(LOC("Dynamic Spawns Tracked: %d"), (int)DynamicSpawns);
         }
@@ -309,16 +313,10 @@ namespace Lumina
         {
             if (ImGui::BeginTable("##Totals", 2, ImGuiTableFlags_SizingFixedFit))
             {
-                auto Row = [](const char* K, const FString& V)
-                {
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn(); ImGui::TextUnformatted(K);
-                    ImGui::TableNextColumn(); ImGui::TextUnformatted(V.c_str());
-                };
-                Row(LOC("Sent"),            FormatBytesNice((double)Stats.TotalSentBytes));
-                Row(LOC("Received"),        FormatBytesNice((double)Stats.TotalReceivedBytes));
-                Row(LOC("Packets Sent"),    FString(Format(LOCF("{}"), Stats.TotalSentPackets).c_str()));
-                Row(LOC("Packets Recv"),    FString(Format(LOCF("{}"), Stats.TotalReceivedPackets).c_str()));
+                InfoTable::Row("Sent",         FormatBytesNice((double)Stats.TotalSentBytes));
+                InfoTable::Row("Received",     FormatBytesNice((double)Stats.TotalReceivedBytes));
+                InfoTable::Row("Packets Sent", Format("{}", Stats.TotalSentPackets));
+                InfoTable::Row("Packets Recv", Format("{}", Stats.TotalReceivedPackets));
                 ImGui::EndTable();
             }
 
@@ -328,9 +326,9 @@ namespace Lumina
             const float CurRecv = H.RecvRate[(H.Head + FNetHistory::Capacity - 1) % FNetHistory::Capacity];
 
             ImGui::Spacing();
-            ImGui::Text(LOC("Send: %s/s"), FormatBytesNice(CurSend).c_str());
+            ImGui::Text("Send: %s/s", *FormatBytesNice(CurSend));
             ImGui::PlotLines("##Send", H.SendRate, FNetHistory::Capacity, H.Head, nullptr, 0.0f, FLT_MAX, ImVec2(-1, 60));
-            ImGui::Text(LOC("Recv: %s/s"), FormatBytesNice(CurRecv).c_str());
+            ImGui::Text("Recv: %s/s", *FormatBytesNice(CurRecv));
             ImGui::PlotLines("##Recv", H.RecvRate, FNetHistory::Capacity, H.Head, nullptr, 0.0f, FLT_MAX, ImVec2(-1, 60));
         }
 
@@ -360,9 +358,9 @@ namespace Lumina
             const ImVec4 BarCol = (RepStats.OversizedSnapshotDrops > 0) ? ColBad : (CapPct >= 0.75f ? ColWarn : ColGood);
 
             char Overlay[96];
-            snprintf(Overlay, sizeof(Overlay), LOC("%s / %s  (largest frame)"),
-                FormatBytesNice((double)SmoothBytes).c_str(),
-                FormatBytesNice((double)Net::MaxFramedMessageSize).c_str());
+            snprintf(Overlay, sizeof(Overlay), "%s / %s  (largest frame)",
+                *FormatBytesNice((double)SmoothBytes),
+                *FormatBytesNice((double)Net::MaxFramedMessageSize));
 
             ImGui::TextUnformatted(LOC("Largest transform frame vs 64 KB cap:"));
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram, BarCol);
@@ -375,19 +373,19 @@ namespace Lumina
             // The snapshot is split into as many <=64 KB frames as needed, so any entity count replicates.
             const float BytesPerEnt = RepStats.MovementEntityCount
                 ? static_cast<float>(RepStats.MovementTotalBytes) / static_cast<float>(RepStats.MovementEntityCount) : 0.0f;
-            ImGui::BulletText(LOC("Snapshot total: %s across %u frame%s  (%u entities, %.1f B/entity)"),
-                FormatBytesNice((double)RepStats.MovementTotalBytes).c_str(),
-                RepStats.MovementChunks, RepStats.MovementChunks == 1 ? "" : LOC_S,
+            ImGui::BulletText("Snapshot total: %s across %u frame%s  (%u entities, %.1f B/entity)",
+                *FormatBytesNice((double)RepStats.MovementTotalBytes),
+                RepStats.MovementChunks, RepStats.MovementChunks == 1 ? "" : "s",
                 RepStats.MovementEntityCount, BytesPerEnt);
-            ImGui::BulletText(LOC("Peak frame: %s"), FormatBytesNice((double)RepStats.PeakMovementFrameBytes).c_str());
+            ImGui::BulletText("Peak frame: %s", *FormatBytesNice((double)RepStats.PeakMovementFrameBytes));
             if (RepStats.OversizedSnapshotDrops > 0)
             {
                 ImGui::TextColored(ColBad, LOC("  Oversized frame drops: %u"), RepStats.OversizedSnapshotDrops);
             }
-            ImGui::BulletText(LOC("Datagrams: unreliable %s, reliable %s"),
-                FormatBytesNice((double)RepStats.UnreliableBatchBytes).c_str(),
-                FormatBytesNice((double)RepStats.ReliableBatchBytes).c_str());
-            ImGui::BulletText(LOC("Last tick: %u spawns, %u despawns, %u property updates%s"),
+            ImGui::BulletText("Datagrams: unreliable %s, reliable %s",
+                *FormatBytesNice((double)RepStats.UnreliableBatchBytes),
+                *FormatBytesNice((double)RepStats.ReliableBatchBytes));
+            ImGui::BulletText("Last tick: %u spawns, %u despawns, %u property updates%s",
                 RepStats.SpawnsSent, RepStats.DespawnsSent, RepStats.PropertyUpdatesSent,
                 RepStats.bKeyframeThisTick ? LOC("  (keyframe)") : "");
             ImGui::BulletText(LOC("Roles: Authority %d, Simulated %d, Autonomous %d, None %d"),
@@ -396,7 +394,7 @@ namespace Lumina
             // With chunking this stays under the cap, since the snapshot just splits into more frames.
             const float CurSnap = H.MovementBytes[(H.Head + FNetHistory::Capacity - 1) % FNetHistory::Capacity];
             ImGui::Spacing();
-            ImGui::Text(LOC("Largest frame (cap = top of plot): %s"), FormatBytesNice(CurSnap).c_str());
+            ImGui::Text("Largest frame (cap = top of plot): %s", *FormatBytesNice(CurSnap));
             ImGui::PlotLines("##Snap", H.MovementBytes, FNetHistory::Capacity, H.Head, nullptr,
                 0.0f, static_cast<float>(Net::MaxFramedMessageSize), ImVec2(-1, 60));
         }
@@ -405,9 +403,8 @@ namespace Lumina
         if (ImGui::CollapsingHeader(LOC_ID("Interpolation"), ImGuiTreeNodeFlags_DefaultOpen))
         {
             const CNetworkSettings* NS = GetDefault<CNetworkSettings>();
-            ImGui::BulletText(LOC("Interp delay: %.0f ms"), (NS ? NS->InterpDelay : 0.1f) * 1000.0f);
-            ImGui::BulletText(LOC("Clock offset: %.1f ms"), State->ClockOffset * 1000.0);
-            ImGui::BulletText(LOC("Latest server time: %.2f s"), State->LatestServerTime);
+            ImGui::BulletText("Interp delay: %.0f ms", (NS ? NS->InterpDelay : 0.1f) * 1000.0f);
+            ImGui::BulletText("Latest server time: %.2f s", State->LatestServerTime);
             if (RingCount > 0)
             {
                 ImGui::BulletText(LOC("Proxy rings: %d active, avg %.1f samples (min %d, cap %d)"),
@@ -422,7 +419,7 @@ namespace Lumina
         // --- Per-connection stats ---
         if (ImGui::CollapsingHeader(LOC_ID("Connections"), ImGuiTreeNodeFlags_DefaultOpen))
         {
-            if (Conns.empty())
+            if (Conns.IsEmpty())
             {
                 ImGui::TextDisabled(LOC("No peers."));
             }
@@ -446,8 +443,8 @@ namespace Lumina
                     ImGui::TableNextColumn(); ImGui::TextUnformatted(ConnStateName(C.State));
                     ImGui::TableNextColumn(); ImGui::Text("%u ms", C.RoundTripTimeMs);
                     ImGui::TableNextColumn(); ImGui::Text("%.1f%%", C.PacketLoss * 100.0f);
-                    ImGui::TableNextColumn(); ImGui::TextUnformatted(FormatBytesNice((double)C.SentBytes).c_str());
-                    ImGui::TableNextColumn(); ImGui::TextUnformatted(FormatBytesNice((double)C.ReceivedBytes).c_str());
+                    ImGui::TableNextColumn(); ImGui::TextUnformatted(*FormatBytesNice((double)C.SentBytes));
+                    ImGui::TableNextColumn(); ImGui::TextUnformatted(*FormatBytesNice((double)C.ReceivedBytes));
                     ImGui::TableNextColumn(); ImGui::Text("%u", C.PacketsSent);
                     ImGui::TableNextColumn(); ImGui::Text("%u", C.PacketsLost);
                 }
@@ -482,7 +479,7 @@ namespace Lumina
                     const SNetworkComponent& N = Registry.Get<SNetworkComponent>(E);
 
                     const char* Name = "";
-                    if (const SNameComponent* NC = Registry.TryGet<SNameComponent>(E)) { Name = NC->Name.c_str(); }
+                    if (const SNameComponent* NC = Registry.TryGet<SNameComponent>(E)) { Name = *NC->Name; }
                     if (!ImGuiX::PassSearchFilter(Filter, Name)) { continue; }
                     if (Shown >= MaxRows) { continue; }
                     ++Shown;

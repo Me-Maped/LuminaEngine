@@ -9,7 +9,8 @@
 #include "Core/Object/ObjectMacros.h"
 #include "GUID/GUID.h"
 #include "Memory/SmartPtr.h"
-#include "TaskSystem/FiberSync.h"
+#include "Core/Threading/Mutex.h"
+#include "Core/Threading/Sync.h"
 #include "AssetManager.generated.h"
 
 
@@ -52,7 +53,6 @@ namespace Lumina
         // Loaded over requested, one once ready.
         NODISCARD float GetProgress() const;
 
-        // Fiber-aware.
         void Wait() const;
 
         // Runs on the game thread once everything has loaded, and right away there when it already has or nothing resolved.
@@ -111,7 +111,7 @@ namespace Lumina
         struct FWaiter
         {
             TSharedPtr<FAssetLoad> Load;
-            uint32                 Index = 0;
+            int32                  Index = 0;
         };
 
         void Request(const FGuid& Asset, FWaiter Waiter);
@@ -122,7 +122,7 @@ namespace Lumina
 
     private:
 
-        FFiberMutex                             RequestMutex;
+        FMutex                             RequestMutex;
 
         // Everyone waiting on an asset that is loading, so a second request joins the first.
         THashMap<FGuid, TVector<FWaiter>>       InFlight;
@@ -132,12 +132,11 @@ namespace Lumina
         bool                                    bDrainScheduled = false;
 
         // Taken in this order, groups, then the registry, then classes, which is how a rebuild nests them.
-        FFiberMutex                             GroupMutex;
+        FMutex                             GroupMutex;
         THashMap<FName, TVector<FGuid>>         GroupMembers;
         THashMap<SAssetId, FGuid>               GroupIds;
         std::atomic<bool>                       bGroupsDirty = true;
 
-        FFiberMutex                             ClassMutex;
-        THashMap<FName, FName>                  GroupOfClass;
+        TMutex<THashMap<FName, FName>>          GroupOfClass;
     };
 }

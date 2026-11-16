@@ -2,6 +2,7 @@
 
 #include "Containers/Vector.h"
 #include "Core/Math/Math.h"
+#include "World/Entity/Systems/SystemResources.h"
 
 namespace Lumina
 {
@@ -51,8 +52,8 @@ namespace Lumina
         float  WaterlineWetness = 0.0f;
     };
 
-    // What every Weather Interactor did this frame, written by SWeatherInteractionSystem into the registry context.
-    struct FWeatherInteractionState
+    // What every Weather Interactor did this frame, written by CWeatherInteractionSystem into the registry context.
+    struct FWeatherInteractionState : ECS::FResource
     {
         TVector<FWeatherContact>         Contacts;
         TVector<FWeatherImpact>          Impacts;

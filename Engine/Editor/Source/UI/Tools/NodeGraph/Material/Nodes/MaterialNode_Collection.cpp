@@ -10,7 +10,7 @@ namespace Lumina
 {
     void CMaterialExpression_CollectionParameter::DrawNodeBody()
     {
-        const char* CollectionName = Collection.IsValid() ? Collection->GetName().c_str() : LOC("<no collection>");
+        const char* CollectionName = Collection.IsValid() ? *Collection->GetName() : "<no collection>";
         ImGui::TextColored(ImVec4(0.35f, 0.80f, 0.75f, 1.0f), "%s", CollectionName);
 
         if (ParameterName.IsNone())
@@ -19,7 +19,7 @@ namespace Lumina
         }
         else
         {
-            ImGui::TextUnformatted(ParameterName.c_str());
+            ImGui::TextUnformatted(*ParameterName);
         }
     }
 

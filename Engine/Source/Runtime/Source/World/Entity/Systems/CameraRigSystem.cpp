@@ -3,25 +3,24 @@
 #include "World/ECS/Registry.h"
 #include "Core/Math/Math.h"
 #include "Core/Math/Transform.h"
+#include "Physics/PhysicsScene.h"
 #include "Physics/Ray/RayCast.h"
-#include "World/Entity/EntityUtils.h"
 #include "World/Entity/Components/CameraFollowComponent.h"
 #include "World/Entity/Components/SpringArmComponent.h"
 #include "World/Entity/Components/TransformComponent.h"
 #include "World/Entity/Components/EntityTags.h"
-#include "SystemResources.h"
 
 namespace Lumina
 {
-    // SetEntityWorldTransform reads the parent links, and CastSphere reads the physics scene.
-    void SCameraRigSystem::Configure()
+    void CCameraRigSystem::Configure()
     {
         RequireUpdate(EUpdateStage::FrameEnd);
-        Writes<STransformComponent, SCameraFollowComponent, SSpringArmComponent>();
-        Reads<SystemResource::PhysicsQuery, SystemResource::Hierarchy>();
+
+        // The rigs decide, since the target lookup matches nearly every entity.
+        ExcludeFromHasWork(Targets);
     }
 
-    namespace Detail
+    namespace CameraRigSystemInternal
     {
         // Frame-rate independent exponential smoothing weight. LagSpeed <= 0 snaps.
         static float SmoothAlpha(float LagSpeed, float Dt)
@@ -51,40 +50,43 @@ namespace Lumina
             return Math::ToQuat(FMatrix3(R, U, F));
         }
 
-        static void ApplyWorldPose(ECS::FRegistry& Registry, ECS::FEntity Entity, const STransformComponent& Xform, const FVector3& Location, const FQuat& Rotation)
+        // A settled rig leaves the transform unstamped so Changed<STransformComponent> readers skip it.
+        static void ApplyWorldPose(ECS::TMut<STransformComponent> XformMut, const FVector3& Location, const FQuat& Rotation)
         {
+            const FTransform Current = XformMut.Get().ComputeWorldTransform();
+            if (Math::IsNearlyEqual(Current.GetLocation(), Location) && Math::IsSameRotation(Current.GetRotation(), Rotation))
+            {
+                return;
+            }
+
             FTransform World;
             World.SetLocation(Location);
             World.SetRotation(Rotation);
-            World.SetScale(Xform.GetWorldScale());
-            ECS::Utils::SetEntityWorldTransform(Registry, Entity, World);
+            World.SetScale(Current.GetScale());
+            XformMut.GetMut().SetWorldTransform(World);
         }
     }
 
-    void SCameraRigSystem::OnUpdate(const SSystemContext& Context)
+    void CCameraRigSystem::OnUpdate(const SSystemContext& Context)
     {
+        using namespace CameraRigSystemInternal;
 
-        LUMINA_PROFILE_SCOPE();
-
-        ECS::FRegistry& Registry = Context.GetRegistry();
-        const float Dt = (float)Context.GetDeltaTime();
+        const float Dt = Context.GetDeltaTime();
+        Physics::IPhysicsQueries* PhysicsQueries = Context.GetPhysics();
 
         //~ Follow eases toward Target + Offset, optionally facing the target.
-        auto FollowView = Registry.View<SCameraFollowComponent, STransformComponent>(ECS::TExclude<SDisabledTag, SSpringArmComponent>{});
-        for (ECS::FEntity Entity : FollowView)
+        Followers.ForEach([&](ECS::TMut<SCameraFollowComponent> FollowMut, ECS::TMut<STransformComponent> XformMut)
         {
-            SCameraFollowComponent& Follow = FollowView.Get<SCameraFollowComponent>(Entity);
-            const ECS::FEntity Target = Follow.Target;
-            if (!Registry.IsValid(Target) || !Registry.HasAll<STransformComponent>(Target))
+            const STransformComponent* TargetXform = Targets.TryGet<STransformComponent>(FollowMut.Get().Target);
+            if (TargetXform == nullptr)
             {
-                continue;
+                return;
             }
 
-            const STransformComponent& Xform       = FollowView.Get<STransformComponent>(Entity);
-            const STransformComponent& TargetXform = Registry.Get<STransformComponent>(Target);
-
-            const FVector3 TargetPos = TargetXform.GetWorldLocation();
-            const FQuat TargetRot = TargetXform.GetWorldRotation();
+            const STransformComponent& Xform = XformMut.Get();
+            SCameraFollowComponent& Follow = FollowMut.GetMut();
+            const FVector3 TargetPos = TargetXform->GetWorldLocation();
+            const FQuat TargetRot = TargetXform->GetWorldRotation();
 
             const FVector3 DesiredPos = Follow.bWorldSpaceOffset
                 ? TargetPos + Follow.Offset
@@ -97,7 +99,7 @@ namespace Lumina
                 const FVector3 Dir = LookPoint - DesiredPos;
                 if (Math::Dot(Dir, Dir) > 1e-6f)
                 {
-                    DesiredRot = Detail::MakeLookRotation(Dir, FVector3(0.0f, 1.0f, 0.0f));
+                    DesiredRot = MakeLookRotation(Dir, FVector3(0.0f, 1.0f, 0.0f));
                 }
             }
 
@@ -109,7 +111,7 @@ namespace Lumina
             }
             else
             {
-                Follow.CurrentPosition = Math::Mix(Follow.CurrentPosition, DesiredPos, Detail::SmoothAlpha(Follow.PositionLagSpeed, Dt));
+                Follow.CurrentPosition = Math::Mix(Follow.CurrentPosition, DesiredPos, SmoothAlpha(Follow.PositionLagSpeed, Dt));
                 if (Follow.bLookAtTarget)
                 {
                     FQuat To = DesiredRot;
@@ -117,7 +119,7 @@ namespace Lumina
                     {
                         To = -To;
                     }
-                    Follow.CurrentRotation = Math::Slerp(Follow.CurrentRotation, To, Detail::SmoothAlpha(Follow.RotationLagSpeed, Dt));
+                    Follow.CurrentRotation = Math::Slerp(Follow.CurrentRotation, To, SmoothAlpha(Follow.RotationLagSpeed, Dt));
                 }
                 else
                 {
@@ -125,26 +127,24 @@ namespace Lumina
                 }
             }
 
-            Detail::ApplyWorldPose(Registry, Entity, Xform, Follow.CurrentPosition, Follow.CurrentRotation);
-        }
+            ApplyWorldPose(XformMut, Follow.CurrentPosition, Follow.CurrentRotation);
+        });
 
         //~ Spring arm places the camera a collision-shortened distance behind the pivot.
-        auto ArmView = Registry.View<SSpringArmComponent, STransformComponent>(ECS::TExclude<SDisabledTag>{});
-        for (ECS::FEntity Entity : ArmView)
+        SpringArms.ForEach([&](ECS::FEntity Entity, ECS::TMut<SSpringArmComponent> ArmMut, ECS::TMut<STransformComponent> XformMut)
         {
-            SSpringArmComponent&        Arm   = ArmView.Get<SSpringArmComponent>(Entity);
-            const STransformComponent&  Xform = ArmView.Get<STransformComponent>(Entity);
-
+            const STransformComponent& Xform = XformMut.Get();
+            SSpringArmComponent& Arm = ArmMut.GetMut();
             const ECS::FEntity Target = Arm.Target;
-            const bool bHasTarget = Registry.IsValid(Target) && Registry.HasAll<STransformComponent>(Target);
+            const STransformComponent* TargetXform = Targets.TryGet<STransformComponent>(Target);
+            const bool bHasTarget = TargetXform != nullptr;
 
             FVector3 PivotBase;
             FQuat ControlRot;
             if (bHasTarget)
             {
-                const STransformComponent& TargetXform = Registry.Get<STransformComponent>(Target);
-                PivotBase  = TargetXform.GetWorldLocation();
-                ControlRot = Arm.bUseControlRotation ? Xform.GetWorldRotation() : TargetXform.GetWorldRotation();
+                PivotBase  = TargetXform->GetWorldLocation();
+                ControlRot = Arm.bUseControlRotation ? Xform.GetWorldRotation() : TargetXform->GetWorldRotation();
             }
             else
             {
@@ -162,7 +162,7 @@ namespace Lumina
             }
             else
             {
-                Arm.CurrentPivot = Math::Mix(Arm.CurrentPivot, Pivot, Detail::SmoothAlpha(Arm.PositionLagSpeed, Dt));
+                Arm.CurrentPivot = Math::Mix(Arm.CurrentPivot, Pivot, SmoothAlpha(Arm.PositionLagSpeed, Dt));
             }
 
             const FVector3 Back        = ControlRot * FVector3(0.0f, 0.0f, -1.0f);
@@ -170,20 +170,20 @@ namespace Lumina
             const FVector3 DesiredEnd  = Arm.CurrentPivot + Back * Arm.TargetArmLength + SocketWorld;
 
             float DesiredLength = Arm.TargetArmLength;
-            if (Arm.bDoCollisionTest && Arm.TargetArmLength > 0.0f)
+            if (PhysicsQueries != nullptr && Arm.bDoCollisionTest && Arm.TargetArmLength > 0.0f)
             {
                 SSphereCastSettings Settings;
                 Settings.Start  = Arm.CurrentPivot + SocketWorld;
                 Settings.End    = DesiredEnd;
                 Settings.Radius = Arm.ProbeSize;
-                Settings.IgnoreEntities.push_back(Entity);
+                Settings.IgnoreEntities.Add(Entity);
                 if (bHasTarget)
                 {
-                    Settings.IgnoreEntities.push_back(Target);
+                    Settings.IgnoreEntities.Add(Target);
                 }
 
-                const TOptional<SRayResult> Hit = Context.CastSphereClosest(Settings);
-                const float Nearest = Hit.has_value() ? Math::Min(1.0f, Hit->Fraction) : 1.0f;
+                const TOptional<SRayResult> Hit = PhysicsQueries->CastSphereClosest(Settings);
+                const float Nearest = Hit.IsSet() ? Math::Min(1.0f, Hit->Fraction) : 1.0f;
                 DesiredLength = Math::Max(0.0f, Arm.TargetArmLength * Nearest);
             }
 
@@ -194,11 +194,11 @@ namespace Lumina
             }
             else
             {
-                Arm.CurrentArmLength = Math::Mix(Arm.CurrentArmLength, DesiredLength, Detail::SmoothAlpha(Arm.LengthLagSpeed, Dt));
+                Arm.CurrentArmLength = Math::Mix(Arm.CurrentArmLength, DesiredLength, SmoothAlpha(Arm.LengthLagSpeed, Dt));
             }
 
             const FVector3 FinalPos = Arm.CurrentPivot + Back * Arm.CurrentArmLength + SocketWorld;
-            Detail::ApplyWorldPose(Registry, Entity, Xform, FinalPos, ControlRot);
-        }
+            ApplyWorldPose(XformMut, FinalPos, ControlRot);
+        });
     }
 }

@@ -20,11 +20,11 @@ public class Reflector : ModuleRules
 
         PrivateIncludePaths.Add("Source");
 
-        PrivateDependencyModuleNames.AddRange(new[]
-        {
-            "XXHash",
-            "NlohmannJson",
-        });
+        // Exports the generator API that Reflection modules link against.
+        PrivateDefinitions.Add("LRT_HOST");
+
+        // Names hash exactly as the engine hashes them, through the same header-only XXH64.
+        PrivateIncludePaths.Add(ModulePath("../../Source/Runtime/Source/Core/Math/Hash"));
 
         // Prebuilt libclang and LLVM, vendored under the engine's External directory.
         PublicSystemIncludePaths.Add(ModulePath("../../../External/LLVM/include"));
@@ -72,6 +72,9 @@ public class Reflector : ModuleRules
             // resolves the transitive needs of the bundle's RUNPATH-less libraries (libedit's libtinfo,
             // libbsd's libmd).
             PrivateLinkerOptions.Add("-Wl,--disable-new-dtags");
+
+            // A loaded Reflection module resolves the generator API against the executable's own symbols.
+            PrivateLinkerOptions.Add("-rdynamic");
         }
 
         if (Target.Platform == BuildPlatform.Windows64)

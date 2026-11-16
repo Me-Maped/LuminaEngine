@@ -9,11 +9,12 @@
 #include "Input/Key.h"
 #include "Physics/PhysicsTypes.h"
 #include "Renderer/PresentMode.h"
-#include "World/World.h"
 #include "EngineSettings.generated.h"
 
 namespace Lumina
 {
+    class CWorld;
+
     // Per-project runtime settings; persists to the project's /Config/GameSettings.json.
     REFLECT(MinimalAPI, ConfigFile = "/Config/GameSettings.json", DisplayName = "Project", Category = "Project")
     class CProjectSettings : public CDeveloperSettings
@@ -25,6 +26,10 @@ namespace Lumina
         PROPERTY(Editable, Category = "Project")
         FString GameDisplayName;
 
+        // PNG the game window shows as its icon, given relative to the project or as a /Game path. Empty keeps the Lumina icon.
+        PROPERTY(Editable, FilePath, Category = "Project")
+        FString Icon;
+
         /** World loaded when the standalone game starts. */
         PROPERTY(Editable, Category = "Maps")
         TSoftObjectPtr<CWorld> GameStartupMap;
@@ -32,6 +37,10 @@ namespace Lumina
         /** World opened automatically when the editor finishes loading the project. */
         PROPERTY(Editable, Category = "Maps")
         TSoftObjectPtr<CWorld> EditorStartupMap;
+
+        // Whether a new world saves one package per entity, which each world then keeps however this changes.
+        PROPERTY(Editable, Category = "Maps")
+        bool bNewWorldsUseExternalEntities = false;
 
         /** Worlds the cooker walks from to build the shipped PAK. */
         PROPERTY(Editable, Category = "Maps")
@@ -298,6 +307,14 @@ namespace Lumina
         Ultra,
     };
 
+    // XeGTAO marches horizons along screen slices; CORTAO ray-traces a hemisphere against circular occluders built from depth.
+    REFLECT()
+    enum class EAmbientOcclusionMethod : uint8
+    {
+        XeGTAO,
+        CORTAO,
+    };
+
     // None is the built-in spatial upscale, which an unsupported or unregistered choice also falls back to.
     REFLECT()
     enum class EUpscaler : uint8
@@ -357,6 +374,10 @@ namespace Lumina
         PROPERTY(Editable, Category = "Display", ClampMin = 0, ClampMax = 1000)
         int32 MaxFPS = 0;
 
+        // Waits for the previous frame's GPU work before reading input, trading GPU throughput for a frame less input latency when GPU-bound.
+        PROPERTY(Editable, Category = "Display")
+        bool bLowLatencyMode = false;
+
         void PostInitSettings() override;
 
         // Pushes PresentMode to the RHI, rebuilding the primary swapchain if one already exists.
@@ -391,7 +412,31 @@ namespace Lumina
         PROPERTY(Editable, Category = "Shadows", ClampMin = 128, ClampMax = 1024)
         int32 PointShadowResolution = 512;
 
-        // Sun shadow filtering; a low sun stretches each shadow texel along the ground, which only more taps hide.
+        // New meshes import with a cluster hierarchy the GPU cuts per meshlet, in place of a discrete LOD chain. Existing meshes rebuild from the mesh editor.
+        PROPERTY(Editable, Category = "Virtual Geometry")
+        bool bClusterLODByDefault = true;
+
+        // New meshes import with voxel splat levels past their coarsest geometry.
+        PROPERTY(Editable, Category = "Virtual Geometry")
+        bool bVoxelFarByDefault = true;
+
+        // Voxels along the longest side at the finest voxel level a new mesh bakes.
+        PROPERTY(Editable, Category = "Virtual Geometry", ClampMin = 4, ClampMax = 128)
+        int32 DefaultVoxelResolution = 128;
+
+        // Draws the baked voxel levels once a mesh is far enough; off keeps every mesh on its coarsest triangles.
+        PROPERTY(Editable, Category = "Virtual Geometry")
+        bool bVoxelFarRepresentation = true;
+
+        // Replaces an instance smaller than ProxyTransitionPixels on screen with one splat carrying no transform or meshlet data of its own.
+        PROPERTY(Editable, Category = "Virtual Geometry")
+        bool bFarProxies = true;
+
+        // Projected diameter in pixels under which an instance becomes a proxy. 0 keeps every instance on its meshlets.
+        PROPERTY(Editable, Category = "Virtual Geometry", ClampMin = 0.0f, ClampMax = 16.0f, Delta = 0.25f)
+        float ProxyTransitionPixels = 2.0f;
+
+        // Sun shadow filtering and contact march steps, with the march off at Low; a low sun stretches each shadow texel along the ground, which only more taps hide.
         PROPERTY(Editable, Category = "Shadows")
         EShadowQuality ShadowQuality = EShadowQuality::High;
 
@@ -466,6 +511,14 @@ namespace Lumina
         PROPERTY(Editable, Category = "Anti-Aliasing")
         ESMAAQuality SMAAQuality = ESMAAQuality::High;
 
+        // Lowers the edge threshold where depth jumps, so a silhouette against a similar color, such as grass over grass, is still smoothed.
+        PROPERTY(Editable, Category = "Anti-Aliasing")
+        bool bSMAADepthEdges = true;
+
+        // With no temporal resolve, sharpens resolved masked edges to about one pixel so hashed alpha dithers only that band, and keeps the plain hash where leaves are too small to resolve.
+        PROPERTY(Editable, Category = "Anti-Aliasing")
+        bool bSharpenedAlphaTest = true;
+
         // T2x history contribution. 0.5 is the true two-sample average; lower trades aliasing for less ghosting.
         PROPERTY(Editable, Category = "Anti-Aliasing", ClampMin = 0.0f, ClampMax = 0.5f)
         float TemporalHistoryWeight = 0.5f;
@@ -506,6 +559,10 @@ namespace Lumina
         PROPERTY(Editable, Category = "Ambient Occlusion")
         bool bEnableGTAO = false;
 
+        // CORTAO traces the same radius and shares intensity, quality, denoise and the depth pyramid, but not Power or the slice heuristics.
+        PROPERTY(Editable, Category = "Ambient Occlusion")
+        EAmbientOcclusionMethod AmbientOcclusionMethod = EAmbientOcclusionMethod::XeGTAO;
+
         /** GTAO sample radius in world units. Larger = wider, softer occlusion. */
         PROPERTY(Editable, Category = "Ambient Occlusion", ClampMin = 0.01f)
         float GTAORadius = 0.5f;
@@ -545,5 +602,13 @@ namespace Lumina
         /** Trades depth-pyramid bandwidth against thin-object accuracy and temporal stability. */
         PROPERTY(Editable, Category = "Ambient Occlusion|Heuristics", ClampMin = 0.0f, ClampMax = 30.0f)
         float GTAODepthMipSamplingOffset = 3.3f;
+
+        // Half resolution indirect diffuse gathered along GTAO's horizon slices from last frame's lit color; needs GTAO on.
+        PROPERTY(Editable, Category = "Global Illumination")
+        bool bScreenSpaceGI = false;
+
+        // World distance the indirect diffuse trace searches for surfaces to bounce light from.
+        PROPERTY(Editable, Category = "Global Illumination", ClampMin = 0.01f)
+        float ScreenSpaceGIRadius = 2.0f;
     };
 }

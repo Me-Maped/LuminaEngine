@@ -36,16 +36,16 @@ namespace Lumina
         {
             if (Object != nullptr)
             {
-                Image.Referenced.push_back(Object);
+                Image.Referenced.Add(Object);
             }
             return Object;
         };
         FObjectReferenceVisitor::VisitStruct(Graph->GetClass(), Graph, Hold);
 
-        Image.Nodes.reserve(Graph->Nodes.size());
+        Image.Nodes.Reserve(Graph->Nodes.Num());
         for (const TStrongObjectPtr<CEdGraphNode>& Node : Graph->Nodes)
         {
-            Image.Nodes.push_back(Node);
+            Image.Nodes.Add(Node);
             if (Node.IsValid())
             {
                 Node->GetClass()->SerializeProperties(Ar, Node.Get());
@@ -60,16 +60,16 @@ namespace Lumina
     {
         LUMINA_PROFILE_SCOPE();
 
-        if (Graph == nullptr || Bytes.empty())
+        if (Graph == nullptr || Bytes.IsEmpty())
         {
             return;
         }
 
         TVector<CEdGraphNode*> Previous;
-        Previous.reserve(Graph->Nodes.size());
+        Previous.Reserve(Graph->Nodes.Num());
         for (const TStrongObjectPtr<CEdGraphNode>& Node : Graph->Nodes)
         {
-            Previous.push_back(Node.Get());
+            Previous.Add(Node.Get());
         }
 
         // The compile state describes now, not the moment of the capture.
@@ -93,11 +93,6 @@ namespace Lumina
         Graph->CompiledContentVersion = CompiledContentVersion;
 
         Graph->FixupAfterRestore(Previous);
-
-        if (CPackage* Package = Graph->GetPackage())
-        {
-            Package->MarkDirty();
-        }
     }
 
     void FNodeGraphImage::VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func)
@@ -125,6 +120,18 @@ namespace Lumina
         {
             Image.Restore(Target);
             Target->RebaseUndoImage();
+        }
+    }
+
+    // Layout-only edits such as ties, moves and comment colors reach the package through here and nowhere else.
+    void FNodeGraphSnapshotCommand::MarkChanged() const
+    {
+        if (const CEdNodeGraph* Target = Graph.Get())
+        {
+            if (CPackage* Package = Target->GetPackage())
+            {
+                Package->MarkDirty();
+            }
         }
     }
 

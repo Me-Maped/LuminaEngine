@@ -1,14 +1,12 @@
 #include "RuntimePCH.h"
-#include "World/ECS/Registry.h"
 #include "WeatherSystem.h"
 
-#include "World/World.h"
 #include "World/Entity/Components/WeatherComponent.h"
 #include "World/Entity/Components/EntityTags.h"
 
 namespace Lumina
 {
-    namespace
+    namespace WeatherSystemInternal
     {
         constexpr float kMaxStepSeconds = 0.25f;
         constexpr float kSnowingThreshold = 0.01f;
@@ -20,48 +18,22 @@ namespace Lumina
             const double N = 0.6 * Math::Sin(TwoPi * T) + 0.3 * Math::Sin(TwoPi * 2.71 * T + 1.3) + 0.1 * Math::Sin(TwoPi * 6.13 * T + 0.4);
             return (float)N;
         }
-
-        float MoveToward(float Value, float Target, float MaxStep)
-        {
-            return Value < Target ? Math::Min(Value + MaxStep, Target) : Math::Max(Value - MaxStep, Target);
-        }
     }
 
-    void SWeatherSystem::Configure()
+    void CWeatherSystem::Configure()
     {
         RequireUpdate(EUpdateStage::FrameEnd);
         RequireUpdate(EUpdateStage::Paused);
-        Reads<SWeatherComponent>();
     }
 
-    void SWeatherSystem::OnStartup(const SSystemContext& Context)
+    void CWeatherSystem::OnUpdate(const SSystemContext& Context)
     {
-        GetWorld()->GetOrEmplaceSingleton<FWeatherState>();
-    }
+        using namespace WeatherSystemInternal;
 
-    bool SWeatherSystem::HasWork(const SSystemContext& Context)
-    {
-        CWorld* World = GetWorld();
-        const ECS::TComponentStorage<SWeatherComponent> Weather = World != nullptr
-            ? World->GetEntityRegistry().FindStorage<SWeatherComponent>()
-            : ECS::TComponentStorage<SWeatherComponent>();
-        return Weather && !Weather.IsEmpty();
-    }
-
-    void SWeatherSystem::OnUpdate(const SSystemContext& Context)
-    {
-        LUMINA_PROFILE_SCOPE();
-
-        CWorld* World = Context.GetWorld();
-        FWeatherState* State = World != nullptr ? World->TryGetSingleton<FWeatherState>() : nullptr;
-        if (State == nullptr)
-        {
-            return;
-        }
+        SWeatherState* State = &WeatherState.Get();
 
         const SWeatherComponent* Weather = nullptr;
-        auto View = Context.CreateView<SWeatherComponent>(ECS::TExclude<SDisabledTag>{});
-        View.ForEach([&Weather] (const SWeatherComponent& Component)
+        Weathers.ForEach([&Weather](const SWeatherComponent& Component)
         {
             if (Weather == nullptr && Component.bEnabled)
             {
@@ -76,7 +48,7 @@ namespace Lumina
             return;
         }
 
-        const float DeltaTime = Math::Min((float)World->GetRealDeltaTime(), kMaxStepSeconds);
+        const float DeltaTime = Math::Min(Context.GetRealDeltaTime(), kMaxStepSeconds);
 
         const CWeatherPreset* Preset = Weather->Preset.Get();
         if (Preset != nullptr && Preset->HasAnyFlag(OF_NeedsLoad))
@@ -127,11 +99,11 @@ namespace Lumina
         }
         else if (Snow.Intensity > kSnowingThreshold)
         {
-            State->SnowCover = MoveToward(State->SnowCover, Snow.MaxCover, Snow.AccumulationRate * Snow.Intensity * DeltaTime);
+            State->SnowCover = Math::MoveTowards(State->SnowCover, Snow.MaxCover, Snow.AccumulationRate * Snow.Intensity * DeltaTime);
         }
         else
         {
-            State->SnowCover = MoveToward(State->SnowCover, 0.0f, Snow.MeltRate * DeltaTime);
+            State->SnowCover = Math::MoveTowards(State->SnowCover, 0.0f, Snow.MeltRate * DeltaTime);
         }
 
         const FRainParams& Rain = State->Params.Rain;
@@ -148,13 +120,13 @@ namespace Lumina
         if (Rain.Intensity > kRainingThreshold)
         {
             const float Soak = Rain.WettingRate * Rain.Intensity * DeltaTime;
-            State->Wetness     = MoveToward(State->Wetness, Rain.MaxWetness, Soak);
-            State->PuddleLevel = MoveToward(State->PuddleLevel, Rain.MaxWetness * Rain.Intensity, Soak * kPuddleFillShare);
+            State->Wetness     = Math::MoveTowards(State->Wetness, Rain.MaxWetness, Soak);
+            State->PuddleLevel = Math::MoveTowards(State->PuddleLevel, Rain.MaxWetness * Rain.Intensity, Soak * kPuddleFillShare);
         }
         else
         {
-            State->Wetness     = MoveToward(State->Wetness, 0.0f, Rain.DryingRate * DeltaTime);
-            State->PuddleLevel = MoveToward(State->PuddleLevel, 0.0f, Rain.DryingRate * kPuddleDrainShare * DeltaTime);
+            State->Wetness     = Math::MoveTowards(State->Wetness, 0.0f, Rain.DryingRate * DeltaTime);
+            State->PuddleLevel = Math::MoveTowards(State->PuddleLevel, 0.0f, Rain.DryingRate * kPuddleDrainShare * DeltaTime);
         }
     }
 }

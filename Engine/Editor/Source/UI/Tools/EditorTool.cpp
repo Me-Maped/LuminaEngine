@@ -31,8 +31,10 @@
 #include "Transactions/EntityRelationshipCommand.h"
 #include "Transactions/EntityTransformCommand.h"
 #include "Transactions/ObjectSnapshotCommand.h"
+#include "UI/InfoTable.h"
 #include "UI/RmlUiBridge.h"
 #include "UI/Tools/EditorAssetDropHandlers.h"
+#include "World/World.h"
 #include "World/WorldManager.h"
 #include "World/Entity/Components/CameraComponent.h"
 #include "World/Entity/Components/EditorComponent.h"
@@ -58,6 +60,8 @@ namespace Lumina::EditorToolInternal
 
     // Under ImGui's 15px tap threshold, so a gesture can never both arm the camera and read as a tap.
     constexpr float RightLookArmThresholdPixels = 4.0f;
+
+    constexpr float FlyLookDegreesPerCount = 0.1f;
 
     // How far along Normal a mesh's origin sits when its bounds just touch a surface facing Normal.
     float RestingOffset(const SAABB& Bounds, const FVector3& Normal)
@@ -109,6 +113,47 @@ namespace Lumina
         ImGui::DockBuilderRemoveNodeChildNodes(InDockspaceID);
     }
 
+    void FEditorTool::SplitDockingLayoutLeftRight(ImGuiID InDockspaceID, float InRightFraction, ImGuiID& OutLeftDockID, ImGuiID& OutRightDockID)
+    {
+        ImGui::DockBuilderRemoveNodeChildNodes(InDockspaceID);
+        ImGui::DockBuilderSplitNode(InDockspaceID, ImGuiDir_Right, InRightFraction, &OutRightDockID, &OutLeftDockID);
+    }
+
+    void FEditorTool::SplitDockingLayoutLeftRight(ImGuiID InDockspaceID, const char* InLeftWindowName, const char* InRightWindowName, float InRightFraction)
+    {
+        ImGuiID LeftDockID = 0, RightDockID = 0;
+        SplitDockingLayoutLeftRight(InDockspaceID, InRightFraction, LeftDockID, RightDockID);
+
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(InLeftWindowName, InDockspaceID), LeftDockID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(InRightWindowName, InDockspaceID), RightDockID);
+    }
+
+    void FEditorTool::DrawEmptyState(const char* Icon, const char* Title, const char* Hint)
+    {
+        const ImVec2 WindowSize = ImGui::GetWindowSize();
+        ImGui::SetCursorPosY(Math::Max(ImGui::GetCursorPosY(), WindowSize.y * 0.5f - 40.0f));
+
+        auto DrawCentered = [&WindowSize](const char* Text)
+        {
+            ImGui::SetCursorPosX(Math::Max(ImGui::GetStyle().WindowPadding.x, (WindowSize.x - ImGui::CalcTextSize(Text).x) * 0.5f));
+            ImGui::TextUnformatted(Text);
+        };
+
+        ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextMuted());
+
+        ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
+        DrawCentered(Icon);
+        ImGui::PopFont();
+
+        ImGui::Spacing();
+        DrawCentered(Title);
+        ImGui::Spacing();
+
+        ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::WithAlpha(EditorColors::TextMuted(), 0.7f));
+        DrawCentered(Hint);
+        ImGui::PopStyleColor(2);
+    }
+
     void FEditorTool::GenerateThumbnail(CPackage* Package)
     {
         if (!World || !World->GetRenderer())
@@ -154,14 +199,14 @@ namespace Lumina
 
     void FEditorTool::Initialize()
     {
-        ToolName = Format("{0} {1}", GetTitlebarIcon(), GetToolName().c_str()).c_str();
+        ToolName = *Format("{0} {1}", GetTitlebarIcon(), *GetToolName());
 
         if (HasWorld())
         {
             // Use world context as "is initialized", editor worlds don't have a physics scene.
-            if (GWorldManager->FindContext(World.Get()) == nullptr)
+            if (Global::GWorldManager->FindContext(World.Get()) == nullptr)
             {
-                GWorldManager->CreateWorldContext(World.Get(), EWorldType::Editor);
+                Global::GWorldManager->CreateWorldContext(World.Get(), EWorldType::Editor);
             }
 
             SetupWorldForTool();
@@ -194,7 +239,7 @@ namespace Lumina
     {
         OnDeinitialize(UpdateContext);
 
-        ToolWindows.clear();
+        ToolWindows.Reset();
 
         // A tool closed mid look would otherwise leave the cursor captured with nothing left to release it.
         if (CameraState.bWasLooking)
@@ -212,7 +257,7 @@ namespace Lumina
         if (HasWorld())
         {
             // Not force destroyed, since this TStrongObjectPtr still holds the world and would then dangle.
-            GWorldManager->DestroyWorldContext(World.Get());
+            Global::GWorldManager->DestroyWorldContext(World.Get());
             World.Reset();
         }
     }
@@ -226,7 +271,7 @@ namespace Lumina
     void FEditorTool::Update(const FUpdateContext& UpdateContext)
     {
         LUMINA_PROFILE_SCOPE();
-        LUMINA_PROFILE_TAG(GetToolName().c_str());
+        LUMINA_PROFILE_TAG(*GetToolName());
         
         TickEditorCamera(UpdateContext.GetDeltaTime());
         TickEditorActions();
@@ -287,7 +332,7 @@ namespace Lumina
 
         TVector<SkeletonDebugDraw::FBoneLabel> Labels;
         SkeletonDebugDraw::GatherWorldBoneLabels(World.Get(), CameraPos, MaxDist, Labels);
-        if (Labels.empty())
+        if (Labels.IsEmpty())
         {
             return;
         }
@@ -313,7 +358,7 @@ namespace Lumina
             const float ScreenX = (NdcX * 0.5f + 0.5f) * ViewportSize.x + ViewportOrigin.x;
             const float ScreenY = (1.0f - (NdcY * 0.5f + 0.5f)) * ViewportSize.y + ViewportOrigin.y;
 
-            const char* Text = Label.Name.c_str();
+            const char* Text = *Label.Name;
             const ImVec2 TextSize = ImGui::CalcTextSize(Text);
 
             // A dark rounded pill keeps names legible against any geometry, with a small marker dot.
@@ -411,15 +456,15 @@ namespace Lumina
             const bool bInvocable = (bool)Action.Callback;
 
             ImGui::BeginDisabled(!bInvocable);
-            if (ImGui::MenuItem(Action.Name.c_str(), Shortcut.empty() ? nullptr : Shortcut.c_str()))
+            if (ImGui::MenuItem(*Action.Name, Shortcut.IsEmpty() ? nullptr : *Shortcut))
             {
                 Action.Callback();
             }
             ImGui::EndDisabled();
 
-            if (!Action.Description.empty())
+            if (!Action.Description.IsEmpty())
             {
-                ImGuiX::WrappedTooltip("{}", Action.Description.c_str());
+                ImGuiX::WrappedTooltip("{}", *Action.Description);
             }
         }
 
@@ -428,7 +473,7 @@ namespace Lumina
 
     void FEditorTool::TickEditorActions()
     {
-        if (EditorActions.empty())
+        if (EditorActions.IsEmpty())
         {
             return;
         }
@@ -508,16 +553,16 @@ namespace Lumina
         if (World.IsValid())
         {
             // Released after the teardown rather than force-freed while still held, which would dangle.
-            GWorldManager->DestroyWorldContext(World.Get());
+            Global::GWorldManager->DestroyWorldContext(World.Get());
             World.Reset();
         }
 
         World = InWorld;
 
         // Keyed on the world context, since editor worlds intentionally have no physics scene.
-        if (GWorldManager->FindContext(World.Get()) == nullptr)
+        if (Global::GWorldManager->FindContext(World.Get()) == nullptr)
         {
-            GWorldManager->CreateWorldContext(World.Get(), EWorldType::Editor);
+            Global::GWorldManager->CreateWorldContext(World.Get(), EWorldType::Editor);
         }
 
         if (InputViewport)
@@ -592,11 +637,11 @@ namespace Lumina
         }
 
         const FFixedString AssetVirtualPath = GetAssetVirtualPath();
-        if (!AssetVirtualPath.empty())
+        if (!AssetVirtualPath.IsEmpty())
         {
             if (ImGui::MenuItem(LE_ICON_MAGNIFY"##BrowseToAsset"))
             {
-                ToolContext->BrowseToAsset(FStringView(AssetVirtualPath.c_str(), AssetVirtualPath.size()));
+                ToolContext->BrowseToAsset(FStringView(*AssetVirtualPath, AssetVirtualPath.Len()));
             }
 
             ImGuiX::TextTooltip(LOCF("Browse to asset in Content Browser"));
@@ -604,14 +649,14 @@ namespace Lumina
             // Polled, since another program can flip the flag without touching the file.
             if (ImGui::GetFrameCount() % 30 == 0)
             {
-                bAssetReadOnlyOnDisk = VFS::IsReadOnlyOnDisk(FStringView(AssetVirtualPath.c_str(), AssetVirtualPath.size()));
+                bAssetReadOnlyOnDisk = VFS::IsReadOnlyOnDisk(FStringView(*AssetVirtualPath, AssetVirtualPath.Len()));
             }
             if (bAssetReadOnlyOnDisk)
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::Warning());
                 if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_LOCK, "Read-only")))
                 {
-                    ToolContext->ConfirmWritable({ FString(AssetVirtualPath.c_str()) }, {}, false);
+                    ToolContext->ConfirmWritable({ FString(*AssetVirtualPath) }, {}, false);
                 }
                 ImGui::PopStyleColor();
                 ImGuiX::TextTooltip("{}", LOC("Read-only on disk, so saving will fail. Click to make it writable."));
@@ -628,7 +673,7 @@ namespace Lumina
         
         if (CanUndo())
         {
-            ImGuiX::TextTooltip(LOCF("Undo {} (Ctrl+Z)"), PeekUndoLabel().c_str());
+            ImGuiX::TextTooltip("Undo {} (Ctrl+Z)", *PeekUndoLabel());
         }
         else
         {
@@ -645,7 +690,7 @@ namespace Lumina
         
         if (CanRedo())
         {
-            ImGuiX::TextTooltip(LOCF("Redo {} (Ctrl+Y)"), PeekRedoLabel().c_str());
+            ImGuiX::TextTooltip("Redo {} (Ctrl+Y)", *PeekRedoLabel());
         }
         else
         {
@@ -1099,7 +1144,7 @@ namespace Lumina
 
         // ImGui keys windows globally by name, so a shared literal made every tool share one bar.
         const FFixedString WindowName = GetToolWindowName("##ViewportToolbar", CurrDockspaceID);
-        return ImGui::Begin(WindowName.c_str(), nullptr, WindowFlags);
+        return ImGui::Begin(*WindowName, nullptr, WindowFlags);
     }
 
     void FEditorTool::EndViewportToolbarWindow()
@@ -1147,16 +1192,16 @@ namespace Lumina
 
             for (auto&& [Struct, Visualizer] : CComponentVisualizerRegistry::Get().GetVisualizers())
             {
-                bool bVisible = HiddenVisualizerTypes.find(Struct) == HiddenVisualizerTypes.end();
-                if (ImGui::Checkbox(Struct->MakeDisplayName().c_str(), &bVisible))
+                bool bVisible = !HiddenVisualizerTypes.Contains(Struct);
+                if (ImGui::Checkbox(*Struct->MakeDisplayName(), &bVisible))
                 {
                     if (bVisible)
                     {
-                        HiddenVisualizerTypes.erase(Struct);
+                        HiddenVisualizerTypes.Remove(Struct);
                     }
                     else
                     {
-                        HiddenVisualizerTypes.insert(Struct);
+                        HiddenVisualizerTypes.Add(Struct);
                     }
                 }
             }
@@ -1259,6 +1304,7 @@ namespace Lumina
                     { ERenderSceneDebugFlags::ShadowCascades,  "Shadow Cascades"  },
                     { ERenderSceneDebugFlags::SunFarShadow,    "Sun Far Shadow"   },
                     { ERenderSceneDebugFlags::GTAO,            "GTAO"             },
+                    { ERenderSceneDebugFlags::ScreenSpaceGI,   "Screen Space GI"  },
                     // The two failure modes look identical in a lit view, hence two separate inspectors.
                     { ERenderSceneDebugFlags::ProbeInfluence,  "Probe Influence"  },
                     { ERenderSceneDebugFlags::ProbeRadiance,   "Probe Radiance"   },
@@ -1803,6 +1849,10 @@ namespace Lumina
             }
         }
 
+        // Fly look turns by plain yaw and pitch, the one motion the renderer can run ahead with.
+        const bool bFlyLook = CameraState.Mode == EEditorCameraMode::Free && bWantLook && !CameraState.bFocusInterp;
+        World->GetComponent<SCameraComponent>(EditorEntity).MouseLookDegreesPerCount = bFlyLook ? EditorToolInternal::FlyLookDegreesPerCount : 0.0f;
+
         if (CameraState.Mode == EEditorCameraMode::Free)
         {
             if (!bAllowInput || CameraState.bFocusInterp)
@@ -1872,7 +1922,7 @@ namespace Lumina
             }
 
             float Speed = CameraState.Speed;
-            if (ImGui::IsKeyDown(ImGuiKey_LeftShift))
+            if (ImGui::GetIO().KeyShift)
             {
                 Speed *= 10.0f;
             }
@@ -1926,15 +1976,8 @@ namespace Lumina
 
             if (bWantLook)
             {
-                Transform.AddYaw(static_cast<float>(Raw.GetMouseDeltaX() * 0.1));
-
-                // Clamps accumulated pitch rather than the delta, so the camera cannot flip past vertical.
-                const FVector3 Forward2 = Transform.GetForward();
-                const float Elevation   = Math::Degrees(Math::Asin(Math::Clamp(Forward2.y, -1.0f, 1.0f)));
-                constexpr float PitchLimit = 89.0f;
-                float PitchDelta = static_cast<float>(Raw.GetMouseDeltaY() * 0.1);
-                PitchDelta = Math::Clamp(PitchDelta, Elevation - PitchLimit, Elevation + PitchLimit);
-                Transform.AddPitch(PitchDelta);
+                const FVector2 MouseDelta((float)Raw.GetMouseDeltaX(), (float)Raw.GetMouseDeltaY());
+                Transform.SetLocalRotation(AddMouseLook(Transform.GetLocalRotation(), MouseDelta * EditorToolInternal::FlyLookDegreesPerCount));
 
                 // In ortho the wheel is already spoken for as zoom, above.
                 if (!CameraState.bOrthographic)
@@ -1978,6 +2021,16 @@ namespace Lumina
 
             ApplyOrbitTransform();
         }
+    }
+
+    bool FEditorTool::HasEditorCameraControl() const
+    {
+        return HasWorld() && !World->IsGameWorld();
+    }
+
+    bool FEditorTool::CanTransact() const
+    {
+        return World != nullptr && World->GetWorldType() == EWorldType::Editor;
     }
 
     bool FEditorTool::ShouldSuppressViewportClickInput() const
@@ -2111,16 +2164,16 @@ namespace Lumina
         }));
         
         auto ToolWindow = MakeUnique<FToolWindow>(InName, DrawFunction, WindowPadding, DisableScrolling);
-        return ToolWindows.emplace_back(Move(ToolWindow)).get();
+        return ToolWindows.EmplaceGetRef(Move(ToolWindow)).get();
     }
 
     void FEditorTool::RemoveToolWindow(const FName& InName)
     {
-        for (auto It = ToolWindows.begin(); It != ToolWindows.end(); ++It)
+        for (int32 i = 0; i < ToolWindows.Num(); ++i)
         {
-            if ((*It)->Name == InName)
+            if (ToolWindows[i]->Name == InName)
             {
-                ToolWindows.erase(It);
+                ToolWindows.RemoveAt(i);
                 return;
             }
         }
@@ -2128,7 +2181,7 @@ namespace Lumina
     
     void FEditorTool::DrawKeybindsMenu()
     {
-        const bool bDisabled = EditorActions.empty();
+        const bool bDisabled = EditorActions.IsEmpty();
         ImGui::BeginDisabled(bDisabled);
         const bool bOpen = ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_KEYBOARD, "Keybinds"));
 
@@ -2144,11 +2197,11 @@ namespace Lumina
         THashMap<FString, TVector<const FEditorAction*>> ByCategory;
         for (const FEditorAction& A : EditorActions)
         {
-            if (ByCategory.find(A.Category) == ByCategory.end())
+            if (!ByCategory.Contains(A.Category))
             {
-                CategoryOrder.push_back(A.Category);
+                CategoryOrder.Add(A.Category);
             }
-            ByCategory[A.Category].push_back(&A);
+            ByCategory.FindOrAdd(A.Category).Add(&A);
         }
 
         if (ImGui::BeginTable("KeybindsTable", 2,
@@ -2161,7 +2214,7 @@ namespace Lumina
             {
                 ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
                 ImGui::TableNextColumn();
-                ImGui::TextDisabled("%s", Category.empty() ? LOC("General") : Category.c_str());
+                ImGui::TextDisabled("%s", Category.IsEmpty() ? "General" : *Category);
                 ImGui::TableNextColumn();
 
                 for (const FEditorAction* A : ByCategory[Category])
@@ -2169,15 +2222,15 @@ namespace Lumina
                     ImGui::TableNextRow();
 
                     ImGui::TableNextColumn();
-                    ImGui::TextUnformatted(A->Name.c_str());
-                    if (!A->Description.empty() && ImGui::IsItemHovered())
+                    ImGui::TextUnformatted(*A->Name);
+                    if (!A->Description.IsEmpty() && ImGui::IsItemHovered())
                     {
-                        ImGui::SetTooltip("%s", A->Description.c_str());
+                        ImGui::SetTooltip("%s", *A->Description);
                     }
 
                     ImGui::TableNextColumn();
                     const FString Chord = A->DefaultChord.ToDisplayString();
-                    ImGui::TextUnformatted(Chord.empty() ? "-" : Chord.c_str());
+                    ImGui::TextUnformatted(Chord.IsEmpty() ? "-" : *Chord);
                 }
             }
             ImGui::EndTable();
@@ -2189,14 +2242,10 @@ namespace Lumina
 
     void FEditorTool::DrawHelpTextRow(const char* Label, const char* Text) const
     {
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::TextUnformatted(Label);
-        ImGui::TableNextColumn();
-        ImGui::TextUnformatted(Text);
+        InfoTable::Row(Label, Text);
     }
 
-    void FEditorTool::BeginTransaction()
+    void FEditorTool::BeginTransaction(TVector<ECS::FEntity> Edited)
     {
         if (!CanTransact())
         {
@@ -2204,7 +2253,7 @@ namespace Lumina
         }
 
         TransactionManager.BeginTransaction(FName());
-        TransactionManager.Record(MakeUnique<FEcsRegistrySnapshotCommand>(World.Get()));
+        TransactionManager.Record(MakeUnique<FEcsRegistrySnapshotCommand>(World.Get(), Move(Edited)));
     }
 
     void FEditorTool::BeginTransformTransaction(const TVector<ECS::FEntity>& Entities)
@@ -2238,7 +2287,7 @@ namespace Lumina
 
         if (!FEntityComponentSnapshotCommand::CanSnapshotComponent(ComponentType))
         {
-            BeginTransaction();
+            BeginTransaction(Entities);
             return;
         }
 
@@ -2305,7 +2354,7 @@ namespace Lumina
         // Deleting an inherited instance node writes its root's ledger, which undo has to roll back with it.
         TVector<ECS::FEntity> InstanceRoots;
         CPrefab::CollectRemovedNodeRoots(Registry, Candidates, InstanceRoots);
-        if (!InstanceRoots.empty())
+        if (!InstanceRoots.IsEmpty())
         {
             TransactionManager.Record(MakeUnique<FEntityComponentSnapshotCommand>(World.Get(), InstanceRoots, SPrefabOverrideComponent::StaticStruct()));
             CPrefab::NoteEntitiesRemoved(Registry, Candidates);
@@ -2326,8 +2375,8 @@ namespace Lumina
         TransactionManager.SetOpenTransactionName(Name);
         TransactionManager.CommitTransaction();
 
-        // Dirty the world package so the unsaved-document indicator appears (most world sites rely on this).
-        if (World != nullptr && World->GetPackage())
+        // An external-entity world's commands mark only the entities they touched, so only an inline world dirties its package here.
+        if (World != nullptr && World->GetPackage() && !ExternalEntities::IsEnabled(World->GetEntityRegistry()))
         {
             World->GetPackage()->MarkDirty();
         }
@@ -2338,7 +2387,7 @@ namespace Lumina
         TransactionManager.AbortTransaction();
     }
 
-    void FEditorTool::RunObjectTransacted(FName Label, CObject* Object, const TFunction<void()>& Mutate)
+    void FEditorTool::RunObjectTransacted(FName Label, CObject* Object, const TFunction<void()>& Mutate, const FObjectSnapshotCommand::FSerializer& Serializer)
     {
         if (!Mutate)
         {
@@ -2351,7 +2400,7 @@ namespace Lumina
         {
             TransactionManager.BeginTransaction(Label);
         }
-        TransactionManager.Record(MakeUnique<FObjectSnapshotCommand>(Object, Label));
+        TransactionManager.Record(MakeUnique<FObjectSnapshotCommand>(Object, Label, Serializer));
         Mutate();
         if (!bJoinOpenEdit)
         {
@@ -2692,10 +2741,10 @@ namespace Lumina
 
     CObject* FEditorTool::LoadDroppedAsset(FStringView VirtualPath) const
     {
-        FAssetData* AssetData = FAssetRegistry::Get().GetAssetByPath(VirtualPath);
+        FAssetDataPtr AssetData = FAssetRegistry::Get().GetAssetByPath(VirtualPath);
         if (AssetData == nullptr)
         {
-            LOG_WARN("Asset drop: no registry entry for '{}'", FString(VirtualPath.data(), VirtualPath.size()).c_str());
+            LOG_WARN("Asset drop: no registry entry for '{}'", *FString(VirtualPath.GetData(), VirtualPath.Len()));
             return nullptr;
         }
 
@@ -2707,14 +2756,14 @@ namespace Lumina
         }
         if (Loaded == nullptr)
         {
-            LOG_WARN("Asset drop: failed to load '{}'", FString(VirtualPath.data(), VirtualPath.size()).c_str());
+            LOG_WARN("Asset drop: failed to load '{}'", *FString(VirtualPath.GetData(), VirtualPath.Len()));
         }
         return Loaded;
     }
 
     ECS::FEntity FEditorTool::HandleContentBrowserAssetDrop(FStringView VirtualPath, ECS::FEntity DropTarget, bool bAttachToTarget, const FTransform* SpawnTransform)
     {
-        if (World == nullptr || VirtualPath.empty())
+        if (World == nullptr || VirtualPath.IsEmpty())
         {
             return ECS::NullEntity;
         }

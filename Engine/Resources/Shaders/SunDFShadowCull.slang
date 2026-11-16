@@ -4,7 +4,7 @@
 #include "Includes/SunDFShadowCommon.slang"
 #include "Includes/WaveAtomics.slang"
 
-// Gathers every static caster with a distance field and bins it into the sun-space grid the trace walks.
+// Gathers every static caster with a distance field for SunDFShadowBin.slang to bin into the sun-space grid the trace walks.
 
 static const uint LOCAL_SIZE_X = 64u;
 
@@ -16,7 +16,7 @@ struct FPushConstants
     GPUSpan<FInstanceCullEntry> RetainedCullEntries;
     GPUSpan<FTransform3x4>      RetainedTransforms;
     GPUSpan<FInstanceStatic>    RetainedStatic;
-    // Casters over many cells, left for SunDFShadowBinLarge.slang to bin with a whole group each.
+    // Casters over many cells, which SunDFShadowBin.slang bins with a whole group each.
     GPUSpan<uint>               LargeObjects;
     FSunDFShadowGrid            Grid;
 };
@@ -111,6 +111,23 @@ void ComputeMain(uint3 GroupID : SV_GroupID, uint3 LocalID : SV_GroupThreadID)
         return;
     }
 
+    uint Flags = Volume.bTwoSided ? kDistanceFieldTwoSided : 0u;
+    const int4 Range = SunDFCellRange(Sphere, Grid.SunRight, Grid.SunUp, Grid.Origin, Grid.CellSize, Grid.Dimension);
+    if (uint(Range.z - Range.x + 1) * uint(Range.w - Range.y + 1) > kSunDFLargeCasterCells)
+    {
+        Flags |= kSunDFLargeCaster;
+        const uint LargeIndex = WaveInterlockedAdd(Grid.Counters.At(kSunDFLargeCounter), 1u);
+        if (LargeIndex < Pass().LargeObjects.Count)
+        {
+            Pass().LargeObjects.Set(LargeIndex, ObjectIndex);
+        }
+    }
+
+    // The bake rounds each axis up to whole voxels of one size, so the volume over its texels gives that size back.
+    uint DimX, DimY, DimZ;
+    Volume.Texture.GetDimensions(DimX, DimY, DimZ);
+    const float3 Voxel = Volume.VolumeSize / float3(max(uint3(DimX, DimY, DimZ), uint3(1u, 1u, 1u)));
+
     FSunDFObject Object;
     Object.WorldToLocal = InverseAffine(LocalToWorld);
     Object.Sphere       = Sphere;
@@ -118,34 +135,9 @@ void ComputeMain(uint3 GroupID : SV_GroupID, uint3 LocalID : SV_GroupThreadID)
     Object.MaxDistance  = Volume.MaxDistance;
     Object.VolumeSize   = Volume.VolumeSize;
     Object.MinScale     = MinScale;
-    Object.Texture = Volume.Texture;
-    Object.Flags        = Volume.bTwoSided ? kDistanceFieldTwoSided : 0u;
+    Object.Texture      = Volume.Texture;
+    Object.Flags        = Flags;
+    Object.VoxelSize    = max(Voxel.x, max(Voxel.y, Voxel.z));
     Object._Pad0        = 0u;
-    Object._Pad1        = 0u;
     Grid.Objects.Set(ObjectIndex, Object);
-
-    const int4 Range = SunDFCellRange(Sphere, Grid.SunRight, Grid.SunUp, Grid.Origin, Grid.CellSize, Grid.Dimension);
-    if (uint(Range.z - Range.x + 1) * uint(Range.w - Range.y + 1) > kSunDFLargeCasterCells)
-    {
-        const uint LargeIndex = WaveInterlockedAdd(Grid.Counters.At(kSunDFLargeCounter), 1u);
-        if (LargeIndex < Pass().LargeObjects.Count)
-        {
-            Pass().LargeObjects.Set(LargeIndex, ObjectIndex);
-            return;
-        }
-    }
-
-    for (int Y = Range.y; Y <= Range.w; ++Y)
-    {
-        for (int X = Range.x; X <= Range.z; ++X)
-        {
-            const uint Cell = uint(Y) * Grid.Dimension + uint(X);
-            uint Index;
-            InterlockedAdd(Grid.CellCounts.At(Cell)[0], 1u, Index);
-            if (Index < Grid.CellCapacity)
-            {
-                Grid.CellItems.Set(Cell * Grid.CellCapacity + Index, ObjectIndex);
-            }
-        }
-    }
 }

@@ -74,39 +74,46 @@ namespace Lumina::Input
         }
     }
 
+    // Scripts can pass any value, including the Num an unbound SKey holds, and the context getters index without a check.
+    template<typename EnumType>
+    static const FInputContext* GetReceivingContextFor(const CWorld* World, EnumType Value)
+    {
+        return (uint32)Value < (uint32)EnumType::Num ? GetReceivingContext(World) : nullptr;
+    }
+
     bool IsKeyDown(const CWorld* World, EKey Key)
     {
-        const FInputContext* Context = GetReceivingContext(World);
+        const FInputContext* Context = GetReceivingContextFor(World, Key);
         return Context != nullptr && Context->IsKeyDown(Key);
     }
 
     bool IsKeyPressed(const CWorld* World, EKey Key)
     {
-        const FInputContext* Context = GetReceivingContext(World);
+        const FInputContext* Context = GetReceivingContextFor(World, Key);
         return Context != nullptr && Context->IsKeyPressed(Key);
     }
 
     bool IsKeyReleased(const CWorld* World, EKey Key)
     {
-        const FInputContext* Context = GetReceivingContext(World);
+        const FInputContext* Context = GetReceivingContextFor(World, Key);
         return Context != nullptr && Context->IsKeyReleased(Key);
     }
 
     bool IsMouseButtonDown(const CWorld* World, EMouseKey Button)
     {
-        const FInputContext* Context = GetReceivingContext(World);
+        const FInputContext* Context = GetReceivingContextFor(World, Button);
         return Context != nullptr && Context->IsMouseButtonDown(Button);
     }
 
     bool IsMouseButtonPressed(const CWorld* World, EMouseKey Button)
     {
-        const FInputContext* Context = GetReceivingContext(World);
+        const FInputContext* Context = GetReceivingContextFor(World, Button);
         return Context != nullptr && Context->IsMouseButtonPressed(Button);
     }
 
     bool IsMouseButtonReleased(const CWorld* World, EMouseKey Button)
     {
-        const FInputContext* Context = GetReceivingContext(World);
+        const FInputContext* Context = GetReceivingContextFor(World, Button);
         return Context != nullptr && Context->IsMouseButtonReleased(Button);
     }
 
@@ -136,25 +143,25 @@ namespace Lumina::Input
 
     bool IsGamepadButtonDown(const CWorld* World, EGamepadButton Button)
     {
-        const FInputContext* Context = GetReceivingContext(World);
+        const FInputContext* Context = GetReceivingContextFor(World, Button);
         return Context != nullptr && Context->IsGamepadButtonDown(Button);
     }
 
     bool IsGamepadButtonPressed(const CWorld* World, EGamepadButton Button)
     {
-        const FInputContext* Context = GetReceivingContext(World);
+        const FInputContext* Context = GetReceivingContextFor(World, Button);
         return Context != nullptr && Context->IsGamepadButtonPressed(Button);
     }
 
     bool IsGamepadButtonReleased(const CWorld* World, EGamepadButton Button)
     {
-        const FInputContext* Context = GetReceivingContext(World);
+        const FInputContext* Context = GetReceivingContextFor(World, Button);
         return Context != nullptr && Context->IsGamepadButtonReleased(Button);
     }
 
     float GetGamepadAxis(const CWorld* World, EGamepadAxis Axis)
     {
-        const FInputContext* Context = GetReceivingContext(World);
+        const FInputContext* Context = GetReceivingContextFor(World, Axis);
         return Context != nullptr ? Context->GetGamepadAxis(Axis) : 0.0f;
     }
 
@@ -208,8 +215,7 @@ namespace Lumina::Input
                 continue;
             }
 
-            const bool bGamepadSource = Binding.Source >= EInputAxisSource::GamepadLeftX;
-            if (bGamepadSource == bGamepad)
+            if (IsGamepadSource(Binding.Source) == bGamepad)
             {
                 return Binding.GetDisplayName(Family);
             }
@@ -220,13 +226,13 @@ namespace Lumina::Input
     static const SInputActionBinding* FindBinding(FName Action, int32 BindingIndex)
     {
         const SInputAction* Found = FInputActionMap::Get().FindAction(Action);
-        return (Found != nullptr && BindingIndex >= 0 && BindingIndex < int32(Found->Bindings.size())) ? &Found->Bindings[BindingIndex] : nullptr;
+        return (Found != nullptr && BindingIndex >= 0 && BindingIndex < Found->Bindings.Num()) ? &Found->Bindings[BindingIndex] : nullptr;
     }
 
     int32 GetBindingCount(FName Action)
     {
         const SInputAction* Found = FInputActionMap::Get().FindAction(Action);
-        return Found != nullptr ? int32(Found->Bindings.size()) : 0;
+        return Found != nullptr ? Found->Bindings.Num() : 0;
     }
 
     FString GetBindingDisplayName(FName Action, int32 BindingIndex)
@@ -274,12 +280,23 @@ namespace Lumina::Input
             return TSpan<const SInputEvent>();
         }
         const TVector<SInputEvent>& Events = Context->GetFrameEvents();
-        return TSpan<const SInputEvent>(Events.data(), Events.size());
+        return TSpan<const SInputEvent>(Events.GetData(), Events.Num());
     }
 
     void SetMouseMode(const CWorld* World, EMouseMode Mode)
     {
         FInputViewportRegistry::Get().SetMouseMode(Mode, World);
+    }
+
+    void SetMouseCursor(const CWorld* World, EMouseCursor Cursor)
+    {
+        FInputViewportRegistry::Get().SetMouseCursor(Cursor, World);
+    }
+
+    EMouseCursor GetMouseCursor(const CWorld* World)
+    {
+        const FInputContext* Context = FindOwnContext(World);
+        return Context != nullptr ? Context->GetMouseCursor() : EMouseCursor::Default;
     }
 
     EMouseMode GetMouseMode(const CWorld* World)

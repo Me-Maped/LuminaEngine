@@ -1,6 +1,7 @@
 #include "DLSSUpscaler.h"
 
 #include "Config/EngineSettings.h"
+#include "Containers/Algorithm.h"
 #include "Core/Console/ConsoleVariable.h"
 #include "Log/Log.h"
 #include "Lumina.h"
@@ -115,7 +116,7 @@ namespace Lumina
         bInitAttempted = true;
 
         std::error_code Error;
-        const std::filesystem::path DataPath = std::filesystem::path(Paths::GetUserDataDirectory().c_str()) / "Lumina" / "NGX";
+        const std::filesystem::path DataPath = std::filesystem::path(*Paths::GetUserDataDirectory()) / "Lumina" / "NGX";
         std::filesystem::create_directories(DataPath, Error);
 
         const std::wstring ExecutableDirectory = GetExecutableDirectory();
@@ -177,6 +178,16 @@ namespace Lumina
             return RequestedScale;
         }
 
+        const TSpan<FRenderScaleCacheEntry> LiveEntries(RenderScaleCache.GetData(), RenderScaleCacheNum);
+        const auto MatchesRequest = [&](const FRenderScaleCacheEntry& Entry)
+        {
+            return Entry.DisplaySize == DisplaySize && Entry.Mode == Mode && Entry.RequestedScale == RequestedScale;
+        };
+        if (auto Found = Algo::FindIf(LiveEntries, MatchesRequest); Found != LiveEntries.end())
+        {
+            return Found->Result;
+        }
+
         uint32 OptimalWidth  = 0;
         uint32 OptimalHeight = 0;
         uint32 MaxWidth = 0, MaxHeight = 0, MinWidth = 0, MinHeight = 0;
@@ -189,12 +200,19 @@ namespace Lumina
         }
 
         // A custom percentage keeps its own size inside the range the nearest mode accepts.
+        float RenderScale = (float)OptimalWidth / (float)DisplaySize.x;
         if (Mode == EUpscalerMode::Custom && MinWidth > 0 && MaxWidth >= MinWidth)
         {
             const float Wanted = Math::Clamp(RequestedScale * (float)DisplaySize.x, (float)MinWidth, (float)MaxWidth);
-            return Wanted / (float)DisplaySize.x;
+            RenderScale = Wanted / (float)DisplaySize.x;
         }
-        return (float)OptimalWidth / (float)DisplaySize.x;
+
+        if (RenderScaleCacheNum >= RenderScaleCache.Num())
+        {
+            RenderScaleCacheNum = 0;
+        }
+        RenderScaleCache[RenderScaleCacheNum++] = FRenderScaleCacheEntry{ DisplaySize, Mode, RequestedScale, RenderScale };
+        return RenderScale;
     }
 
     void FDLSSUpscaler::Evaluate(RHI::FCmdListH CL, const FUpscaleInputs& Inputs)
@@ -214,9 +232,14 @@ namespace Lumina
         const float Scale = (float)Inputs.RenderSize.x / (float)Math::Max(Inputs.DisplaySize.x, 1u);
         const NVSDK_NGX_PerfQuality_Value Quality = QualityForMode(Inputs.Mode, Scale);
 
-        if (Feature == nullptr || FeatureRender != Inputs.RenderSize || FeatureDisplay != Inputs.DisplaySize || FeatureQuality != (int32)Quality)
+        FFeature& Feature = Features.FindOrAdd(Inputs.ViewKey);
+        if (Feature.Render != Inputs.RenderSize || Feature.Display != Inputs.DisplaySize || Feature.Quality != (int32)Quality)
         {
-            ReleaseFeature();
+            ReleaseFeature(Feature);
+            // Recorded before creating so a failed configuration is not retried until its inputs change.
+            Feature.Render  = Inputs.RenderSize;
+            Feature.Display = Inputs.DisplaySize;
+            Feature.Quality = (int32)Quality;
 
             NVSDK_NGX_DLSS_Create_Params Create = {};
             Create.Feature.InWidth            = Inputs.RenderSize.x;
@@ -228,20 +251,21 @@ namespace Lumina
             Create.InFeatureCreateFlags = NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes
                                         | NVSDK_NGX_DLSS_Feature_Flags_DepthInverted | NVSDK_NGX_DLSS_Feature_Flags_AutoExposure;
 
-            const NVSDK_NGX_Result Result = NGX_VULKAN_CREATE_DLSS_EXT(CommandBuffer, 1, 1, &Feature, Parameters, &Create);
-            if (NVSDK_NGX_FAILED(Result) || Feature == nullptr)
+            const NVSDK_NGX_Result Result = NGX_VULKAN_CREATE_DLSS_EXT(CommandBuffer, 1, 1, &Feature.Handle, Parameters, &Create);
+            if (NVSDK_NGX_FAILED(Result) || Feature.Handle == nullptr)
             {
                 LOG_WARN("[DLSS] Creating the {}x{} to {}x{} feature failed ({:#x}).",
                     Inputs.RenderSize.x, Inputs.RenderSize.y, Inputs.DisplaySize.x, Inputs.DisplaySize.y, (uint32)Result);
-                Feature = nullptr;
+                Feature.Handle = nullptr;
                 return;
             }
 
-            FeatureRender  = Inputs.RenderSize;
-            FeatureDisplay = Inputs.DisplaySize;
-            FeatureQuality = (int32)Quality;
             LOG_INFO("[DLSS] Feature created for {}x{} to {}x{}, quality mode {}.",
                 Inputs.RenderSize.x, Inputs.RenderSize.y, Inputs.DisplaySize.x, Inputs.DisplaySize.y, (int32)Quality);
+        }
+        else if (Feature.Handle == nullptr)
+        {
+            return;
         }
 
         NVSDK_NGX_Resource_VK Color  = MakeResource(Inputs.Color,    false, false);
@@ -265,33 +289,34 @@ namespace Lumina
         Eval.InExposureScale                = 1.0f;
         Eval.InFrameTimeDeltaInMsec         = Inputs.DeltaSeconds * 1000.0f;
 
-        const NVSDK_NGX_Result Result = NGX_VULKAN_EVALUATE_DLSS_EXT(CommandBuffer, Feature, Parameters, &Eval);
+        const NVSDK_NGX_Result Result = NGX_VULKAN_EVALUATE_DLSS_EXT(CommandBuffer, Feature.Handle, Parameters, &Eval);
         if (NVSDK_NGX_FAILED(Result))
         {
             LOG_WARN("[DLSS] Evaluate failed ({:#x}).", (uint32)Result);
         }
     }
 
-    void FDLSSUpscaler::ReleaseFeature()
+    void FDLSSUpscaler::ReleaseFeature(FFeature& Feature)
     {
-        if (Feature == nullptr)
+        if (Feature.Handle == nullptr)
         {
             return;
         }
 
         // A frame in flight may still be running the old feature.
         RHI::WaitDeviceIdle();
-        NVSDK_NGX_VULKAN_ReleaseFeature(Feature);
-        Feature        = nullptr;
-        FeatureRender  = FUIntVector2(0);
-        FeatureDisplay = FUIntVector2(0);
-        FeatureQuality = -1;
+        NVSDK_NGX_VULKAN_ReleaseFeature(Feature.Handle);
+        Feature = FFeature();
     }
 
-    void FDLSSUpscaler::ReleaseViewResources()
+    void FDLSSUpscaler::ReleaseViewResources(const void* ViewKey)
     {
         FScopeLock Lock(Mutex);
-        ReleaseFeature();
+        if (FFeature* Feature = Features.Find(ViewKey))
+        {
+            ReleaseFeature(*Feature);
+            Features.Remove(ViewKey);
+        }
     }
 
     void FDLSSUpscaler::Shutdown()
@@ -302,7 +327,11 @@ namespace Lumina
             return;
         }
 
-        ReleaseFeature();
+        for (auto& Pair : Features)
+        {
+            ReleaseFeature(Pair.Value);
+        }
+        Features.Reset();
         if (Parameters != nullptr)
         {
             NVSDK_NGX_VULKAN_DestroyParameters(Parameters);

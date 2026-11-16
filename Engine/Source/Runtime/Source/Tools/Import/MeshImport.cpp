@@ -13,9 +13,19 @@
 #include <meshoptimizer.h>
 #include "Renderer/MeshQuantization.h"
 #include "Renderer/SkeletonResource.h"
+#include "Tools/Import/ClusterLODBuilder.h"
+#include "Tools/Import/VoxelFarBuilder.h"
 
 namespace Lumina::Import::Mesh
 {
+    void ApplyVirtualGeometrySettings(FMeshResource& Resource, const SVirtualGeometryBuildSettings& Settings)
+    {
+        Resource.bClusterLODs       = Settings.bClusterLOD && !Resource.bSkinnedMesh;
+        Resource.VoxelFarResolution = Settings.bVoxelFarRepresentation && !Resource.bSkinnedMesh
+                                    ? Math::Clamp(Settings.VoxelResolution, 4u, 128u) : 0u;
+        Resource.VoxelErrorScale    = Math::Clamp(Settings.VoxelErrorScale, 0.25f, 8.0f);
+    }
+
     FMeshImportData::FMeshImportData() = default;
     FMeshImportData::FMeshImportData(FMeshImportData&&) noexcept = default;
     FMeshImportData& FMeshImportData::operator=(FMeshImportData&&) noexcept = default;
@@ -122,29 +132,29 @@ namespace Lumina::Import::Mesh
         uint32 BuildVertexStreams(FMeshResource& M, meshopt_Stream* OutStreams)
         {
             uint32 Count = 0;
-            OutStreams[Count++] = { M.Positions.data(), sizeof(FVector3),   sizeof(FVector3) };
-            OutStreams[Count++] = { M.Normals.data(),   sizeof(uint32),      sizeof(uint32) };
-            OutStreams[Count++] = { M.Tangents.data(),  sizeof(uint32),      sizeof(uint32) };
-            OutStreams[Count++] = { M.UVs.data(),       sizeof(uint32),      sizeof(uint32) };
-            OutStreams[Count++] = { M.UVs1.data(),      sizeof(uint32),      sizeof(uint32) };
-            OutStreams[Count++] = { M.Colors.data(),    sizeof(uint32),      sizeof(uint32) };
+            OutStreams[Count++] = { M.Positions.GetData(), sizeof(FVector3),   sizeof(FVector3) };
+            OutStreams[Count++] = { M.Normals.GetData(),   sizeof(uint32),      sizeof(uint32) };
+            OutStreams[Count++] = { M.Tangents.GetData(),  sizeof(uint32),      sizeof(uint32) };
+            OutStreams[Count++] = { M.UVs.GetData(),       sizeof(uint32),      sizeof(uint32) };
+            OutStreams[Count++] = { M.UVs1.GetData(),      sizeof(uint32),      sizeof(uint32) };
+            OutStreams[Count++] = { M.Colors.GetData(),    sizeof(uint32),      sizeof(uint32) };
             if (M.bSkinnedMesh)
             {
-                OutStreams[Count++] = { M.JointIndices.data(), sizeof(FU16Vector4), sizeof(FU16Vector4) };
-                OutStreams[Count++] = { M.JointWeights.data(), sizeof(FU8Vector4), sizeof(FU8Vector4) };
+                OutStreams[Count++] = { M.JointIndices.GetData(), sizeof(FU16Vector4), sizeof(FU16Vector4) };
+                OutStreams[Count++] = { M.JointWeights.GetData(), sizeof(FU8Vector4), sizeof(FU8Vector4) };
             }
             LUMINA_ASSERT(Count <= kMaxVertexStreams, "BuildVertexStreams overflowed the caller's array");
             return Count;
         }
 
         // Apply a meshopt vertex remap to every active stream into fresh buffers (no overlap).
-        void RemapVertexStreams(FMeshResource& M, const uint32* Remap, size_t OldCount, size_t NewCount)
+        void RemapVertexStreams(FMeshResource& M, const uint32* Remap, int32 OldCount, int32 NewCount)
         {
             auto RemapStream = [&](auto& Stream)
             {
                 using TElem = typename std::remove_reference_t<decltype(Stream)>::value_type;
                 TVector<TElem> Out(NewCount);
-                meshopt_remapVertexBuffer(Out.data(), Stream.data(), OldCount, sizeof(TElem), Remap);
+                meshopt_remapVertexBuffer(Out.GetData(), Stream.GetData(), OldCount, sizeof(TElem), Remap);
                 Stream = Move(Out);
             };
             RemapStream(M.Positions);
@@ -163,8 +173,8 @@ namespace Lumina::Import::Mesh
 
     void ComputeTangents(FMeshResource& MeshResource, FScopedSlowTask* Progress = nullptr, float StepPerSurface = 0.0f)
     {
-        const size_t NumVertices = MeshResource.GetNumVertices();
-        if (MeshResource.Indices.empty() || NumVertices == 0)
+        const int32 NumVertices = MeshResource.GetNumVertices();
+        if (MeshResource.Indices.IsEmpty() || NumVertices == 0)
         {
             return;
         }
@@ -172,23 +182,23 @@ namespace Lumina::Import::Mesh
         LUMINA_PROFILE_SCOPE();
 
         // meshopt wants unit float3 normals and float2 UVs; both streams live packed.
-        if (MeshResource.Normals.size() != NumVertices || MeshResource.UVs.size() != NumVertices)
+        if (MeshResource.Normals.Num() != NumVertices || MeshResource.UVs.Num() != NumVertices)
         {
             return;
         }
 
-        MeshResource.Tangents.resize(NumVertices);
+        MeshResource.Tangents.SetNum(NumVertices);
 
         TVector<FVector3> UnpackedNormals(NumVertices);
         TVector<FVector2> UnpackedUVs(NumVertices);
         {
             LUMINA_PROFILE_SECTION("Unpack Tangent Inputs");
-            const uint32* InNormals = MeshResource.Normals.data();
-            const uint32* InUVs     = MeshResource.UVs.data();
-            FVector3*     OutNormals = UnpackedNormals.data();
-            FVector2*     OutUVs     = UnpackedUVs.data();
+            const uint32* InNormals = MeshResource.Normals.GetData();
+            const uint32* InUVs     = MeshResource.UVs.GetData();
+            FVector3*     OutNormals = UnpackedNormals.GetData();
+            FVector2*     OutUVs     = UnpackedUVs.GetData();
 
-            Task::ParallelFor((uint32)NumVertices, [=](const Task::FParallelRange& Range)
+            Jobs::ParallelFor((uint32)NumVertices, [=](const Jobs::FParallelRange& Range)
             {
                 const size_t Count = Range.End - Range.Start;
                 VertexOps::UnpackNormals(InNormals + Range.Start, OutNormals + Range.Start, Count);
@@ -196,19 +206,21 @@ namespace Lumina::Import::Mesh
             }, 4096);
         }
 
-        const uint32 NumSurfaces = (uint32)MeshResource.GeometrySurfaces.size();
-        Task::ParallelFor(NumSurfaces, [&](uint32 SurfaceIdx)
+        // Surfaces share vertices, so each one packs into its own slot and the scatter below runs serially.
+        const uint32 NumSurfaces = (uint32)MeshResource.GeometrySurfaces.Num();
+        TVector<TVector<uint32>> SurfaceCornerTangents(NumSurfaces);
+        Jobs::ParallelFor(NumSurfaces, [&](uint32 SurfaceIdx)
         {
             const FGeometrySurface& Section = MeshResource.GeometrySurfaces[SurfaceIdx];
             if (Section.IndexCount >= 3)
             {
                 const uint32* SurfaceIndices = &MeshResource.Indices[Section.StartIndex];
 
-                TVector<float> CornerTangents((size_t)Section.IndexCount * 4u);
+                TVector<float> CornerTangents(IntCastChecked<int32>(static_cast<int64>(Section.IndexCount) * 4u));
                 {
                     LUMINA_PROFILE_SECTION("meshopt_generateTangents");
                     meshopt_generateTangents(
-                        CornerTangents.data(),
+                        CornerTangents.GetData(),
                         SurfaceIndices, Section.IndexCount,
                         &MeshResource.Positions[0].x, NumVertices, sizeof(FVector3),
                         &UnpackedNormals[0].x, sizeof(FVector3),
@@ -216,14 +228,9 @@ namespace Lumina::Import::Mesh
                         meshopt_TangentCompatible);
                 }
 
-                TVector<uint32> CornerPacked(Section.IndexCount);
-                VertexOps::PackTangents(CornerTangents.data(), CornerPacked.data(), Section.IndexCount);
-
-                // Per-corner collapsed to per-vertex last-writer-wins, as the previous per-corner writer did.
-                for (uint32 i = 0; i < Section.IndexCount; ++i)
-                {
-                    MeshResource.Tangents[SurfaceIndices[i]] = CornerPacked[i];
-                }
+                TVector<uint32>& CornerPacked = SurfaceCornerTangents[SurfaceIdx];
+                CornerPacked.SetNum(Section.IndexCount);
+                VertexOps::PackTangents(CornerTangents.GetData(), CornerPacked.GetData(), Section.IndexCount);
             }
 
             if (Progress)
@@ -231,25 +238,40 @@ namespace Lumina::Import::Mesh
                 Progress->EnterProgressFrame(StepPerSurface);
             }
         });
+
+        // Per-corner collapsed to per-vertex, where the last surface in order wins on a shared vertex.
+        for (uint32 SurfaceIdx = 0; SurfaceIdx < NumSurfaces; ++SurfaceIdx)
+        {
+            const TVector<uint32>& CornerPacked = SurfaceCornerTangents[SurfaceIdx];
+            if (CornerPacked.IsEmpty())
+            {
+                continue;
+            }
+            const uint32* SurfaceIndices = &MeshResource.Indices[MeshResource.GeometrySurfaces[SurfaceIdx].StartIndex];
+            for (int32 i = 0; i < CornerPacked.Num(); ++i)
+            {
+                MeshResource.Tangents[SurfaceIndices[i]] = CornerPacked[i];
+            }
+        }
     }
     
     void GenerateFallbackTangents(FMeshResource& MeshResource)
     {
         LUMINA_PROFILE_SCOPE();
 
-        const size_t NumVertices = MeshResource.GetNumVertices();
-        if (NumVertices == 0 || MeshResource.Normals.size() != NumVertices)
+        const int32 NumVertices = MeshResource.GetNumVertices();
+        if (NumVertices == 0 || MeshResource.Normals.Num() != NumVertices)
         {
             return;
         }
 
-        MeshResource.Tangents.resize(NumVertices);
+        MeshResource.Tangents.SetNum(NumVertices);
 
-        const uint32* Normals  = MeshResource.Normals.data();
-        uint32*       Tangents = MeshResource.Tangents.data();
+        const uint32* Normals  = MeshResource.Normals.GetData();
+        uint32*       Tangents = MeshResource.Tangents.GetData();
 
         constexpr uint32 kBatch = 256;
-        Task::ParallelFor((uint32)NumVertices, [=](const Task::FParallelRange& Range)
+        Jobs::ParallelFor((uint32)NumVertices, [=](const Jobs::FParallelRange& Range)
         {
             FVector3 N[kBatch];
             float TangentsXYZW[kBatch * 4];
@@ -278,8 +300,8 @@ namespace Lumina::Import::Mesh
     {
         LUMINA_PROFILE_SCOPE();
 
-        const size_t NumVertices = MeshResource.GetNumVertices();
-        const size_t NumIndices  = MeshResource.Indices.size();
+        const int32 NumVertices = MeshResource.GetNumVertices();
+        const int32 NumIndices  = MeshResource.Indices.Num();
         if (NumVertices == 0 || NumIndices == 0)
         {
             return;
@@ -295,19 +317,19 @@ namespace Lumina::Import::Mesh
         const uint32 StreamCount = BuildVertexStreams(MeshResource, Streams);
 
         TVector<uint32> Remap(NumVertices);
-        const size_t UniqueVerts = meshopt_generateVertexRemapMulti(
-            Remap.data(),
-            MeshResource.Indices.data(), NumIndices,
-            NumVertices, Streams, StreamCount);
+        const int32 UniqueVerts = IntCastChecked<int32>(meshopt_generateVertexRemapMulti(
+            Remap.GetData(),
+            MeshResource.Indices.GetData(), NumIndices,
+            NumVertices, Streams, StreamCount));
 
         if (UniqueVerts < NumVertices)
         {
             meshopt_remapIndexBuffer(
-                MeshResource.Indices.data(),
-                MeshResource.Indices.data(), NumIndices,
-                Remap.data());
+                MeshResource.Indices.GetData(),
+                MeshResource.Indices.GetData(), NumIndices,
+                Remap.GetData());
 
-            RemapVertexStreams(MeshResource, Remap.data(), NumVertices, UniqueVerts);
+            RemapVertexStreams(MeshResource, Remap.GetData(), NumVertices, UniqueVerts);
         }
     }
 
@@ -316,8 +338,8 @@ namespace Lumina::Import::Mesh
     {
         LUMINA_PROFILE_SCOPE();
 
-        const size_t NumVertices = MeshResource.GetNumVertices();
-        const size_t NumIndices  = MeshResource.Indices.size();
+        const int32 NumVertices = MeshResource.GetNumVertices();
+        const int32 NumIndices  = MeshResource.Indices.Num();
 
         if (NumVertices == 0 || NumIndices == 0)
         {
@@ -325,16 +347,16 @@ namespace Lumina::Import::Mesh
         }
 
         // Per-surface reorder; disjoint index slices make the in-place reorder thread-safe.
-        const uint32 NumSurfaces = (uint32)MeshResource.GeometrySurfaces.size();
+        const uint32 NumSurfaces = (uint32)MeshResource.GeometrySurfaces.Num();
         if (NumSurfaces > 0)
         {
             if (Progress)
             {
                 Progress->UpdateMessage("Optimizing vertex cache & overdraw...");
             }
-            const float* VertexPositions = reinterpret_cast<const float*>(MeshResource.Positions.data());
+            const float* VertexPositions = reinterpret_cast<const float*>(MeshResource.Positions.GetData());
 
-            Task::ParallelFor(NumSurfaces, [&](uint32 SurfaceIdx)
+            Jobs::ParallelFor(NumSurfaces, [&](uint32 SurfaceIdx)
             {
                 FGeometrySurface& Section = MeshResource.GeometrySurfaces[SurfaceIdx];
                 if (Section.IndexCount == 0)
@@ -364,17 +386,17 @@ namespace Lumina::Import::Mesh
         }
         {
             TVector<uint32> FetchRemap(NumVertices);
-            const size_t NewCount = meshopt_optimizeVertexFetchRemap(
-                FetchRemap.data(),
-                MeshResource.Indices.data(), NumIndices,
-                NumVertices);
+            const int32 NewCount = IntCastChecked<int32>(meshopt_optimizeVertexFetchRemap(
+                FetchRemap.GetData(),
+                MeshResource.Indices.GetData(), NumIndices,
+                NumVertices));
 
             meshopt_remapIndexBuffer(
-                MeshResource.Indices.data(),
-                MeshResource.Indices.data(), NumIndices,
-                FetchRemap.data());
+                MeshResource.Indices.GetData(),
+                MeshResource.Indices.GetData(), NumIndices,
+                FetchRemap.GetData());
 
-            RemapVertexStreams(MeshResource, FetchRemap.data(), NumVertices, NewCount);
+            RemapVertexStreams(MeshResource, FetchRemap.GetData(), NumVertices, NewCount);
         }
     }
 
@@ -403,6 +425,8 @@ namespace Lumina::Import::Mesh
             TVector<uint32>   SourceVertex;
             // meshopt_simplifyScale of Positions, which turns a relative error into a mesh-local distance.
             float             ErrorScale = 0.0f;
+            // Positions are the vertices' own rather than copies of the mesh's, as when a hierarchy grew some of them.
+            bool              bOwnsPositions = false;
         };
 
         struct FSurfaceMeshletResult
@@ -420,7 +444,35 @@ namespace Lumina::Import::Mesh
             TVector<FVector3>        UpdatedPositions;
             TVector<float>           UpdatedAttributes;
             float                    Error = 0.0f;
+
+            // One per meshlet on a cluster hierarchy level, empty on a discrete LOD.
+            TVector<FMeshletLODBounds> LODBounds;
+
+            // A voxel splat level, whose meshlets skip the material's opacity clip.
+            bool                     bVoxel = false;
         };
+
+        // One surface's LOD slots as the pack writes them, the result cell each draws from and what each tells the cull.
+        struct FSurfaceLODTable
+        {
+            TInlineVector<uint32, MAX_MESH_LODS> Accepted;
+            TInlineVector<float, MAX_MESH_LODS>  Error;
+            TInlineVector<float, MAX_MESH_LODS>  ParentError;
+            uint32                               Flags = 0;
+
+            void Add(uint32 Cell, float InError, float InParentError)
+            {
+                Accepted.Add(Cell);
+                Error.Add(InError);
+                ParentError.Add(InParentError);
+            }
+
+            void MarkVoxelSlot(uint32 Slot)   { Flags |= 1u << (SURFACE_DESC_VOXEL_SHIFT + Slot); }
+            void MarkVoxelParent(uint32 Slot) { Flags |= 1u << (SURFACE_DESC_VOXEL_PARENT_SHIFT + Slot); }
+        };
+
+        // Levels a 128 voxel grid halves through before it stops at two a side.
+        constexpr uint32 kMaxVoxelLevels = 7;
 
         uint64 PositionKey(const FVector3& Position)
         {
@@ -437,13 +489,13 @@ namespace Lumina::Import::Mesh
         {
             LUMINA_PROFILE_SCOPE();
 
-            const uint32 NumSurfaces = (uint32)MeshResource.GeometrySurfaces.size();
-            const size_t NumVertices = MeshResource.GetNumVertices();
-            const bool   bHasNormals = MeshResource.Normals.size() == NumVertices;
-            const bool   bHasUVs     = MeshResource.UVs.size() == NumVertices;
+            const uint32 NumSurfaces = (uint32)MeshResource.GeometrySurfaces.Num();
+            const int32 NumVertices = MeshResource.GetNumVertices();
+            const bool   bHasNormals = MeshResource.Normals.Num() == NumVertices;
+            const bool   bHasUVs     = MeshResource.UVs.Num() == NumVertices;
 
             TVector<FSurfaceSimplifyInput> Inputs(NumSurfaces);
-            Task::ParallelFor(NumSurfaces, [&](uint32 SurfaceIdx)
+            Jobs::ParallelFor(NumSurfaces, [&](uint32 SurfaceIdx)
             {
                 const FGeometrySurface& Section = MeshResource.GeometrySurfaces[SurfaceIdx];
                 FSurfaceSimplifyInput&  In      = Inputs[SurfaceIdx];
@@ -453,21 +505,23 @@ namespace Lumina::Import::Mesh
                 }
 
                 const uint32* SurfaceIndices = &MeshResource.Indices[Section.StartIndex];
-                In.SourceVertex.assign(SurfaceIndices, SurfaceIndices + Section.IndexCount);
+                In.SourceVertex.Reset();
+                In.SourceVertex.Append(SurfaceIndices, SurfaceIndices + Section.IndexCount);
                 Algo::Sort(In.SourceVertex);
-                In.SourceVertex.erase(Algo::Unique(In.SourceVertex), In.SourceVertex.end());
+                const uint32* const UniqueEnd = Algo::Unique(In.SourceVertex);
+                In.SourceVertex.SetNum(static_cast<int32>(UniqueEnd - In.SourceVertex.GetData()));
 
-                In.Indices.resize(Section.IndexCount);
+                In.Indices.SetNum(Section.IndexCount);
                 for (uint32 i = 0; i < Section.IndexCount; ++i)
                 {
                     const auto Found = Algo::LowerBound(In.SourceVertex.begin(), In.SourceVertex.end(), SurfaceIndices[i]);
                     In.Indices[i] = (uint32)(Found - In.SourceVertex.begin());
                 }
 
-                const size_t LocalCount = In.SourceVertex.size();
-                In.Positions.resize(LocalCount);
-                In.Attributes.assign(LocalCount * kSimplifyAttributeCount, 0.0f);
-                for (size_t v = 0; v < LocalCount; ++v)
+                const int32 LocalCount = In.SourceVertex.Num();
+                In.Positions.SetNum(LocalCount);
+                In.Attributes.Init(0.0f, LocalCount * kSimplifyAttributeCount);
+                for (int32 v = 0; v < LocalCount; ++v)
                 {
                     const uint32 MeshVertex = In.SourceVertex[v];
                     In.Positions[v] = MeshResource.Positions[MeshVertex];
@@ -500,23 +554,24 @@ namespace Lumina::Import::Mesh
             THashMap<uint64, uint32> PositionOwner;
             for (uint32 SurfaceIdx = 0; SurfaceIdx < NumSurfaces; ++SurfaceIdx)
             {
+                const uint32 Surface = SurfaceIdx;
                 for (const FVector3& Position : Inputs[SurfaceIdx].Positions)
                 {
-                    const auto [It, bInserted] = PositionOwner.try_emplace(PositionKey(Position), SurfaceIdx);
-                    if (!bInserted && It->second != SurfaceIdx)
+                    uint32& Owner = PositionOwner.FindOrAdd(PositionKey(Position), Surface);
+                    if (Owner != Surface)
                     {
-                        It->second = kSharedPosition;
+                        Owner = kSharedPosition;
                     }
                 }
             }
 
-            Task::ParallelFor(NumSurfaces, [&](uint32 SurfaceIdx)
+            Jobs::ParallelFor(NumSurfaces, [&](uint32 SurfaceIdx)
             {
                 FSurfaceSimplifyInput& In = Inputs[SurfaceIdx];
-                In.Locks.assign(In.Positions.size(), (uint8)0u);
-                for (size_t v = 0; v < In.Positions.size(); ++v)
+                In.Locks.Init((uint8)0u, In.Positions.Num());
+                for (int32 v = 0; v < In.Positions.Num(); ++v)
                 {
-                    if (PositionOwner.find(PositionKey(In.Positions[v]))->second == kSharedPosition)
+                    if (PositionOwner.FindChecked(PositionKey(In.Positions[v])) == kSharedPosition)
                     {
                         In.Locks[v] = meshopt_SimplifyVertex_Lock;
                     }
@@ -609,15 +664,15 @@ namespace Lumina::Import::Mesh
                     Dim[Axis] = (int32)Math::Clamp(std::ceil(Extent[Axis] / CellSize), 1.0f, 128.0f);
                 }
 
-                TVector<uint32> Counts((size_t)Dim[0] * Dim[1] * Dim[2] + 1u, 0u);
+                TVector<uint32> Counts(IntCastChecked<int32>(static_cast<int64>(Dim[0]) * Dim[1] * Dim[2] + 1u), 0u);
                 ForEachTriangleCell([&](size_t, uint32 Cell) { ++Counts[Cell]; });
 
-                CellStart.resize(Counts.size(), 0u);
-                for (size_t c = 1; c < Counts.size(); ++c)
+                CellStart.SetNum(Counts.Num(), 0u);
+                for (int32 c = 1; c < Counts.Num(); ++c)
                 {
                     CellStart[c] = CellStart[c - 1] + Counts[c - 1];
                 }
-                CellTriangles.resize(CellStart.back());
+                CellTriangles.SetNum(CellStart.Last());
 
                 TVector<uint32> Cursor(CellStart.begin(), CellStart.end() - 1);
                 ForEachTriangleCell([&](size_t Triangle, uint32 Cell) { CellTriangles[Cursor[Cell]++] = (uint32)Triangle; });
@@ -740,7 +795,7 @@ namespace Lumina::Import::Mesh
         };
 
         // Triangles past this are sampled at a stride, which bounds the import cost of a very dense surface.
-        constexpr size_t kMaxDistanceSampleTriangles = 131072u;
+        constexpr int32 kMaxDistanceSampleTriangles = 131072;
 
         // The farther of source-to-result and result-to-source surface distance, sampled at vertices, edge midpoints and centroids.
         float MeasureSimplificationDistance(const TVector<FVector3>& SourcePositions, const TVector<uint32>& SourceIndices,
@@ -749,7 +804,7 @@ namespace Lumina::Import::Mesh
             LUMINA_PROFILE_SCOPE();
 
             const FTriangleGrid ResultGrid(ResultPositions, ResultIndices, ResultCount);
-            const FTriangleGrid SourceGrid(SourcePositions, SourceIndices.data(), SourceIndices.size());
+            const FTriangleGrid SourceGrid(SourcePositions, SourceIndices.GetData(), SourceIndices.Num());
 
             float Worst = 0.0f;
             auto Sample = [&](const FTriangleGrid& Grid, const FVector3& P)
@@ -758,9 +813,9 @@ namespace Lumina::Import::Mesh
             };
 
             // A card that collapsed away leaves its corners and center far from any surviving surface.
-            const size_t SourceTriangles = SourceIndices.size() / 3u;
-            const size_t SourceStride    = Math::Max<size_t>(SourceTriangles / kMaxDistanceSampleTriangles, 1u);
-            for (size_t t = 0; t < SourceTriangles; t += SourceStride)
+            const int32 SourceTriangles = SourceIndices.Num() / 3;
+            const int32 SourceStride    = Math::Max(SourceTriangles / kMaxDistanceSampleTriangles, 1);
+            for (int32 t = 0; t < SourceTriangles; t += SourceStride)
             {
                 const FVector3& A = SourcePositions[SourceIndices[t * 3u]];
                 const FVector3& B = SourcePositions[SourceIndices[t * 3u + 1u]];
@@ -794,10 +849,10 @@ namespace Lumina::Import::Mesh
         {
             LUMINA_PROFILE_SCOPE();
 
-            const size_t SourceCount     = In.Indices.size();
-            const size_t VertexCount     = In.Positions.size();
+            const int32 SourceCount     = In.Indices.Num();
+            const int32 VertexCount     = In.Positions.Num();
             const size_t AttributeStride = kSimplifyAttributeCount * sizeof(float);
-            const uint8* Locks           = In.Locks.empty() ? nullptr : In.Locks.data();
+            const uint8* Locks           = In.Locks.IsEmpty() ? nullptr : In.Locks.GetData();
 
             float  RelativeError = 0.0f;
             size_t NewCount      = 0;
@@ -808,19 +863,19 @@ namespace Lumina::Import::Mesh
                 Out.UpdatedAttributes = In.Attributes;
                 OutIndices            = In.Indices;
                 NewCount = meshopt_simplifyWithUpdate(
-                    OutIndices.data(), SourceCount,
+                    OutIndices.GetData(), SourceCount,
                     &Out.UpdatedPositions[0].x, VertexCount, sizeof(FVector3),
-                    Out.UpdatedAttributes.data(), AttributeStride,
+                    Out.UpdatedAttributes.GetData(), AttributeStride,
                     kSimplifyAttributeWeights, kSimplifyAttributeCount,
                     Locks, TargetIndices, kLODMaxRelativeError, 0u, &RelativeError);
             }
             else
             {
-                OutIndices.resize(SourceCount);
+                OutIndices.SetNum(SourceCount);
                 NewCount = meshopt_simplifyWithAttributes(
-                    OutIndices.data(), In.Indices.data(), SourceCount,
+                    OutIndices.GetData(), In.Indices.GetData(), SourceCount,
                     &In.Positions[0].x, VertexCount, sizeof(FVector3),
-                    In.Attributes.data(), AttributeStride,
+                    In.Attributes.GetData(), AttributeStride,
                     kSimplifyAttributeWeights, kSimplifyAttributeCount,
                     Locks, TargetIndices, kLODMaxRelativeError, 0u, &RelativeError);
             }
@@ -828,20 +883,20 @@ namespace Lumina::Import::Mesh
             // Leaf cards are separate quads whose every edge is a border, so edge collapse cannot touch them and only clustering reduces them.
             if (NewCount > TargetIndices * 2u)
             {
-                Out.UpdatedPositions.clear();
-                Out.UpdatedAttributes.clear();
-                OutIndices.resize(SourceCount);
+                Out.UpdatedPositions.Reset();
+                Out.UpdatedAttributes.Reset();
+                OutIndices.SetNum(SourceCount);
                 NewCount = meshopt_simplifySloppy(
-                    OutIndices.data(), In.Indices.data(), SourceCount,
+                    OutIndices.GetData(), In.Indices.GetData(), SourceCount,
                     &In.Positions[0].x, VertexCount, sizeof(FVector3),
                     Locks, TargetIndices, kLODMaxRelativeError, &RelativeError);
             }
 
-            OutIndices.resize(NewCount);
+            OutIndices.SetNum(IntCastChecked<int32>(NewCount));
 
             // A collapsed card costs only its own size in the simplifier's error, however sparse the canopy gets, so the distance is measured.
-            const TVector<FVector3>& ResultPositions = Out.UpdatedPositions.empty() ? In.Positions : Out.UpdatedPositions;
-            const float Measured = MeasureSimplificationDistance(In.Positions, In.Indices, ResultPositions, OutIndices.data(), NewCount);
+            const TVector<FVector3>& ResultPositions = Out.UpdatedPositions.IsEmpty() ? In.Positions : Out.UpdatedPositions;
+            const float Measured = MeasureSimplificationDistance(In.Positions, In.Indices, ResultPositions, OutIndices.GetData(), NewCount);
             Out.Error = Math::Max(RelativeError * In.ErrorScale, Measured < FLT_MAX ? Measured : In.ErrorScale);
         }
 
@@ -871,9 +926,9 @@ namespace Lumina::Import::Mesh
             TVector<meshopt_Meshlet> LocalMeshlets;
             {
                 LUMINA_PROFILE_SECTION("Meshlet Scratch Alloc");
-                LocalMeshlets.resize(MaxMeshlets);
-                Result.Vertices.resize(MaxMeshlets * MaxVertices);
-                Result.Triangles.resize(MaxMeshlets * MaxTriangles * 3);
+                LocalMeshlets.SetNum(IntCastChecked<int32>(MaxMeshlets));
+                Result.Vertices.SetNum(IntCastChecked<int32>(MaxMeshlets * MaxVertices));
+                Result.Triangles.SetNum(IntCastChecked<int32>(MaxMeshlets * MaxTriangles * 3));
             }
 
             size_t MeshletCount = 0;
@@ -881,9 +936,9 @@ namespace Lumina::Import::Mesh
             {
                 LUMINA_PROFILE_SECTION("meshopt_buildMeshletsScan");
                 MeshletCount = meshopt_buildMeshletsScan(
-                    LocalMeshlets.data(),
-                    Result.Vertices.data(),
-                    Result.Triangles.data(),
+                    LocalMeshlets.GetData(),
+                    Result.Vertices.GetData(),
+                    Result.Triangles.GetData(),
                     SrcIndices, SrcIndexCount,
                     NumVertices,
                     MaxVertices, MaxTriangles);
@@ -892,9 +947,9 @@ namespace Lumina::Import::Mesh
             {
                 LUMINA_PROFILE_SECTION("meshopt_buildMeshlets");
                 MeshletCount = meshopt_buildMeshlets(
-                    LocalMeshlets.data(),
-                    Result.Vertices.data(),
-                    Result.Triangles.data(),
+                    LocalMeshlets.GetData(),
+                    Result.Vertices.GetData(),
+                    Result.Triangles.GetData(),
                     SrcIndices, SrcIndexCount,
                     VertexPositions, NumVertices, VertexSize,
                     MaxVertices, MaxTriangles, ConeWeight);
@@ -902,17 +957,17 @@ namespace Lumina::Import::Mesh
 
             if (MeshletCount == 0)
             {
-                Result.Vertices.clear();
-                Result.Triangles.clear();
+                Result.Vertices.Reset();
+                Result.Triangles.Reset();
                 return;
             }
 
-            LocalMeshlets.resize(MeshletCount);
+            LocalMeshlets.SetNum(IntCastChecked<int32>(MeshletCount));
 
             // meshopt pads triangles to a multiple of 4.
-            const meshopt_Meshlet& Last = LocalMeshlets.back();
-            Result.Vertices.resize(Last.vertex_offset + Last.vertex_count);
-            Result.Triangles.resize(Last.triangle_offset + ((Last.triangle_count * 3 + 3) & ~3u));
+            const meshopt_Meshlet& Last = LocalMeshlets.Last();
+            Result.Vertices.SetNum(Last.vertex_offset + Last.vertex_count);
+            Result.Triangles.SetNum(Last.triangle_offset + ((Last.triangle_count * 3 + 3) & ~3u));
 
             if (bOptimizeMeshlets)
             {
@@ -926,9 +981,9 @@ namespace Lumina::Import::Mesh
                 }
             }
 
-            Result.OutMeshlets.reserve(MeshletCount);
-            Result.Spheres.reserve(MeshletCount);
-            Result.Cones.reserve(MeshletCount);
+            Result.OutMeshlets.Reserve(IntCastChecked<int32>(MeshletCount));
+            Result.Spheres.Reserve(IntCastChecked<int32>(MeshletCount));
+            Result.Cones.Reserve(IntCastChecked<int32>(MeshletCount));
             
             {
             LUMINA_PROFILE_SECTION("Meshlet Bounds");
@@ -939,7 +994,7 @@ namespace Lumina::Import::Mesh
                 Out.TriangleOffset = M.triangle_offset;
                 Out.VertexCount    = M.vertex_count;
                 Out.TriangleCount  = M.triangle_count;
-                Result.OutMeshlets.push_back(Out);
+                Result.OutMeshlets.Add(Out);
 
                 FMeshletSphere Sphere{};
                 FMeshletCone   Cone = kDisabledMeshletCone;
@@ -976,12 +1031,12 @@ namespace Lumina::Import::Mesh
                     Sphere.Center = FVector3(B.center[0], B.center[1], B.center[2]);
                     Sphere.Radius = B.radius;
                 }
-                Result.Spheres.push_back(Sphere);
-                Result.Cones.push_back(Cone);
+                Result.Spheres.Add(Sphere);
+                Result.Cones.Add(Cone);
             }
             }
 
-            Result.bHasData = !Result.OutMeshlets.empty();
+            Result.bHasData = !Result.OutMeshlets.IsEmpty();
         }
 
         // A fast build splits a surface this large into ranges built in parallel, since one surface is otherwise one serial job.
@@ -1000,18 +1055,18 @@ namespace Lumina::Import::Mesh
                 return;
             }
 
-            const uint32 VertexShift   = (uint32)Into.Vertices.size();
-            const uint32 TriangleShift = (uint32)Into.Triangles.size();
-            Into.Vertices.insert(Into.Vertices.end(), From.Vertices.begin(), From.Vertices.end());
-            Into.Triangles.insert(Into.Triangles.end(), From.Triangles.begin(), From.Triangles.end());
+            const uint32 VertexShift   = (uint32)Into.Vertices.Num();
+            const uint32 TriangleShift = (uint32)Into.Triangles.Num();
+            Into.Vertices.Append(From.Vertices);
+            Into.Triangles.Append(From.Triangles);
             for (FMeshlet M : From.OutMeshlets)
             {
                 M.VertexOffset   += VertexShift;
                 M.TriangleOffset += TriangleShift;
-                Into.OutMeshlets.push_back(M);
+                Into.OutMeshlets.Add(M);
             }
-            Into.Spheres.insert(Into.Spheres.end(), From.Spheres.begin(), From.Spheres.end());
-            Into.Cones.insert(Into.Cones.end(), From.Cones.begin(), From.Cones.end());
+            Into.Spheres.Append(From.Spheres);
+            Into.Cones.Append(From.Cones);
             Into.bHasData  = true;
         }
 
@@ -1020,11 +1075,11 @@ namespace Lumina::Import::Mesh
         {
             LUMINA_PROFILE_SCOPE();
 
-            const size_t NumIndices  = MeshResource.Indices.size();
-            const size_t NumVertices = MeshResource.Positions.size();
+            const int32 NumIndices  = MeshResource.Indices.Num();
+            const uint32 NumVertices = static_cast<uint32>(MeshResource.Positions.Num());
 
             // Leaving it at zero is the honest answer, and consumers fall back rather than act on it.
-            if (MeshResource.UVs.size() < NumVertices || NumVertices == 0 || NumIndices < 3)
+            if (static_cast<uint32>(MeshResource.UVs.Num()) < NumVertices || NumVertices == 0 || NumIndices < 3)
             {
                 for (FGeometrySurface& Surface : MeshResource.GeometrySurfaces)
                 {
@@ -1037,8 +1092,8 @@ namespace Lumina::Import::Mesh
             {
                 Surface.TexelFactor = 0.0f;
 
-                const size_t Start = Surface.StartIndex;
-                const size_t End   = Math::Min<size_t>(Start + Surface.IndexCount, NumIndices);
+                const int64 Start = Surface.StartIndex;
+                const int64 End   = Math::Min<int64>(Start + Surface.IndexCount, NumIndices);
                 if (End < Start + 3)
                 {
                     continue;
@@ -1048,7 +1103,7 @@ namespace Lumina::Import::Mesh
                 double WorldArea = 0.0;
                 double UVArea    = 0.0;
 
-                for (size_t i = Start; i + 2 < End; i += 3)
+                for (int32 i = static_cast<int32>(Start); i + 2 < End; i += 3)
                 {
                     const uint32 I0 = MeshResource.Indices[i];
                     const uint32 I1 = MeshResource.Indices[i + 1];
@@ -1098,9 +1153,7 @@ namespace Lumina::Import::Mesh
         // Each distinct vertex gets one slot, in order of first use, so a meshlet's refs stay close and usually fit 16 bits.
         template<typename TLevelPosition, typename TResolveLevelVertex>
         void PackStaticMeshlets(FMeshResource& MeshResource, const TVector<FSurfaceMeshletResult>& Results,
-                                const TVector<TFixedVector<uint32, MAX_MESH_LODS>>& AcceptedPerSurface,
-                                const TVector<TFixedVector<float, MAX_MESH_LODS>>& AcceptedErrorPerSurface,
-                                uint32 LODCount, uint32 NumSurfaces,
+                                const TVector<FSurfaceLODTable>& Tables, uint32 NumSurfaces,
                                 TLevelPosition&& LevelPosition, TResolveLevelVertex&& ResolveLevelVertex)
         {
             LUMINA_PROFILE_SCOPE();
@@ -1123,88 +1176,90 @@ namespace Lumina::Import::Mesh
             TVector<FPackSlot> PackSlots;
             uint32 RefCursor      = 0;
             uint32 TriangleCursor = 0;
+            bool   bAnyLODBounds  = false;
 
-            for (uint32 Slot = 0; Slot < LODCount; ++Slot)
+            // Surface-major, so a cluster surface's slots form one contiguous run a view can take a slice of.
+            for (uint32 SurfaceIdx = 0; SurfaceIdx < NumSurfaces; ++SurfaceIdx)
             {
-                for (uint32 SurfaceIdx = 0; SurfaceIdx < NumSurfaces; ++SurfaceIdx)
-                {
-                    const TFixedVector<uint32, MAX_MESH_LODS>& Accepted = AcceptedPerSurface[SurfaceIdx];
-                    if (Slot >= Accepted.size())
-                    {
-                        continue;
-                    }
+                const FSurfaceLODTable& Table   = Tables[SurfaceIdx];
+                FGeometrySurface&       Section = MeshResource.GeometrySurfaces[SurfaceIdx];
+                Section.LODFlags = Table.Flags;
 
-                    FGeometrySurface&            Section = MeshResource.GeometrySurfaces[SurfaceIdx];
-                    const FSurfaceMeshletResult& Result  = Results[Accepted[Slot] * NumSurfaces + SurfaceIdx];
+                for (uint32 Slot = 0; Slot < static_cast<uint32>(Table.Accepted.Num()); ++Slot)
+                {
+                    const FSurfaceMeshletResult& Result = Results[Table.Accepted[Slot] * NumSurfaces + SurfaceIdx];
                     if (!Result.bHasData)
                     {
                         continue;
                     }
 
-                    Section.LODMeshletOffset[Slot] = (uint32)PackSlots.size();
-                    Section.LODMeshletCount[Slot]  = (uint32)Result.OutMeshlets.size();
-                    Section.LODError[Slot]         = AcceptedErrorPerSurface[SurfaceIdx][Slot];
+                    Section.LODMeshletOffset[Slot] = (uint32)PackSlots.Num();
+                    Section.LODMeshletCount[Slot]  = (uint32)Result.OutMeshlets.Num();
+                    Section.LODError[Slot]         = Table.Error[Slot];
+                    Section.LODParentError[Slot]   = Table.ParentError[Slot];
                     Section.NumLODs                = Slot + 1u;
+                    bAnyLODBounds                  = bAnyLODBounds || !Result.LODBounds.IsEmpty();
 
-                    for (size_t MeshletIdx = 0; MeshletIdx < Result.OutMeshlets.size(); ++MeshletIdx)
+                    for (int32 MeshletIdx = 0; MeshletIdx < Result.OutMeshlets.Num(); ++MeshletIdx)
                     {
                         const FMeshlet& M = Result.OutMeshlets[MeshletIdx];
-                        PackSlots.push_back({ &Result, (uint32)MeshletIdx, Slot, RefCursor, TriangleCursor });
+                        PackSlots.Emplace(&Result, (uint32)MeshletIdx, Slot, RefCursor, TriangleCursor);
                         RefCursor      += M.VertexCount;
                         TriangleCursor += M.TriangleCount;
                     }
                 }
             }
 
-            // A level that kept the source vertices shares their slots, and a destructive level moved its vertices and gets its own.
+            // A level that kept the source vertices shares their slots, a destructive level moved its vertices and gets its own, and a hierarchy's levels share its vertex space.
             TVector<uint32>        UniqueOf(RefCursor);
             TVector<FUniqueSource> UniqueSources;
             {
                 LUMINA_PROFILE_SECTION("Assign Shared Vertices");
                 TVector<uint32> MeshSlot(MeshResource.GetNumVertices(), ~0u);
-                THashMap<const FSurfaceMeshletResult*, TVector<uint32>> MovedSlots;
+                THashMap<const void*, TVector<uint32>> OwnSlots;
 
                 for (const FPackSlot& Pack : PackSlots)
                 {
-                    const FSurfaceMeshletResult& Result = *Pack.Result;
-                    const FMeshlet&              M      = Result.OutMeshlets[Pack.MeshletIdx];
-                    const bool                   bMoved = !Result.UpdatedPositions.empty();
+                    const FSurfaceMeshletResult& Result   = *Pack.Result;
+                    const FMeshlet&              M        = Result.OutMeshlets[Pack.MeshletIdx];
+                    const bool                   bMoved   = !Result.UpdatedPositions.IsEmpty();
+                    const bool                   bOwnSpace = bMoved || (Result.Source != nullptr && Result.Source->bOwnsPositions);
 
                     TVector<uint32>* LevelSlots = nullptr;
-                    if (bMoved)
+                    if (bOwnSpace)
                     {
-                        LevelSlots = &MovedSlots[&Result];
-                        if (LevelSlots->empty())
+                        LevelSlots = &OwnSlots[bMoved ? static_cast<const void*>(&Result) : static_cast<const void*>(Result.Source)];
+                        if (LevelSlots->IsEmpty())
                         {
-                            LevelSlots->assign(Result.UpdatedPositions.size(), ~0u);
+                            LevelSlots->Init(~0u, bMoved ? Result.UpdatedPositions.Num() : Result.Source->Positions.Num());
                         }
                     }
 
                     for (uint32 i = 0; i < M.VertexCount; ++i)
                     {
                         const uint32 Ref  = Result.Vertices[M.VertexOffset + i];
-                        uint32&      Slot = bMoved ? (*LevelSlots)[Ref]
-                                                   : MeshSlot[Result.Source != nullptr ? Result.Source->SourceVertex[Ref] : Ref];
+                        uint32&      Slot = bOwnSpace ? (*LevelSlots)[Ref]
+                                                      : MeshSlot[Result.Source != nullptr ? Result.Source->SourceVertex[Ref] : Ref];
                         if (Slot == ~0u)
                         {
-                            Slot = (uint32)UniqueSources.size();
-                            UniqueSources.push_back({ &Result, Ref });
+                            Slot = (uint32)UniqueSources.Num();
+                            UniqueSources.Emplace(&Result, Ref);
                         }
                         UniqueOf[Pack.RefStart + i] = Slot;
                     }
                 }
             }
 
-            const uint32  UniqueCount = (uint32)UniqueSources.size();
+            const uint32  UniqueCount = (uint32)UniqueSources.Num();
             FMeshletData& Data        = MeshResource.MeshletData;
 
             TVector<FVector3> Positions(UniqueCount);
             TVector<uint32>   UV1s(UniqueCount);
             TVector<uint32>   Colors(UniqueCount);
-            Data.VertexAttributes.resize(UniqueCount);
+            Data.VertexAttributes.SetNum(UniqueCount);
             {
                 LUMINA_PROFILE_SECTION("Resolve Shared Vertices");
-                Task::ParallelFor(UniqueCount, [&](const Task::FParallelRange& Range)
+                Jobs::ParallelFor(UniqueCount, [&](const Jobs::FParallelRange& Range)
                 {
                     for (uint32 i = Range.Start; i < Range.End; ++i)
                     {
@@ -1228,9 +1283,9 @@ namespace Lumina::Import::Mesh
             Data.VertexUV1s   = bHasUV1   ? Move(UV1s)   : TVector<uint32>();
             Data.VertexColors = bHasColor ? Move(Colors) : TVector<uint32>();
 
-            Data.PositionGrid = ComputeMeshPositionGrid(Positions.data(), Positions.size());
-            Data.VertexPositions.resize(UniqueCount);
-            Task::ParallelFor(UniqueCount, [&](const Task::FParallelRange& Range)
+            Data.PositionGrid = ComputeMeshPositionGrid(Positions.GetData(), Positions.Num());
+            Data.VertexPositions.SetNum(UniqueCount);
+            Jobs::ParallelFor(UniqueCount, [&](const Jobs::FParallelRange& Range)
             {
                 for (uint32 i = Range.Start; i < Range.End; ++i)
                 {
@@ -1238,23 +1293,40 @@ namespace Lumina::Import::Mesh
                 }
             }, 4096);
 
-            Data.Meshlets.resize(PackSlots.size());
-            Data.MeshletSpheres.resize(PackSlots.size());
-            Data.MeshletCones.resize(PackSlots.size());
-            Data.MeshletTriangles.resize(TriangleCursor);
-            Data.MeshletVertexRefs.reserve(RefCursor);
+            Data.Meshlets.SetNum(PackSlots.Num());
+            Data.MeshletSpheres.SetNum(PackSlots.Num());
+            Data.MeshletCones.SetNum(PackSlots.Num());
+            Data.MeshletTriangles.SetNum(TriangleCursor);
+            Data.MeshletVertexRefs.Reserve(RefCursor);
+            if (bAnyLODBounds)
+            {
+                Data.MeshletLODBounds.SetNum(PackSlots.Num());
+            }
 
             {
                 LUMINA_PROFILE_SECTION("Pack Static Meshlets");
-                for (uint32 PackIdx = 0; PackIdx < (uint32)PackSlots.size(); ++PackIdx)
+                for (int32 PackIdx = 0; PackIdx < PackSlots.Num(); ++PackIdx)
                 {
                     const FPackSlot&             Pack   = PackSlots[PackIdx];
                     const FSurfaceMeshletResult& Result = *Pack.Result;
 
                     FMeshlet Out = Result.OutMeshlets[Pack.MeshletIdx];
-                    Out.LODIndex = Pack.LOD;
+                    Out.LODIndex = Math::Min(Pack.LOD, (uint32)MESHLET_LOD_MASK);
+                    Out.bVoxel   = Result.bVoxel ? 1u : 0u;
 
-                    const uint8* TriSrc = Result.Triangles.data() + Out.TriangleOffset;
+                    if (bAnyLODBounds)
+                    {
+                        // A level without bounds of its own is always its own finest and coarsest, so the cut keeps it.
+                        FMeshletLODBounds Bounds{};
+                        Bounds.ParentError = kMeshletLODErrorInfinite;
+                        if (!Result.LODBounds.IsEmpty())
+                        {
+                            Bounds = Result.LODBounds[Pack.MeshletIdx];
+                        }
+                        Data.MeshletLODBounds[PackIdx] = Bounds;
+                    }
+
+                    const uint8* TriSrc = Result.Triangles.GetData() + Out.TriangleOffset;
                     for (uint32 t = 0; t < Out.TriangleCount; ++t)
                     {
                         Data.MeshletTriangles[Pack.TriangleStart + t] =
@@ -1297,12 +1369,12 @@ namespace Lumina::Import::Mesh
             GenerateFallbackTangents(MeshResource);
             if (Progress)
             {
-                Progress->EnterProgressFrame(TangentStep * (float)MeshResource.GeometrySurfaces.size());
+                Progress->EnterProgressFrame(TangentStep * (float)MeshResource.GeometrySurfaces.Num());
             }
         }
 
-        const size_t NumVertices = MeshResource.GetNumVertices();
-        const size_t NumIndices  = MeshResource.Indices.size();
+        const int32 NumVertices = MeshResource.GetNumVertices();
+        const int32 NumIndices  = MeshResource.Indices.Num();
         constexpr size_t PositionStride = sizeof(FVector3);
 
         if (NumVertices == 0 || NumIndices == 0)
@@ -1319,7 +1391,7 @@ namespace Lumina::Import::Mesh
             }
             if (Progress)
             {
-                Progress->EnterProgressFrame(StepPerSurface * (float)MeshResource.GeometrySurfaces.size());
+                Progress->EnterProgressFrame(StepPerSurface * (float)MeshResource.GeometrySurfaces.Num());
             }
             return;
         }
@@ -1327,14 +1399,14 @@ namespace Lumina::Import::Mesh
         // Before any of the meshlet build below, which drops the streams this reads.
         ComputeSurfaceTexelFactors(MeshResource);
 
-        const float* VertexPositions = reinterpret_cast<const float*>(MeshResource.Positions.data());
+        const float* VertexPositions = reinterpret_cast<const float*>(MeshResource.Positions.GetData());
 
         auto ReadPosition = [&](uint32 GlobalIdx) -> FVector3
         {
             return MeshResource.Positions[GlobalIdx];
         };
 
-        const uint32 NumSurfaces = (uint32)MeshResource.GeometrySurfaces.size();
+        const uint32 NumSurfaces = (uint32)MeshResource.GeometrySurfaces.Num();
 
         // Callers that rebuild often (dynamic meshes) trade distant-draw quality for build time here.
         const uint32 LODCount          = Math::Clamp(MeshResource.MaxLODs, 1u, MAX_MESH_LODS);
@@ -1360,11 +1432,11 @@ namespace Lumina::Import::Mesh
                 for (size_t Begin = 0; Begin < Section.IndexCount; Begin += Step)
                 {
                     const size_t Count = Math::Min(Step, (size_t)Section.IndexCount - Begin);
-                    Ranges.push_back(FUIntVector2((uint32)(Section.StartIndex + Begin), (uint32)Count));
+                    Ranges.Emplace((uint32)(Section.StartIndex + Begin), (uint32)Count);
                 }
             }
 
-            Task::ParallelFor((uint32)Ranges.size(), [&](uint32 RangeIdx)
+            Jobs::ParallelFor((uint32)Ranges.Num(), [&](uint32 RangeIdx)
             {
                 uint32* RangeIndices = &MeshResource.Indices[Ranges[RangeIdx].x];
                 meshopt_optimizeVertexCache(RangeIndices, RangeIndices, Ranges[RangeIdx].y, NumVertices);
@@ -1374,14 +1446,279 @@ namespace Lumina::Import::Mesh
         // A skinned vertex that moved would keep the skin weights of the place it left.
         const bool bDestructiveLODs = MeshResource.bDestructiveLODs && !MeshResource.bSkinnedMesh;
 
-        const TVector<FSurfaceSimplifyInput> SimplifyInputs = LODCount > 1u
+        // Both virtual geometry paths want the compact per-surface space, and neither applies to skinning.
+        const bool   bClusterLOD     = MeshResource.bClusterLODs && !MeshResource.bSkinnedMesh;
+        const uint32 VoxelResolution = !MeshResource.bSkinnedMesh && MeshResource.VoxelFarResolution >= 4u
+                                     ? (uint32)Math::NextPowerOfTwo((int)Math::Min(MeshResource.VoxelFarResolution, 128u)) : 0u;
+        const float  VoxelErrorScale = Math::Clamp(MeshResource.VoxelErrorScale, 0.25f, 8.0f);
+
+        const TVector<FSurfaceSimplifyInput> SimplifyInputs = (LODCount > 1u || bClusterLOD || VoxelResolution > 0u)
             ? BuildSurfaceSimplifyInputs(MeshResource)
             : TVector<FSurfaceSimplifyInput>();
 
-        TVector<FSurfaceMeshletResult> Results(LODCount * NumSurfaces);
-        TVector<size_t> CellIndexCount(LODCount * NumSurfaces, 0u);
+        // One grid for the whole mesh, so splats of neighboring surfaces line up.
+        FVector3 VoxelGridMin(0.0f);
+        float    VoxelSize = 0.0f;
+        if (VoxelResolution > 0u)
+        {
+            FVector3 BoundsMin(FLT_MAX);
+            FVector3 BoundsMax(-FLT_MAX);
+            for (const FVector3& P : MeshResource.Positions)
+            {
+                BoundsMin = Math::Min(BoundsMin, P);
+                BoundsMax = Math::Max(BoundsMax, P);
+            }
+            const FVector3 Extent    = BoundsMax - BoundsMin;
+            const float    MaxExtent = Math::Max(Extent.x, Math::Max(Extent.y, Extent.z));
+            // Grown a little so a face on the bounds lands inside the last voxel rather than on its edge.
+            VoxelSize    = MaxExtent > 0.0f ? MaxExtent * 1.001f / (float)VoxelResolution : 0.0f;
+            VoxelGridMin = BoundsMin - FVector3(MaxExtent * 0.0005f);
+        }
 
-        Task::ParallelFor(LODCount * NumSurfaces, [&](uint32 Cell)
+        // Cells are slot-major, every slot a mesh can hold, since a cluster surface fills them from the hierarchy rather than from MaxLODs.
+        TVector<FSurfaceMeshletResult> Results(MAX_MESH_LODS * NumSurfaces);
+        TVector<size_t> CellIndexCount(MAX_MESH_LODS * NumSurfaces, 0u);
+
+        // Voxel levels build into their own cells and their own vertex spaces, placed into slots once the LODs are accepted.
+        TVector<FSurfaceSimplifyInput>  VoxelSources(VoxelResolution > 0u ? NumSurfaces * kMaxVoxelLevels : 0u);
+        TVector<FSurfaceMeshletResult>  VoxelResults(VoxelResolution > 0u ? NumSurfaces * kMaxVoxelLevels : 0u);
+        TVector<TInlineVector<float, kMaxVoxelLevels>> SurfaceVoxelErrors(NumSurfaces);
+
+        auto BuildVoxelLevels = [&](uint32 SurfaceIdx)
+        {
+            if (VoxelResolution == 0u || !(VoxelSize > 0.0f))
+            {
+                return;
+            }
+            const FSurfaceSimplifyInput& Input = SimplifyInputs[SurfaceIdx];
+            if (Input.Indices.IsEmpty())
+            {
+                return;
+            }
+
+            VoxelFar::FBuildInput In;
+            In.Indices        = TSpan<const uint32>(Input.Indices.GetData(), Input.Indices.Num());
+            In.Positions      = TSpan<const FVector3>(Input.Positions.GetData(), Input.Positions.Num());
+            In.Attributes     = TSpan<const float>(Input.Attributes.GetData(), Input.Attributes.Num());
+            In.AttributeCount = kSimplifyAttributeCount;
+            In.GridMin        = VoxelGridMin;
+            In.VoxelSize      = VoxelSize;
+            In.Resolution     = VoxelResolution;
+
+            TVector<VoxelFar::FLevel> Levels;
+            VoxelFar::Build(In, Levels);
+
+            uint32 Kept = 0;
+            for (int32 LevelIdx = 0; LevelIdx < Levels.Num() && Kept < kMaxVoxelLevels; ++LevelIdx)
+            {
+                VoxelFar::FLevel& Level = Levels[LevelIdx];
+
+                // An empty level would leave the slot below it parented to an error no slot carries, and half the triangles saves nothing.
+                if (Level.Indices.IsEmpty() || Level.Indices.Num() * 2 >= Input.Indices.Num())
+                {
+                    continue;
+                }
+
+                FSurfaceSimplifyInput&  Source = VoxelSources[SurfaceIdx * kMaxVoxelLevels + Kept];
+                FSurfaceMeshletResult&  Out    = VoxelResults[SurfaceIdx * kMaxVoxelLevels + Kept];
+                ++Kept;
+                Out.bVoxel = true;
+
+                // The splat vertices stand in for mesh vertices, which is where their color and second UV come from.
+                Source.SourceVertex.SetNum(Level.SourceVertex.Num());
+                for (int32 v = 0; v < Level.SourceVertex.Num(); ++v)
+                {
+                    Source.SourceVertex[v] = Input.SourceVertex[Level.SourceVertex[v]];
+                }
+                Source.Positions  = Level.Positions;
+                Source.ErrorScale = Input.ErrorScale;
+
+                Out.Source            = &Source;
+                Out.UpdatedPositions  = Move(Level.Positions);
+                Out.UpdatedAttributes = Move(Level.Attributes);
+                Out.Error             = Level.Error * VoxelErrorScale;
+
+                const FVector3* LevelPositions = Out.UpdatedPositions.GetData();
+                BuildLODMeshletsForRange(
+                    Level.Indices.GetData(), Level.Indices.Num(),
+                    &LevelPositions[0].x, Out.UpdatedPositions.Num(), PositionStride,
+                    /*bConeCulling*/ false, bOptimizeMeshlets, /*bFastBuild*/ false,
+                    [LevelPositions](uint32 LocalIdx) { return LevelPositions[LocalIdx]; }, Out);
+
+                SurfaceVoxelErrors[SurfaceIdx].Add(Level.Error);
+            }
+        };
+
+        // Levels past the finest voxel one are the hierarchy's, each raising the error over the one below.
+        auto VoxelLevelErrors = [&](uint32 SurfaceIdx, float BaseError, TInlineVector<float, kMaxVoxelLevels>& OutErrors)
+        {
+            OutErrors.Reset();
+            float Last = BaseError;
+            for (float LevelError : SurfaceVoxelErrors[SurfaceIdx])
+            {
+                Last = Math::Max(LevelError * VoxelErrorScale, Last * 1.0001f + 1e-7f);
+                OutErrors.Add(Last);
+            }
+        };
+
+        // Appends the surface's voxel levels as the coarsest slots, each a voxel parent to the one below it.
+        auto AppendVoxelSlots = [&](uint32 SurfaceIdx, FSurfaceLODTable& Table, float BaseError)
+        {
+            TInlineVector<float, kMaxVoxelLevels> Errors;
+            VoxelLevelErrors(SurfaceIdx, BaseError, Errors);
+            for (int32 LevelIdx = 0; LevelIdx < Errors.Num(); ++LevelIdx)
+            {
+                const uint32 Slot = (uint32)Table.Accepted.Num();
+                if (Slot >= MAX_MESH_LODS)
+                {
+                    break;
+                }
+                Results[Slot * NumSurfaces + SurfaceIdx] = Move(VoxelResults[SurfaceIdx * kMaxVoxelLevels + LevelIdx]);
+                const bool bHasCoarser = LevelIdx + 1 < Errors.Num() && Slot + 1u < MAX_MESH_LODS;
+                Table.Add(Slot, Errors[LevelIdx], bHasCoarser ? Errors[LevelIdx + 1] : kMeshletLODErrorInfinite);
+                Table.MarkVoxelSlot(Slot);
+                if (bHasCoarser)
+                {
+                    Table.MarkVoxelParent(Slot);
+                }
+            }
+        };
+
+        TVector<FSurfaceLODTable> Tables(NumSurfaces);
+
+        // A hierarchy's levels index its own vertex space, the surface's vertices plus those area preservation grew.
+        TVector<FSurfaceSimplifyInput> DagSources(bClusterLOD ? NumSurfaces : 0u);
+
+        if (bClusterLOD)
+        {
+            Jobs::ParallelFor(NumSurfaces, [&](uint32 SurfaceIdx)
+            {
+                LUMINA_PROFILE_SECTION("Build Cluster Hierarchy");
+                LUMINA_MEMORY_SCOPE("Meshes");
+
+                const FSurfaceSimplifyInput& Input = SimplifyInputs[SurfaceIdx];
+                if (Input.Indices.IsEmpty())
+                {
+                    return;
+                }
+
+                ClusterLOD::FBuildInput In;
+                In.Indices           = TSpan<const uint32>(Input.Indices.GetData(), Input.Indices.Num());
+                In.Positions         = TSpan<const FVector3>(Input.Positions.GetData(), Input.Positions.Num());
+                In.Attributes        = TSpan<const float>(Input.Attributes.GetData(), Input.Attributes.Num());
+                In.AttributeWeights  = TSpan<const float>(kSimplifyAttributeWeights, kSimplifyAttributeCount);
+                In.AttributeCount    = kSimplifyAttributeCount;
+                In.Locks             = TSpan<const uint8>(Input.Locks.GetData(), Input.Locks.Num());
+                In.ErrorScale        = Input.ErrorScale;
+                In.bConeCulling      = bConeCulling;
+                In.bOptimizeMeshlets = bOptimizeMeshlets;
+
+                // Built first, since a hierarchy level coarser than the finest splats would never be drawn over them.
+                BuildVoxelLevels(SurfaceIdx);
+                In.MaxLevelError = SurfaceVoxelErrors[SurfaceIdx].IsEmpty() ? 0.0f : SurfaceVoxelErrors[SurfaceIdx][0] * VoxelErrorScale;
+
+                ClusterLOD::FBuildOutput Dag;
+                if (!ClusterLOD::Build(In, Dag))
+                {
+                    return;
+                }
+
+                FSurfaceSimplifyInput& DagSource = DagSources[SurfaceIdx];
+                DagSource.bOwnsPositions = true;
+                DagSource.ErrorScale     = Input.ErrorScale;
+                DagSource.Positions      = Move(Dag.Positions);
+                DagSource.SourceVertex.SetNum(Dag.SourceVertex.Num());
+                for (int32 v = 0; v < Dag.SourceVertex.Num(); ++v)
+                {
+                    DagSource.SourceVertex[v] = Input.SourceVertex[Dag.SourceVertex[v]];
+                }
+
+                TInlineVector<float, kMaxVoxelLevels> VoxelErrors;
+                VoxelLevelErrors(SurfaceIdx, Dag.MaxRootError, VoxelErrors);
+                const uint32 NumVoxelLevels = (uint32)VoxelErrors.Num();
+
+                // The voxel levels keep their own slots, and the hierarchy's levels share what is left.
+                const uint32 DagSlots = Math::Clamp(MAX_MESH_LODS - Math::Min(NumVoxelLevels, MAX_MESH_LODS - 1u), 1u, Dag.NumLevels);
+                const uint32 UsedVoxelLevels = Math::Min(NumVoxelLevels, MAX_MESH_LODS - DagSlots);
+
+                if (UsedVoxelLevels > 0u)
+                {
+                    ClusterLOD::SetRootParents(Dag, Dag.BoundsCenter, Dag.BoundsRadius, VoxelErrors[0], true);
+                }
+
+                FSurfaceLODTable& Table = Tables[SurfaceIdx];
+                Table.Flags |= SURFACE_DESC_CLUSTER_LOD;
+
+                for (uint32 Slot = 0; Slot < DagSlots; ++Slot)
+                {
+                    const uint32 FirstLevel = Slot * Dag.NumLevels / DagSlots;
+                    const uint32 EndLevel   = (Slot + 1u) * Dag.NumLevels / DagSlots;
+                    const uint32 Begin      = Dag.LevelBegin(FirstLevel);
+                    const uint32 End        = Dag.LevelBegin(EndLevel);
+
+                    FSurfaceMeshletResult& Out = Results[Slot * NumSurfaces + SurfaceIdx];
+                    Out.Source = &DagSource;
+
+                    float MinSelf    = FLT_MAX;
+                    float MaxParent  = 0.0f;
+                    bool  bVoxelRoot = false;
+                    for (uint32 m = Begin; m < End; ++m)
+                    {
+                        const FMeshlet&          M      = Dag.Meshlets[m];
+                        const FMeshletLODBounds& Bounds = Dag.LODBounds[m];
+
+                        FMeshlet Local = M;
+                        Local.VertexOffset   = (uint32)Out.Vertices.Num();
+                        Local.TriangleOffset = (uint32)Out.Triangles.Num();
+                        Out.Vertices.Append(&Dag.Vertices[M.VertexOffset], M.VertexCount);
+                        Out.Triangles.Append(&Dag.Triangles[M.TriangleOffset], M.TriangleCount * 3u);
+                        Out.OutMeshlets.Add(Local);
+                        Out.Spheres.Add(Dag.Spheres[m]);
+                        Out.Cones.Add(Dag.Cones[m]);
+                        Out.LODBounds.Add(Bounds);
+
+                        MinSelf    = Math::Min(MinSelf, Bounds.SelfError);
+                        MaxParent  = Math::Max(MaxParent, Bounds.ParentError);
+                        bVoxelRoot = bVoxelRoot || (Bounds.Flags & MESHLET_LOD_FLAG_VOXEL_PARENT) != 0u;
+                    }
+                    Out.bHasData = !Out.OutMeshlets.IsEmpty();
+
+                    Table.Add(Slot, MinSelf < FLT_MAX ? MinSelf : 0.0f, MaxParent);
+                    if (bVoxelRoot)
+                    {
+                        Table.MarkVoxelParent(Slot);
+                    }
+                }
+
+                // Every voxel level shares the surface sphere, so the cut between them is one decision for the whole surface.
+                for (uint32 LevelIdx = 0; LevelIdx < UsedVoxelLevels; ++LevelIdx)
+                {
+                    FSurfaceMeshletResult& Voxel = VoxelResults[SurfaceIdx * kMaxVoxelLevels + LevelIdx];
+                    const bool bHasCoarser = LevelIdx + 1u < UsedVoxelLevels;
+                    for (int32 m = 0; m < Voxel.OutMeshlets.Num(); ++m)
+                    {
+                        FMeshletLODBounds Bounds{};
+                        Bounds.SelfCenter   = Dag.BoundsCenter;
+                        Bounds.SelfRadius   = Dag.BoundsRadius;
+                        Bounds.SelfError    = VoxelErrors[LevelIdx];
+                        Bounds.ParentCenter = Dag.BoundsCenter;
+                        Bounds.ParentRadius = Dag.BoundsRadius;
+                        Bounds.ParentError  = bHasCoarser ? VoxelErrors[LevelIdx + 1] : kMeshletLODErrorInfinite;
+                        Bounds.Flags        = MESHLET_LOD_FLAG_VOXEL | (bHasCoarser ? MESHLET_LOD_FLAG_VOXEL_PARENT : 0u);
+                        Bounds.Level        = Dag.NumLevels + LevelIdx;
+                        Voxel.LODBounds.Add(Bounds);
+                    }
+                }
+                AppendVoxelSlots(SurfaceIdx, Table, Dag.MaxRootError);
+            });
+
+            if (Progress)
+            {
+                Progress->EnterProgressFrame(MeshletStep * (float)NumSurfaces);
+            }
+        }
+
+        Jobs::ParallelFor(bClusterLOD ? 0u : LODCount * NumSurfaces, [&](uint32 Cell)
         {
             LUMINA_PROFILE_SECTION("Process Surfaces and LODs");
             LUMINA_MEMORY_SCOPE("Meshes");
@@ -1404,7 +1741,7 @@ namespace Lumina::Import::Mesh
                 {
                     const uint32 NumChunks = (uint32)((Section.IndexCount + kChunkedBuildIndices - 1u) / kChunkedBuildIndices);
                     TVector<FSurfaceMeshletResult> Chunks(NumChunks);
-                    Task::ParallelFor(NumChunks, [&](uint32 Chunk)
+                    Jobs::ParallelFor(NumChunks, [&](uint32 Chunk)
                     {
                         const size_t Begin = (size_t)Chunk * kChunkedBuildIndices;
                         const size_t Count = Math::Min(kChunkedBuildIndices, (size_t)Section.IndexCount - Begin);
@@ -1440,7 +1777,7 @@ namespace Lumina::Import::Mesh
             }
 
             const FSurfaceSimplifyInput& Input = SimplifyInputs[SurfaceIdx];
-            if (Input.Indices.empty())
+            if (Input.Indices.IsEmpty())
             {
                 return;
             }
@@ -1448,53 +1785,63 @@ namespace Lumina::Import::Mesh
             TVector<uint32> Simplified;
             SimplifySurfaceLOD(Input, TargetIndices, bDestructiveLODs, Simplified, Out);
 
-            const size_t NewCount = Simplified.size();
+            const int32 NewCount = Simplified.Num();
             CellIndexCount[Cell] = NewCount;
-            if (NewCount < kLODMinIndices)
+            if (static_cast<size_t>(NewCount) < kLODMinIndices)
             {
                 Out = FSurfaceMeshletResult{};
                 return;
             }
 
-            const size_t LocalVertexCount = Input.Positions.size();
+            const int32 LocalVertexCount = Input.Positions.Num();
 
             // Restore vertex-cache locality after simplifiers reorder by collapse/cluster priority.
             {
                 LUMINA_PROFILE_SECTION("meshopt_optimizeVertexCache");
                 meshopt_optimizeVertexCache(
-                    Simplified.data(),
-                    Simplified.data(),
+                    Simplified.GetData(),
+                    Simplified.GetData(),
                     NewCount, LocalVertexCount);
             }
 
-            const FVector3* LevelPositions = Out.UpdatedPositions.empty() ? Input.Positions.data() : Out.UpdatedPositions.data();
+            const FVector3* LevelPositions = Out.UpdatedPositions.IsEmpty() ? Input.Positions.GetData() : Out.UpdatedPositions.GetData();
             Out.Source = &Input;
 
             BuildLODMeshletsForRange(
-                Simplified.data(), NewCount,
+                Simplified.GetData(), NewCount,
                 &LevelPositions[0].x, LocalVertexCount, PositionStride,
                 bConeCulling, bOptimizeMeshlets, bFastMeshletBuild,
                 [LevelPositions](uint32 LocalIdx) { return LevelPositions[LocalIdx]; }, Out);
         });
 
-        TVector<TFixedVector<uint32, MAX_MESH_LODS>> AcceptedPerSurface(NumSurfaces);
-        TVector<TFixedVector<float, MAX_MESH_LODS>>  AcceptedErrorPerSurface(NumSurfaces);
+        // Voxel levels of a discrete LOD mesh, built apart from the LOD cells since they index their own vertices.
+        if (!bClusterLOD && VoxelResolution > 0u)
+        {
+            Jobs::ParallelFor(NumSurfaces, [&](uint32 SurfaceIdx)
+            {
+                LUMINA_MEMORY_SCOPE("Meshes");
+                BuildVoxelLevels(SurfaceIdx);
+            });
+        }
 
-        for (uint32 SurfaceIdx = 0; SurfaceIdx < NumSurfaces; ++SurfaceIdx)
+        for (uint32 SurfaceIdx = 0; !bClusterLOD && SurfaceIdx < NumSurfaces; ++SurfaceIdx)
         {
             const FGeometrySurface& Section = MeshResource.GeometrySurfaces[SurfaceIdx];
 
-            TFixedVector<uint32, MAX_MESH_LODS>& Accepted      = AcceptedPerSurface[SurfaceIdx];
-            TFixedVector<float, MAX_MESH_LODS>&  AcceptedError = AcceptedErrorPerSurface[SurfaceIdx];
+            FSurfaceLODTable& Table = Tables[SurfaceIdx];
+            TInlineVector<uint32, MAX_MESH_LODS>& Accepted = Table.Accepted;
             if (Results[0 * NumSurfaces + SurfaceIdx].bHasData)
             {
-                Accepted.push_back(0u);
-                AcceptedError.push_back(0.0f);
+                Table.Add(0u, 0.0f, 0.0f);
             }
             size_t LastIndexCount = Section.IndexCount;
             float  LastError      = 0.0f;
 
-            for (uint32 lod = 1; lod < LODCount; ++lod)
+            // The voxel levels take the coarsest slots, so the discrete chain stops short of them.
+            const uint32 VoxelLevelCount   = Math::Min((uint32)SurfaceVoxelErrors[SurfaceIdx].Num(), MAX_MESH_LODS - 1u);
+            const uint32 MaxDiscreteSlots  = MAX_MESH_LODS - VoxelLevelCount;
+
+            for (uint32 lod = 1; lod < LODCount && (uint32)Accepted.Num() < MaxDiscreteSlots; ++lod)
             {
                 const uint32                 Cell   = lod * NumSurfaces + SurfaceIdx;
                 const FSurfaceMeshletResult& Result = Results[Cell];
@@ -1519,8 +1866,7 @@ namespace Lumina::Import::Mesh
                 // Every level is measured against the source, so a coarser one can report less; selection needs it non-decreasing.
                 LastError      = Math::Max(LastError, Result.Error);
                 LastIndexCount = NewCount;
-                Accepted.push_back(lod);
-                AcceptedError.push_back(LastError);
+                Table.Add(lod, LastError, 0.0f);
             }
 
             // Drop every level that did not make the cut so the pack pass cannot fold one back in.
@@ -1530,6 +1876,16 @@ namespace Lumina::Import::Mesh
                 {
                     Results[lod * NumSurfaces + SurfaceIdx] = FSurfaceMeshletResult{};
                 }
+            }
+
+            // The LOD cells past the accepted count are free, which is where the voxel levels go.
+            if (VoxelResolution > 0u && !MeshResource.bSkinnedMesh)
+            {
+                for (uint32 Slot = (uint32)Accepted.Num(); Slot < MAX_MESH_LODS; ++Slot)
+                {
+                    Results[Slot * NumSurfaces + SurfaceIdx] = FSurfaceMeshletResult{};
+                }
+                AppendVoxelSlots(SurfaceIdx, Table, LastError);
             }
 
             if (Progress)
@@ -1547,41 +1903,47 @@ namespace Lumina::Import::Mesh
             {
                 continue;
             }
-            TotalMeshlets += R.OutMeshlets.size();
-            TotalVertices += R.Vertices.size();
+            TotalMeshlets += R.OutMeshlets.Num();
+            TotalVertices += R.Vertices.Num();
             for (const FMeshlet& M : R.OutMeshlets)
             {
                 TotalTriangles += M.TriangleCount;
             }
         }
 
-        MeshResource.MeshletData.Meshlets.reserve(TotalMeshlets);
-        MeshResource.MeshletData.MeshletSpheres.reserve(TotalMeshlets);
-        MeshResource.MeshletData.MeshletCones.reserve(TotalMeshlets);
-        MeshResource.MeshletData.MeshletTriangles.reserve(TotalTriangles);
+        MeshResource.MeshletData.Meshlets.Reserve(IntCastChecked<int32>(TotalMeshlets));
+        MeshResource.MeshletData.MeshletSpheres.Reserve(IntCastChecked<int32>(TotalMeshlets));
+        MeshResource.MeshletData.MeshletCones.Reserve(IntCastChecked<int32>(TotalMeshlets));
+        MeshResource.MeshletData.MeshletTriangles.Reserve(IntCastChecked<int32>(TotalTriangles));
         if (MeshResource.bSkinnedMesh)
         {
-            MeshResource.MeshletData.MeshletSkinnedVertices.reserve(TotalVertices);
-            MeshResource.MeshletData.MeshletBonePalettes.reserve(TotalMeshlets);
-            MeshResource.MeshletData.MeshletBoneIndices.reserve(TotalMeshlets * 16);
+            MeshResource.MeshletData.MeshletSkinnedVertices.Reserve(IntCastChecked<int32>(TotalVertices));
+            MeshResource.MeshletData.MeshletBonePalettes.Reserve(IntCastChecked<int32>(TotalMeshlets));
+            MeshResource.MeshletData.MeshletBoneIndices.Reserve(IntCastChecked<int32>(TotalMeshlets * 16));
         }
 
         for (FGeometrySurface& Section : MeshResource.GeometrySurfaces)
         {
-            Section.NumLODs = 0;
+            Section.NumLODs  = 0;
+            Section.LODFlags = 0;
             for (uint32 i = 0; i < MAX_MESH_LODS; ++i)
             {
                 Section.LODMeshletOffset[i] = 0;
                 Section.LODMeshletCount[i]  = 0;
                 Section.LODError[i]         = 0.0f;
+                Section.LODParentError[i]   = 0.0f;
             }
         }
 
         auto LevelPosition = [&](const FSurfaceMeshletResult& Result, uint32 Ref) -> FVector3
         {
-            if (!Result.UpdatedPositions.empty())
+            if (!Result.UpdatedPositions.IsEmpty())
             {
                 return Result.UpdatedPositions[Ref];
+            }
+            if (Result.Source != nullptr && Result.Source->bOwnsPositions)
+            {
+                return Result.Source->Positions[Ref];
             }
             return MeshResource.Positions[Result.Source != nullptr ? Result.Source->SourceVertex[Ref] : Ref];
         };
@@ -1595,9 +1957,9 @@ namespace Lumina::Import::Mesh
             Out.Tangent    = MeshResource.Tangents[Out.MeshVertex];
             Out.UV         = MeshResource.UVs[Out.MeshVertex];
 
-            if (!Result.UpdatedAttributes.empty())
+            if (!Result.UpdatedAttributes.IsEmpty())
             {
-                const float*   Updated   = &Result.UpdatedAttributes[(size_t)Ref * kSimplifyAttributeCount];
+                const float*   Updated   = &Result.UpdatedAttributes[Ref * kSimplifyAttributeCount];
                 const FVector3 RawNormal = FVector3(Updated[0], Updated[1], Updated[2]);
                 if (Math::Dot(RawNormal, RawNormal) > 1e-12f)
                 {
@@ -1620,13 +1982,12 @@ namespace Lumina::Import::Mesh
 
         if (!MeshResource.bSkinnedMesh)
         {
-            PackStaticMeshlets(MeshResource, Results, AcceptedPerSurface, AcceptedErrorPerSurface, LODCount, NumSurfaces,
-                               LevelPosition, ResolveLevelVertex);
+            PackStaticMeshlets(MeshResource, Results, Tables, NumSurfaces, LevelPosition, ResolveLevelVertex);
         }
         else
         {
             // Skinned levels never move a vertex, so the source positions bound every level.
-            MeshResource.MeshletData.PositionGrid = ComputeMeshPositionGrid(MeshResource.Positions.data(), MeshResource.Positions.size());
+            MeshResource.MeshletData.PositionGrid = ComputeMeshPositionGrid(MeshResource.Positions.GetData(), MeshResource.Positions.Num());
         }
 
         for (uint32 Slot = 0; MeshResource.bSkinnedMesh && Slot < LODCount; ++Slot)
@@ -1635,12 +1996,12 @@ namespace Lumina::Import::Mesh
 
             for (uint32 SurfaceIdx = 0; SurfaceIdx < NumSurfaces; ++SurfaceIdx)
             {
-                const TFixedVector<uint32, MAX_MESH_LODS>& Accepted = AcceptedPerSurface[SurfaceIdx];
-                if (Slot >= Accepted.size())
+                const FSurfaceLODTable& Table = Tables[SurfaceIdx];
+                if (Slot >= static_cast<uint32>(Table.Accepted.Num()))
                 {
                     continue;
                 }
-                const uint32 SourceLOD = Accepted[Slot];
+                const uint32 SourceLOD = Table.Accepted[Slot];
 
                 FGeometrySurface&      Section = MeshResource.GeometrySurfaces[SurfaceIdx];
                 FSurfaceMeshletResult& Result  = Results[SourceLOD * NumSurfaces + SurfaceIdx];
@@ -1650,22 +2011,22 @@ namespace Lumina::Import::Mesh
                     continue;
                 }
 
-                Section.LODMeshletOffset[Slot] = (uint32)MeshResource.MeshletData.Meshlets.size();
-                Section.LODMeshletCount[Slot]  = (uint32)Result.OutMeshlets.size();
-                Section.LODError[Slot]         = AcceptedErrorPerSurface[SurfaceIdx][Slot];
+                Section.LODMeshletOffset[Slot] = (uint32)MeshResource.MeshletData.Meshlets.Num();
+                Section.LODMeshletCount[Slot]  = (uint32)Result.OutMeshlets.Num();
+                Section.LODError[Slot]         = Table.Error[Slot];
                 Section.NumLODs                = Slot + 1u;
 
                 FMeshletPaletteScratch Palette;
 
-                for (size_t MeshletIdx = 0; MeshletIdx < Result.OutMeshlets.size(); ++MeshletIdx)
+                for (int32 MeshletIdx = 0; MeshletIdx < Result.OutMeshlets.Num(); ++MeshletIdx)
                 {
                     FMeshlet Out = Result.OutMeshlets[MeshletIdx];
 
                     Out.LODIndex = Slot;
 
-                    const uint32 PackedVertexStart = (uint32)MeshResource.MeshletData.MeshletSkinnedVertices.size();
+                    const uint32 PackedVertexStart = (uint32)MeshResource.MeshletData.MeshletSkinnedVertices.Num();
 
-                    Palette.clear();
+                    Palette.Reset();
 
                     for (uint32 i = 0; i < Out.VertexCount; ++i)
                     {
@@ -1697,42 +2058,53 @@ namespace Lumina::Import::Mesh
 
                         Packed.JointIndices = LocalJoints;
                         memcpy(&Packed.JointWeights, &MeshResource.JointWeights[GlobalIdx], sizeof(uint32));
-                        MeshResource.MeshletData.MeshletSkinnedVertices.push_back(Packed);
+                        MeshResource.MeshletData.MeshletSkinnedVertices.Add(Packed);
                     }
 
                     // Indexed in lockstep with Meshlets, which Out is pushed into at the end of this body.
                     AppendMeshletBonePalette(MeshResource.MeshletData, Palette);
 
-                    const uint32 PackedDwordStart = (uint32)MeshResource.MeshletData.MeshletTriangles.size();
-                    const uint8* TriSrc           = Result.Triangles.data() + Out.TriangleOffset;
+                    const uint32 PackedDwordStart = (uint32)MeshResource.MeshletData.MeshletTriangles.Num();
+                    const uint8* TriSrc           = Result.Triangles.GetData() + Out.TriangleOffset;
                     for (uint32 t = 0; t < Out.TriangleCount; ++t)
                     {
                         const uint32 Packed =
                               (uint32)TriSrc[t * 3 + 0]
                             | ((uint32)TriSrc[t * 3 + 1] << 8)
                             | ((uint32)TriSrc[t * 3 + 2] << 16);
-                        MeshResource.MeshletData.MeshletTriangles.push_back(Packed);
+                        MeshResource.MeshletData.MeshletTriangles.Add(Packed);
                     }
 
                     Out.VertexOffset   = PackedVertexStart;
                     Out.TriangleOffset = PackedDwordStart;
-                    MeshResource.MeshletData.Meshlets.push_back(Out);
-                    MeshResource.MeshletData.MeshletSpheres.push_back(Result.Spheres[MeshletIdx]);
-                    MeshResource.MeshletData.MeshletCones.push_back(Result.Cones[MeshletIdx]);
+                    MeshResource.MeshletData.Meshlets.Add(Out);
+                    MeshResource.MeshletData.MeshletSpheres.Add(Result.Spheres[MeshletIdx]);
+                    MeshResource.MeshletData.MeshletCones.Add(Result.Cones[MeshletIdx]);
                 }
             }
         }
 
-        if (MeshResource.MeshletData.MeshletTriangles.empty())
+        if (MeshResource.MeshletData.MeshletTriangles.IsEmpty())
         {
-            MeshResource.MeshletData.MeshletTriangles.push_back(0u);
+            MeshResource.MeshletData.MeshletTriangles.Add(0u);
         }
     }
 
     void AnalyzeMeshStatistics(FMeshResource& MeshResource, FMeshStatistics& OutMeshStats)
     {
-        OutMeshStats.VertexFetchStatics.emplace_back(meshopt_analyzeVertexFetch(MeshResource.Indices.data(), MeshResource.Indices.size(), MeshResource.GetNumVertices(), MeshResource.GetVertexTypeSize()));
-        OutMeshStats.OverdrawStatics.emplace_back(meshopt_analyzeOverdraw(MeshResource.Indices.data(), MeshResource.Indices.size(), reinterpret_cast<const float*>(MeshResource.Positions.data()), MeshResource.GetNumVertices(), sizeof(FVector3)));
+        OutMeshStats.VertexFetchStatics.Emplace(meshopt_analyzeVertexFetch(MeshResource.Indices.GetData(), MeshResource.Indices.Num(), MeshResource.GetNumVertices(), MeshResource.GetVertexTypeSize()));
+        OutMeshStats.OverdrawStatics.Emplace(meshopt_analyzeOverdraw(MeshResource.Indices.GetData(), MeshResource.Indices.Num(), reinterpret_cast<const float*>(MeshResource.Positions.GetData()), MeshResource.GetNumVertices(), sizeof(FVector3)));
+    }
+
+    int16 FindOrAddMergedMaterialSlot(TVector<int16>& SlotToSource, int16 SourceMaterial)
+    {
+        int32 Slot = SlotToSource.Find(SourceMaterial);
+        if (Slot == Constants::kIndexNone)
+        {
+            Slot = SlotToSource.Num();
+            SlotToSource.Add(SourceMaterial);
+        }
+        return (int16)Slot;
     }
 
     namespace
@@ -1741,7 +2113,7 @@ namespace Lumina::Import::Mesh
         void MergeSurfacesByMaterial(FMeshResource& MeshResource)
         {
             const TVector<FGeometrySurface>& OldSurfaces = MeshResource.GeometrySurfaces;
-            if (OldSurfaces.size() <= 1 || MeshResource.Indices.empty())
+            if (OldSurfaces.Num() <= 1 || MeshResource.Indices.IsEmpty())
             {
                 return;
             }
@@ -1749,23 +2121,23 @@ namespace Lumina::Import::Mesh
             // First-seen MaterialIndex order; stable for downstream slot matching.
             THashMap<int16, uint32> MaterialToNewIdx;
             TVector<int16>          MaterialOrder;
-            MaterialOrder.reserve(OldSurfaces.size());
+            MaterialOrder.Reserve(OldSurfaces.Num());
 
             for (const FGeometrySurface& S : OldSurfaces)
             {
-                if (MaterialToNewIdx.find(S.MaterialIndex) == MaterialToNewIdx.end())
+                if (!MaterialToNewIdx.Contains(S.MaterialIndex))
                 {
-                    MaterialToNewIdx.emplace(S.MaterialIndex, (uint32)MaterialOrder.size());
-                    MaterialOrder.push_back(S.MaterialIndex);
+                    MaterialToNewIdx.TryAdd(S.MaterialIndex, (uint32)MaterialOrder.Num());
+                    MaterialOrder.Add(S.MaterialIndex);
                 }
             }
 
-            if (MaterialOrder.size() == OldSurfaces.size())
+            if (MaterialOrder.Num() == OldSurfaces.Num())
             {
                 return;
             }
 
-            const uint32 NumMerged = (uint32)MaterialOrder.size();
+            const uint32 NumMerged = (uint32)MaterialOrder.Num();
 
             TVector<uint32> CountPerMerged(NumMerged, 0u);
             for (const FGeometrySurface& S : OldSurfaces)
@@ -1781,7 +2153,7 @@ namespace Lumina::Import::Mesh
                 Running += CountPerMerged[i];
             }
 
-            TVector<uint32> NewIndices(MeshResource.Indices.size());
+            TVector<uint32> NewIndices(MeshResource.Indices.Num());
             TVector<uint32> WriteCursor = StartPerMerged;
             for (const FGeometrySurface& S : OldSurfaces)
             {
@@ -1790,15 +2162,15 @@ namespace Lumina::Import::Mesh
                     continue;
                 }
                 const uint32 NewIdx = MaterialToNewIdx[S.MaterialIndex];
-                memcpy(NewIndices.data() + WriteCursor[NewIdx],
-                       MeshResource.Indices.data() + S.StartIndex,
+                memcpy(NewIndices.GetData() + WriteCursor[NewIdx],
+                       MeshResource.Indices.GetData() + S.StartIndex,
                        S.IndexCount * sizeof(uint32));
                 WriteCursor[NewIdx] += S.IndexCount;
             }
 
             // Inherit first source surface's ID so re-imports keep stable surface identity.
             TVector<FGeometrySurface> NewSurfaces;
-            NewSurfaces.reserve(NumMerged);
+            NewSurfaces.Reserve(NumMerged);
             for (uint32 i = 0; i < NumMerged; ++i)
             {
                 FGeometrySurface NewSurface;
@@ -1813,7 +2185,7 @@ namespace Lumina::Import::Mesh
                 NewSurface.IndexCount    = CountPerMerged[i];
                 NewSurface.StartIndex    = StartPerMerged[i];
                 NewSurface.MaterialIndex = MaterialOrder[i];
-                NewSurfaces.push_back(NewSurface);
+                NewSurfaces.Add(NewSurface);
             }
 
             MeshResource.Indices          = Move(NewIndices);
@@ -1824,69 +2196,56 @@ namespace Lumina::Import::Mesh
         void MergeResourceInto(FMeshResource& Src, FMeshResource& Dst, TVector<int16>& SlotToSource)
         {
             const uint32 BaseVert = (uint32)Dst.GetNumVertices();
-            const uint32 BaseIdx  = (uint32)Dst.Indices.size();
+            const uint32 BaseIdx  = (uint32)Dst.Indices.Num();
 
             const FMatrix4 PosMatrix    = Src.ImportTransform;
             const FMatrix3 NormalMatrix = Math::Transpose(Math::Inverse(FMatrix3(PosMatrix)));
             const bool bIdentity         = PosMatrix == FMatrix4(1.0f);
 
             // Append every active stream; joint streams only when both sides are skinned.
-            const size_t Start    = Dst.GetNumVertices();
-            const size_t SrcCount = Src.GetNumVertices();
+            const int32 Start    = Dst.GetNumVertices();
+            const int32 SrcCount = Src.GetNumVertices();
 
-            Dst.Positions.insert(Dst.Positions.end(), Src.Positions.begin(), Src.Positions.end());
-            Dst.Normals.insert(Dst.Normals.end(),     Src.Normals.begin(),   Src.Normals.end());
-            Dst.Tangents.insert(Dst.Tangents.end(),   Src.Tangents.begin(),  Src.Tangents.end());
-            Dst.UVs.insert(Dst.UVs.end(),             Src.UVs.begin(),       Src.UVs.end());
-            Dst.UVs1.insert(Dst.UVs1.end(),           Src.UVs1.begin(),      Src.UVs1.end());
-            Dst.Colors.insert(Dst.Colors.end(),       Src.Colors.begin(),    Src.Colors.end());
+            Dst.Positions.Append(Src.Positions);
+            Dst.Normals.Append(Src.Normals);
+            Dst.Tangents.Append(Src.Tangents);
+            Dst.UVs.Append(Src.UVs);
+            Dst.UVs1.Append(Src.UVs1);
+            Dst.Colors.Append(Src.Colors);
             if (Dst.bSkinnedMesh && Src.bSkinnedMesh)
             {
-                Dst.JointIndices.insert(Dst.JointIndices.end(), Src.JointIndices.begin(), Src.JointIndices.end());
-                Dst.JointWeights.insert(Dst.JointWeights.end(), Src.JointWeights.begin(), Src.JointWeights.end());
+                Dst.JointIndices.Append(Src.JointIndices);
+                Dst.JointWeights.Append(Src.JointWeights);
             }
 
             // Bake the source scene-graph transform into the appended positions/normals.
             if (!bIdentity)
             {
                 TVector<FVector3> BakedNormals(SrcCount);
-                VertexOps::UnpackNormals(Dst.Normals.data() + Start, BakedNormals.data(), SrcCount);
-                for (size_t i = 0; i < SrcCount; ++i)
+                VertexOps::UnpackNormals(Dst.Normals.GetData() + Start, BakedNormals.GetData(), SrcCount);
+                for (int32 i = 0; i < SrcCount; ++i)
                 {
                     Dst.Positions[Start + i] = FVector3(PosMatrix * FVector4(Dst.Positions[Start + i], 1.0f));
                     BakedNormals[i]          = Math::Normalize(NormalMatrix * BakedNormals[i]);
                 }
-                VertexOps::PackNormals(BakedNormals.data(), Dst.Normals.data() + Start, SrcCount);
+                VertexOps::PackNormals(BakedNormals.GetData(), Dst.Normals.GetData() + Start, SrcCount);
             }
 
-            Dst.Indices.reserve(Dst.Indices.size() + Src.Indices.size());
+            Dst.Indices.Reserve(Dst.Indices.Num() + Src.Indices.Num());
             for (uint32 Idx : Src.Indices)
             {
-                Dst.Indices.push_back(Idx + BaseVert);
+                Dst.Indices.Add(Idx + BaseVert);
             }
 
-            // Keyed per piece, so each merged piece keeps its own slot even where pieces share a material.
-            THashMap<int16, int16> PieceSlots;
-            Dst.GeometrySurfaces.reserve(Dst.GeometrySurfaces.size() + Src.GeometrySurfaces.size());
+            Dst.GeometrySurfaces.Reserve(Dst.GeometrySurfaces.Num() + Src.GeometrySurfaces.Num());
             for (FGeometrySurface S : Src.GeometrySurfaces)
             {
                 S.StartIndex += BaseIdx;
                 if (S.MaterialIndex >= 0)
                 {
-                    auto It = PieceSlots.find(S.MaterialIndex);
-                    if (It == PieceSlots.end())
-                    {
-                        const int16 NewSlot = (int16)SlotToSource.size();
-                        SlotToSource.push_back(S.MaterialIndex);
-                        PieceSlots.emplace(S.MaterialIndex, NewSlot);
-                        S.MaterialIndex = NewSlot;
-                    }
-                    else
-                    {
-                        S.MaterialIndex = It->second;
-                    }
+                    S.MaterialIndex = FindOrAddMergedMaterialSlot(SlotToSource, S.MaterialIndex);
                 }
-                Dst.GeometrySurfaces.push_back(S);
+                Dst.GeometrySurfaces.Add(S);
             }
         }
     }
@@ -1902,7 +2261,7 @@ namespace Lumina::Import::Mesh
         // Per-mesh transforms (each resource owns its own vertex buffer).
         if (bScaleEnabled || bFlipUVs || bFlipU || bFlipNormals)
         {
-            Task::ParallelFor((uint32)Data.Resources.size(), [&](uint32 ResIdx)
+            Jobs::ParallelFor((uint32)Data.Resources.Num(), [&](uint32 ResIdx)
             {
                 TUniquePtr<FMeshResource>& MeshPtr = Data.Resources[ResIdx];
                 if (!MeshPtr)
@@ -1911,9 +2270,9 @@ namespace Lumina::Import::Mesh
                 }
 
                 FMeshResource& M = *MeshPtr;
-                const size_t NumVerts = M.GetNumVertices();
+                const int32 NumVerts = M.GetNumVertices();
 
-                for (size_t i = 0; i < NumVerts; ++i)
+                for (int32 i = 0; i < NumVerts; ++i)
                 {
                     if (bScaleEnabled)
                     {
@@ -1983,7 +2342,7 @@ namespace Lumina::Import::Mesh
         }
 
         // Merged before optimize and meshlets, so the heavy passes run on the merged geometry.
-        if (Options.bMergeMeshes && Data.Resources.size() > 1)
+        if (Options.bMergeMeshes && Data.Resources.Num() > 1)
         {
             TUniquePtr<FMeshResource> MergedStatic = MakeUnique<FMeshResource>();
 
@@ -2029,24 +2388,24 @@ namespace Lumina::Import::Mesh
             TVector<TUniquePtr<FMeshResource>> NewResources;
             if (MergedStatic->GetNumVertices() > 0)
             {
-                NewResources.push_back(std::move(MergedStatic));
+                NewResources.Add(Move(MergedStatic));
             }
             if (MergedSkinned->GetNumVertices() > 0)
             {
-                NewResources.push_back(std::move(MergedSkinned));
+                NewResources.Add(Move(MergedSkinned));
             }
-            Data.Resources = std::move(NewResources);
+            Data.Resources = Move(NewResources);
         }
 
         // Stats run serially afterwards, so the parallel pass writes only resource-local data.
-        Data.MeshStatistics.OverdrawStatics.clear();
-        Data.MeshStatistics.VertexFetchStatics.clear();
+        Data.MeshStatistics.OverdrawStatics.Reset();
+        Data.MeshStatistics.VertexFetchStatics.Reset();
 
         if (Progress)
         {
             Progress->UpdateMessage("Merging surfaces...");
         }
-        Task::ParallelFor((uint32)Data.Resources.size(), [&](uint32 ResIdx)
+        Jobs::ParallelFor((uint32)Data.Resources.Num(), [&](uint32 ResIdx)
         {
             if (Data.Resources[ResIdx])
             {
@@ -2060,17 +2419,17 @@ namespace Lumina::Import::Mesh
         {
             if (MeshPtr)
             {
-                TotalSurfaces += MeshPtr->GeometrySurfaces.size();
+                TotalSurfaces += MeshPtr->GeometrySurfaces.Num();
             }
         }
-        const float StepPerSurface = ProgressBudget / (float)std::max<size_t>((size_t)1, TotalSurfaces);
+        const float StepPerSurface = ProgressBudget / (float)Math::Max<size_t>(1, TotalSurfaces);
 
         if (Progress)
         {
             Progress->UpdateMessage("Optimizing geometry...");
         }
 
-        Task::ParallelFor((uint32)Data.Resources.size(), [&](uint32 ResIdx)
+        Jobs::ParallelFor((uint32)Data.Resources.Num(), [&](uint32 ResIdx)
         {
             TUniquePtr<FMeshResource>& MeshPtr = Data.Resources[ResIdx];
             if (!MeshPtr)
@@ -2084,6 +2443,7 @@ namespace Lumina::Import::Mesh
             {
                 OptimizeNewlyImportedMesh(M, Progress);
             }
+            ApplyVirtualGeometrySettings(M, Options.VirtualGeometry);
             // It runs tangent generation internally and advances progress per surface it meshletizes.
             GenerateMeshlets(M, Progress, StepPerSurface);
         });

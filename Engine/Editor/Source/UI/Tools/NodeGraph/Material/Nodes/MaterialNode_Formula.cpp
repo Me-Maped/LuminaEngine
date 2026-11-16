@@ -88,7 +88,7 @@ namespace Lumina
         }
         if (Width > Target)
         {
-            return "(" + Expr + ")." + FString("xyzw").substr(0, Target);
+            return "(" + Expr + ")." + FString("xyzw").Mid(0, Target);
         }
 
         FString Padded = FormulaVectorType(Target) + "(" + Expr;
@@ -122,12 +122,12 @@ namespace Lumina
             }
 
             bool bReplaced = false;
-            for (size_t Index = 0; Index < Inputs.size() && Index < Formula.Inputs.size() && !Name.empty(); ++Index)
+            for (int32 Index = 0; Index < Inputs.Num() && Index < Formula.Inputs.Num() && !Name.empty(); ++Index)
             {
                 if (Name == Formula.Inputs[Index].Name)
                 {
                     const int32 Target = Formula.Inputs[Index].Width == 0 ? SharedWidth : Formula.Inputs[Index].Width;
-                    Expanded += ReadFormulaInput(Inputs[Index].first, Inputs[Index].second, Target);
+                    Expanded += ReadFormulaInput(Inputs[Index].Key, Inputs[Index].Value, Target);
                     Cursor    = Close;
                     bReplaced = true;
                     break;
@@ -150,7 +150,7 @@ namespace Lumina
     void CMaterialExpression_Formula::BuildNode()
     {
         const FMaterialFormula& Formula = GetFormula();
-        if (Formula.Outputs.empty())
+        if (Formula.Outputs.IsEmpty())
         {
             Super::BuildNode();
             Output->SetInputType(TypeForWidth(Formula.Width));
@@ -161,9 +161,9 @@ namespace Lumina
         }
 
         // Loaded nodes rebuild their pins after their saved values arrive, so only missing values take defaults.
-        const size_t Saved = Values.size();
-        Values.resize(Formula.Inputs.size());
-        for (size_t Index = 0; Index < Formula.Inputs.size(); ++Index)
+        const int32 Saved = Values.Num();
+        Values.SetNum(Formula.Inputs.Num());
+        for (int32 Index = 0; Index < Formula.Inputs.Num(); ++Index)
         {
             const FMaterialFormulaPin& Pin = Formula.Inputs[Index];
             CMaterialInput* Input = MakeIn(this, Pin.Name, Pin.Fallback != nullptr ? TypeForWidth(Pin.Width) : EMaterialInputType::Float);
@@ -800,7 +800,7 @@ namespace Lumina
     const FMaterialFormula& CMaterialExpression_ScreenDither::GetFormula() const
     {
         static constexpr FMaterialFormula Formula = { "Screen Dither", "Noise", "A fine per pixel pattern in 0..1 for dithering gradients and fades.", TSpan<const FMaterialFormulaPin>(), 1,
-            "float $ = frac(52.9829189 * frac(dot(Input.Position.xy, float2(0.06711056, 0.00583715))));",
+            "float $ = FixedInterleavedGradientNoise(Input.Position.xy);",
             {}, EMaterialFormulaLimit::PixelOnly };
         return Formula;
     }
@@ -1189,7 +1189,7 @@ namespace Lumina
     {
         static constexpr FMaterialFormulaPin Inputs[] = { { "Opacity", 1, 0.5f } };
         static constexpr FMaterialFormula Formula = { "Dither Fade", "Utility", "Turns Opacity into a dithered 0 or 1 per pixel, for fading masked materials without sorting.", Inputs, 1,
-            "float $ = step(frac(52.9829189 * frac(dot(Input.Position.xy, float2(0.06711056, 0.00583715)))), {Opacity});",
+            "float $ = step(FixedInterleavedGradientNoise(Input.Position.xy), {Opacity});",
             {}, EMaterialFormulaLimit::PixelOnly };
         return Formula;
     }

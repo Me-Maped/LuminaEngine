@@ -142,7 +142,7 @@ namespace Lumina
                 return false;
             }
 
-            for (SIZE_T Index = 0; Index < InvocationList.size(); ++Index)
+            for (int32 Index = 0; Index < InvocationList.Num(); ++Index)
             {
                 if (InvocationList[Index].Handle == Handle)
                 {
@@ -152,7 +152,7 @@ namespace Lumina
                     }
                     else
                     {
-                        InvocationList.erase(InvocationList.begin() + Index);
+                        InvocationList.RemoveAt(Index);
                     }
                     return true;
                 }
@@ -176,13 +176,14 @@ namespace Lumina
             }
             else
             {
-                InvocationList.clear();
-                InvocationList.shrink_to_fit();
+                InvocationList.Reset();
+                InvocationList.Shrink();
             }
         }
 
+        // False when a listener destroyed this delegate, so the caller must not touch its owner again.
         template<typename... CallArgs>
-        void Broadcast(CallArgs&&... args)
+        bool Broadcast(CallArgs&&... args)
         {
             // A handler is free to destroy whatever owns this delegate, so nothing below touches a dead this.
             FBroadcastFrame Frame;
@@ -191,8 +192,8 @@ namespace Lumina
 
             ++LockCount;
 
-            const SIZE_T Count = InvocationList.size();
-            for (SIZE_T Index = 0; Index < Count && Frame.bAlive; ++Index)
+            const int32 Count = InvocationList.Num();
+            for (int32 Index = 0; Index < Count && Frame.bAlive; ++Index)
             {
                 if (InvocationList[Index].Delegate.IsBound())
                 {
@@ -203,18 +204,21 @@ namespace Lumina
 
             if (!Frame.bAlive)
             {
-                return;
+                return false;
             }
 
             ActiveBroadcast = Frame.Previous;
             Unlock();
+            return true;
         }
 
         template<typename... CallArgs>
         void BroadcastAndClear(CallArgs&&... args)
         {
-            Broadcast(std::forward<CallArgs>(args)...);
-            Clear();
+            if (Broadcast(std::forward<CallArgs>(args)...))
+            {
+                Clear();
+            }
         }
 
         bool IsBound() const
@@ -229,7 +233,7 @@ namespace Lumina
             return false;
         }
 
-        size_t GetCount() const { return InvocationList.size(); }
+        int32 GetCount() const { return InvocationList.Num(); }
 
     private:
         struct FDelegateEntry
@@ -241,7 +245,7 @@ namespace Lumina
         FDelegateHandle Add(FBase&& Delegate)
         {
             const FDelegateHandle Handle = GenerateHandle();
-            InvocationList.push_back({Handle, std::move(Delegate)});
+            InvocationList.Emplace(Handle, std::move(Delegate));
             return Handle;
         }
 
@@ -260,8 +264,8 @@ namespace Lumina
             {
                 bCompactionPending = false;
 
-                SIZE_T Write = 0;
-                for (SIZE_T Read = 0; Read < InvocationList.size(); ++Read)
+                int32 Write = 0;
+                for (int32 Read = 0; Read < InvocationList.Num(); ++Read)
                 {
                     if (InvocationList[Read].Delegate.IsBound())
                     {
@@ -272,7 +276,7 @@ namespace Lumina
                         ++Write;
                     }
                 }
-                InvocationList.resize(Write);
+                InvocationList.SetNum(Write);
             }
         }
 

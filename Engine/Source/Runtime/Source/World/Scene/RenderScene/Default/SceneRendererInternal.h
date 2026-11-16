@@ -23,7 +23,6 @@
 #include "Renderer/RHITexture.h"
 #include "Renderer/RenderManager.h"
 #include "Renderer/TextureStreamingManager.h"
-#include "TaskSystem/TaskGraph.h"
 #include "TaskSystem/TaskSystem.h"
 #include "Tools/Import/ImportHelpers.h"
 #include "UI/RmlUiBridge.h"
@@ -40,7 +39,6 @@
 #include "World/Entity/Components/EnvironmentComponent.h"
 #include "World/Entity/Components/ExponentialHeightFogComponent.h"
 #include "World/Entity/Components/LocalFogVolumeComponent.h"
-#include "World/Entity/Components/LocalFogVolumeComponent.h"
 #include "World/Entity/Components/LightComponent.h"
 #include "World/Entity/Components/LineBatcherComponent.h"
 #include "World/Entity/Components/TriangleBatcherComponent.h"
@@ -52,7 +50,6 @@
 #include "World/Entity/Components/WaterComponent.h"
 #include "World/Entity/Components/FollowerPoseComponent.h"
 #include "World/Entity/Components/SkeletalMeshComponent.h"
-#include "World/Entity/Components/EnvironmentComponent.h"
 #include "World/Entity/Components/SkyLightComponent.h"
 #include "World/Entity/Components/ReflectionProbeComponent.h"
 #include "World/Entity/Components/SplineComponent.h"
@@ -67,14 +64,37 @@
 #include "World/Scene/RenderScene/MeshResolveCache.h"
 #include "World/Scene/RenderScene/TerrainMeshletBuilder.h"
 #include "World/Scene/RenderScene/TerrainRenderTypes.h"
-#include "Renderer/SMAA/AreaTex.h"
-#include "Renderer/SMAA/SearchTex.h"
-#include "TaskSystem/FiberSync.h"
+#include "Core/Threading/Sync.h"
 #include "Log/Log.h"
 #include "Renderer/SkeletonResource.h"
 
 namespace Lumina
 {
+    // Raw bytes, so only for trivially copyable inputs of an extract cache key.
+    template <typename T>
+    uint64 HashExtractValue(const T& Value, uint64 Seed)
+    {
+        static_assert(std::is_trivially_copyable_v<T>, "Hashed as raw bytes.");
+        return Hash::GetHash64(&Value, sizeof(T), Seed);
+    }
+
+    // Drops entries an extract did not touch, walking down so a swapped-in entry is already checked; free when every entry was visited.
+    template <typename TEntry>
+    void SweepUnseenExtractCache(ECS::TEntityMap<TEntry>& Cache, uint32 Serial, uint32 Visited)
+    {
+        if (Cache.Num() <= Visited)
+        {
+            return;
+        }
+        for (uint32 Dense = Cache.Num(); Dense-- > 0;)
+        {
+            if (Cache.GetValueAt(Dense).SeenSerial != Serial)
+            {
+                Cache.RemoveAt(Dense);
+            }
+        }
+    }
+
     // About twice Godot's default 64-slice volume; FroxelResolutionScale raises it where the fog needs detail.
     inline constexpr uint32 GFroxelGridX = 96;
     inline constexpr uint32 GFroxelGridY = 54;
@@ -107,12 +127,9 @@ namespace Lumina
     inline constexpr uint32 GSkinnedLayoutGrain = 256;
 
 
-    // A ceiling reserves nothing, so it scales with the card rather than pinning one number that risks
-    // an allocation failure on a small GPU and wastes headroom on a large one.
-    inline uint64 AutoPreSkinnedBudgetMiB()
+    // Resolved once, so another process using VRAM never resizes the buffers sized from it.
+    inline uint64 DeviceLocalVRAMMiB()
     {
-        // Resolved once: a ceiling that drifted with another process's VRAM use would resize the
-        // buffer for reasons the scene cannot see.
         static const uint64 Resolved = []
         {
             RHI::FGPUMemoryStats Stats;
@@ -126,10 +143,20 @@ namespace Lumina
                     DeviceLocalBytes = Math::Max(DeviceLocalBytes, Heap.BudgetBytes);
                 }
             }
+            return DeviceLocalBytes >> 20;
+        }();
 
-            const uint64 MiB = Math::Clamp((DeviceLocalBytes >> 20) * 8ull / 100ull, 64ull, 2048ull);
+        return Resolved;
+    }
+
+    // A ceiling reserves nothing, so it scales with the card instead of risking a failed allocation on a small GPU.
+    inline uint64 AutoPreSkinnedBudgetMiB()
+    {
+        static const uint64 Resolved = []
+        {
+            const uint64 MiB = Math::Clamp(DeviceLocalVRAMMiB() * 8ull / 100ull, 64ull, 2048ull);
             LOG_INFO("RenderScene: pre-skinned vertex budget auto-set to {} MiB, 8% of {} MiB device-local VRAM.",
-                     MiB, DeviceLocalBytes >> 20);
+                     MiB, DeviceLocalVRAMMiB());
             return MiB;
         }();
 
@@ -165,6 +192,12 @@ namespace Lumina
         return Settings->SMAAQuality;
     }
 
+    inline bool IsSMAADepthEdgesEnabled()
+    {
+        const CRendererSettings* Settings = GetDefault<CRendererSettings>();
+        return Settings != nullptr && Settings->bSMAADepthEdges;
+    }
+
     inline bool IsGTAOEnabled()
     {
         const CRendererSettings* Settings = GetDefault<CRendererSettings>();
@@ -189,7 +222,12 @@ namespace Lumina
     {
         uint32 Taps;
         float  RadiusTexels;  // in texels of the nearest cascade
+        uint32 ContactSteps;  // the sun's screen-space contact march, 0 when it is off
+        uint32 BlockerTaps;   // contact-hardening blocker search on the near cascades, 0 when it is off
     };
+
+    // The narrowest kernel any quality uses, which contact hardening never goes below or the edge shows texel stairs.
+    inline constexpr float GSunShadowMinFilterRadiusTexels = 2.0f;
 
     // Godot's Soft Low, Medium, High and Ultra directional filters.
     inline FSunShadowFilter GetSunShadowFilter()
@@ -197,12 +235,12 @@ namespace Lumina
         const CRendererSettings* Settings = GetDefault<CRendererSettings>();
         switch (Settings != nullptr ? Settings->ShadowQuality : EShadowQuality::High)
         {
-        case EShadowQuality::Low:    return { 4u,  2.0f };
-        case EShadowQuality::Medium: return { 8u,  2.0f };
-        case EShadowQuality::High:   return { 16u, 3.0f };
-        case EShadowQuality::Ultra:  return { 32u, 4.0f };
+        case EShadowQuality::Low:    return { 4u,  GSunShadowMinFilterRadiusTexels, 0u,  0u };
+        case EShadowQuality::Medium: return { 8u,  GSunShadowMinFilterRadiusTexels, 8u,  0u };
+        case EShadowQuality::High:   return { 16u, 3.0f, 12u, 8u };
+        case EShadowQuality::Ultra:  return { 32u, 4.0f, 16u, 12u };
         }
-        return { 16u, 3.0f };
+        return { 16u, 3.0f, 12u, 8u };
     }
 
     inline ESSRQuality GetSSRQuality()
@@ -254,16 +292,26 @@ namespace Lumina
 
     struct FScopedGPUMarker
     {
+        #if defined(TRACY_ENABLE)
+        // First member, so the pass's CPU recording opens before its GPU marker and closes after it, under the same name.
+        tracy::ScopedZone CpuZone;
+        #endif
         RHI::FCmdListH CL;
         static void SerializeForTiming(RHI::FCmdListH InCL)
         {
-            static const bool bSerialize = !Platform::GetEnvVariable("LUMINA_SERIAL_GPU_SCOPES").empty();
+            static const bool bSerialize = !Platform::GetEnvVariable("LUMINA_SERIAL_GPU_SCOPES").IsEmpty();
             if (bSerialize)
             {
                 RHI::CmdBarrier(InCL, RHI::EStageFlags::AllCommands, RHI::EStageFlags::AllCommands);
             }
         }
+        #if defined(TRACY_ENABLE)
+        FScopedGPUMarker(RHI::FCmdListH InCL, const char* Name) : FScopedGPUMarker(InCL, Name, TracyIsConnected ? Profiler::NamedLocation(Name) : nullptr) {}
+        FScopedGPUMarker(RHI::FCmdListH InCL, const char* Name, const tracy::SourceLocationData* CpuLocation)
+            : CpuZone(CpuLocation, -1, CpuLocation != nullptr), CL(InCL) { SerializeForTiming(CL); RHI::CmdBeginMarker(CL, Name); }
+        #else
         FScopedGPUMarker(RHI::FCmdListH InCL, const char* Name) : CL(InCL) { SerializeForTiming(CL); RHI::CmdBeginMarker(CL, Name); }
+        #endif
         ~FScopedGPUMarker() { SerializeForTiming(CL); RHI::CmdEndMarker(CL); }
         FScopedGPUMarker(const FScopedGPUMarker&) = delete;
         FScopedGPUMarker& operator=(const FScopedGPUMarker&) = delete;

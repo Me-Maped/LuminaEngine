@@ -1,31 +1,25 @@
 #include "RuntimePCH.h"
 #include "ImportPaths.h"
 
-#include "Containers/HashTable.h"
 #include "Containers/StringFormat.h"
 #include "Core/Object/ObjectCore.h"
 #include "Core/Object/Package/Package.h"
 #include "FileSystem/FileSystem.h"
-#include "Core/Threading/Thread.h"
-#include "Core/Threading/Sync.h"
+#include "Assets/AssetRegistry/AssetRegistry.h"
 
 namespace Lumina::Import::PathReservations
 {
     namespace
     {
-        // Import runs on workers, and the content browser reserves from the main thread.
-        FMutex               GMutex;
-        THashSet<FFixedString> GReserved;
-
         constexpr uint32 kMaxSuffix = 10000;
 
         // Neither the extension nor case tells two packages apart, so neither may tell two reservations apart.
         FFixedString KeyOf(FStringView Path)
         {
-            FFixedString Key(Path.data(), Path.size());
+            FFixedString Key(Path.GetData(), Path.Len());
             if (VFS::HasExtension(Key, ".lasset"))
             {
-                Key.resize(Key.size() - FStringView(".lasset").size());
+                Key.SetLen(Key.Len() - FStringView(".lasset").Len());
             }
             for (char& Character : Key)
             {
@@ -34,7 +28,7 @@ namespace Lumina::Import::PathReservations
             return Key;
         }
 
-        bool IsOwnedUnlocked(const FFixedString& Path)
+        bool IsOwned(const FFixedString& Path)
         {
             // What CreatePackage actually refuses on.
             if (FindObject<CPackage>(Path) != nullptr)
@@ -50,12 +44,14 @@ namespace Lumina::Import::PathReservations
                 return true;
             }
 
-            return GReserved.find(KeyOf(Path)) != GReserved.end();
+            return FAssetRegistry::Get().IsImportPathReserved(KeyOf(Path));
         }
 
-        FFixedString FindFreeUnlocked(const FFixedString& Base)
+        // Base, then Base_1, Base_2 and so on, stopping at the first Candidate Claim accepts.
+        template<typename TClaim>
+        FFixedString FirstClaimed(const FFixedString& Base, TClaim&& Claim)
         {
-            if (!IsOwnedUnlocked(Base))
+            if (Claim(Base))
             {
                 return Base;
             }
@@ -63,8 +59,8 @@ namespace Lumina::Import::PathReservations
             for (uint32 N = 1; N < kMaxSuffix; ++N)
             {
                 FFixedString Candidate = Base;
-                Candidate.append("_").append(Format("{}", N).c_str());
-                if (!IsOwnedUnlocked(Candidate))
+                Candidate.Append("_").Append(*Format("{}", N));
+                if (Claim(Candidate))
                 {
                     return Candidate;
                 }
@@ -75,57 +71,53 @@ namespace Lumina::Import::PathReservations
 
     bool IsFree(FStringView Path)
     {
-        if (Path.empty())
+        if (Path.IsEmpty())
         {
             return false;
         }
 
-        FScopeLock Lock(GMutex);
-        return !IsOwnedUnlocked(FFixedString(Path.data(), Path.size()));
+        return !IsOwned(FFixedString(Path.GetData(), Path.Len()));
     }
 
     FFixedString FindFree(FStringView Path)
     {
-        if (Path.empty())
+        if (Path.IsEmpty())
         {
             return {};
         }
 
-        FScopeLock Lock(GMutex);
-        return FindFreeUnlocked(FFixedString(Path.data(), Path.size()));
+        FFixedString Base(Path.GetData(), Path.Len());
+        return FirstClaimed(Base, [](const FFixedString& Candidate) { return !IsOwned(Candidate); });
     }
 
     FFixedString Reserve(FStringView Path)
     {
-        if (Path.empty())
+        if (Path.IsEmpty())
         {
             return {};
         }
 
-        FScopeLock Lock(GMutex);
-        FFixedString Free = FindFreeUnlocked(FFixedString(Path.data(), Path.size()));
-        if (!Free.empty())
+        FAssetRegistry& Registry = FAssetRegistry::Get();
+        FFixedString Base(Path.GetData(), Path.Len());
+        return FirstClaimed(Base, [&Registry](const FFixedString& Candidate)
         {
-            GReserved.insert(KeyOf(Free));
-        }
-        return Free;
+            return !IsOwned(Candidate) && Registry.TryReserveImportPath(KeyOf(Candidate));
+        });
     }
 
     void Release(FStringView Path)
     {
-        if (Path.empty())
+        if (Path.IsEmpty())
         {
             return;
         }
 
-        FScopeLock Lock(GMutex);
-        GReserved.erase(KeyOf(Path));
+        FAssetRegistry::Get().ReleaseImportPath(KeyOf(FFixedString(Path.GetData(), Path.Len())));
     }
 
     void ReleaseAll()
     {
-        FScopeLock Lock(GMutex);
-        GReserved.clear();
+        FAssetRegistry::Get().ReleaseAllImportPaths();
     }
 
     FScopedReservation::FScopedReservation(FStringView Path)

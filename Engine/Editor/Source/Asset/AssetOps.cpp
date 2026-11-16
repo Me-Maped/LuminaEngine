@@ -11,6 +11,7 @@
 #include "FileSystem/FileSystem.h"
 #include "Paths/Paths.h"
 #include "UI/Tools/EditorToolContext.h"
+#include "World/ExternalEntities/ExternalEntities.h"
 #include "World/World.h"
 #include "World/WorldManager.h"
 
@@ -18,50 +19,15 @@ namespace Lumina::AssetOps
 {
     namespace
     {
-        // Case-insensitive compare of a view against a NUL-terminated literal.
-        bool IEquals(FStringView A, const char* B)
+        bool IsAtOrUnder(FStringView VirtualPath, FStringView Root)
         {
-            const auto Lower = [](char Character)
-            {
-                return (Character >= 'A' && Character <= 'Z') ? (char)(Character + 32) : Character;
-            };
-
-            size_t Index = 0;
-            for (; Index < A.size() && B[Index] != 0; ++Index)
-            {
-                if (Lower(A[Index]) != Lower(B[Index]))
-                {
-                    return false;
-                }
-            }
-
-            return Index == A.size() && B[Index] == 0;
-        }
-
-        bool IsAtOrUnder(FStringView VirtualPath, const char* RootLiteral)
-        {
-            const FStringView Root(RootLiteral);
-            if (VirtualPath.size() < Root.size() || !IEquals(VirtualPath.substr(0, Root.size()), RootLiteral))
+            if (VirtualPath.Len() < Root.Len() || !EqualsIgnoreCase(VirtualPath.Mid(0, Root.Len()), Root))
             {
                 return false;
             }
 
             // A prefix match is only real on a path boundary, or "/Game/ContentPacks" would pass.
-            return VirtualPath.size() == Root.size() || VirtualPath[Root.size()] == '/';
-        }
-
-        FPathOpResult MoveAssetPackage(FStringView OldPath, FStringView NewPath)
-        {
-            // RenamePackage owns the disk move plus the in-memory rename, so the registry follows it.
-            if (!CPackage::RenamePackage(OldPath, NewPath))
-            {
-                return FPathOpResult::Fail(Lumina::Format("Could not move the package at {}.", OldPath));
-            }
-
-            FAssetRegistry::Get().AssetRenamed(OldPath, NewPath);
-            FCoreEditorDelegates::OnAssetRenamed.Broadcast(OldPath, NewPath);
-
-            return FPathOpResult::Ok(1);
+            return VirtualPath.Len() == Root.Len() || VirtualPath[Root.Len()] == '/';
         }
 
         FPathOpResult MoveFolder(FStringView OldFolder, FStringView NewFolder)
@@ -82,16 +48,16 @@ namespace Lumina::AssetOps
                     return;
                 }
 
-                FStringView Old(FileInfo.VirtualPath.data(), FileInfo.VirtualPath.size());
-                if (!Old.starts_with(OldFolder))
+                FStringView Old(FileInfo.VirtualPath.GetData(), FileInfo.VirtualPath.Len());
+                if (!Old.StartsWith(OldFolder))
                 {
                     return;
                 }
 
-                FFixedString NewPath(NewFolder.data(), NewFolder.size());
-                NewPath.append(Old.data() + OldFolder.size(), Old.size() - OldFolder.size());
+                FFixedString NewPath(NewFolder.GetData(), NewFolder.Len());
+                NewPath.Append(Old.GetData() + OldFolder.Len(), Old.Len() - OldFolder.Len());
 
-                Entries.push_back({ FFixedString(Old.data(), Old.size()), Move(NewPath) });
+                Entries.Emplace(FFixedString(Old.GetData(), Old.Len()), Move(NewPath));
             });
 
             if (!VFS::Rename(OldFolder, NewFolder))
@@ -109,7 +75,42 @@ namespace Lumina::AssetOps
 
             FAssetRegistry::Get().TextAssetFolderRenamed(OldFolder, NewFolder);
 
-            return FPathOpResult::Ok((uint32)Entries.size());
+            return FPathOpResult::Ok((uint32)Entries.Num());
+        }
+
+        FPathOpResult MoveAssetPackage(FStringView OldPath, FStringView NewPath)
+        {
+            // A world renamed below rereads its entity files from beside its new path, so they move first.
+            const FFixedString OldEntities = ExternalEntities::EntitiesDirectory(OldPath);
+            const FFixedString NewEntities = ExternalEntities::EntitiesDirectory(NewPath);
+            const bool bHasEntities = VFS::IsDirectory(OldEntities);
+            if (bHasEntities)
+            {
+                if (VFS::Exists(NewEntities))
+                {
+                    return FPathOpResult::Fail(Lumina::Format("{} already exists.", NewEntities));
+                }
+                VFS::CreateDir(VFS::Parent(NewEntities, true));
+                if (FPathOpResult Moved = MoveFolder(OldEntities, NewEntities); !Moved.bSucceeded)
+                {
+                    return Moved;
+                }
+            }
+
+            // RenamePackage owns the disk move plus the in-memory rename, so the registry follows it.
+            if (!CPackage::RenamePackage(OldPath, NewPath))
+            {
+                if (bHasEntities && !MoveFolder(NewEntities, OldEntities).bSucceeded)
+                {
+                    return FPathOpResult::Fail(Lumina::Format("Could not move the package at {}, and its entity files are left at {}.", OldPath, NewEntities));
+                }
+                return FPathOpResult::Fail(Lumina::Format("Could not move the package at {}.", OldPath));
+            }
+
+            FAssetRegistry::Get().AssetRenamed(OldPath, NewPath);
+            FCoreEditorDelegates::OnAssetRenamed.Broadcast(OldPath, NewPath);
+
+            return FPathOpResult::Ok(1);
         }
 
         FPathOpResult MoveLooseFile(FStringView OldPath, FStringView NewPath)
@@ -133,12 +134,13 @@ namespace Lumina::AssetOps
 
     bool IsProtectedRoot(FStringView VirtualPath)
     {
-        return IEquals(VirtualPath, "/Game")
-            || IEquals(VirtualPath, "/Game/Content")
-            || IEquals(VirtualPath, "/Game/Scripts")
-            || IEquals(VirtualPath, "/Engine/Resources")
-            || IEquals(VirtualPath, "/Engine/Resources/Content")
-            || IEquals(VirtualPath, "/Engine/Resources/Scripts");
+        constexpr FStringView ProtectedRoots[] =
+        {
+            "/Game", "/Game/Content", "/Game/Scripts",
+            "/Engine/Resources", "/Engine/Resources/Content", "/Engine/Resources/Scripts",
+        };
+
+        return Algo::AnyOf(ProtectedRoots, [VirtualPath](FStringView Root) { return EqualsIgnoreCase(VirtualPath, Root); });
     }
 
     bool IsAssetLocation(FStringView VirtualPath)
@@ -153,7 +155,13 @@ namespace Lumina::AssetOps
         {
             if (VFS::IsReadOnlyOnDisk(VirtualPath))
             {
-                ReadOnly.emplace_back(VirtualPath.data(), VirtualPath.size());
+                ReadOnly.Emplace(VirtualPath.GetData(), VirtualPath.Len());
+            }
+
+            // A world's entity files move and go with it.
+            if (const FFixedString Entities = ExternalEntities::EntitiesDirectory(VirtualPath); VFS::IsDirectory(Entities))
+            {
+                ReadOnly.Append(FindReadOnlyFiles(Entities));
             }
             return ReadOnly;
         }
@@ -162,7 +170,7 @@ namespace Lumina::AssetOps
         {
             if (!Info.IsDirectory() && Info.IsReadOnly())
             {
-                ReadOnly.emplace_back(Info.VirtualPath.c_str(), Info.VirtualPath.size());
+                ReadOnly.Emplace(*Info.VirtualPath, Info.VirtualPath.Len());
             }
         });
         return ReadOnly;
@@ -172,9 +180,9 @@ namespace Lumina::AssetOps
     {
         FString DescribeReadOnly(const TVector<FString>& ReadOnly, const char* Verb)
         {
-            return ReadOnly.size() == 1
-                ? Lumina::Format("{} is read-only, so it was not {}. Make it writable first.", ReadOnly.front(), Verb)
-                : Lumina::Format("{} files are read-only, including {}, so nothing was {}. Make them writable first.", ReadOnly.size(), ReadOnly.front(), Verb);
+            return ReadOnly.Num() == 1
+                ? Lumina::Format("{} is read-only, so it was not {}. Make it writable first.", ReadOnly[0], Verb)
+                : Lumina::Format("{} files are read-only, including {}, so nothing was {}. Make them writable first.", ReadOnly.Num(), ReadOnly[0], Verb);
         }
     }
 
@@ -189,7 +197,7 @@ namespace Lumina::AssetOps
             return false;
         };
 
-        if (Name.empty())
+        if (Name.IsEmpty())
         {
             return Fail("A name cannot be empty.");
         }
@@ -201,13 +209,13 @@ namespace Lumina::AssetOps
 
         for (const char Character : Name)
         {
-            if (static_cast<unsigned char>(Character) < 0x20 || FStringView("<>:\"/\\|?*").find(Character) != FStringView::npos)
+            if (static_cast<unsigned char>(Character) < 0x20 || FStringView("<>:\"/\\|?*").Find(Character) != Constants::kIndexNone)
             {
                 return Fail("A name cannot contain a path separator or any of < > : \" | ? *.");
             }
         }
 
-        if (Name.back() == '.' || Name.back() == ' ' || Name.front() == ' ')
+        if (Name.Last() == '.' || Name.Last() == ' ' || Name[0] == ' ')
         {
             return Fail("A name cannot start with a space or end with a space or a dot.");
         }
@@ -217,7 +225,7 @@ namespace Lumina::AssetOps
 
     FPathOpResult MovePath(FStringView OldPath, FStringView NewPath)
     {
-        if (OldPath.empty() || NewPath.empty())
+        if (OldPath.IsEmpty() || NewPath.IsEmpty())
         {
             return FPathOpResult::Fail("A move needs both a source and a destination.");
         }
@@ -229,7 +237,7 @@ namespace Lumina::AssetOps
         {
             return FPathOpResult::Fail(Lumina::Format("'{}' is not a valid name. {}", Leaf, LeafReason));
         }
-        if (!VFS::IsDirectory(OldPath) && VFS::FileName(NewPath, true).empty())
+        if (!VFS::IsDirectory(OldPath) && VFS::FileName(NewPath, true).IsEmpty())
         {
             return FPathOpResult::Fail("A file needs a name before its extension.");
         }
@@ -249,7 +257,7 @@ namespace Lumina::AssetOps
             return FPathOpResult::Fail(Lumina::Format("{} is a mount root and cannot be moved.", OldPath));
         }
 
-        if (const TVector<FString> ReadOnly = FindReadOnlyFiles(OldPath); !ReadOnly.empty())
+        if (const TVector<FString> ReadOnly = FindReadOnlyFiles(OldPath); !ReadOnly.IsEmpty())
         {
             return FPathOpResult::Fail(DescribeReadOnly(ReadOnly, "moved"));
         }
@@ -260,13 +268,13 @@ namespace Lumina::AssetOps
         }
 
         // Moving a folder into itself would recurse forever, and the walk below cannot detect it after the fact.
-        if (VFS::IsDirectory(OldPath) && IsAtOrUnder(NewPath, FString(OldPath.data(), OldPath.size()).c_str()))
+        if (VFS::IsDirectory(OldPath) && IsAtOrUnder(NewPath, OldPath))
         {
             return FPathOpResult::Fail("A folder cannot be moved inside itself.");
         }
 
         const FStringView Parent = VFS::Parent(NewPath, true);
-        if (!Parent.empty() && !VFS::Exists(Parent))
+        if (!Parent.IsEmpty() && !VFS::Exists(Parent))
         {
             return FPathOpResult::Fail(Lumina::Format("{} does not exist, so nothing can be moved into it.", Parent));
         }
@@ -278,7 +286,7 @@ namespace Lumina::AssetOps
             return MoveAssetPackage(OldPath, NewPath);
         }
 
-        if (Extension.empty())
+        if (Extension.IsEmpty())
         {
             return MoveFolder(OldPath, NewPath);
         }
@@ -288,7 +296,7 @@ namespace Lumina::AssetOps
 
     FPathOpResult CreateFolder(FStringView VirtualPath)
     {
-        if (VirtualPath.empty())
+        if (VirtualPath.IsEmpty())
         {
             return FPathOpResult::Fail("A folder needs a path.");
         }
@@ -299,7 +307,7 @@ namespace Lumina::AssetOps
         }
 
         const FStringView Parent = VFS::Parent(VirtualPath, true);
-        if (!Parent.empty() && !VFS::Exists(Parent))
+        if (!Parent.IsEmpty() && !VFS::Exists(Parent))
         {
             return FPathOpResult::Fail(Lumina::Format("{} does not exist, so nothing can be created in it.", Parent));
         }
@@ -314,12 +322,12 @@ namespace Lumina::AssetOps
 
     bool IsAnyWorldPlayingOrSimulating()
     {
-        if (GWorldManager == nullptr)
+        if (Global::GWorldManager == nullptr)
         {
             return false;
         }
 
-        for (const TUniquePtr<FWorldContext>& Context : GWorldManager->GetContexts())
+        for (const TUniquePtr<FWorldContext>& Context : Global::GWorldManager->GetContexts())
         {
             if (Context && (Context->Type == EWorldType::Game || Context->Type == EWorldType::Simulation))
             {
@@ -332,7 +340,7 @@ namespace Lumina::AssetOps
 
     bool IsLoadedWorldAsset(FStringView AssetPath)
     {
-        if (const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(AssetPath))
+        if (const FAssetDataPtr Data = FAssetRegistry::Get().GetAssetByPath(AssetPath))
         {
             if (CObject* Object = FindObject<CObject>(Data->AssetGUID))
             {
@@ -345,7 +353,7 @@ namespace Lumina::AssetOps
 
     FString FindDependentPrefabVariants(FStringView AssetPath)
     {
-        const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(AssetPath);
+        const FAssetDataPtr Data = FAssetRegistry::Get().GetAssetByPath(AssetPath);
         CClass* AssetClass = Data != nullptr ? FindObject<CClass>(Data->AssetClass) : nullptr;
         if (AssetClass == nullptr || !AssetClass->IsChildOf(CPrefab::StaticClass()))
         {
@@ -359,7 +367,7 @@ namespace Lumina::AssetOps
         }
 
         // FindDirectVariants walks loaded objects, so a variant nobody opened has to be brought in first.
-        for (const FAssetData* Referencer : FAssetRegistry::Get().GetReferencersOf(Data->AssetGUID))
+        for (const FAssetDataPtr& Referencer : FAssetRegistry::Get().GetReferencersOf(Data->AssetGUID))
         {
             CClass* ReferencerClass = Referencer != nullptr ? FindObject<CClass>(Referencer->AssetClass) : nullptr;
             if (ReferencerClass != nullptr && ReferencerClass->IsChildOf(CPrefab::StaticClass()))
@@ -371,11 +379,11 @@ namespace Lumina::AssetOps
         FString Variants;
         for (CPrefab* Variant : Prefab->FindDirectVariants())
         {
-            if (!Variants.empty())
+            if (!Variants.IsEmpty())
             {
                 Variants += ", ";
             }
-            Variants += Variant->GetName().c_str();
+            Variants += *Variant->GetName();
         }
         return Variants;
     }
@@ -390,7 +398,7 @@ namespace Lumina::AssetOps
             return Result;
         }
 
-        if (const TVector<FString> ReadOnly = FindReadOnlyFiles(AssetPath); !ReadOnly.empty())
+        if (const TVector<FString> ReadOnly = FindReadOnlyFiles(AssetPath); !ReadOnly.IsEmpty())
         {
             Result.Error = DescribeReadOnly(ReadOnly, "deleted");
             return Result;
@@ -403,14 +411,14 @@ namespace Lumina::AssetOps
         }
 
         // Refused rather than cascaded, since a variant is defined by its parent and resolves to nothing without it.
-        if (const FString Variants = FindDependentPrefabVariants(AssetPath); !Variants.empty())
+        if (const FString Variants = FindDependentPrefabVariants(AssetPath); !Variants.IsEmpty())
         {
             Result.Error = Lumina::Format("{} is the parent of {}. Delete or reparent those first.", AssetPath, Variants);
             return Result;
         }
 
         CObject* AliveObject = nullptr;
-        if (const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(AssetPath))
+        if (const FAssetDataPtr Data = FAssetRegistry::Get().GetAssetByPath(AssetPath))
         {
             AliveObject = FindObject<CObject>(Data->AssetGUID);
         }
@@ -436,6 +444,10 @@ namespace Lumina::AssetOps
         FCoreEditorDelegates::OnAssetDeleted.Broadcast(AssetPath);
 
         Result.bDeleted = true;
+        if (!ExternalEntities::DeleteEntityFiles(AssetPath))
+        {
+            Result.Error = Lumina::Format("{} was deleted, but some of its entity files remain in {}.", AssetPath, ExternalEntities::EntitiesDirectory(AssetPath));
+        }
         return Result;
     }
 }

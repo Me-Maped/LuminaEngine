@@ -36,7 +36,6 @@ namespace Lumina
         void OnInitialize() override;
         void SetupWorldForTool() override;
         void Update(const FUpdateContext& UpdateContext) override;
-        void OnDeinitialize(const FUpdateContext& UpdateContext) override {}
         void OnAssetDataChangedExternally() override;
         void OnPostUndoRedo() override;
         void DrawToolMenu(const FUpdateContext& UpdateContext) override;
@@ -82,9 +81,6 @@ namespace Lumina
         void RebindSampleTable();
 
         void RefreshAfterStructuralEdit();
-
-        void BeginAssetTransaction(FName Name);
-        void EndAssetTransaction();
 
         TUniquePtr<FPropertyTable>  SampleTable;
         void*                       SampleTarget = nullptr;

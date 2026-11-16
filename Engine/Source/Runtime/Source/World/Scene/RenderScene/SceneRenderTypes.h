@@ -3,6 +3,7 @@
 #include "Core/Math/Math.h"
 #include "Core/Math/Half.h"
 
+#include "Containers/StaticArray.h"
 #include "Containers/Vector.h"
 #include "Core/LuminaMacros.h"
 #include "Core/Math/Color.h"
@@ -13,6 +14,7 @@
 #include "Renderer/MaterialTypes.h"
 #include "Renderer/PrimitiveDrawInterface.h"
 #include "Renderer/RenderResource.h"
+#include "Renderer/RendererUtils.h"
 #include "Renderer/ViewVolume.h"
 #include "Renderer/RHI.h"
 #include "Renderer/RHICore.h"
@@ -59,10 +61,10 @@ namespace Lumina
         constexpr uint32 TileStep = 16;
         for (uint32 Tile = ClusterTilePixels; ; Tile += TileStep)
         {
-            const uint32 X = (Width + Tile - 1) / Tile;
-            const uint32 Y = (Height + Tile - 1) / Tile;
-            const uint32 Blocks = ((X + CLUSTER_CULL_BLOCK_X - 1) / CLUSTER_CULL_BLOCK_X)
-                                * ((Y + CLUSTER_CULL_BLOCK_Y - 1) / CLUSTER_CULL_BLOCK_Y)
+            const uint32 X = RenderUtils::GetGroupCount(Width, Tile);
+            const uint32 Y = RenderUtils::GetGroupCount(Height, Tile);
+            const uint32 Blocks = RenderUtils::GetGroupCount(X, CLUSTER_CULL_BLOCK_X)
+                                * RenderUtils::GetGroupCount(Y, CLUSTER_CULL_BLOCK_Y)
                                 * (ClusterGridSizeZ / CLUSTER_CULL_BLOCK_Z);
             if (X * Y * ClusterGridSizeZ <= (uint32)MaxClusters && Blocks <= (uint32)MaxClusterCullBlocks)
             {
@@ -81,21 +83,19 @@ namespace Lumina
 {
 
     template<typename T>
-    using TRenderVector = TFixedVector<T, 100>;
+    using TRenderVector = TInlineVector<T, 100>;
 
     constexpr uint32 INVALID_MESH_RESOLVE_HANDLE = Constants::kIndexNoneU32;
 
     constexpr uint32 MESH_RESOLVE_STATE_STALE   = Constants::kIndexNoneU32;  // never resolved, or invalidated since
-    constexpr uint32 MESH_RESOLVE_STATE_NO_MESH = 0u;   // settled: there is nothing to resolve
+    constexpr uint32 MESH_RESOLVE_STATE_NO_MESH = 0u;   // settled with nothing to resolve
 
     constexpr uint32 MAX_MESHLETS_PER_SURFACE_LOD = (1u << MESHLET_DRAW_INDEX_BITS);
 
     // FGPUInstance::SurfaceDescIndex when the instance's LOD is fixed and no view may re-select it.
     constexpr uint32 kNoSurfaceDescIndex = NO_SURFACE_DESC_INDEX;
 
-    // FGPUInstance::RetainedSlot for an instance the CPU feeds directly (skinned), which has no retained
-    // slot to key a persistent two-phase visibility flag off. Always out of range, so it reads as
-    // "not visible last frame" and the late phase draws it.
+    // RetainedSlot of a CPU-fed skinned instance, out of range so it reads as not visible last frame and the late phase draws it.
     constexpr uint32 kNoRetainedSlot = Constants::kIndexNoneU32;
 
     // Mutually-exclusive debug viz; values must match DEBUG_MODE_* in Common.slang.
@@ -132,7 +132,8 @@ namespace Lumina
         WireframeOverlay    = 29,
         Velocity            = 30,
         QuadEfficiency      = 31,
-        Num                 = 32,
+        ScreenSpaceGI       = 32,
+        Num                 = 33,
     };
 
     constexpr FStringView RenderFlagsAsString(ERenderSceneDebugFlags Flags)
@@ -170,6 +171,7 @@ namespace Lumina
             case ERenderSceneDebugFlags::WireframeOverlay:  return "Wireframe Overlay";
             case ERenderSceneDebugFlags::Velocity:          return "Velocity";
             case ERenderSceneDebugFlags::QuadEfficiency:    return "Quad Efficiency";
+            case ERenderSceneDebugFlags::ScreenSpaceGI:     return "Screen Space GI";
             default:                                        return "Lit";
         }
     }
@@ -235,7 +237,7 @@ namespace Lumina
     constexpr uint32 LIGHT_SHADOW_MASK    = 0xFFFF0000; // upper 16 bits
     constexpr int    LIGHT_SHADOW_SHIFT   = 16;
 
-    // Mirror of ELightFlags in Common.slang -- keep values in lockstep.
+    // Mirrors ELightFlags in Common.slang.
     enum class ELightFlags : uint32
     {
         None        = 0,
@@ -244,13 +246,13 @@ namespace Lumina
         Spot        = BIT(2),
         CastShadow  = BIT(3),
         Volumetric  = BIT(4),
-        // Screen-space contact trace on top of this light's shadow map; local lights only.
+        // Screen-space contact trace on top of this light's shadow map; local lights only, reach at LIGHT_CONTACT_LENGTH_SHIFT.
         ContactShadow = BIT(5),
         // Masked by a light-function material whose atlas tile sits at LIGHT_FUNCTION_SLOT_SHIFT.
         LightFunction = BIT(6),
         // A one-sided rectangle. Angles holds its half width and height, and VolumetricScatteringRadius its packed right axis.
         Area        = BIT(7),
-        // Bits 8-15 and 24-31 are not free, see LIGHT_FUNCTION_SLOT_SHIFT and kLightMinRoughnessShift.
+        // Bits 8-31 are not free, see LIGHT_FUNCTION_SLOT_SHIFT, LIGHT_CONTACT_LENGTH_SHIFT and kLightMinRoughnessShift.
     };
 
     ENUM_CLASS_FLAGS(ELightFlags);
@@ -262,6 +264,17 @@ namespace Lumina
     {
         const uint32 Quantized = (uint32)(Math::Clamp(MinRoughness, 0.0f, 1.0f) * 255.0f + 0.5f);
         return (ELightFlags)((uint32)Flags | (Quantized << kLightMinRoughnessShift));
+    }
+
+    // Whole centimeters keep the reach in one byte of FLight::Flags, up to 2.55 m.
+    inline ELightFlags PackLightContactShadow(ELightFlags Flags, bool bContactShadows, float LengthMeters)
+    {
+        if (!bContactShadows)
+        {
+            return Flags;
+        }
+        const uint32 Centimeters = (uint32)Math::Clamp(LengthMeters * 100.0f + 0.5f, 1.0f, (float)LIGHT_CONTACT_LENGTH_MASK);
+        return (ELightFlags)((uint32)(Flags | ELightFlags::ContactShadow) | (Centimeters << LIGHT_CONTACT_LENGTH_SHIFT));
     }
 
     struct FSceneImage
@@ -277,7 +290,7 @@ namespace Lumina
         explicit operator bool() const { return IsValid(); }
 
         int32  GetResourceID() const { return SampledSlot == RHI::kInvalidHeapSlot ? -1 : (int32)SampledSlot; }
-        int32  GetMipUAVIndex(uint32 Mip) const { return Mip < (uint32)MipUAVSlots.size() ? (int32)MipUAVSlots[Mip] : -1; }
+        int32  GetMipUAVIndex(uint32 Mip) const { return Mip < (uint32)MipUAVSlots.Num() ? (int32)MipUAVSlots[Mip] : -1; }
         FUIntVector2 GetExtent() const { return FUIntVector2(Desc.Dimension.x, Desc.Dimension.y); }
         uint32 GetSizeX() const { return Desc.Dimension.x; }
         uint32 GetSizeY() const { return Desc.Dimension.y; }
@@ -296,7 +309,7 @@ namespace Lumina
         }
         if (bMipUAVs)
         {
-            Out.MipUAVSlots.resize(Desc.MipCount);
+            Out.MipUAVSlots.SetNum(Desc.MipCount);
             for (uint32 Mip = 0; Mip < Desc.MipCount; ++Mip)
             {
                 Out.MipUAVSlots[Mip] = RHI::HeapWriteRWTexture(RHI::GetGlobalHeap(), Out.Texture, Mip);
@@ -342,7 +355,7 @@ namespace Lumina
 
     struct FShadowAtlasConfig
     {
-        uint32 AtlasResolution    = GShadowAtlasResolution;    // Atlas is square: AtlasResolution x AtlasResolution.
+        uint32 AtlasResolution    = GShadowAtlasResolution;    // The atlas is square.
         uint32 MaxTileResolution  = 1024;                      // Largest tile a single shadow can claim. Must be pow2.
         uint32 MinTileResolution  = 128;                       // Smallest leaf the quad-tree will subdivide to. Must be pow2.
     };
@@ -350,7 +363,7 @@ namespace Lumina
     struct FShadowTile
     {
         FVector2 UVOffset;     // Normalized origin (0-1 range) of this tile in the atlas.
-        FVector2 UVScale;      // Normalized size (square: UVScale.x == UVScale.y).
+        FVector2 UVScale;      // Normalized size, square so UVScale.x == UVScale.y.
     };
 
     // Quad-tree shadow atlas allocator. Tiles sized by projected radius; reset per-frame via FreeTiles().
@@ -364,7 +377,7 @@ namespace Lumina
             MinLevel = Log2Floor(Config.MinTileResolution);
             MaxLevel = Log2Floor(Config.MaxTileResolution);
             NumLevels = (MaxLevel - MinLevel) + 1;
-            FreeLists.resize(NumLevels);
+            FreeLists.SetNum(NumLevels);
 
             FreeTiles();
         }
@@ -378,7 +391,7 @@ namespace Lumina
         FShadowAtlas(FShadowAtlas&&) = delete;
         FShadowAtlas& operator=(FShadowAtlas&&) = delete;
 
-        // GPU image created lazily: the atlas is a scene member constructed before scene Init.
+        // Created lazily because the atlas is a scene member constructed before scene Init.
         void InitImage()
         {
             if (ShadowAtlas.IsValid())
@@ -406,42 +419,59 @@ namespace Lumina
 
             for (uint32 Level = StartLevel; Level < NumLevels; ++Level)
             {
-                if (!FreeLists[Level].empty())
+                if (!FreeLists[Level].IsEmpty())
                 {
-                    FTileRect Rect = FreeLists[Level].back();
-                    FreeLists[Level].pop_back();
+                    FTileRect Rect = FreeLists[Level].Last();
+                    FreeLists[Level].Pop();
 
                     // Split down to StartLevel; return last quadrant, push siblings back.
                     while (Level > StartLevel)
                     {
                         const uint32 Half = Rect.Size / 2;
                         const uint32 ChildLevel = Level - 1;
-                        FreeLists[ChildLevel].push_back({ Rect.X + Half, Rect.Y,        Half });
-                        FreeLists[ChildLevel].push_back({ Rect.X,        Rect.Y + Half, Half });
-                        FreeLists[ChildLevel].push_back({ Rect.X + Half, Rect.Y + Half, Half });
+                        FreeLists[ChildLevel].Emplace(Rect.X + Half, Rect.Y,        Half);
+                        FreeLists[ChildLevel].Emplace(Rect.X,        Rect.Y + Half, Half);
+                        FreeLists[ChildLevel].Emplace(Rect.X + Half, Rect.Y + Half, Half);
                         Rect = { Rect.X, Rect.Y, Half };
                         --Level;
                     }
 
-                    const int32 Handle = (int32)Tiles.size();
+                    const int32 Handle = Tiles.Num();
                     const float InvAtlas = 1.0f / (float)Config.AtlasResolution;
                     FShadowTile Tile;
                     Tile.UVOffset = FVector2(Rect.X * InvAtlas, Rect.Y * InvAtlas);
                     Tile.UVScale  = FVector2(Rect.Size * InvAtlas);
-                    Tiles.push_back(Tile);
+                    Tiles.Add(Tile);
+                    AllocatedRects.Add(Rect);
                     return Handle;
                 }
             }
             return Constants::kIndexNone;
         }
 
+        // Returns a previously allocated tile's space to its level's free list. No coalescing, the atlas resets fully next frame via FreeTiles().
+        void Free(int32 TileHandle)
+        {
+            FScopeLock Lock(AllocMutex);
+
+            if (!AllocatedRects.IsValidIndex(TileHandle))
+            {
+                return;
+            }
+
+            const FTileRect& Rect = AllocatedRects[TileHandle];
+            const uint32 Level = Log2Floor(Rect.Size) - MinLevel;
+            FreeLists[Level].Add(Rect);
+        }
+
         // Reseeds top-level free list with a grid of MaxTileResolution roots.
         void FreeTiles()
         {
-            Tiles.clear();
+            Tiles.Reset();
+            AllocatedRects.Reset();
             for (TVector<FTileRect>& Q : FreeLists)
             {
-                Q.clear();   // keeps capacity -- avoids reallocating the free lists every frame
+                Q.Reset();   // keeps capacity so the free lists do not reallocate every frame
             }
 
             const uint32 RootSize = Config.MaxTileResolution;
@@ -449,7 +479,7 @@ namespace Lumina
             {
                 for (uint32 X = 0; X < Config.AtlasResolution; X += RootSize)
                 {
-                    FreeLists[NumLevels - 1].push_back({ X, Y, RootSize });
+                    FreeLists[NumLevels - 1].Emplace(X, Y, RootSize);
                 }
             }
         }
@@ -491,6 +521,7 @@ namespace Lumina
         FSceneImage ShadowAtlas;
         FShadowAtlasConfig Config;
         TVector<FShadowTile> Tiles;
+        TVector<FTileRect> AllocatedRects;   // Parallel to Tiles, indexed by the same handle; lets Free() find a tile's rect and level.
         TVector<TVector<FTileRect>> FreeLists;   // Indexed by (log2(size) - MinLevel). Used LIFO; cleared (keeps capacity) per frame.
         FMutex AllocMutex;
         uint32 MinLevel  = 0;
@@ -518,7 +549,7 @@ namespace Lumina
         FVector3        Position;
         float           Radius;
 
-        FVector3        Direction;   // to-light: FROM surface TOWARD the light (sun & spot)
+        FVector3        Direction;   // from the surface toward the light, for sun and spot
         uint32          Color;
 
         float           Intensity;
@@ -547,6 +578,140 @@ namespace Lumina
     static_assert(sizeof(FLightShadowData) == 576, "FLightShadowData layout must match shader");
     VERIFY_SSBO_ALIGNMENT(FLightShadowData);
 
+    constexpr uint32 kAllCubeFaces = 0x3Fu;
+
+    struct FShadowRequest
+    {
+        uint32      LightIndex;
+        ELightType  Type;
+        uint32      DesiredPixels;
+        float       DistanceToCamera;
+        FVector3    Position;
+        FVector3    Direction;      // Spot only
+        FVector3    Up;             // Spot only
+        float       Attenuation;
+        float       OuterFOVDegrees;
+        // Point lights only, one bit per cube face that some view can see a receiver through.
+        uint32      FaceMask = kAllCubeFaces;
+    };
+
+    // Frees any tile it already got rather than committing when the face allocation or MAX_SHADOWS slot budget fails.
+    inline void AllocateShadowSlot(FShadowAtlas& ShadowAtlas, const FShadowRequest& Req, uint32 TileSize, TAtomic<uint32>& ShadowDataCount,
+        TArray<FLight, MAX_LIGHTS>& Lights, TArray<FLightShadowData, MAX_SHADOWS>& Shadows,
+        TArray<TVector<FLightShadow>, (uint32)ELightType::Num>& PackedShadows)
+    {
+        if (Req.Type == ELightType::Point)
+        {
+            int32 FaceTileIndices[6] = { Constants::kIndexNone, Constants::kIndexNone, Constants::kIndexNone, Constants::kIndexNone, Constants::kIndexNone, Constants::kIndexNone };
+            bool  bAllAllocated = true;
+            for (uint32 Face = 0; Face < 6; ++Face)
+            {
+                if ((Req.FaceMask & (1u << Face)) == 0u)
+                {
+                    continue;
+                }
+                FaceTileIndices[Face] = ShadowAtlas.AllocateTile(TileSize);
+                if (FaceTileIndices[Face] == Constants::kIndexNone)
+                {
+                    bAllAllocated = false;
+                    break;
+                }
+            }
+            const uint32 ShadowSlot = bAllAllocated ? ShadowDataCount.fetch_add(1, std::memory_order_acquire) : (uint32)MAX_SHADOWS;
+            if (ShadowSlot >= (uint32)MAX_SHADOWS)
+            {
+                for (uint32 FreeFace = 0; FreeFace < 6; ++FreeFace)
+                {
+                    if (FaceTileIndices[FreeFace] != Constants::kIndexNone)
+                    {
+                        ShadowAtlas.Free(FaceTileIndices[FreeFace]);
+                    }
+                }
+                return;
+            }
+
+            Lights[Req.LightIndex].ShadowDataIndex = (int32)ShadowSlot;
+            FLightShadowData& ShadowData = Shadows[ShadowSlot];
+
+            const float ShadowNear = Math::Max(Req.Attenuation * 0.01f, 0.1f);
+            FViewVolume LightView(90.0f, 1.0f, ShadowNear, Req.Attenuation);
+
+            auto SetFace = [&](uint32 Face)
+            {
+                switch (Face)
+                {
+                    case 0: LightView.SetView(Req.Position, FViewVolume::RightAxis,    FViewVolume::DownAxis);     break;
+                    case 1: LightView.SetView(Req.Position, FViewVolume::LeftAxis,     FViewVolume::DownAxis);     break;
+                    case 2: LightView.SetView(Req.Position, FViewVolume::UpAxis,       FViewVolume::ForwardAxis);  break;
+                    case 3: LightView.SetView(Req.Position, FViewVolume::DownAxis,     FViewVolume::BackwardAxis); break;
+                    case 4: LightView.SetView(Req.Position, FViewVolume::ForwardAxis,  FViewVolume::DownAxis);     break;
+                    case 5: LightView.SetView(Req.Position, FViewVolume::BackwardAxis, FViewVolume::DownAxis);     break;
+                }
+            };
+
+            for (uint32 Face = 0; Face < 6; ++Face)
+            {
+                SetFace(Face);
+                ShadowData.ViewProjection[Face] = LightView.ToStandardDepthViewProjectionMatrix();
+
+                // A face no view reaches keeps no tile, which the shaders read as unshadowed.
+                FLightShadow& Shadow   = ShadowData.Shadow[Face];
+                if (FaceTileIndices[Face] == Constants::kIndexNone)
+                {
+                    Shadow = FLightShadow{};
+                    Shadow.ShadowMapIndex  = Constants::kIndexNone;
+                    Shadow.LightIndex      = (int32)Req.LightIndex;
+                    Shadow.ShadowDataIndex = (int32)ShadowSlot;
+                    continue;
+                }
+
+                const FShadowTile& FaceTile = ShadowAtlas.GetTile(FaceTileIndices[Face]);
+                Shadow.AtlasUVOffset   = FaceTile.UVOffset;
+                Shadow.AtlasUVScale    = FaceTile.UVScale;
+                Shadow.ShadowMapIndex  = FaceTileIndices[Face];
+                Shadow.LightIndex      = (int32)Req.LightIndex;
+                Shadow.ShadowDataIndex = (int32)ShadowSlot;
+                Shadow._Padding        = 0;
+            }
+
+            PackedShadows[(uint32)ELightType::Point].Add(ShadowData.Shadow[0]);
+        }
+        else
+        {
+            const int32 TileIndex = ShadowAtlas.AllocateTile(TileSize);
+            if (TileIndex == Constants::kIndexNone)
+            {
+                return;
+            }
+
+            const uint32 ShadowSlot = ShadowDataCount.fetch_add(1, std::memory_order_acquire);
+            if (ShadowSlot >= (uint32)MAX_SHADOWS)
+            {
+                ShadowAtlas.Free(TileIndex);
+                return;
+            }
+
+            Lights[Req.LightIndex].ShadowDataIndex = (int32)ShadowSlot;
+            FLightShadowData& ShadowData = Shadows[ShadowSlot];
+            const FShadowTile& Tile      = ShadowAtlas.GetTile(TileIndex);
+
+            const float ShadowNear = Math::Max(Req.Attenuation * 0.01f, 0.1f);
+            FViewVolume ViewVolume(Req.OuterFOVDegrees * 2.0f, 1.0f, ShadowNear, Req.Attenuation);
+            ViewVolume.SetView(Req.Position, Req.Direction, Req.Up);
+            ShadowData.ViewProjection[0] = ViewVolume.ToStandardDepthViewProjectionMatrix();
+
+            FLightShadow& Shadow   = ShadowData.Shadow[0];
+            Shadow.AtlasUVOffset   = Tile.UVOffset;
+            Shadow.AtlasUVScale    = Tile.UVScale;
+            Shadow.ShadowMapIndex  = TileIndex;
+            Shadow.LightIndex      = (int32)Req.LightIndex;
+            Shadow.ShadowDataIndex = (int32)ShadowSlot;
+            Shadow._Padding        = 0;
+
+            PackedShadows[(uint32)ELightType::Spot].Add(Shadow);
+        }
+    }
+
     // The plane a light function is projected through, indexed by the light's atlas tile.
     struct FLightFunction
     {
@@ -562,6 +727,25 @@ namespace Lumina
     {
         FVector4 Color;
     };
+
+    // Sun cascade tuning forwarded to the lit shaders, mirrored by FSunShadowParams in Common.slang.
+    struct FSunShadowParams
+    {
+        float  NormalBias = 1.0f;
+        float  DepthBias = 0.0f;
+        float  FilterRadiusTexels = 2.0f;   // in cascade-0 texels
+        float  CascadeBlend = 0.0f;
+        float  DistanceFade = 0.1f;         // fraction of the last cascade the shadow fades out over
+        uint32 FilterTaps = 4;
+        uint32 ActiveCascadeCount = NumCascades;
+        uint32 bFarCascade = 0;             // 1 when the last active cascade is the far one
+        float  TanSunRadius = 0.0f;         // tangent of the sun's angular radius, which sets the penumbra per meter of gap
+        uint32 BlockerTaps = 0;             // near cascade blocker search taps, 0 keeps the fixed-width kernel
+        float  MinFilterRadiusTexels = 0.0f; // narrowest contact-hardened kernel, in cascade-0 texels
+        uint32 _Pad = 0;
+    };
+
+    static_assert(sizeof(FSunShadowParams) == 48, "FSunShadowParams layout must match FSunShadowParams in Common.slang");
 
     // Header only; the arrays hang off it by address so a frame uploads the live prefix, not the cap.
     struct FSceneLightData
@@ -582,10 +766,7 @@ namespace Lumina
         // Ortho depth range of each cascade, which turns a shadow-map NDC z delta into world units.
         FVector4           CascadeDepthRanges{};
 
-        // x = normal-bias scale, y = constant depth bias, z = PCF radius in cascade-0 texels, w = cascade blend fraction.
-        FVector4           ShadowParams{ 1.0f, 0.0f, 2.0f, 0.0f };
-        // x = far-cascade distance-fade fraction, y = PCF tap count, z = active cascade count, w = 1 when the last cascade is the far one.
-        FVector4           ShadowParams2{ 0.1f, 4.0f, (float)NumCascades, 0.0f };
+        FSunShadowParams   SunShadow{};
 
         FVector4           AmbientLight{};
 
@@ -598,11 +779,11 @@ namespace Lumina
         uint32                          _LightFunctionPad[3]{};
     };
 
-    static_assert(sizeof(FSceneLightData) == 208, "FSceneLightData layout must match FLightData in Common.slang");
+    static_assert(sizeof(FSceneLightData) == 224, "FSceneLightData layout must match FLightData in Common.slang");
     static_assert(offsetof(FSceneLightData, SunDirection) == 16, "SunDirection must sit at 16, matching the scalar layout in Common.slang");
     VERIFY_SSBO_ALIGNMENT(FSceneLightData);
     // Relaxed block layout rejects a vector straddling 16, so the spans must follow the last one.
-    static_assert(offsetof(FSceneLightData, Lights) == 144, "Lights must sit at 144");
+    static_assert(offsetof(FSceneLightData, Lights) == 160, "Lights must sit at 160");
     
     struct FLineBatch
     {
@@ -625,7 +806,8 @@ namespace Lumina
         uint32 AOTextureIndex = Constants::kIndexNoneU32;
         // Sun occlusion traced past the cascades, read pixel for pixel by the opaque lighting.
         uint32 SunShadowMaskIndex = Constants::kIndexNoneU32;
-        uint32 _Pad1 = 0;
+        // Half resolution bounced light in rgb and the hemisphere fraction it covers in a, set only on frames that traced it.
+        uint32 IndirectDiffuseIndex = Constants::kIndexNoneU32;
         uint32 _Pad2 = 0;
     };
 
@@ -777,8 +959,7 @@ namespace Lumina
     static_assert(sizeof(FGPUSplinePoint) == 64, "FGPUSplinePoint layout must match Includes/Spline.slang");
     VERIFY_SSBO_ALIGNMENT(FGPUSplinePoint);
 
-    // One entry of a spline's arc-length table. Entries are uniform in DISTANCE, not in curve key, so a
-    // shader converts a distance to an index with a single divide -- see SampleSplineAtDistance.
+    // Arc-length table entry, uniform in distance rather than curve key so SampleSplineAtDistance indexes with one divide.
     struct alignas(16) FGPUSplineSample
     {
         FVector3 Position; float DistanceAlong;
@@ -833,16 +1014,19 @@ namespace Lumina
         uint32  LODMeshletOffset[MAX_MESH_LODS];
         uint32  LODMeshletCount[MAX_MESH_LODS];
         float   LODError[MAX_MESH_LODS];
+        // A cluster slot's largest parent error; zero on a discrete LOD surface.
+        float   LODParentError[MAX_MESH_LODS];
         uint32  NumLODs;
-        uint32  _Pad;
+        // SURFACE_DESC_* bits.
+        uint32  Flags;
+        // The mesh LOD distance scale, which every error above and the per-meshlet bounds are multiplied by at selection time.
+        float   LODErrorMultiplier;
+        uint32  _Pad1;
     };
-    static_assert(sizeof(FSurfaceDescGPU) == 80, "FSurfaceDescGPU layout must match shader");
+    static_assert(sizeof(FSurfaceDescGPU) == 208, "FSurfaceDescGPU layout must match shader");
     VERIFY_SSBO_ALIGNMENT(FSurfaceDescGPU);
 
-    // Mirror of FRenderBucket in Common.slang: one (view, draw) pair's slice of the three cull arenas.
-    // The CPU writes only the capacity seeds; BuildDrawPrefix owns every other field.
-    // Which part of a bucket's draw region a pass rasterizes. Mirrors MESHLET_SLICE_* in
-    // Shared/SharedConstants.h; the meshlet cull writes all three and every draw picks one.
+    // Which part of a bucket's draw region a pass rasterizes, mirroring MESHLET_SLICE_* in Shared/SharedConstants.h.
     enum class EMeshletSlice : uint32
     {
         Early = MESHLET_SLICE_EARLY,   // what the early cull phase appended
@@ -851,6 +1035,7 @@ namespace Lumina
     };
     constexpr uint32 kMeshletSliceCount = MESHLET_SLICE_COUNT;
 
+    // Mirrors FRenderBucket in Common.slang; the CPU writes only the capacity seeds and BuildDrawPrefix owns the rest.
     struct FRenderBucketGPU
     {
         uint32 DrawBase;
@@ -859,8 +1044,7 @@ namespace Lumina
         uint32 BlockBase;
         uint32 BlockCapacity;
         uint32 BlockCursor;
-        // Dense offset of this bucket's blocks in the flat meshlet-cull dispatch. Blocks are dense within
-        // a bucket but sparse across the arena, so the cull cannot derive its bucket from the block.
+        // Dense offset of this bucket's blocks in the flat cull dispatch, since blocks are sparse across the arena.
         uint32 CullWorkBase;
         uint32 DrawBudgetCursor;
         uint32 DrawDemand;
@@ -907,7 +1091,7 @@ namespace Lumina
     static_assert(sizeof(FTransform3x4) == 48, "FTransform3x4 must match shader");
     VERIFY_SSBO_ALIGNMENT(FTransform3x4);
 
-    // 32B, not 48: the 3x3 halves error-bound by the mesh extent, the translation kept full.
+    // 32 bytes rather than 48, with the 3x3 in halves error-bound by the mesh extent and the translation kept full.
     struct FPackedBoneTransform
     {
         uint32 Rot[5];   // 9 halves of the 3x3, row-major; the 10th is unused
@@ -950,6 +1134,21 @@ namespace Lumina
             FVector4(M[0][2], M[1][2], M[2][2], M[3][2]),
         };
     }
+
+    // One splat standing in for a retained slot once it is too small for meshlets, in mesh space so the slot's transform places it.
+    struct alignas(16) FInstanceProxy
+    {
+        FVector3    LocalCenter;
+        // Half the side of a square as large as the surface's mean projected area.
+        float       SplatHalfSize;
+        uint32      PackedNormal;       // PackNormal
+        uint32      PackedUV;           // PackHalf2x16
+        uint32      Color;              // PackColor
+        // The foliage thinning start the cull widens survivors from, 0 never.
+        float       ThinningStartDistance;
+    };
+    static_assert(sizeof(FInstanceProxy) == 32, "FInstanceProxy layout must match shader");
+    VERIFY_SSBO_ALIGNMENT(FInstanceProxy);
 
     struct alignas(16) FInstanceCullEntry
     {
@@ -1025,8 +1224,7 @@ namespace Lumina
     // Shaders reach this with loadAligned<16>, which needs every element 16-aligned.
     static_assert(sizeof(FGPUInstance) % 16 == 0, "FGPUInstance stride must stay 16-byte aligned for loadAligned<16>");
 
-    // No 8-byte member left now that the header is a slot rather than a pointer, so scalar layout puts
-    // this at 4. The 128-byte stride is unchanged, which is what the shader mirror actually depends on.
+    // The shader mirror depends only on the 128-byte stride, not this alignment.
     static_assert(alignof(FGPUInstance) == 4, "Scalar layout: FGPUInstance is all 4-byte members");
 
     struct FPreSkinnedVertex
@@ -1061,11 +1259,10 @@ namespace Lumina
     // No slice in the per-frame bone arena; the blend falls back to identity rather than reading garbage.
     constexpr uint32 kNoBoneSlice = Constants::kIndexNoneU32;
 
-    /** Per-frame data for one skinned instance slot*/
+    // Per-frame data for one skinned instance slot.
     struct FSkinnedFrameData
     {
-        // CullData.MeshletDrawTag as of the frame that wrote this. Anything else means the entity was not
-        // gathered this frame, so the slot is stale and must not be emitted -- the array is never cleared.
+        // CullData.MeshletDrawTag of the writing frame; any other value marks a stale slot, since the array is never cleared.
         uint32      FrameTag;
         uint32      SurfaceMeshletOffset;
         uint32      SurfaceMeshletCount;
@@ -1177,9 +1374,10 @@ namespace Lumina
         float  CullFarPlane;
         // Render layers the primary camera draws, for passes that cull without a cull view.
         uint32 CameraLayerMask = RENDER_LAYER_DEFAULT_MASK;
-        // Holds the struct at a 16-byte multiple, which the members after it in FSceneGlobalData rely on.
-        uint32 _CullPad1 = 0;
-        uint32 _CullPad2 = 0;
+        // VG_FLAG_* bits, the project's virtual geometry toggles.
+        uint32 VirtualGeometryFlags = 0;
+        // Projected diameter in pixels under which an instance leaves the meshlet path for its far proxy.
+        float  ProxyTransitionPixels = 0.0f;
     };
 
     VERIFY_SSBO_ALIGNMENT(FCullData);
@@ -1205,8 +1403,7 @@ namespace Lumina
         };
     }
 
-    // Which side of the mid-frame pyramid rebuild a pass is on. CPU-side only: the shaders read the
-    // EMeshletSlice this maps to, which is what actually reaches them.
+    // Which side of the mid-frame pyramid rebuild a pass is on; shaders only see the EMeshletSlice it maps to.
     namespace ECullPhase
     {
         enum Type : uint32
@@ -1220,7 +1417,7 @@ namespace Lumina
     struct alignas(16) FCullView
     {
         FVector4   FrustumPlanes[6];           // 96 B
-        FVector4   ViewOriginAndFlags;         // 16 B: xyz=origin, w=asfloat(flags)
+        FVector4   ViewOriginAndFlags;         // 16 B, xyz is origin and w is asfloat(flags)
         uint32      CascadeIndex;               // Cascade this view rasterizes; only read when Flags has Cascade
         float       MinBoundsDiameter;          // Reject bounds thinner than this (world units); 0 = off
         float       LODErrorScale;              // MakeLODErrorScale; 0 keeps every instance at LOD 0
@@ -1229,9 +1426,7 @@ namespace Lumina
 
     FORCEINLINE uint32 GetCullViewFlags(const FCullView& View)
     {
-        uint32 Flags;
-        std::memcpy(&Flags, &View.ViewOriginAndFlags.w, sizeof(uint32));
-        return Flags;
+        return std::bit_cast<uint32>(View.ViewOriginAndFlags.w);
     }
 
     static_assert(sizeof(FCullView) == 128, "FCullView layout must match shader");
@@ -1334,8 +1529,7 @@ namespace Lumina
     struct FSceneRoot
     {
         RHI::TGPUSpan<FBoneTransform>       Bones;
-        // Last frame's pose and transform, copied before this frame's incremental uploads overwrite them.
-        // These lag a frame and can be shorter than the live arrays, which is what their counts say.
+        // Last frame's pose and transforms, copied before this frame's uploads, so their counts can trail the live arrays.
         RHI::TGPUSpan<FBoneTransform>       PrevBones;
         RHI::TGPUSpan<FTransform3x4>        PrevRetainedTransforms;
         RHI::TGPUSpan<FCluster>          Clusters;              // per-view, GPU-written
@@ -1354,18 +1548,10 @@ namespace Lumina
         RHI::TGPUSpan<FGPUSpline>           Splines;               // one per component with bSendToGPU
         RHI::TGPUSpan<FGPUSplinePoint>      SplinePoints;          // headers carry the slice
         RHI::TGPUSpan<FGPUSplineSample>     SplineSamples;         // arc-length tables
-        // The process-wide meshlet header slab. Instances carry a SLOT into this, never an address, so
-        // this is the only place a header address exists -- and it is republished every frame, which is
-        // what lets the slab grow without invalidating anything. See MeshletHeaderSlab.h.
+        // Instances hold slots, so republishing this sole header address each frame lets the slab grow, see MeshletHeaderSlab.h.
         RHI::TGPUSpan<FMeshletHeaderGPU>    MeshletHeaders;
 
-        /** Texture-streaming feedback: one uint per bindless texture slot, bit N set = "some pixel this
-         *  frame sampled mip N of this texture". Written by the material lanes through
-         *  RequestTextureResolution, read back a few frames later to drive residency.
-         *
-         *  This replaces guessing the requirement on the CPU from bounds, distance and texel density --
-         *  the GPU already computes the exact LOD it samples, so ask it. An empty span disables the
-         *  write, and its count is what keeps an unvalidated slot out of the bindless heap. */
+        // Bit N of a slot's uint is set when a pixel sampled mip N; empty disables the write, and its count keeps unvalidated slots out of the heap.
         RHI::TGPUSpan<uint32>               StreamingFeedback;
         // Object-space meshlet spheres for this frame's poses, written by SkinnedMeshletBounds.slang.
         RHI::TGPUSpan<FMeshletSphere>       SkinnedMeshletBounds;
@@ -1373,6 +1559,13 @@ namespace Lumina
         RHI::TGPUSpan<FMeshletCone>         SkinnedMeshletCones;
         // Parallel to PreSkinnedVertices, and empty when no view wants motion vectors.
         RHI::TGPUSpan<FPrevSkinnedPosition> PreSkinnedPrevPositions;
+
+        // The retained slot arrays, which the far proxy pass draws from directly since a proxy has no compacted instance.
+        RHI::TGPUSpan<FTransform3x4>        RetainedTransforms;
+        RHI::TGPUSpan<FInstanceStatic>      RetainedStatic;
+        RHI::TGPUSpan<FInstanceProxy>       RetainedProxies;
+        // Retained slots CullInstances turned into proxies this frame, in proxy draw order.
+        RHI::TGPUSpan<uint32>               ProxyList;
 
         uint32 BRDFLutIndex          = 0;
         uint32 SkyIrradianceIndex    = 0;
@@ -1383,7 +1576,7 @@ namespace Lumina
         uint32 ProbeCubeArrayIndex   = 0;
         uint32 _Pad0                 = 0;
     };
-    static_assert(sizeof(FSceneRoot) == 400, "FSceneRoot must match SceneGlobals.slang");
+    static_assert(sizeof(FSceneRoot) == 464, "FSceneRoot must match SceneGlobals.slang");
 
     struct FParallaxSettings
     {
@@ -1516,7 +1709,8 @@ namespace Lumina
         // Geometric specular antialiasing, off while the variance scale is zero.
         float           SpecularAAVariance  = 0.0f;
         float           SpecularAAThreshold = 0.0f;
-        uint32          _PadFogParams     = 0;
+        // Masked materials sharpen resolved alpha edges ahead of the hash, only while no temporal resolve runs.
+        uint32          bSharpenedAlphaTest      = 0;
 
         // The translucent passes fog themselves, since the composite runs first and sees only opaque depth.
         FExponentialHeightFogParams FogParams = {};
@@ -1542,7 +1736,7 @@ namespace Lumina
     static_assert(offsetof(FSceneGlobalData, Weather) % 16 == 0, "Weather must follow DBufferDIndex with no C++ padding.");
     // alignas(16) here but 4-byte aligned in scalar layout, so C++ must not pad in front of it, which the 16 check alone cannot see.
     static_assert(offsetof(FSceneGlobalData, FogParams) % 16 == 0 &&
-                  offsetof(FSceneGlobalData, FogParams) == offsetof(FSceneGlobalData, _PadFogParams) + sizeof(FSceneGlobalData::_PadFogParams),
+                  offsetof(FSceneGlobalData, FogParams) == offsetof(FSceneGlobalData, bSharpenedAlphaTest) + sizeof(FSceneGlobalData::bSharpenedAlphaTest),
                   "FogParams must follow the field before it with no C++ padding, since the shader's scalar layout has none.");
 
     struct FMeshPass

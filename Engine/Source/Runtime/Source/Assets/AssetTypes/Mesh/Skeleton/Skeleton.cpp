@@ -27,7 +27,7 @@ namespace Lumina
 
     void CSkeleton::SetSkeletonResource(TUniquePtr<FSkeletonResource>&& NewResource)
     {
-        SkeletonResource = std::move(NewResource);
+        SkeletonResource = Move(NewResource);
         BumpSocketGeneration();
 
         // Derived caches key on (skeleton, generation), so one that arrived without a cache reads empty.
@@ -50,7 +50,7 @@ namespace Lumina
     void CSkeleton::ComputeBindPoseSkinningMatrices(TVector<FMatrix4>& OutMatrices) const
     {
         const int32 NumBones = SkeletonResource->GetNumBones();
-        OutMatrices.resize(NumBones);
+        OutMatrices.SetNum(NumBones);
 
         // FK in skeleton order; Bones[] is parents-before-children.
         for (int32 i = 0; i < NumBones; ++i)

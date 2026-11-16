@@ -12,18 +12,19 @@ namespace Lumina
 
         // Snapshot each command's after-image, then drop the ones that changed nothing.
         TVector<TUniquePtr<IUndoableCommand>> Kept;
-        Kept.reserve(Open.Commands.size());
+        Kept.Reserve(Open.Commands.Num());
         for (TUniquePtr<IUndoableCommand>& Command : Open.Commands)
         {
             Command->Finalize();
             if (!Command->IsNoOp())
             {
-                Kept.push_back(Move(Command));
+                Kept.Add(Move(Command));
             }
         }
         Open.Commands = Move(Kept);
+        Open.MarkChanged();
 
-        if (!Open.Commands.empty())
+        if (!Open.Commands.IsEmpty())
         {
             PushCommitted(Move(Open));
         }
@@ -39,7 +40,7 @@ namespace Lumina
 
         if (bOpen)
         {
-            Open.Commands.push_back(Move(Command));
+            Open.Commands.Add(Move(Command));
             return;
         }
 
@@ -48,18 +49,19 @@ namespace Lumina
         {
             return;
         }
+        Command->MarkChanged();
 
-        if (UndoStack.empty())
+        if (UndoStack.IsEmpty())
         {
             FTransaction Transaction;
             Transaction.Name = Command->GetName();
-            Transaction.Commands.push_back(Move(Command));
+            Transaction.Commands.Add(Move(Command));
             PushCommitted(Move(Transaction));
             return;
         }
 
-        UndoStack.back().Commands.push_back(Move(Command));
-        RedoStack.clear();
+        UndoStack.Last().Commands.Add(Move(Command));
+        RedoStack.Reset();
 
         if (OnCommitted)
         {
@@ -75,12 +77,12 @@ namespace Lumina
 
     void FTransactionManager::PushCommitted(FTransaction&& Transaction)
     {
-        if ((int32)UndoStack.size() >= MaxHistory)
+        if (UndoStack.Num() >= MaxHistory)
         {
-            UndoStack.erase(UndoStack.begin());
+            UndoStack.RemoveAt(0);
         }
-        UndoStack.push_back(Move(Transaction));
-        RedoStack.clear();
+        UndoStack.Add(Move(Transaction));
+        RedoStack.Reset();
 
         if (OnCommitted)
         {
@@ -90,19 +92,19 @@ namespace Lumina
 
     void FTransactionManager::Undo()
     {
-        if (UndoStack.empty())
+        if (UndoStack.IsEmpty())
         {
             return;
         }
 
-        FTransaction Transaction = Move(UndoStack.back());
-        UndoStack.pop_back();
+        FTransaction Transaction = Move(UndoStack.Last());
+        UndoStack.Pop();
 
         bApplying = true;
         Transaction.Undo();
         bApplying = false;
 
-        RedoStack.push_back(Move(Transaction));
+        RedoStack.Add(Move(Transaction));
 
         if (OnPostApply)
         {
@@ -112,19 +114,19 @@ namespace Lumina
 
     void FTransactionManager::Redo()
     {
-        if (RedoStack.empty())
+        if (RedoStack.IsEmpty())
         {
             return;
         }
 
-        FTransaction Transaction = Move(RedoStack.back());
-        RedoStack.pop_back();
+        FTransaction Transaction = Move(RedoStack.Last());
+        RedoStack.Pop();
 
         bApplying = true;
         Transaction.Redo();
         bApplying = false;
 
-        UndoStack.push_back(Move(Transaction));
+        UndoStack.Add(Move(Transaction));
 
         if (OnPostApply)
         {
@@ -134,8 +136,8 @@ namespace Lumina
 
     void FTransactionManager::Clear()
     {
-        UndoStack.clear();
-        RedoStack.clear();
+        UndoStack.Reset();
+        RedoStack.Reset();
         Open = FTransaction{};
         bOpen = false;
     }

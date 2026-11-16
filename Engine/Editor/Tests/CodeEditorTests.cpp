@@ -1,14 +1,12 @@
 #include <gtest/gtest.h>
 
-#include <imgui.h>
-#include <imgui_internal.h>
-#include "Tools/UI/ImGui/ImGuiAllocator.h"
+#include "ImGuiTestHarness.h"
+#include "ScopedTempMountTestUtil.h"
 #include "Containers/Algorithm.h"
 #include "Core/Math/Math.h"
 #include "Paths/Paths.h"
 #include "Scripting/DotNet/DotNetHost.h"
 #include <chrono>
-#include <filesystem>
 #include <thread>
 #include "FileSystem/FileSystem.h"
 #include "Settings/EditorSettings.h"
@@ -22,8 +20,6 @@
 
 using namespace Lumina;
 
-extern "C" DLL_IMPORT void LuminaModuleSetupImGui(void* InImGui, void* InImPlot);
-
 namespace
 {
     // Runs whole ImGui frames around one editor with no renderer behind them.
@@ -31,52 +27,11 @@ namespace
     {
     public:
 
-        FCodeEditorHarness()
-        {
-            ImGuiX::InstallImGuiAllocator();
-            Context = ImGui::CreateContext();
-            ImGui::SetCurrentContext(Context);
-            LuminaModuleSetupImGui(Context, nullptr);
-            ImGuiIO& IO = ImGui::GetIO();
-            IO.DisplaySize = ImVec2(1280.0f, 720.0f);
-            IO.DeltaTime = 1.0f / 60.0f;
-            IO.IniFilename = nullptr;
-            IO.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
-        }
-
-        ~FCodeEditorHarness()
-        {
-            ImGui::DestroyContext(Context);
-            LuminaModuleSetupImGui(nullptr, nullptr);
-        }
-
-        FCodeEditorHarness(const FCodeEditorHarness&) = delete;
-        FCodeEditorHarness& operator=(const FCodeEditorHarness&) = delete;
-        FCodeEditorHarness(FCodeEditorHarness&&) = delete;
-        FCodeEditorHarness& operator=(FCodeEditorHarness&&) = delete;
-
         void Frame()
         {
-            ImGui::NewFrame();
-            ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-            ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-            ImGui::Begin("Host", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+            FImGuiTestHarness::BeginFrame();
             Editor.Render("Code", ImVec2(0.0f, 0.0f));
-            ImGui::End();
-            ImGui::Render();
-            for (ImTextureData* Texture : ImGui::GetPlatformIO().Textures)
-            {
-                if (Texture->Status == ImTextureStatus_WantCreate || Texture->Status == ImTextureStatus_WantUpdates)
-                {
-                    Texture->SetTexID((ImTextureID)1);
-                    Texture->SetStatus(ImTextureStatus_OK);
-                }
-                else if (Texture->Status == ImTextureStatus_WantDestroy)
-                {
-                    Texture->SetTexID(ImTextureID_Invalid);
-                    Texture->SetStatus(ImTextureStatus_Destroyed);
-                }
-            }
+            FImGuiTestHarness::EndFrame();
         }
 
         void Key(ImGuiKey Key, bool bDown)
@@ -85,23 +40,20 @@ namespace
             Frame();
         }
 
-        FCodeEditor   Editor;
-
-    private:
-
-        ImGuiContext* Context = nullptr;
+        FImGuiTestHarness ImGuiHarness;
+        FCodeEditor       Editor;
     };
 
     // A bar in the text marks the caret and is taken out.
     FCodePosition TakeCaret(FString& Text)
     {
-        const size_t Bar = Text.find('|');
+        const int32 Bar = Text.Find('|');
         FCodePosition Caret;
-        for (size_t i = 0; i < Bar; ++i)
+        for (int32 i = 0; i < Bar; ++i)
         {
             Caret = Text[i] == '\n' ? FCodePosition{ Caret.Line + 1, 0 } : FCodePosition{ Caret.Line, Caret.Column + 1 };
         }
-        Text.erase(Bar, 1);
+        Text.RemoveAt(Bar, 1);
         return Caret;
     }
 
@@ -125,11 +77,11 @@ namespace
         Request.Caret = Caret;
         Request.WordStart = { Caret.Line, CodeLanguageUtil::WordRangeAt(Document, Language, Caret).Start.Column };
         const FStringView Line = Document.GetLineView(Caret.Line);
-        Request.Word = Line.substr(Request.WordStart.Column, Caret.Column - Request.WordStart.Column);
-        Request.LinePrefix = Line.substr(0, Caret.Column);
+        Request.Word = Line.Mid(Request.WordStart.Column, Caret.Column - Request.WordStart.Column);
+        Request.LinePrefix = Line.Mid(0, Caret.Column);
         TVector<ECodeToken> Scratch;
-        Scratch.resize(Math::Max(1, Caret.Column));
-        Request.CaretState = Language.Tokenize(Request.LinePrefix, Document.GetStartState(Language, Caret.Line), Scratch.data());
+        Scratch.SetNum(Math::Max(1, Caret.Column));
+        Request.CaretState = Language.Tokenize(Request.LinePrefix, Document.GetStartState(Language, Caret.Line), Scratch.GetData());
 
         TVector<FCodeCompletionItem> Items;
         Language.GetCompletions(Request, Items);
@@ -150,7 +102,7 @@ namespace
 
     bool HasMessage(const TVector<FCodeDiagnostic>& Diagnostics, FStringView Fragment)
     {
-        return Algo::AnyOf(Diagnostics.begin(), Diagnostics.end(), [Fragment](const FCodeDiagnostic& Diagnostic) { return Diagnostic.Message.contains(Fragment); });
+        return Algo::AnyOf(Diagnostics.begin(), Diagnostics.end(), [Fragment](const FCodeDiagnostic& Diagnostic) { return Diagnostic.Message.Contains(Fragment); });
     }
 }
 
@@ -351,15 +303,15 @@ TEST(RmlLanguage, FindsColorsAndDescribesProperties)
     Document.Highlight(Language, 0);
 
     TVector<FCodeColorSpan> Spans;
-    Language.GetColorSpans(Document.GetLineView(0), Document.GetTokens(0).data(), Spans);
-    ASSERT_EQ(Spans.size(), 3u);
+    Language.GetColorSpans(Document.GetLineView(0), Document.GetTokens(0).GetData(), Spans);
+    ASSERT_EQ(Spans.Num(), 3);
     EXPECT_EQ(Spans[0].Color, IM_COL32(255, 0, 0, 255));
     EXPECT_EQ(Spans[1].Color, IM_COL32(0, 0, 255, 128));
     EXPECT_EQ(Spans[2].Color, IM_COL32(0, 255, 0, 255));
 
     FCodeHover Hover;
     ASSERT_TRUE(Language.GetHover(Document, { 0, 6 }, Hover));
-    EXPECT_TRUE(Hover.Title.starts_with("color"));
+    EXPECT_TRUE(Hover.Title.StartsWith("color"));
 }
 
 TEST(SlangLanguage, ColorsSymbolsAndFindsTheActiveParameter)
@@ -378,7 +330,7 @@ TEST(SlangLanguage, ColorsSymbolsAndFindsTheActiveParameter)
     FCodeSignature Signature;
     ASSERT_TRUE(Language.GetSignature(Document, { 0, 22 }, Signature));
     EXPECT_EQ(Signature.ActiveParameter, 1);
-    EXPECT_EQ(Signature.Parameters.size(), 3u);
+    EXPECT_EQ(Signature.Parameters.Num(), 3);
 
     EXPECT_NE(FindItem(Complete(Language, "float A = satu|"), "saturate"), nullptr);
 }
@@ -450,29 +402,6 @@ namespace
         SShortcut  Saved;
     };
 
-    // A scratch folder mounted where the editor's resources live, so theme files can be written and read.
-    class FScopedEditorFolder
-    {
-    public:
-
-        FScopedEditorFolder()
-        {
-            Root = std::filesystem::temp_directory_path() / "LuminaCodeThemeTests";
-            std::filesystem::remove_all(Root);
-            std::filesystem::create_directories(Root / "Resources" / "CodeThemes");
-            VFS::Mount<VFS::FNativeFileSystem>("/Editor", FStringView(Root.string().c_str()));
-        }
-
-        ~FScopedEditorFolder()
-        {
-            VFS::Unmount("/Editor");
-            std::error_code Error;
-            std::filesystem::remove_all(Root, Error);
-        }
-
-        std::filesystem::path Root;
-    };
-
     void Chord(FCodeEditorHarness& Harness, ImGuiKeyChord Mods, ImGuiKey Key)
     {
         for (const ImGuiKey Mod : { ImGuiMod_Ctrl, ImGuiMod_Shift, ImGuiMod_Alt })
@@ -528,7 +457,7 @@ TEST(CodeEditor, AlternateChordsAndKeypadEnterAnswer)
 
 TEST(CodeEditorThemes, MissingColorsKeepTheBuiltInOnes)
 {
-    FScopedEditorFolder Folder;
+    TestUtil::FScopedTempMount Folder("/Editor", "LuminaCodeThemeTests");
     ASSERT_TRUE(VFS::WriteFile(CodeEditorThemes::PathOf("Partial").View(), R"({ "Syntax": { "Keyword": "#FF0000" }, "Editor": { "Background": "#00000080" } })"));
 
     FCodeEditorPalette Palette = FCodeEditorPalette::Dark();
@@ -548,13 +477,12 @@ TEST(CodeEditorThemes, MissingColorsKeepTheBuiltInOnes)
 
 TEST(CodeEditorThemes, ShippedThemesGiveEveryColor)
 {
-    FScopedEditorFolder Folder;
+    TestUtil::FScopedTempMount Folder("/Editor", "LuminaCodeThemeTests");
     Paths::InitializePaths();
-    const std::filesystem::path Shipped = std::filesystem::path(Paths::GetEngineDirectory().c_str()) / "Editor" / "Resources" / "CodeThemes";
-    std::filesystem::copy(Shipped, Folder.Root / "Resources" / "CodeThemes");
+    ASSERT_TRUE(Filesystem::CopyTree(Format("{}/Editor/Resources/CodeThemes", Paths::GetEngineDirectory()), Folder.Dir + "/Resources/CodeThemes"));
 
     const TVector<FString> Themes = CodeEditorThemes::List();
-    EXPECT_GE(Themes.size(), 10u);
+    EXPECT_GE(Themes.Num(), 10);
     EXPECT_TRUE(Algo::AnyOf(Themes.begin(), Themes.end(), [](const FString& Theme) { return Theme == "Dracula"; }));
 
     // Saving writes every color in the same layout, so a file that left one out or misspelled one no longer matches.
@@ -562,12 +490,14 @@ TEST(CodeEditorThemes, ShippedThemesGiveEveryColor)
     {
         FString Original;
         ASSERT_TRUE(VFS::ReadFile(Original, CodeEditorThemes::PathOf(Theme.View()).View()));
+        // Git may check the shipped files out with CRLF while Save always writes LF.
+        Original.ReplaceInline("\r\n", "\n");
         FCodeEditorPalette Palette = FCodeEditorPalette::Dark();
         ASSERT_TRUE(CodeEditorThemes::Load(Theme.View(), Palette));
         ASSERT_TRUE(CodeEditorThemes::Save(Theme.View(), Palette));
         FString Written;
         ASSERT_TRUE(VFS::ReadFile(Written, CodeEditorThemes::PathOf(Theme.View()).View()));
-        EXPECT_TRUE(Written == Original) << Theme.c_str();
+        EXPECT_TRUE(Written == Original) << *Theme;
     }
 }
 
@@ -607,7 +537,7 @@ TEST_F(FScriptLanguageTest, AnswersFromTheScriptCompiler)
     bool bAnswered = false;
     for (int32 Attempt = 0; Attempt < 600 && !bAnswered; ++Attempt)
     {
-        Diagnostics.clear();
+        Diagnostics.Reset();
         bAnswered = Language.GetDiagnostics(Document, Diagnostics);
         if (!bAnswered)
         {
@@ -619,7 +549,7 @@ TEST_F(FScriptLanguageTest, AnswersFromTheScriptCompiler)
 
     FCodeHover Hover;
     ASSERT_TRUE(Language.GetHover(Document, { 6, 9 }, Hover));
-    EXPECT_TRUE(Hover.Title.contains("Probe.Count"));
+    EXPECT_TRUE(Hover.Title.Contains("Probe.Count"));
 
     FCodeLocation Definition;
     ASSERT_TRUE(Language.FindDefinition(Document, { 6, 9 }, Definition));
@@ -638,9 +568,9 @@ TEST_F(FScriptLanguageTest, AnswersFromTheScriptCompiler)
     Document.SetText("class Probe\n{\n    void Run()\n    {\n        System.Math.Max(1, );\n    }\n}\n");
     FCodeSignature Signature;
     ASSERT_TRUE(Language.GetSignature(Document, { 4, 27 }, Signature));
-    EXPECT_TRUE(Signature.Label.contains("Max("));
+    EXPECT_TRUE(Signature.Label.Contains("Max("));
     EXPECT_EQ(Signature.ActiveParameter, 1);
-    EXPECT_EQ(Signature.Parameters.size(), 2u);
+    EXPECT_EQ(Signature.Parameters.Num(), 2);
 }
 
 TEST(CodeLanguage, FoldsBraceBlocksAndRegions)
@@ -667,7 +597,7 @@ TEST(CodeEditor, CollapsedFoldHidesItsBody)
     // Folds settle a moment after the last edit so typing does not rescan the file on every key.
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     Harness.Frame();
-    ASSERT_FALSE(Harness.Editor.GetFolds().empty());
+    ASSERT_FALSE(Harness.Editor.GetFolds().IsEmpty());
 
     Harness.Editor.ToggleFold(0);
     Harness.Frame();
@@ -728,8 +658,8 @@ TEST(PlainTextLanguage, ColorsStringsNumbersAndComments)
 
 TEST(CSharpScript, NewScriptNamesItsClassAfterTheFile)
 {
-    EXPECT_TRUE(CSharpScript::NewScriptSource("Enemy Spawner").contains("public sealed class Enemy_Spawner : CEntityScript"));
-    EXPECT_TRUE(CSharpScript::NewScriptSource("2DCamera").contains("public sealed class _2DCamera : CEntityScript"));
+    EXPECT_TRUE(CSharpScript::NewScriptSource("Enemy Spawner").Contains("public sealed class Enemy_Spawner : CEntityScript"));
+    EXPECT_TRUE(CSharpScript::NewScriptSource("2DCamera").Contains("public sealed class _2DCamera : CEntityScript"));
 }
 
 TEST_F(FScriptLanguageTest, FindsReferencesSymbolsAndFixes)
@@ -760,8 +690,8 @@ TEST_F(FScriptLanguageTest, FindsReferencesSymbolsAndFixes)
     Document.SetText("class Refs\n{\n    int Count;\n    void Run()\n    {\n        Count = 1;\n        Count += 2;\n        var Watch = new Stopwatch();\n    }\n}\n");
 
     TVector<FCSharpScriptLanguage::FReference> References;
-    ASSERT_EQ(Wait([&] { References.clear(); return Language.FindReferences(Document, { 5, 9 }, References); }), EReply::Answered);
-    ASSERT_EQ(References.size(), 3u);
+    ASSERT_EQ(Wait([&] { References.Reset(); return Language.FindReferences(Document, { 5, 9 }, References); }), EReply::Answered);
+    ASSERT_EQ(References.Num(), 3);
     const auto Declaration = Algo::FindIf(References, [](const FCSharpScriptLanguage::FReference& Reference) { return Reference.bDeclaration; });
     ASSERT_NE(Declaration, References.end());
     EXPECT_EQ(Declaration->Range.Start, (FCodePosition{ 2, 8 }));
@@ -777,25 +707,25 @@ TEST_F(FScriptLanguageTest, FindsReferencesSymbolsAndFixes)
     EXPECT_EQ(Run->EndLine, 8);
 
     TVector<FCodeSymbolInfo> Found;
-    ASSERT_EQ(Wait([&] { Found.clear(); return Language.FindWorkspaceSymbols("Refs", Found); }), EReply::Answered);
+    ASSERT_EQ(Wait([&] { Found.Reset(); return Language.FindWorkspaceSymbols("Refs", Found); }), EReply::Answered);
     EXPECT_TRUE(Algo::AnyOf(Found.begin(), Found.end(), [](const FCodeSymbolInfo& Symbol) { return Symbol.Name == "Refs" && Symbol.Kind == ECodeCompletionKind::Type; }));
 
     TVector<FCodeAction> Actions;
-    for (int32 Attempt = 0; Attempt < 200 && Actions.empty(); ++Attempt)
+    for (int32 Attempt = 0; Attempt < 200 && Actions.IsEmpty(); ++Attempt)
     {
         Language.GetCodeActions(Document, { 7, 26 }, Actions);
-        if (Actions.empty())
+        if (Actions.IsEmpty())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     }
     const auto Using = Algo::FindIf(Actions, [](const FCodeAction& Action) { return Action.Title == "using System.Diagnostics;"; });
     ASSERT_NE(Using, Actions.end());
-    ASSERT_EQ(Using->Edits.size(), 1u);
-    EXPECT_TRUE(Using->Edits[0].Path.empty());
+    ASSERT_EQ(Using->Edits.Num(), 1);
+    EXPECT_TRUE(Using->Edits[0].Path.IsEmpty());
     EXPECT_EQ(Using->Edits[0].Range.Start, (FCodePosition{ 0, 0 }));
 
     TVector<FCSharpScriptLanguage::FProjectDiagnostic> Problems;
-    ASSERT_EQ(Wait([&] { Problems.clear(); return Language.GetProjectDiagnostics(Problems); }), EReply::Answered);
-    EXPECT_TRUE(Algo::AnyOf(Problems.begin(), Problems.end(), [](const FCSharpScriptLanguage::FProjectDiagnostic& Problem) { return Problem.Diagnostic.Message.contains("CS0246") && Problem.Diagnostic.Range.Start.Line == 7; }));
+    ASSERT_EQ(Wait([&] { Problems.Reset(); return Language.GetProjectDiagnostics(Problems); }), EReply::Answered);
+    EXPECT_TRUE(Algo::AnyOf(Problems.begin(), Problems.end(), [](const FCSharpScriptLanguage::FProjectDiagnostic& Problem) { return Problem.Diagnostic.Message.Contains("CS0246") && Problem.Diagnostic.Range.Start.Line == 7; }));
 }

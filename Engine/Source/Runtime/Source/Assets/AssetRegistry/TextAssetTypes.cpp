@@ -10,8 +10,8 @@ namespace Lumina::TextAsset
         // Case-insensitive compare of an extension token against a lowercase literal.
         bool IEquals(FStringView A, FStringView B)
         {
-            if (A.size() != B.size()) return false;
-            for (size_t i = 0; i < A.size(); ++i)
+            if (A.Len() != B.Len()) return false;
+            for (int32 i = 0; i < A.Len(); ++i)
             {
                 char Ca = A[i]; if (Ca >= 'A' && Ca <= 'Z') Ca = char(Ca + ('a' - 'A'));
                 if (Ca != B[i]) return false;
@@ -23,7 +23,7 @@ namespace Lumina::TextAsset
     ETextAssetKind KindFromExtension(FStringView Ext)
     {
         // Accept with or without the leading dot.
-        if (!Ext.empty() && Ext[0] == '.') Ext = Ext.substr(1);
+        if (!Ext.IsEmpty() && Ext[0] == '.') Ext = Ext.Mid(1);
 
         if (IEquals(Ext, "rml"))  return ETextAssetKind::RmlDocument;
         if (IEquals(Ext, "rcss")) return ETextAssetKind::RmlStyleSheet;
@@ -68,24 +68,26 @@ namespace Lumina::TextAsset
         {
             if (K == ETextAssetKind::None) return;
             for (ETextAssetKind Existing : Out) { if (Existing == K) return; }
-            Out.push_back(K);
+            Out.Add(K);
         };
 
         // Split on commas / whitespace.
-        size_t i = 0;
-        const size_t N = Meta.size();
+        int32 i = 0;
+        const int32 N = Meta.Len();
+        bool bHadTokens = false;
         while (i < N)
         {
             while (i < N && (Meta[i] == ',' || Meta[i] == ' ' || Meta[i] == '\t')) ++i;
-            size_t Start = i;
+            int32 Start = i;
             while (i < N && Meta[i] != ',' && Meta[i] != ' ' && Meta[i] != '\t') ++i;
             if (i <= Start) continue;
 
-            FStringView Token = Meta.substr(Start, i - Start);
+            FStringView Token = Meta.Mid(Start, i - Start);
+            bHadTokens = true;
 
             if (IEquals(Token, "any") || IEquals(Token, "*"))
             {
-                Out.clear();
+                Out.Reset();
                 AddUnique(ETextAssetKind::RmlDocument);
                 AddUnique(ETextAssetKind::RmlStyleSheet);
                 return Out;
@@ -101,8 +103,8 @@ namespace Lumina::TextAsset
             AddUnique(K);
         }
 
-        // Empty meta == accept everything.
-        if (Out.empty())
+        // Empty/whitespace-only meta == accept everything; an unrecognized token stays empty.
+        if (!bHadTokens)
         {
             AddUnique(ETextAssetKind::RmlDocument);
             AddUnique(ETextAssetKind::RmlStyleSheet);

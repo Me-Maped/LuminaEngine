@@ -19,7 +19,7 @@ namespace Lumina
         }
 
         TScopeLock Guard(WaitLock);
-        Waits.push_back(std::move(Wait));
+        Waits.Add(Move(Wait));
     }
 
     void FCoroutineManager::Suspend(CoroDetail::FCoroutineState& State, CoroDetail::FLatentWaitSpec&& Spec, uint32 Serial)
@@ -27,21 +27,21 @@ namespace Lumina
         FWait Wait;
         Wait.State  = CoroDetail::FStateRef(&State);
         Wait.Serial = Serial;
-        Wait.Spec   = std::move(Spec);
-        Add(std::move(Wait));
+        Wait.Spec   = Move(Spec);
+        Add(Move(Wait));
     }
 
     uint64 FCoroutineManager::AddWait(CoroDetail::FLatentWaitSpec&& Spec, FWaitCallback Callback)
     {
         FWait Wait;
-        Wait.Spec     = std::move(Spec);
-        Wait.Callback = std::move(Callback);
+        Wait.Spec     = Move(Spec);
+        Wait.Callback = Move(Callback);
         {
             TScopeLock Guard(WaitLock);
             Wait.Id = ++NextId;
         }
         const uint64 Id = Wait.Id;
-        Add(std::move(Wait));
+        Add(Move(Wait));
         return Id;
     }
 
@@ -55,15 +55,15 @@ namespace Lumina
             {
                 return;
             }
-            Dropped = std::move(It->Callback);
-            Waits.erase(It);
+            Dropped = Move(It->Callback);
+            Waits.RemoveAt(static_cast<int32>(It - Waits.begin()));
         }
     }
 
     void FCoroutineManager::Track(CoroDetail::FCoroutineState& State)
     {
         TScopeLock Guard(TrackLock);
-        Tracked.push_back(&State);
+        Tracked.Add(&State);
     }
 
     void FCoroutineManager::Untrack(CoroDetail::FCoroutineState& State)
@@ -72,8 +72,8 @@ namespace Lumina
         auto It = Algo::Find(Tracked, &State);
         if (It != Tracked.end())
         {
-            *It = Tracked.back();
-            Tracked.pop_back();
+            *It = Tracked.Last();
+            Tracked.Pop();
         }
     }
 
@@ -105,29 +105,22 @@ namespace Lumina
         Clocks[(uint8)ECoroutineClock::Real]     += RealDeltaTime;
 
         // Swapped out, so a coroutine resumed here that waits again lands in the next tick rather than this one.
-        TVector<FWait> Current;
         {
             TScopeLock Guard(WaitLock);
-            Current = std::move(Waits);
-            Waits.clear();
+            ElementOps::SwapElements(Waits, TickingWaits);
         }
 
-        TVector<FWait> Kept;
-        Kept.reserve(Current.size());
-        for (FWait& Wait : Current)
+        TickingWaits.RemoveAll([this, bPaused](FWait& Wait)
         {
             if (!Wait.State)
             {
-                if (IsReady(Wait, bPaused))
+                if (!IsReady(Wait, bPaused))
                 {
-                    FWaitCallback Callback = std::move(Wait.Callback);
-                    Callback(true);
+                    return false;
                 }
-                else
-                {
-                    Kept.push_back(std::move(Wait));
-                }
-                continue;
+                FWaitCallback Callback = Move(Wait.Callback);
+                Callback(true);
+                return true;
             }
 
             CoroDetail::FCoroutineState& State = *Wait.State.Get();
@@ -139,31 +132,28 @@ namespace Lumina
             const bool bDie = State.ShouldDieAtSuspension();
             if (!bDie && !IsReady(Wait, bPaused))
             {
-                if (State.IsWaitingOn(Wait.Serial))
+                return !State.IsWaitingOn(Wait.Serial);
+            }
+            if (State.ClaimWait(Wait.Serial))
+            {
+                if (bDie)
                 {
-                    Kept.push_back(std::move(Wait));
+                    State.DestroyAsCanceled();
                 }
-                continue;
+                else
+                {
+                    State.Resume();
+                }
             }
-            if (!State.ClaimWait(Wait.Serial))
-            {
-                continue;
-            }
-            if (bDie)
-            {
-                State.DestroyAsCanceled();
-            }
-            else
-            {
-                State.Resume();
-            }
-        }
+            return true;
+        });
 
         TScopeLock Guard(WaitLock);
-        for (FWait& Wait : Kept)
+        for (FWait& Wait : TickingWaits)
         {
-            Waits.push_back(std::move(Wait));
+            Waits.Add(Move(Wait));
         }
+        TickingWaits.Reset();
     }
 
     void FCoroutineManager::Clear()
@@ -174,9 +164,9 @@ namespace Lumina
             for (CoroDetail::FCoroutineState* State : Tracked)
             {
                 State->DetachFromWorld();
-                Bound.emplace_back(State);
+                Bound.Emplace(State);
             }
-            Tracked.clear();
+            Tracked.Reset();
         }
         for (CoroDetail::FStateRef& State : Bound)
         {
@@ -186,14 +176,14 @@ namespace Lumina
         TVector<FWait> Current;
         {
             TScopeLock Guard(WaitLock);
-            Current = std::move(Waits);
-            Waits.clear();
+            Current = Move(Waits);
+            Waits.Reset();
         }
         for (FWait& Wait : Current)
         {
             if (!Wait.State)
             {
-                FWaitCallback Callback = std::move(Wait.Callback);
+                FWaitCallback Callback = Move(Wait.Callback);
                 Callback(false);
             }
             else if (Wait.State->ClaimWait(Wait.Serial))
@@ -206,12 +196,12 @@ namespace Lumina
     int32 FCoroutineManager::NumWaiting() const
     {
         TScopeLock Guard(WaitLock);
-        return (int32)Waits.size();
+        return Waits.Num();
     }
 
     int32 FCoroutineManager::NumTracked() const
     {
         TScopeLock Guard(TrackLock);
-        return (int32)Tracked.size();
+        return Tracked.Num();
     }
 }

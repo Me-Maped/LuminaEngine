@@ -6,11 +6,11 @@
 #include "Containers/Name.h"
 #include "Containers/String.h"
 #include "Core/Templates/Optional.h"
-#include "Core/Utils/Expected.h"
 #include "Memory/SmartPtr.h"
 #include "Platform/Platform.h"
 #include "Renderer/Format.h"
 #include "Renderer/MeshDistanceField.h"
+#include "Renderer/VirtualGeometrySettings.h"
 #include "Renderer/RHITexture.h"
 #include "Assets/AssetTypes/Textures/Texture.h"
 #include "Renderer/SkeletonResource.h"
@@ -32,18 +32,18 @@ namespace Lumina::Import
     inline FString SanitizeAssetName(FStringView In, FStringView Fallback = "Asset")
     {
         FString Out;
-        Out.reserve(In.size());
+        Out.Reserve(In.Len());
         bool bSep = false;
         for (char C : In)
         {
             const bool bKeep = (C >= 'a' && C <= 'z') || (C >= 'A' && C <= 'Z') || (C >= '0' && C <= '9');
             if (bKeep)
             {
-                if (bSep && !Out.empty())
+                if (bSep && !Out.IsEmpty())
                 {
-                    Out.push_back('_');
+                    Out.AppendChar('_');
                 }
-                Out.push_back(C);
+                Out.AppendChar(C);
                 bSep = false;
             }
             else
@@ -51,9 +51,9 @@ namespace Lumina::Import
                 bSep = true;
             }
         }
-        if (Out.empty())
+        if (Out.IsEmpty())
         {
-            Out.assign(Fallback.data(), Fallback.size());
+            Out = FStringView(Fallback.GetData(), Fallback.Len());
         }
         return Out;
     }
@@ -64,8 +64,8 @@ namespace Lumina::Import
     {
         FString Name = SanitizeAssetName(Raw, Fallback);
 
-        bool bHasPrefix = Name.size() >= Prefix.size();
-        for (size_t i = 0; bHasPrefix && i < Prefix.size(); ++i)
+        bool bHasPrefix = Name.Len() >= Prefix.Len();
+        for (int32 i = 0; bHasPrefix && i < Prefix.Len(); ++i)
         {
             char A = Name[i];
             char B = Prefix[i];
@@ -78,8 +78,8 @@ namespace Lumina::Import
             return Name;
         }
 
-        FString Out(Prefix.data(), Prefix.size());
-        Out.append(Name);
+        FString Out(Prefix.GetData(), Prefix.Len());
+        Out.Append(Name);
         return Out;
     }
 
@@ -100,7 +100,7 @@ namespace Lumina::Import
     {
         struct FTextureImportResult
         {
-            TVector<uint8>      Pixels;
+            TVector64<uint8>    Pixels;
             FUIntVector2        Dimensions;
             EFormat             Format;
         };
@@ -135,6 +135,9 @@ namespace Lumina::Import
 
         /** Size with its longest edge capped at MaxDimension, aspect preserved. MaxDimension 0 means no cap. */
         RUNTIME_API FUIntVector2 ClampToMaxDimension(FUIntVector2 Size, uint32 MaxDimension);
+
+        /** The float format for an HDR image with this many channels, or NullOpt for a count stb never decodes. */
+        RUNTIME_API TOptional<EFormat> GetHDRChannelFormat(int Channels);
 
         /** Gets an image's raw pixel data */
         RUNTIME_API TOptional<FTextureImportResult> ImportTexture(FStringView RawFilePath, bool bFlipVertical = true, FUIntVector2 Size = {});
@@ -171,7 +174,13 @@ namespace Lumina::Import
              *  voxelization pass in FinalizeMeshImportData. Off by default: the build is the single most
              *  expensive step of a mesh import, and most meshes never need a field. */
             SDistanceFieldBuildSettings DistanceField;
+
+            // Seeds CMesh::VirtualGeometrySettings and picks the meshlet build GenerateMeshlets runs.
+            SVirtualGeometryBuildSettings VirtualGeometry;
         };
+
+        // Copies the virtual geometry settings onto the resource's build inputs, which is all GenerateMeshlets reads.
+        RUNTIME_API void ApplyVirtualGeometrySettings(FMeshResource& Resource, const SVirtualGeometryBuildSettings& Settings);
 
         /** One source image, deduplicated by Key during parse. Embedded payloads are a VIEW into the
          *  parser's own buffer (Bytes) so a GLB's textures are never copied; a parser that cannot keep its
@@ -194,9 +203,9 @@ namespace Lumina::Import
             // 0 = auto. A batch cooking many textures at once passes 1 so each doesn't spawn its own pool.
             uint32 EncodeThreadBudget = 0;
 
-            NODISCARD bool IsEmbedded() const { return !Bytes.empty(); }
+            NODISCARD bool IsEmbedded() const { return !Bytes.IsEmpty(); }
 
-            void AdoptOwnedBytes() { Bytes = TSpan<const uint8>(OwnedBytes.data(), OwnedBytes.size()); }
+            void AdoptOwnedBytes() { Bytes = TSpan<const uint8>(OwnedBytes.GetData(), OwnedBytes.Num()); }
         };
 
         /** Alpha handling parsed from the source material; maps to EBlendMode at material-asset creation. */
@@ -480,6 +489,8 @@ namespace Lumina::Import
         /** When Progress is set, advances StepPerSurface of progress for each surface meshletized. */
         RUNTIME_API void GenerateMeshlets(FMeshResource& MeshResource, FScopedSlowTask* Progress = nullptr, float StepPerSurface = 0.0f);
         RUNTIME_API void AnalyzeMeshStatistics(FMeshResource& MeshResource, FMeshStatistics& OutMeshStats);
+        // Pieces that share a source material share one merged slot, so a merge never adds slots per object.
+        RUNTIME_API int16 FindOrAddMergedMaterialSlot(TVector<int16>& SlotToSource, int16 SourceMaterial);
 
         /** Apply user transforms and run the heavy finalize passes on a parsed FMeshImportData.
          *  When Progress is set, advances a total of ProgressBudget across the finalize pass. */

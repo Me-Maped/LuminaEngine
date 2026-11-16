@@ -9,6 +9,9 @@ public enum ActionType
 
     Compile,
 
+    // Compiles a Windows .rc script into a .res the image links.
+    ResourceCompile,
+
     /// <summary>Produces a static library.</summary>
     Archive,
 
@@ -65,6 +68,15 @@ public sealed class BuildAction
 
     public IEnumerable<FileItem> AllProducedItems => ProducedItems.Concat(OptionalProducedItems);
 
+    private string? HistoryKeyOverride;
+
+    // Set when several targets produce the same primary output, so each keeps its own command and input record.
+    public string HistoryKey
+    {
+        get => HistoryKeyOverride ?? ProducedItems[0].Location;
+        set => HistoryKeyOverride = value;
+    }
+
     /// <summary>Explicit ordering edges for actions that do not communicate through files.</summary>
     public List<BuildAction> OrderDependencies { get; } = new();
 
@@ -72,6 +84,9 @@ public sealed class BuildAction
     public string? ResponseFilePath { get; set; }
 
     public string? ResponseFileContents { get; set; }
+
+    /// <summary>Text piped to the tool's standard input, part of the command key so a change reruns the action.</summary>
+    public string? StandardInput { get; set; }
 
     /// <summary>Extra environment for the process, merged over the inherited environment.</summary>
     public Dictionary<string, string>? EnvironmentOverrides { get; set; }
@@ -101,7 +116,7 @@ public sealed class BuildAction
     /// <summary>Identity of the command being run.</summary>
     public string GetCommandKey()
     {
-        return ContentHash.OfStrings(new[]
+        List<string> Parts = new()
         {
             ToolPath,
             Arguments,
@@ -109,7 +124,15 @@ public sealed class BuildAction
             WorkingDirectory,
             ToolchainIdentity,
             Operation?.GetIdentity() ?? string.Empty,
-        });
+        };
+
+        // Appended only when present, so actions without input keep the keys every existing build recorded.
+        if (StandardInput is not null)
+        {
+            Parts.Add(StandardInput);
+        }
+
+        return ContentHash.OfStrings(Parts);
     }
 
     public override string ToString() => $"{Type} {StatusText}";

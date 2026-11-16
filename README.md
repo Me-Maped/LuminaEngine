@@ -227,7 +227,7 @@ https://github.com/user-attachments/assets/3d797479-fc47-4b8f-baf4-87315709d0c2
    它会下载一个预编译的依赖包
    （`External-Win64.zip`，约 192 MB），用本仓库中固定的 SHA-256 哈希进行校验
    （需要维护者先录入，见 [`DEPENDENCIES.md`](DEPENDENCIES.md)），配置 git hooks，
-   注册 `.lproject` 文件类型，并生成 `Lumina.sln`。
+   注册 `.lproject` 文件类型，并生成 `Lumina.slnx`。
 
    该依赖包包含 .NET 10 运行时（C# 脚本）、LLVM/Clang 19
    （反射代码生成）、Slang shader 编译器、RenderDoc 和 Tracy。每一项都是开源的；
@@ -242,7 +242,7 @@ https://github.com/user-attachments/assets/3d797479-fc47-4b8f-baf4-87315709d0c2
 
 1. **打开解决方案**
 
-   在 Visual Studio 中打开 `Lumina.sln`。
+   在 Visual Studio 中打开 `Lumina.slnx`。
 
 2. **构建并运行**
 
@@ -495,7 +495,6 @@ Lumina 是一个公开构建和维护的业余爱好项目。如果你觉得它�
 | Miniz | 用于 package 和 pak 归档序列化的 Deflate 压缩 |
 | MSDFGen | 用于清晰世界空间文本的多通道有符号距离场 |
 | .NET Runtime | 作为 C#（LuminaSharp）脚本宿主的 CoreCLR（.NET 10） |
-| Nlohmann JSON | 兼容 STL 的现代 JSON 库 |
 | NVIDIA Aftermath | GPU 崩溃调试与事后转储分析 |
 | NVIDIA Nsight Perf | 硬件性能分析器插件背后的 GPU 计数器采集 |
 | Recast & Detour | 导航网格生成与寻路 |
@@ -510,7 +509,6 @@ Lumina 是一个公开构建和维护的业余爱好项目。如果你觉得它�
 | Volk | 用于运行时函数加载的 Vulkan 元加载器 |
 | Vulkan | 提供显式 GPU 控制的底层图形 API |
 | VulkanMemoryAllocator | Vulkan 内存管理库，支持碎片整理 |
-| xxHash | 极快的非加密哈希算法 |
 
 ---
 

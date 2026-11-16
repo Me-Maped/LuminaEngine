@@ -31,6 +31,7 @@ struct FMeshletCullArgs
     GPUSpan<uint>          ReceiverMask;
     // Word 3 is how many blocks BuildMeshletCullArgs gave each group.
     GPUSpan<uint4>         CullDispatch;
+    GPUSpan<FSurfaceDesc>  SurfaceDescs;
 };
 FMeshletCullArgs* Pass() { return GetPassArgs<FMeshletCullArgs>(); }
 
@@ -41,6 +42,8 @@ FMeshletCullArgs* Pass() { return GetPassArgs<FMeshletCullArgs>(); }
 static const uint kBlockTwoPhase        = 1u;
 static const uint kBlockWasVisible      = 2u;
 static const uint kBlockDeferredCascade = 4u;
+// The block build fell back to a whole slot, so every meshlet draws without the cluster cut.
+static const uint kBlockForceAll        = 8u;
 
 // A group culls up to MESHLET_CULL_GROUP_SIZE blocks, so a block holding one cube's meshlet no longer idles 31 lanes.
 groupshared uint gsBlockArg[MESHLET_CULL_GROUP_SIZE];
@@ -50,6 +53,7 @@ groupshared uint gsBlockPrevBits[MESHLET_CULL_GROUP_SIZE];
 groupshared uint gsBlockFlags[MESHLET_CULL_GROUP_SIZE];
 groupshared uint gsBlockStart[MESHLET_CULL_GROUP_SIZE + 1];
 groupshared uint gsBlockVisibleBits[MESHLET_CULL_GROUP_SIZE];
+groupshared FMeshletCullContext gsBlockContext[MESHLET_CULL_GROUP_SIZE];
 
 // Inverts the dense prefix BuildMeshletCullArgs writes, since blocks are sparse across the arena.
 uint FindBucketForWork(uint WorkIndex, uint NumBuckets)
@@ -144,7 +148,8 @@ void ComputeMain(uint3 GroupID : SV_GroupID, uint ThreadID : SV_GroupIndex)
         {
             Block = Pass().BlockList.Get(BlockIdx);
         }
-        Flags = (bTwoPhase ? kBlockTwoPhase : 0u) | (bDeferredCascade ? kBlockDeferredCascade : 0u);
+        Flags = (bTwoPhase ? kBlockTwoPhase : 0u) | (bDeferredCascade ? kBlockDeferredCascade : 0u)
+              | ((Block.PackedBaseAndCount & MESHLET_BLOCK_FORCE_ALL_BIT) != 0u ? kBlockForceAll : 0u);
     }
 
     FGPUInstance* Inst = Instances() + Block.InstanceID;
@@ -200,6 +205,16 @@ void ComputeMain(uint3 GroupID : SV_GroupID, uint ThreadID : SV_GroupIndex)
         gsBlockStart[ThreadID]       = Start;
         gsBlockVisibleBits[ThreadID] = 0u;
     }
+    // Only a block with meshlets owns items, so only those need the context the item loop reads.
+    if (Meshlets > 0u)
+    {
+        FMeshletCullContext Ctx = MakeMeshletCullContext(Inst);
+        if (Ctx.bSelectsLOD && Pass().SurfaceDescs.Contains(Ctx.SurfaceDescIndex))
+        {
+            Ctx.LODErrorMultiplier = Pass().SurfaceDescs.At(Ctx.SurfaceDescIndex).LODErrorMultiplier;
+        }
+        gsBlockContext[ThreadID] = Ctx;
+    }
     if (ThreadID == 0u)
     {
         gsBlockStart[NumBlocks] = Total;
@@ -231,12 +246,13 @@ void ComputeMain(uint3 GroupID : SV_GroupID, uint ThreadID : SV_GroupIndex)
             // Late also tests what early drew, since that test is what writes next frame's flag and bits.
             if (bLate || bEmitPhase)
             {
-                const FMeshletCullContext Ctx = MakeMeshletCullContext(Instances() + KeepInstance);
-                FMeshletBoundsCache Cache     = MakeMeshletBoundsCache();
+                const FMeshletCullContext Ctx = gsBlockContext[Owner];
+                // Blocks of a group nearly always share a view, so this load hits one address across the wave.
                 const FCullView View          = CullViews().GetAligned(KeepArg / NumDraws);
+                FMeshletBoundsCache Cache     = MakeMeshletBoundsCache();
 
                 // No Hi-Z in the early replay, since the late phase never re-emits what the early phase drew.
-                bool bVisible = TestMeshletAgainstView(Ctx, View, KeepMeshlet, Cache, bLate);
+                bool bVisible = TestMeshletAgainstView(Ctx, View, KeepMeshlet, Cache, bLate, (OwnerFlags & kBlockForceAll) != 0u);
                 if (bVisible && (OwnerFlags & kBlockDeferredCascade) != 0u && Ctx.bPosedBounds)
                 {
                     bVisible = !IsShadowUnreceived(View.CascadeIndex, Cache.WorldCenter, Cache.WorldRadius);

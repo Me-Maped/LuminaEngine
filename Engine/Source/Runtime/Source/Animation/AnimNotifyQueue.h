@@ -11,7 +11,10 @@ namespace Lumina
     namespace ECS
     {
         class FCommandBus;
+        class FRegistry;
     }
+
+    struct SSystemContext;
 
     // Simple playback runs before graphs, matching the order the passes resolve a dual-component entity.
     enum class EAnimNotifyPass : uint8
@@ -34,6 +37,9 @@ namespace Lumina
         // Main thread, once every pass has joined. The handlers run at the bus's next flush with full registry access.
         void Submit(ECS::FCommandBus& Bus);
 
+        // The same from a system, whose handlers run at the flush after its batch.
+        void Submit(const SSystemContext& Context);
+
     private:
 
         struct FRecord
@@ -47,6 +53,8 @@ namespace Lumina
             EAnimNotifyEventType            Type   = EAnimNotifyEventType::Trigger;
             EAnimNotifyPass                 Pass   = EAnimNotifyPass::Simple;
         };
+
+        TVector<FRecord> TakeSorted();
 
         static void Dispatch(const TVector<FRecord>& Records, ECS::FRegistry& Registry);
 

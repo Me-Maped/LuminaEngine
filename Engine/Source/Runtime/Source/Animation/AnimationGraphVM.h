@@ -10,11 +10,12 @@
 #include "Core/Object/ObjectHandleTyped.h"
 #include "Core/Serialization/Archiver.h"
 #include "Renderer/SkeletonResource.h"
+#include "World/ECS/Entity.h"
 #include "AnimationGraphVM.generated.h"
 
 namespace Lumina
 {
-    namespace Physics { class IPhysicsScene; }
+    namespace Physics { class IPhysicsQueries; }
 
     class CAnimationGraph;
     struct FSkeletonResource;
@@ -192,6 +193,7 @@ namespace Lumina
     {
         FSyncPosition Position;     // shared playhead on the group's blended sync track
         FSyncPosition PrevPosition; // position before this update's advance
+        int32 WholeLoops = 0;       // full cycles this update's advance spanned beyond PrevPosition to Position
 
         float Duration     = 0.0f; // blended seconds one cycle of the track takes
         float NextDuration = 0.0f; // accumulated from this update's blend provenance
@@ -235,7 +237,7 @@ namespace Lumina
     // Per-entity scene state a GroundTrace queries; left invalid when there is no world, which traces flat.
     struct FAnimGraphSceneContext
     {
-        Physics::IPhysicsScene* Scene = nullptr;
+        Physics::IPhysicsQueries* Scene = nullptr;
 
         // Last update's skinning matrices, since this update's pose is what the graph is still building.
         const TVector<FMatrix4>* BoneTransforms = nullptr;

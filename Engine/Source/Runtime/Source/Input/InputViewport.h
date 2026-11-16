@@ -1,10 +1,14 @@
 #pragma once
 
+#include "Containers/HashTable.h"
 #include "Containers/Name.h"
+#include "Containers/String.h"
 #include "Containers/Vector.h"
+#include "Core/Math/Math.h"
 #include "Events/EventProcessor.h"
 #include "Events/MouseCodes.h"
 #include "Input/Gamepad.h"
+#include "Input/InputMode.h"
 #include "Memory/SmartPtr.h"
 
 namespace Lumina
@@ -75,7 +79,6 @@ namespace Lumina
 
         // A game's developer overlay holds the keyboard, mouse and pad while open, freeing the cursor without touching the game's own mode.
         RUNTIME_API void SetDevOverlayCapturing(bool bCapturing);
-        RUNTIME_API bool IsDevOverlayCapturing() const { return bDevOverlayCapturing; }
 
         // A game world is the active viewport and holds game focus, so editor UI must leave the keyboard and mouse alone.
         RUNTIME_API bool IsGameOwningInput() const;
@@ -104,6 +107,16 @@ namespace Lumina
         // Pushes the active viewport's effective cursor mode to its window, which a context mode change alone never does.
         RUNTIME_API void ApplyActiveCursorMode();
 
+        // Sets the cursor of CallerWorld's own viewport, or of the active one when null.
+        RUNTIME_API void SetMouseCursor(EMouseCursor Cursor, const CWorld* CallerWorld = nullptr);
+
+        // The viewport whose cursor the window shows, which needs a visible cursor over the game that owns input, or null when the editor or system keeps it.
+        RUNTIME_API const FInputViewport* GetGameCursorViewport() const;
+        RUNTIME_API bool IsGameCursorShowing() const { return GetGameCursorViewport() != nullptr; }
+
+        // Puts the cursor GetGameCursorViewport asks for on its window, from the project's hardware cursors or the system's own.
+        RUNTIME_API void ApplyActiveCursor();
+
         RUNTIME_API const FGamepadDevices& GetGamepads() const { return Gamepads; }
 
         // Waits for the next key, mouse button or pad button and saves it as the player's binding, while Escape cancels.
@@ -118,6 +131,12 @@ namespace Lumina
         RUNTIME_API void BeginFrame(double DeltaSeconds);
         RUNTIME_API void EndFrame();
         RUNTIME_API void OnWindowFocusLost();
+
+        // Pumps the window again just before extract when the captured viewport's camera turns with the mouse, returning whether it did.
+        RUNTIME_API bool PumpLateMouseLook();
+
+        // The yaw and pitch in degrees World's rendered view turns by for the motion PumpLateMouseLook held, or zero.
+        RUNTIME_API FVector2 GetLateMouseLook(const CWorld* World) const;
 
         bool OnEvent(FEvent& Event) override;
 
@@ -142,6 +161,7 @@ namespace Lumina
         FInputViewport* MousePressViewport = nullptr;
         bool            bGameInputFocused = true;
         bool            bDevOverlayCapturing = false;
+        const CWorld*   LateLookWorld = nullptr;
         TUniquePtr<FInputContext> RawInput;
         FGamepadDevices Gamepads;
 
@@ -149,5 +169,15 @@ namespace Lumina
         int32 RebindIndex = 0;
         bool  bRebindArmed = false;
         FName RebindConflict;
+
+        void* ResolveCursor(EMouseCursor Cursor);
+
+        // OS cursors by image path and hotspot, and the system's own by type, which the platform frees when it shuts down.
+        THashMap<FString, void*> HardwareCursorImages;
+        void* SystemCursors[MouseCursorTypeCount] = {};
+        void* AppliedCursorWindow = nullptr;
+        bool  bGameCursorApplied  = false;
+        int32 LastMouseWindowX    = -1;
+        int32 LastMouseWindowY    = -1;
     };
 }

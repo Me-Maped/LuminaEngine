@@ -2,13 +2,18 @@
 
 #include "ThumbnailManager.h"
 #include "ThumbnailUtils.h"
+#include "Assets/AssetRegistry/AssetRegistry.h"
+#include "Assets/AssetTypes/Audio/SoundBase.h"
 #include "Assets/AssetTypes/Curve/CurveAsset.h"
+#include "Audio/AudioGlobals.h"
+#include "Audio/SoundPlayback.h"
 #include "Core/Math/Math.h"
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/Object.h"
 #include "Core/Object/Package/Thumbnail/PackageThumbnail.h"
 #include "Tools/UI/ImGui/EditorColors.h"
+#include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 
 namespace Lumina
 {
@@ -24,39 +29,129 @@ namespace Lumina
         {
             return;
         }
-        Painters.insert_or_assign(AssetClass, std::move(Painter));
+        Painters.Add(AssetClass, std::move(Painter));
     }
 
-    FAssetTilePainterFn* FAssetTilePainterRegistry::Find(CClass* AssetClass)
+    void FAssetTilePainterRegistry::RegisterAction(CClass* AssetClass, FAssetTileAction Action)
     {
-        // Most-derived first, matching the editor-tool registry, so a subclass can override its base.
-        for (CClass* Current = AssetClass; Current != nullptr; Current = Cast<CClass>(Current->GetSuperStruct()))
+        if (AssetClass == nullptr || !Action.Start)
         {
-            auto It = Painters.find(Current);
-            if (It != Painters.end())
-            {
-                return &It->second;
-            }
+            return;
         }
-        return nullptr;
+        Actions.Add(AssetClass, std::move(Action));
     }
 
     namespace
     {
-        /** Max samples in a curve preview. Fixed so both backends can use a stack array. */
+        // Most-derived first, matching the editor-tool registry, so a subclass can override its base.
+        template<typename TValue>
+        TValue* FindInClassHierarchy(THashMap<CClass*, TValue>& Map, CClass* AssetClass)
+        {
+            for (CClass* Current = AssetClass; Current != nullptr; Current = Cast<CClass>(Current->GetSuperStruct()))
+            {
+                auto It = Map.Find(Current);
+                if (It != nullptr)
+                {
+                    return &(*It);
+                }
+            }
+            return nullptr;
+        }
+    }
+
+    FAssetTilePainterFn* FAssetTilePainterRegistry::Find(CClass* AssetClass)
+    {
+        return FindInClassHierarchy(Painters, AssetClass);
+    }
+
+    const FAssetTileAction* FAssetTilePainterRegistry::FindAction(CClass* AssetClass)
+    {
+        return FindInClassHierarchy(Actions, AssetClass);
+    }
+
+    void FAssetTilePreviewSlot::Request(const FAssetTileAction& InAction, const FAssetData& InAsset)
+    {
+        Stop();
+        Action    = InAction;
+        Asset     = InAsset.AssetGUID;
+        AssetPath = InAsset.Path;
+        Load      = FAssetManager::Get().Load(Asset);
+        Advance();
+    }
+
+    void FAssetTilePreviewSlot::Stop()
+    {
+        if (Preview.Stop)
+        {
+            Preview.Stop();
+        }
+        Preview = {};
+        Load.Reset();
+        Asset = FGuid();
+    }
+
+    void FAssetTilePreviewSlot::Tick()
+    {
+        const bool bWasShown = bShown;
+        bShown = false;
+        if (bWasShown)
+        {
+            Advance();
+        }
+        else
+        {
+            Stop();
+        }
+    }
+
+    void FAssetTilePreviewSlot::Advance()
+    {
+        if (!Asset.IsValid())
+        {
+            return;
+        }
+
+        const FAssetDataPtr Data = FAssetRegistry::Get().GetAssetByGUID(Asset);
+        if (Data == nullptr || Data->Path != AssetPath)
+        {
+            Stop();
+            return;
+        }
+
+        if (!Preview.IsRunning)
+        {
+            if (!Load.IsReady())
+            {
+                return;
+            }
+            if (CObject* Loaded = Load.Get())
+            {
+                Preview = Action.Start(Loaded);
+            }
+        }
+
+        if (!Preview.IsRunning || !Preview.IsRunning())
+        {
+            Stop();
+        }
+    }
+
+    namespace
+    {
+        // Fixed so both backends can use a stack array.
         constexpr int32 kMaxCurveSamples = 128;
 
         // Breathing room, so the curve extremes are not welded to the border.
         constexpr float kInsetFraction = 0.12f;
 
-        // Both axes normalized to [0,1] with Y flipped so 0 is the TOP, shared by tile and thumbnail paths.
+        // Both axes normalized to [0,1] with Y flipped so 0 is the top, shared by tile and thumbnail paths.
         struct FCurveSamples
         {
             float X[kMaxCurveSamples] = {};
             float Y[kMaxCurveSamples] = {};
             int32 Count = 0;
 
-            // Valid only when zero falls INSIDE the value range, since a clamped baseline reads as part of the shape.
+            // Valid only when zero falls inside the value range, since a clamped baseline reads as part of the shape.
             bool  bHasZeroLine = false;
             float ZeroY = 0.0f;
 
@@ -126,15 +221,13 @@ namespace Lumina
             Out.bHasZeroLine = (ValueMin < 0.0f && ValueMax > 0.0f);
             Out.ZeroY        = Out.bHasZeroLine ? ToNormalizedY(0.0f) : 0.0f;
 
-            Out.KeyCount = Math::Min((int32)Curve.Keys.size(), kMaxCurveSamples);
+            Out.KeyCount = Math::Min(Curve.Keys.Num(), kMaxCurveSamples);
             for (int32 i = 0; i < Out.KeyCount; ++i)
             {
                 Out.KeyX[i] = (Curve.Keys[i].Time - TimeMin) / TimeSpan;
                 Out.KeyY[i] = ToNormalizedY(Curve.Keys[i].Value);
             }
         }
-
-        //~ Live tile painter -------------------------------------------------------------------------
 
         void PaintCurveTile(CObject* Asset, ImDrawList& DrawList, const ImVec2& Min, const ImVec2& Max)
         {
@@ -190,8 +283,6 @@ namespace Lumina
             }
         }
 
-        //~ CPU thumbnail rasterizer ------------------------------------------------------------------
-
         struct FRGBA { uint8 R, G, B, A; };
 
         FRGBA ToRGBA8(const ImVec4& C)
@@ -200,7 +291,7 @@ namespace Lumina
             return FRGBA{ Chan(C.x), Chan(C.y), Chan(C.z), Chan(C.w) };
         }
 
-        // A curve is a FUNCTION, so filling each column between adjacent samples needs no line algorithm.
+        // A curve is a function, so filling each column between adjacent samples needs no line algorithm.
         bool PaintCurveThumbnail(CObject* Asset, uint32 Size, FPackageThumbnail& Out)
         {
             const CCurveAsset* CurveAsset = Cast<CCurveAsset>(Asset);
@@ -213,13 +304,13 @@ namespace Lumina
             Out.LoadState.store(FPackageThumbnail::EState::None, std::memory_order_relaxed);
             Out.ImageWidth  = Size;
             Out.ImageHeight = Size;
-            Out.ImageData.assign((size_t)Size * Size * BytesPerPixel, 0);
+            Out.ImageData.Init(0, IntCastChecked<int32>(static_cast<int64>(Size) * Size * BytesPerPixel));
 
             const FRGBA Background = ToRGBA8(ImVec4(0.16f, 0.16f, 0.17f, 1.0f));   // matches the tile frame
             const FRGBA CurveColor = ToRGBA8(EditorColors::Accent());
             const FRGBA AxisColor  = ToRGBA8(ImVec4(0.45f, 0.45f, 0.48f, 1.0f));
 
-            uint8* Pixels = Out.ImageData.data();
+            uint8* Pixels = Out.ImageData.GetData();
 
             // StoreDownsampledRGBA stores flipped and the upload flips back, so every write goes through Plot.
             auto Plot = [&](int32 X, int32 Y, const FRGBA& C)
@@ -293,6 +384,21 @@ namespace Lumina
 
             return true;
         }
+
+        FAssetTilePreview StartSoundPreview(CObject* Asset)
+        {
+            const SAudioHandle Handle = Audio::PlaySound(Cast<CSoundBase>(Asset), SAudioPlayParams()).Handle;
+            if (!Handle.IsValid())
+            {
+                return {};
+            }
+
+            return FAssetTilePreview
+            {
+                .IsRunning = [Handle] { return Audio::HasDevice() && Audio::Context().GetVoiceState(Handle) != EAudioVoiceState::Free; },
+                .Stop      = [Handle] { if (Audio::HasDevice()) { Audio::Context().StopSound(Handle); } },
+            };
+        }
     }
 
     namespace AssetTilePainters
@@ -300,6 +406,7 @@ namespace Lumina
         void RegisterBuiltin()
         {
             FAssetTilePainterRegistry::Get().Register(CCurveAsset::StaticClass(), &PaintCurveTile);
+            FAssetTilePainterRegistry::Get().RegisterAction(CSoundBase::StaticClass(), FAssetTileAction{ LE_ICON_PLAY, LE_ICON_STOP, &StartSoundPreview });
             CThumbnailManager::Get().RegisterThumbnailPainter(CCurveAsset::StaticClass(), &PaintCurveThumbnail);
         }
     }

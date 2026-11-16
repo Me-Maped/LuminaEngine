@@ -2,10 +2,10 @@
 #include "World/ECS/Registry.h"
 
 #include "Assets/AssetTypes/Prefabs/Prefab.h"
-#include "Core/Object/Package/Package.h"
 #include "Core/Serialization/MemoryArchiver.h"
 #include "Core/Serialization/ObjectArchiver.h"
 #include "World/World.h"
+#include "World/ExternalEntities/ExternalEntities.h"
 #include "World/Entity/EntityUtils.h"
 
 namespace Lumina
@@ -55,13 +55,14 @@ namespace Lumina
 
             FEntry Entry;
             Entry.Entity = Candidate;
+            Entry.Guid = ExternalEntities::GuidOf(Registry, Candidate);
             Entry.Offset = Ar.Tell();
 
             ECS::FEntity Mutable = Candidate;
             ECS::Utils::SerializeEntity(Ar, Registry, Mutable);
 
             Entry.Size = Ar.Tell() - Entry.Offset;
-            Entries.push_back(Entry);
+            Entries.Add(Entry);
         }
     }
 
@@ -70,7 +71,7 @@ namespace Lumina
         CWorld* W = World.Get();
         if (W == nullptr)
         {
-            Entries.clear();
+            Entries.Reset();
             return;
         }
 
@@ -78,12 +79,12 @@ namespace Lumina
 
         // A candidate still alive was never part of the delete, so it owes no undo step.
         TVector<FEntry> Kept;
-        Kept.reserve(Entries.size());
+        Kept.Reserve(Entries.Num());
         for (const FEntry& Entry : Entries)
         {
             if (!Registry.IsValid(Entry.Entity))
             {
-                Kept.push_back(Entry);
+                Kept.Add(Entry);
             }
         }
 
@@ -95,7 +96,7 @@ namespace Lumina
         LUMINA_PROFILE_SCOPE();
 
         CWorld* W = World.Get();   // null once the map is closed/swapped -> a stale undo safely no-ops
-        if (W == nullptr || Entries.empty())
+        if (W == nullptr || Entries.IsEmpty())
         {
             return;
         }
@@ -120,11 +121,6 @@ namespace Lumina
         {
             CPrefab::MarkInstanceStale(Registry, Entry.Entity);
         }
-
-        if (W->GetPackage())
-        {
-            W->GetPackage()->MarkDirty();
-        }
     }
 
     void FEntityDestroyCommand::Redo()
@@ -132,7 +128,7 @@ namespace Lumina
         LUMINA_PROFILE_SCOPE();
 
         CWorld* W = World.Get();
-        if (W == nullptr || Entries.empty())
+        if (W == nullptr || Entries.IsEmpty())
         {
             return;
         }
@@ -147,10 +143,17 @@ namespace Lumina
                 Registry.Destroy(It->Entity);
             }
         }
+    }
 
-        if (W->GetPackage())
+    void FEntityDestroyCommand::MarkChanged() const
+    {
+        TVector<ECS::FEntity> Entities;
+        TVector<FName> Guids;
+        for (const FEntry& Entry : Entries)
         {
-            W->GetPackage()->MarkDirty();
+            Entities.Add(Entry.Entity);
+            Guids.Add(Entry.Guid);
         }
+        ExternalEntities::MarkChanged(World.Get(), Entities, Guids);
     }
 }

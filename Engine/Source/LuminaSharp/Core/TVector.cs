@@ -7,29 +7,13 @@ using LuminaSharp;
 
 namespace Lumina;
 
-/// <summary>
-/// A writable <see cref="IList{T}"/> view over a native <c>TVector&lt;T&gt;</c>, source-agnostic across
-/// reflected properties, function returns, or any vector instance. Reads decode the header in place (no
-/// crossing); Add/RemoveAt/Clear/Insert call the ops table so native reallocs through the owning allocator.
-/// As with <see cref="List{T}"/>, a mutation invalidates any earlier span, handle or enumerator; the view
-/// does not own the storage.
-///
-/// <para>The element may be a plain value, an <see cref="FString"/>, or a <see cref="TStrongObjectPtr{T}"/> --
-/// which is why there is one view type and not three. What differs per element is only how a slot is read and
-/// written, and that is <c>ElementMarshal</c>'s job; this file has no per-kind knowledge, the same way
-/// <c>FScriptArrayElementDesc</c> natively has none (it dispatches through the element's own FProperty).</para>
-///
-/// <para>The native element stride comes from the ops table, NOT from <c>Unsafe.SizeOf&lt;T&gt;()</c>. They
-/// are equal only for a blittable element: an FString slot is 24 native bytes behind an 8-byte managed
-/// handle.</para>
-/// </summary>
+// Writable IList view over a native TVector; a mutation invalidates earlier spans and enumerators, and the stride comes from the ops table.
 public readonly unsafe struct TVector<T> : IList<T>
 {
     private readonly nint Vector;   // TVector<T> instance (mpBegin@0, mpEnd@8)
     private readonly nint Ops;      // FVectorOps for T
 
-    /// <summary>Views an existing native TVector&lt;T&gt; through its ops table. Public because the accessors
-    /// ScriptPropertyRewriter emits for a user script are compiled into the user's own assembly.</summary>
+    // Public because ScriptPropertyRewriter accessors compile into the user's own assembly.
     public TVector(nint vector, nint ops)
     {
         Vector = vector;
@@ -38,7 +22,6 @@ public readonly unsafe struct TVector<T> : IList<T>
 
     private VectorOps* OpsPtr => (VectorOps*)Ops;
 
-    /// <summary>False when the property this came from did not resolve, so the view has no storage.</summary>
     public bool IsValid
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -76,7 +59,6 @@ public readonly unsafe struct TVector<T> : IList<T>
 
     public bool IsReadOnly => false;
 
-    /// <summary>The address of element <paramref name="index"/> in native storage.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private nint ElementAt(int index)
     {
@@ -100,10 +82,7 @@ public readonly unsafe struct TVector<T> : IList<T>
         return (nint)Data + index * (nint)Stride;
     }
 
-    /// <summary>The native storage as a writable span, for in-place edits of a blittable element.
-    /// <para>Not available for a marshalled element: a span of FString handles or object slots would let a
-    /// plain assignment copy bytes, which is the aliasing and refcount corruption the marshal exists to
-    /// prevent. Use <see cref="Get"/> / <see cref="Set"/> there.</para></summary>
+    // Blittable elements only, since a span of marshalled slots would let a plain assignment corrupt refcounts.
     public Span<T> AsSpan()
     {
         ThrowIfMarshalled(nameof(AsSpan));
@@ -111,13 +90,7 @@ public readonly unsafe struct TVector<T> : IList<T>
         return Length == 0 ? Span<T>.Empty : new Span<T>(Data, Length);
     }
 
-    /// <summary>
-    /// The element by reference, so <c>List[0] = x</c> works even when the list came from a property. A
-    /// by-value indexer setter would not: assigning through a property that returns a struct is CS1612,
-    /// because the setter would run on a temporary. Returning a ref sidesteps that, and it is accurate
-    /// anyway -- the element lives in native memory.
-    /// <para>A marshalled element reads through a held copy, so LUM0201 sends writes to <see cref="Set"/> instead.</para>
-    /// </summary>
+    // Returns by ref so assigning through a struct-returning property avoids CS1612; marshalled elements write through Set.
     public ref T this[int index]
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -137,12 +110,10 @@ public readonly unsafe struct TVector<T> : IList<T>
         set => Set(index, value);
     }
 
-    /// <summary>Reads an element. Works for every element type.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T Get(int index) => ElementMarshal.Read<T>(ElementAt(index));
 
-    /// <summary>Overwrites an element, doing whatever its type requires -- a native assignment for a string,
-    /// a refcounted assignment for an object reference, a byte write for a plain value.</summary>
+    // Assigns natively for a string, refcounted for an object reference, and bytewise for a plain value.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set(int index, T value) => ElementMarshal.Write(ElementAt(index), value);
 
@@ -154,20 +125,23 @@ public readonly unsafe struct TVector<T> : IList<T>
         }
         if (ElementKind<T>.IsMarshalled)
         {
-            // Default-construct the slot through the ops table first (a live FString / a null object slot),
-            // then assign into it. Pushing the managed value's bytes would be meaningless for these.
-            OpsPtr->PushBack((void*)Vector, null);
-            ElementMarshal.Write(ElementAt(Count - 1), item);
+            // A handle read out of a container still points into it, so native copies it before growing can free it.
+            nint Source = ElementMarshal.BoundAddress(item);
+            OpsPtr->Add((void*)Vector, (void*)Source);
+            if (Source == 0)
+            {
+                ElementMarshal.Write(ElementAt(Count - 1), item);
+            }
             return;
         }
-        OpsPtr->PushBack((void*)Vector, Unsafe.AsPointer(ref item));
+        OpsPtr->Add((void*)Vector, Unsafe.AsPointer(ref item));
     }
 
     public void Clear()
     {
         if (IsValid)
         {
-            OpsPtr->Clear((void*)Vector);
+            OpsPtr->Reset((void*)Vector);
         }
     }
 
@@ -176,7 +150,7 @@ public readonly unsafe struct TVector<T> : IList<T>
     {
         if (IsValid && Size >= 0)
         {
-            OpsPtr->Resize((void*)Vector, (nuint)Size);
+            OpsPtr->SetNum((void*)Vector, Size);
         }
     }
 
@@ -184,7 +158,7 @@ public readonly unsafe struct TVector<T> : IList<T>
     {
         if (IsValid && Size > 0)
         {
-            OpsPtr->Reserve((void*)Vector, (nuint)Size);
+            OpsPtr->Reserve((void*)Vector, Size);
         }
     }
 
@@ -202,7 +176,7 @@ public readonly unsafe struct TVector<T> : IList<T>
         {
             throw new ArgumentOutOfRangeException(nameof(index));
         }
-        OpsPtr->RemoveAt((void*)Vector, (nuint)index);
+        OpsPtr->RemoveAt((void*)Vector, index);
     }
 
     public void Insert(int index, T item)
@@ -211,14 +185,12 @@ public readonly unsafe struct TVector<T> : IList<T>
         {
             throw new ArgumentOutOfRangeException(nameof(index));
         }
-        // Grow by one, then shift the tail up. The shift goes through Set so a marshalled element is moved by
-        // its own assignment rather than by bytes.
+        // The appended copy is swapped down into place, so nothing reads an element the append may have moved.
         Add(item);
         for (int i = Count - 1; i > index; --i)
         {
-            Set(i, Get(i - 1));
+            OpsPtr->Swap((void*)Vector, i, i - 1);
         }
-        Set(index, item);
     }
 
     public int IndexOf(T item)
@@ -273,8 +245,7 @@ public readonly unsafe struct TVector<T> : IList<T>
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-    /// <summary>Allocation-free struct enumerator. Re-reads the count each step (tolerates a moved buffer);
-    /// like <see cref="List{T}"/>, structural mutation mid-iteration is undefined.</summary>
+    // Re-reads the count each step; structural mutation mid-iteration is undefined.
     public struct Enumerator : IEnumerator<T>
     {
         private readonly TVector<T> List;

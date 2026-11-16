@@ -1,5 +1,6 @@
 ﻿#include "Localization/Localization.h"
 #include "TextureEditorTool.h"
+#include "UI/InfoTable.h"
 
 #include "Assets/AssetTypes/Textures/Texture.h"
 #include "Platform/Process/PlatformProcess.h"
@@ -65,13 +66,13 @@ namespace Lumina
 
         if (RecookForPropertyChange(Texture))
         {
-            ImGuiX::Notifications::NotifySuccess(LOCF("Recooked '{0}' ({1})"),
-                Texture->GetName().c_str(), Event.PropertyName.c_str());
+            ImGuiX::Notifications::NotifySuccess("Recooked '{0}' ({1})",
+                *Texture->GetName(), *Event.PropertyName);
         }
         else
         {
-            ImGuiX::Notifications::NotifyError(LOCF("Recook failed for '{0}' -- check log"),
-                Texture->GetName().c_str());
+            ImGuiX::Notifications::NotifyError("Recook failed for '{0}' -- check log",
+                *Texture->GetName());
         }
     }
 
@@ -89,7 +90,7 @@ namespace Lumina
         CTexture* Texture = Cast<CTexture>(Asset.Get());
         if (Texture != nullptr && !RecookForPropertyChange(Texture))
         {
-            ImGuiX::Notifications::NotifyError(LOCF("Recook failed for '{0}', see the log."), Texture->GetName().c_str());
+            ImGuiX::Notifications::NotifyError("Recook failed for '{0}', see the log.", *Texture->GetName());
         }
     }
 
@@ -101,18 +102,18 @@ namespace Lumina
         }
 
         // Pristine bytes, on disk or stored on the asset, make an edit replace the last cook rather than layer on it.
-        if (!Texture->SourcePath.empty() || Texture->HasSourceFile())
+        if (!Texture->SourcePath.IsEmpty() || Texture->HasSourceFile())
         {
             return CTextureFactory::Recook(Texture);
         }
 
-        if (!SourcelessBaseline.has_value())
+        if (!SourcelessBaseline.IsSet())
         {
             Import::Textures::FTextureImportResult Recovered;
             if (!CTextureFactory::RecoverSourceImage(Texture, Recovered))
             {
                 LOG_ERROR("TextureEditor: '{0}' has no source file and its cooked format cannot be decoded; "
-                          "settings changes cannot be applied.", Texture->GetName().c_str());
+                          "settings changes cannot be applied.", *Texture->GetName());
                 return false;
             }
 
@@ -121,14 +122,14 @@ namespace Lumina
         }
 
         // Copied, since CookFromSource consumes what it is given and the baseline has to survive.
-        Import::Textures::FTextureImportResult Working = SourcelessBaseline.value();
+        Import::Textures::FTextureImportResult Working = SourcelessBaseline.GetValue();
         return CTextureFactory::CookFromSource(Texture, Working);
     }
 
     void FTextureEditorTool::OnAssetDataChangedExternally()
     {
         // The baseline describes pixels that have just been replaced.
-        SourcelessBaseline.reset();
+        SourcelessBaseline.Reset();
         FAssetEditorTool::OnAssetDataChangedExternally();
     }
 
@@ -165,7 +166,7 @@ namespace Lumina
 
             // New-heap sampling by ResourceID (per-mip preview deferred until the new RHI exposes mip SRVs).
             const int32 TexResourceID = Texture->GetResourceID();
-            ImTextureID TextureID = (ImTextureID)(uint32)(TexResourceID >= 0 ? (uint32)TexResourceID : 0u);
+            ImTextureID TextureID = (ImTextureID)(TexResourceID >= 0 ? (uint32)TexResourceID : 0u);
 
             const FTextureResource::FDescription& ImageDesc = Texture->TextureResource->ImageDescription;
 
@@ -369,14 +370,14 @@ namespace Lumina
             // A texture created empty has no image until one is imported into it.
             if (Texture->TextureResource == nullptr)
             {
-                ImGui::TextDisabled(LOC("%s has no image yet. Import one to see its details."), Texture->GetName().c_str());
+                ImGui::TextDisabled("%s has no image yet. Import one to see its details.", *Texture->GetName());
                 return;
             }
         
             const FTextureResource::FDescription& ImageDesc = Texture->TextureResource->ImageDescription;
         
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", Texture->GetName().c_str());
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", *Texture->GetName());
             ImGuiX::Font::PopFont();
             
             ImGui::Spacing();
@@ -393,53 +394,22 @@ namespace Lumina
                 ImGui::TableSetupColumn(LOC_ID("Value"), ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableHeadersRow();
             
-                auto PropertyRow = [](const char* label, const FString& value, const ImVec4* color = nullptr)
-                {
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::TextUnformatted(label);
-                    ImGui::TableSetColumnIndex(1);
-                    if (color)
-                    {
-                        ImGui::PushStyleColor(ImGuiCol_Text, *color);
-                    }
-                    ImGui::TextUnformatted(value.c_str());
-                    if (color)
-                    {
-                        ImGui::PopStyleColor();
-                    }
-                };
-            
                 ImVec4 dimensionColor(0.5f, 0.9f, 0.5f, 1.0f);
                 const char* TypeLabel = Texture->IsA<CTextureRenderTarget>() ? "Render Target"
-                                      : (Texture->IsA<CTextureArray>() ? "2D Texture Array" : LOC("2D Texture"));
-                PropertyRow(LOC("Type"), TypeLabel, &dimensionColor);
-                PropertyRow(LOC_ID("Resolution"), Format("{}", ImageDesc.Extent.x) + " x " + Format("{}", ImageDesc.Extent.y));
+                                      : (Texture->IsA<CTextureArray>() ? "2D Texture Array" : "2D Texture");
+                InfoTable::Row("Type", TypeLabel, &dimensionColor);
+                InfoTable::Row("Resolution", Format("{}", ImageDesc.Extent.x) + " x " + Format("{}", ImageDesc.Extent.y));
 
                 // Format
                 const FFormatInfo& FormatInfo = RHI::Format::Info(ImageDesc.Format);
-                PropertyRow(LOC("Pixel Format"), FString(FormatInfo.Name));
+                InfoTable::Row("Pixel Format", FString(FormatInfo.Name));
                 
                 // Memory
-                size_t MemorySizeBytes = Texture->TextureResource->CalcTotalSizeBytes();
-                size_t MemorySizeKB = MemorySizeBytes / 1024;
-                size_t MemorySizeMB = MemorySizeKB / 1024;
-                
-                FString memoryStr;
-                ImVec4 memoryColor(0.7f, 1.0f, 0.7f, 1.0f);
-                
-                if (MemorySizeMB > 0)
-                {
-                    memoryStr = Format("{}", MemorySizeMB) + " MB";
-                    if (MemorySizeMB > 10)  memoryColor = ImVec4(1.0f, 0.7f, 0.3f, 1.0f);
-                    if (MemorySizeMB > 50)  memoryColor = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
-                }
-                else
-                {
-                    memoryStr = Format("{}", MemorySizeKB) + " KB";
-                }
-                
-                PropertyRow(LOC("Memory Size"), memoryStr, &memoryColor);
+                const size_t MemorySizeBytes = Texture->TextureResource->CalcTotalSizeBytes();
+                const ImVec4 memoryColor = MemorySizeBytes > 50 * Constants::kMiB ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)
+                                         : MemorySizeBytes > 10 * Constants::kMiB ? ImVec4(1.0f, 0.7f, 0.3f, 1.0f)
+                                         : ImVec4(0.7f, 1.0f, 0.7f, 1.0f);
+                InfoTable::Row("Memory Size", ImGuiX::FormatSize(MemorySizeBytes), &memoryColor);
             
                 ImGui::EndTable();
             }
@@ -459,9 +429,9 @@ namespace Lumina
                 uint64 totalMipMemory = 0;
                 uint64 baseMipMemory = 0;
                 
-                if (!Texture->TextureResource->Mips.empty())
+                if (!Texture->TextureResource->Mips.IsEmpty())
                 {
-                    // SizeBytes(), not Pixels.size(), since a non-resident streamed mip would report as 0 B.
+                    // SizeBytes(), not Pixels.Num(), since a non-resident streamed mip would report as 0 B.
                     baseMipMemory = Texture->TextureResource->Mips[0].SizeBytes();
                     for (const auto& Mip : Texture->TextureResource->Mips)
                     {
@@ -503,8 +473,8 @@ namespace Lumina
                     {
                         ImGui::TableNextRow();
                         
-                        uint32 mipWidth = std::max<uint32>(1u, ImageDesc.Extent.x >> i);
-                        uint32 mipHeight = std::max<uint32>(1u, ImageDesc.Extent.y >> i);
+                        uint32 mipWidth = Math::Max<uint32>(1u, ImageDesc.Extent.x >> i);
+                        uint32 mipHeight = Math::Max<uint32>(1u, ImageDesc.Extent.y >> i);
                         uint32 mipTexels = mipWidth * mipHeight;
                         
                         // Calculate expected memory size
@@ -513,7 +483,7 @@ namespace Lumina
                         
                         // Get actual size if available
                         uint64 actualSize = expectedSize;
-                        if (i < Texture->TextureResource->Mips.size())
+                        if (i < static_cast<uint32>(Texture->TextureResource->Mips.Num()))
                         {
                             actualSize = Texture->TextureResource->Mips[i].SizeBytes();
                         }
@@ -552,18 +522,7 @@ namespace Lumina
         
                         // Size
                         ImGui::TableSetColumnIndex(3);
-                        if (actualSize >= Constants::kMiB)
-                        {
-                            ImGui::Text("%.2f MB", actualSize / float(Constants::kMiB));
-                        }
-                        else if (actualSize >= 1024)
-                        {
-                            ImGui::Text("%.1f KB", actualSize / 1024.0f);
-                        }
-                        else
-                        {
-                            ImGui::Text("%llu B", (unsigned long long)actualSize);
-                        }
+                        ImGuiX::TextUnformatted(ImGuiX::FormatSize(actualSize));
         
                         // Percentage
                         ImGui::TableSetColumnIndex(4);
@@ -602,36 +561,27 @@ namespace Lumina
                 ImGui::TableSetupColumn("##Label", ImGuiTableColumnFlags_WidthFixed, 150.0f);
                 ImGui::TableSetupColumn("##Value", ImGuiTableColumnFlags_WidthStretch);
                 
-                auto StatRow = [](const char* label, const FString& value)
-                {
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", label);
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::TextUnformatted(value.c_str());
-                };
-                
                 char aspectStr[32];
                 snprintf(aspectStr, sizeof(aspectStr), "%.3f:1", aspectRatio);
-                StatRow(LOC("Aspect Ratio:"), aspectStr);
+                InfoTable::Row("Aspect Ratio:", aspectStr);
                 
-                StatRow(LOC("Base Mip Texels:"), Format("{}", baseTexels));
+                InfoTable::Row("Base Mip Texels:", Format("{}", baseTexels));
                 
                 if (ImageDesc.NumMips > 1)
                 {
                     uint64 mipChainTexels = 0;
                     for (uint32 i = 0; i < ImageDesc.NumMips; ++i)
                     {
-                        uint32 mipWidth = std::max<uint32>(1u, ImageDesc.Extent.x >> i);
-                        uint32 mipHeight = std::max<uint32>(1u, ImageDesc.Extent.y >> i);
+                        uint32 mipWidth = Math::Max<uint32>(1u, ImageDesc.Extent.x >> i);
+                        uint32 mipHeight = Math::Max<uint32>(1u, ImageDesc.Extent.y >> i);
                         mipChainTexels += mipWidth * mipHeight;
                     }
-                    StatRow(LOC("Total Mip Texels:"), Format("{}", mipChainTexels));
+                    InfoTable::Row("Total Mip Texels:", Format("{}", mipChainTexels));
                     
                     float texelIncrease = ((float)mipChainTexels / (float)baseTexels - 1.0f) * 100.0f;
                     char texelIncStr[32];
                     snprintf(texelIncStr, sizeof(texelIncStr), "+%.1f%%", texelIncrease);
-                    StatRow(LOC("Texel Increase:"), texelIncStr);
+                    InfoTable::Row("Texel Increase:", texelIncStr);
                 }
         
                 ImGui::EndTable();
@@ -656,14 +606,14 @@ namespace Lumina
                 int RemoveIndex = -1;
                 int MoveFrom    = -1;
                 int MoveTo      = -1;
-                for (size_t i = 0; i < Array->SourceTextures.size(); ++i)
+                for (int32 i = 0; i < Array->SourceTextures.Num(); ++i)
                 {
                     const TStrongObjectPtr<CTexture>& Layer = Array->SourceTextures[i];
 
                     ImGui::PushID((int)i);
-                    ImGui::Text("%2zu", i);
+                    ImGui::Text("%2d", i);
                     ImGui::SameLine(40);
-                    ImGui::TextUnformatted(Layer.IsValid() ? Layer->GetName().c_str() : LOC("<missing>"));
+                    ImGui::TextUnformatted(Layer.IsValid() ? *Layer->GetName() : "<missing>");
 
                     // Slice order is the material's Slice index, so reordering must not need a clear and re-add.
                     ImGui::SameLine(ImGui::GetContentRegionAvail().x - 66.0f);
@@ -672,7 +622,7 @@ namespace Lumina
                     ImGui::EndDisabled();
 
                     ImGui::SameLine();
-                    ImGui::BeginDisabled(i + 1 >= Array->SourceTextures.size());
+                    ImGui::BeginDisabled(i + 1 >= Array->SourceTextures.Num());
                     if (ImGui::SmallButton("v")) { MoveFrom = (int)i; MoveTo = (int)i + 1; }
                     ImGui::EndDisabled();
 
@@ -683,12 +633,16 @@ namespace Lumina
 
                 if (MoveFrom >= 0)
                 {
-                    std::swap(Array->SourceTextures[MoveFrom], Array->SourceTextures[MoveTo]);
+                    BeginAssetTransaction("Reorder Texture Array Layer");
+                    Array->SourceTextures.Swap(MoveFrom, MoveTo);
+                    EndAssetTransaction();
                     Asset->GetPackage()->MarkDirty();
                 }
                 if (RemoveIndex >= 0)
                 {
-                    Array->SourceTextures.erase(Array->SourceTextures.begin() + RemoveIndex);
+                    BeginAssetTransaction("Remove Texture Array Layer");
+                    Array->SourceTextures.RemoveAt(RemoveIndex);
+                    EndAssetTransaction();
                     Asset->GetPackage()->MarkDirty();
                 }
 
@@ -703,12 +657,14 @@ namespace Lumina
                         // A nested array would recurse through layer-major mips and build a silently wrong image.
                         if (Dropped->IsA<CTextureArray>())
                         {
-                            ImGuiX::Notifications::NotifyError(LOCF("'{0}' is a texture array; layers must be plain textures"),
-                                Dropped->GetName().c_str());
+                            ImGuiX::Notifications::NotifyError("'{0}' is a texture array; layers must be plain textures",
+                                *Dropped->GetName());
                         }
                         else
                         {
-                            Array->SourceTextures.push_back(Dropped);
+                            BeginAssetTransaction("Add Texture Array Layer");
+                            Array->SourceTextures.Add(Dropped);
+                            EndAssetTransaction();
                             Asset->GetPackage()->MarkDirty();
                         }
                     }
@@ -717,19 +673,19 @@ namespace Lumina
                 ImGuiX::TextTooltip(LOCF("Appended as the next slice. Every layer must match layer 0's size and format, " "or enable Resize Layers To First."));
 
                 ImGui::Spacing();
-                const bool bCanBuild = !Array->SourceTextures.empty();
+                const bool bCanBuild = !Array->SourceTextures.IsEmpty();
                 ImGui::BeginDisabled(!bCanBuild);
                 if (ImGui::Button(LOC_ID("Build Array"), ImVec2(-1, 0)))
                 {
                     if (CTextureArrayFactory::Rebuild(Array))
                     {
-                        ImGuiX::Notifications::NotifySuccess(LOCF("Built '{0}' with {1} layers"),
-                            Array->GetName().c_str(), Array->GetNumLayers());
+                        ImGuiX::Notifications::NotifySuccess("Built '{0}' with {1} layers",
+                            *Array->GetName(), Array->GetNumLayers());
                     }
                     else
                     {
-                        ImGuiX::Notifications::NotifyError(LOCF("Build failed for '{0}' -- check log"),
-                            Array->GetName().c_str());
+                        ImGuiX::Notifications::NotifyError("Build failed for '{0}' -- check log",
+                            *Array->GetName());
                     }
                 }
                 ImGui::EndDisabled();
@@ -771,23 +727,25 @@ namespace Lumina
                 {
                     if (CTextureFactory::Recook(Texture))
                     {
-                        ImGuiX::Notifications::NotifySuccess(LOCF("Recooked '{0}'"), Texture->GetName().c_str());
+                        ImGuiX::Notifications::NotifySuccess("Recooked '{0}'", *Texture->GetName());
                     }
                     else
                     {
-                        ImGuiX::Notifications::NotifyError(LOCF("Recook failed for '{0}' -- check log"),
-                            Texture->GetName().c_str());
+                        ImGuiX::Notifications::NotifyError("Recook failed for '{0}' -- check log",
+                            *Texture->GetName());
                     }
                 }
 
                 // A missing source is a quality note, since the cooked mips still decode back to an image.
-                if (Texture->SourcePath.empty())
+                if (Texture->SourcePath.IsEmpty())
                 {
                     ImGuiX::TextTooltip(LOCF("Re-encodes the pixels already in this asset with the settings above. " "It has no source file (mesh-embedded, or the file moved), so a " "block-compressed texture takes a second compression generation and " "tonal adjustments stack on the previous pass instead of replacing it."));
                 }
                 else
                 {
-                    ImGuiX::TextTooltip(LOCF("Re-reads the source file and re-encodes it with the settings above: color space, " "compression quality, mip policy, size cap and every source adjustment. " "Source: %s"), Texture->SourcePath.c_str());
+                    ImGuiX::TextTooltip("Re-reads the source file and re-encodes it with the settings above: color space, "
+                                        "compression quality, mip policy, size cap and every source adjustment. "
+                                        "Source: %s", *Texture->SourcePath);
                 }
 
                 ImGui::Spacing();
@@ -827,23 +785,17 @@ namespace Lumina
                 {
                     FString Written;
                     FString Error;
-                    if (AssetExport::Export(Texture, FStringView(Directory.c_str(), Directory.size()), Written, Error))
+                    if (AssetExport::Export(Texture, FStringView(*Directory, Directory.Len()), Written, Error))
                     {
-                        ImGuiX::Notifications::NotifySuccess("Exported '{0}' to {1}", Texture->GetName().c_str(), Written);
+                        ImGuiX::Notifications::NotifySuccess("Exported '{0}' to {1}", *Texture->GetName(), Written);
                     }
                     else
                     {
-                        ImGuiX::Notifications::NotifyWarning("'{0}' {1}", Texture->GetName().c_str(), Error);
+                        ImGuiX::Notifications::NotifyWarning("'{0}' {1}", *Texture->GetName(), Error);
                     }
                 }
             }
-            ImGuiX::TextTooltip(LOCF("Write the image this texture was imported from to a folder on disk."));
-            
-            if (ImGui::Button(LOC("Analyze Color Distribution"), ImVec2(-1, 0)))
-            {
-                // TODO Implement analysis
-            }
-            ImGuiX::TextTooltip(LOCF("Analyze the color distribution across all pixels."));
+            ImGuiX::TextTooltip("Write the image this texture was imported from to a folder on disk.");
         });
     }
 
@@ -923,12 +875,6 @@ namespace Lumina
 
     void FTextureEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const
     {
-        ImGui::DockBuilderRemoveNodeChildNodes(InDockspaceID);
-
-        ImGuiID leftDockID = 0, rightDockID = 0;
-        ImGui::DockBuilderSplitNode(InDockspaceID, ImGuiDir_Right, 0.3f, &rightDockID, &leftDockID);
-
-        ImGui::DockBuilderDockWindow(GetToolWindowName(TexturePreviewName).c_str(), leftDockID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(TexturePropertiesName).c_str(), rightDockID);
+        SplitDockingLayoutLeftRight(InDockspaceID, TexturePreviewName, TexturePropertiesName, 0.3f);
     }
 }

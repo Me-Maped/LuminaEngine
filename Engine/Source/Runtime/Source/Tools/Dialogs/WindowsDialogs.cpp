@@ -53,9 +53,9 @@ namespace Lumina::Dialogs
 
         EResult Result = EResult::Yes;
         MessageBeep(MB_ICONEXCLAMATION);
-        const FWString WideMessage = UTF8_TO_TCHAR(Message.c_str());
-        const FWString WideTitle = UTF8_TO_TCHAR(Title.c_str());
-        int32 ResultCode = MessageBoxW(nullptr, WideMessage.c_str(), WideTitle.c_str(), Style);
+        const FWString WideMessage = UTF8_TO_TCHAR(*Message);
+        const FWString WideTitle = UTF8_TO_TCHAR(*Title);
+        int32 ResultCode = MessageBoxW(nullptr, *WideMessage, *WideTitle, Style);
         switch(ResultCode)
         {
             case IDOK:

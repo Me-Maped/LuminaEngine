@@ -4,10 +4,15 @@
 #include "Core/Console/ConsoleVariable.h"
 #include "Assets/AssetTypes/Material/Material.h"
 #include "Assets/AssetTypes/Material/MaterialInstance.h"
+#include "Config/EngineSettings.h"
 #include "Core/Engine/Engine.h"
 #include "Core/Object/Cast.h"
+#include "Core/Object/ObjectIteration.h"
+#include "Core/Object/Package/Package.h"
 #include "Memory/MemoryTracking.h"
 #include "Renderer/MeshletHeaderSlab.h"
+#include "Renderer/RenderManager.h"
+#include "Renderer/RHIUpload.h"
 #include "Renderer/Vertex.h"
 #include "Tools/Import/ImportHelpers.h"
 #include "World/Scene/RenderScene/MeshResolveCache.h"
@@ -58,7 +63,8 @@ namespace Lumina
             MeshResources = MakeUnique<FMeshResource>();
         }
 
-        Ar << *MeshResources;
+        // A save that lands before the staged resource publishes still writes the newest geometry.
+        Ar << (Ar.IsWriting() && PendingMeshResources ? *PendingMeshResources : *MeshResources);
     }
 
     void CMesh::PostLoad()
@@ -72,7 +78,7 @@ namespace Lumina
         }
 
         // Fallback for procedurally-generated meshes that bypass the import finalize pass.
-        if (MeshResources && MeshResources->MeshletData.IsEmpty() && !MeshResources->Indices.empty())
+        if (MeshResources && MeshResources->MeshletData.IsEmpty() && !MeshResources->Indices.IsEmpty())
         {
             Import::Mesh::GenerateMeshlets(*MeshResources);
         }
@@ -94,21 +100,16 @@ namespace Lumina
         FMeshResolveCache::InvalidateDependency(this);
     }
 
-    CMaterialInterface* CMesh::GetMaterialAtSlot(size_t Slot) const
+    CMaterialInterface* CMesh::GetMaterialAtSlot(int32 Slot) const
     {
-        if (Materials.size() <= Slot)
-        {
-            return nullptr;
-        }
-        
-        return Materials.empty() ? nullptr : Materials[Slot].Get();
+        return Materials.IsValidIndex(Slot) ? Materials[Slot].Get() : nullptr;
     }
 
-    void CMesh::SetMaterialAtSlot(size_t Slot, CMaterialInterface* NewMaterial)
+    void CMesh::SetMaterialAtSlot(int32 Slot, CMaterialInterface* NewMaterial)
     {
-        if (Materials.size() <= Slot)
+        if (Materials.Num() <= Slot)
         {
-            Materials.push_back(NewMaterial);
+            Materials.Add(NewMaterial);
         }
         else
         {
@@ -121,42 +122,64 @@ namespace Lumina
 
     void CMesh::SetMeshResource(TUniquePtr<FMeshResource>&& NewResource)
     {
-        MeshResources = std::move(NewResource);
-        GenerateBoundingBox();
-
         // ThumbnailManager's primitive meshes arrive without baked meshlets.
-        if (MeshResources && MeshResources->MeshletData.IsEmpty() && !MeshResources->Indices.empty())
+        if (NewResource && NewResource->MeshletData.IsEmpty() && !NewResource->Indices.IsEmpty())
         {
-            Import::Mesh::GenerateMeshlets(*MeshResources);
+            Import::Mesh::GenerateMeshlets(*NewResource);
         }
 
-        GenerateGPUBuffers();
+        StageMeshResource(Move(NewResource));
+
+        // With no renderer nothing is drawing the current resource, so the staged one publishes at once.
+        FRenderManager* RenderManager = TryRender();
+        if (RenderManager != nullptr && PendingMeshResources != nullptr)
+        {
+            RenderManager->WatchMeshPublish(this);
+        }
+        else
+        {
+            PublishPendingMeshResource();
+        }
     }
 
     void CMesh::SetMeshResourceBatched(TUniquePtr<FMeshResource>&& NewResource)
     {
         if (!FMeshBuildBatchScope::IsOpen())
         {
-            SetMeshResource(std::move(NewResource));
+            SetMeshResource(Move(NewResource));
             return;
         }
 
-        MeshResources = std::move(NewResource);
-        GenerateBoundingBox();
+        // A first resource replaces nothing that draws, so code later in the scope can read it at once.
+        if (MeshResources == nullptr)
+        {
+            ReplaceMeshResources(Move(NewResource));
+            GenerateBoundingBox();
+        }
+        else
+        {
+            PendingMeshResources = Move(NewResource);
+        }
         FMeshBuildBatchScope::DeferMeshlets(this);
     }
 
     void CMesh::BuildDeferredMeshlets()
     {
-        if (MeshResources && MeshResources->MeshletData.IsEmpty() && !MeshResources->Indices.empty())
+        FMeshResource* Resource = PendingMeshResources ? PendingMeshResources.get() : MeshResources.get();
+        if (Resource && Resource->MeshletData.IsEmpty() && !Resource->Indices.IsEmpty())
         {
-            Import::Mesh::GenerateMeshlets(*MeshResources);
+            Import::Mesh::GenerateMeshlets(*Resource);
         }
     }
 
     void CMesh::UploadDeferredBuffers()
     {
-        if (MeshResources)
+        if (PendingMeshResources)
+        {
+            TUniquePtr<FMeshResource> Resource = Move(PendingMeshResources);
+            SetMeshResource(Move(Resource));
+        }
+        else if (MeshResources)
         {
             GenerateGPUBuffers();
         }
@@ -187,7 +210,7 @@ namespace Lumina
             return Material != nullptr && Material->IsReadyForRender();
         });
 
-        return bMaterialsReady && !Materials.empty();
+        return bMaterialsReady && !Materials.IsEmpty();
     }
 
     namespace
@@ -230,7 +253,7 @@ namespace Lumina
                 Bounds.Max = Math::Max(Bounds.Max, P);
             }
 
-            if (MD.VertexPositions.empty() && MD.MeshletSkinnedVertices.empty() && !MD.MeshletSpheres.empty())
+            if (MD.VertexPositions.IsEmpty() && MD.MeshletSkinnedVertices.IsEmpty() && !MD.MeshletSpheres.IsEmpty())
             {
                 // Conservative for culling but wildly loose for anything not roughly spherical.
                 for (const FMeshletSphere& S : MD.MeshletSpheres)
@@ -247,6 +270,56 @@ namespace Lumina
     void CMesh::GenerateBoundingBox()
     {
         BoundingBox = MeshResources ? ComputeMeshLocalBounds(*MeshResources) : SAABB();
+    }
+
+    void CMesh::StageMeshResource(TUniquePtr<FMeshResource>&& NewResource)
+    {
+        PendingMeshResources = Move(NewResource);
+        if (PendingMeshResources)
+        {
+            // Measured while the raw positions are still around, since the upload drops them.
+            PendingMeshResources->LocalBounds = ComputeMeshLocalBounds(*PendingMeshResources);
+            if (!Global::GIsHeadless)
+            {
+                UploadGeometry(*PendingMeshResources);
+            }
+        }
+
+        // Nothing is drawing the current resource, so there is no previous geometry to keep live.
+        if (MeshResources == nullptr || Global::GIsHeadless)
+        {
+            PublishPendingMeshResource();
+        }
+    }
+
+    void CMesh::ReplaceMeshResources(TUniquePtr<FMeshResource>&& NewResource)
+    {
+        // The first geometry a mesh gets replaces nothing, so it keeps the version anything built from a loaded mesh saw.
+        if (MeshResources != nullptr)
+        {
+            ++GeometryVersion;
+        }
+        MeshResources = Move(NewResource);
+    }
+
+    bool CMesh::PublishPendingMeshResource()
+    {
+        if (PendingMeshResources == nullptr)
+        {
+            return true;
+        }
+        if (!RHI::Upload::IsBatchComplete(PendingMeshResources->MeshBuffers.UploadBatch))
+        {
+            return false;
+        }
+
+        // The replaced resource's destructor retires its block and slot behind the frames still recording them.
+        ReplaceMeshResources(Move(PendingMeshResources));
+        BoundingBox   = MeshResources->LocalBounds;
+
+        // The surfaces' LOD tables and header slot changed, which every instance of this mesh reads through its resolve entry.
+        FMeshResolveCache::InvalidateDependency(this);
+        return true;
     }
 
     namespace
@@ -278,29 +351,29 @@ namespace Lumina
             if (!Texture.IsValid())
             {
                 LOG_ERROR("Distance field texture creation failed for mesh '{}'; SDF nodes will read as invalid.",
-                          Resource.Name.c_str());
+                          *Resource.Name);
                 return;
             }
 
-            RHI::Textures::Upload(Texture, 0, Volume.Distances.data(), Volume.Distances.size());
+            RHI::Textures::Upload(Texture, 0, Volume.Distances.GetData(), Volume.Distances.Num());
         }
 
         // Meshes built by the importer already carry palettes and are left alone.
         void BuildBonePalettes(FMeshletData& MData)
         {
-            if (MData.MeshletBonePalettes.size() == MData.Meshlets.size())
+            if (MData.MeshletBonePalettes.Num() == MData.Meshlets.Num())
             {
                 return;
             }
 
             LUMINA_PROFILE_SCOPE();
 
-            MData.MeshletBonePalettes.clear();
-            MData.MeshletBonePalettes.reserve(MData.Meshlets.size());
-            MData.MeshletBoneIndices.clear();
-            MData.MeshletBoneIndices.reserve(MData.Meshlets.size() * 16);
+            MData.MeshletBonePalettes.Reset();
+            MData.MeshletBonePalettes.Reserve(MData.Meshlets.Num());
+            MData.MeshletBoneIndices.Reset();
+            MData.MeshletBoneIndices.Reserve(MData.Meshlets.Num() * 16);
 
-            const uint32 VertexTotal = (uint32)MData.MeshletSkinnedVertices.size();
+            const uint32 VertexTotal = static_cast<uint32>(MData.MeshletSkinnedVertices.Num());
 
             FMeshletPaletteScratch Palette;
 
@@ -311,7 +384,7 @@ namespace Lumina
                 const uint32 End   = Math::Min(Begin + Math::Min(Meshlet.VertexCount, (uint32)MESHLET_MAX_VERTICES),
                                                VertexTotal);
 
-                Palette.clear();
+                Palette.Reset();
 
                 for (uint32 v = Begin; v < End; ++v)
                 {
@@ -370,6 +443,8 @@ namespace Lumina
             Header.DistanceFieldSizeZ       = Volume.VolumeSize.z;
             Header.DistanceFieldMaxDistance = Volume.MaxDistance;
             Header.ConesAddress             = MB.MeshletConeBuffer;
+            Header.LODBoundsAddress         = MB.MeshletLODBoundsBuffer;
+            Header.Flags                    = MB.MeshletLODBoundsBuffer != 0 ? MESH_HEADER_FLAG_CLUSTER_LOD : 0u;
             Header.BonePalettesAddress      = MB.MeshletBonePaletteBuffer;
             Header.BoneIndicesAddress       = MB.MeshletBoneIndexBuffer;
             Header.MeshletCount             = MB.MeshletCount;
@@ -441,28 +516,31 @@ namespace Lumina
             Resource.RequiredBoneCount = MaxJoint;
         }
 
-        const void*  VertSrc    = bSkinned ? (const void*)MData.MeshletSkinnedVertices.data() : (const void*)MData.VertexAttributes.data();
+        const void*  VertSrc    = bSkinned ? (const void*)MData.MeshletSkinnedVertices.GetData() : (const void*)MData.VertexAttributes.GetData();
         const uint64 VertStride = bSkinned ? sizeof(FMeshletSkinnedVertex) : sizeof(FMeshVertexAttributes);
-        const uint64 VertCount  = bSkinned ? MData.MeshletSkinnedVertices.size() : MData.VertexAttributes.size();
+        const uint64 VertCount  = bSkinned ? MData.MeshletSkinnedVertices.Num() : MData.VertexAttributes.Num();
 
-        const uint64 MeshletBytes  = sizeof(FMeshlet)       * MData.Meshlets.size();
-        const uint64 SphereBytes   = sizeof(FMeshletSphere) * MData.MeshletSpheres.size();
-        const uint64 ConeBytes     = sizeof(FMeshletCone)   * MData.MeshletCones.size();
+        const uint64 MeshletBytes  = sizeof(FMeshlet)       * MData.Meshlets.Num();
+        const uint64 SphereBytes   = sizeof(FMeshletSphere) * MData.MeshletSpheres.Num();
+        const uint64 ConeBytes     = sizeof(FMeshletCone)   * MData.MeshletCones.Num();
         const uint64 VertexBytes   = VertCount              * VertStride;
-        const uint64 PositionBytes = sizeof(FMeshVertexPosition) * MData.VertexPositions.size();
-        const uint64 RefBytes      = sizeof(uint32)         * MData.MeshletVertexRefs.size();
-        const uint64 UV1Bytes      = sizeof(uint32)         * MData.VertexUV1s.size();
-        const uint64 ColorBytes    = sizeof(uint32)         * MData.VertexColors.size();
-        const uint64 TriangleBytes = sizeof(uint32)         * MData.MeshletTriangles.size();
-        const uint64 PaletteBytes  = sizeof(FMeshletBonePalette) * MData.MeshletBonePalettes.size();
-        const uint64 BoneIdxBytes  = sizeof(uint32)         * MData.MeshletBoneIndices.size();
+        const uint64 PositionBytes = sizeof(FMeshVertexPosition) * MData.VertexPositions.Num();
+        const uint64 RefBytes      = sizeof(uint32)         * MData.MeshletVertexRefs.Num();
+        const uint64 UV1Bytes      = sizeof(uint32)         * MData.VertexUV1s.Num();
+        const uint64 ColorBytes    = sizeof(uint32)         * MData.VertexColors.Num();
+        const uint64 TriangleBytes = sizeof(uint32)         * MData.MeshletTriangles.Num();
+        const uint64 PaletteBytes  = sizeof(FMeshletBonePalette) * MData.MeshletBonePalettes.Num();
+        const uint64 BoneIdxBytes  = sizeof(uint32)         * MData.MeshletBoneIndices.Num();
+        // Only a complete array is published; a partial one would be indexed past its end by the cull.
+        const uint64 LODBoundsBytes = MData.MeshletLODBounds.Num() == MData.Meshlets.Num()
+                                    ? sizeof(FMeshletLODBounds) * MData.MeshletLODBounds.Num() : 0u;
 
         const bool bMissingStaticStream = !bSkinned && (PositionBytes == 0 || RefBytes == 0);
         if (MeshletBytes == 0 || SphereBytes == 0 || ConeBytes == 0 || VertexBytes == 0 || TriangleBytes == 0 || bMissingStaticStream)
         {
             LOG_ERROR("Mesh rebuild failed: {} meshlets with an empty geometry stream "
                       "(meshlets {}, spheres {}, cones {}, vertices {}, positions {}, refs {}, triangles {} bytes). Previous geometry kept.",
-                      MData.Meshlets.size(), MeshletBytes, SphereBytes, ConeBytes, VertexBytes, PositionBytes, RefBytes, TriangleBytes);
+                      MData.Meshlets.Num(), MeshletBytes, SphereBytes, ConeBytes, VertexBytes, PositionBytes, RefBytes, TriangleBytes);
             return;
         }
 
@@ -485,40 +563,51 @@ namespace Lumina
         const uint64 TriangleOffset = Reserve(TriangleBytes);
         const uint64 PaletteOffset  = Reserve(PaletteBytes);
         const uint64 BoneIdxOffset  = Reserve(BoneIdxBytes);
+        const uint64 LODBoundsOffset = Reserve(LODBoundsBytes);
 
         const RHI::FGPUAllocation Block = RHI::Malloc(Cursor, RHI::kDefaultAlign, RHI::EMemoryType::GPUOnly);
 
         if (Block.Gpu == 0)
         {
             LOG_ERROR("Mesh rebuild failed: {} KiB GPU allocation for {} meshlets. Previous geometry kept.",
-                      Cursor / 1024, MData.Meshlets.size());
+                      Cursor / 1024, MData.Meshlets.Num());
             return;
         }
 
         RHI::SetDebugName(Block.Gpu, bSkinned ? "Mesh.SkinnedGeometry" : "Mesh.Geometry");
 
-        RHI::UploadBuffer(Block, MData.Meshlets.data(),         MeshletBytes,  MeshletOffset);
-        RHI::UploadBuffer(Block, MData.MeshletSpheres.data(),   SphereBytes,   SphereOffset);
-        RHI::UploadBuffer(Block, MData.MeshletCones.data(),     ConeBytes,     ConeOffset);
-        RHI::UploadBuffer(Block, VertSrc,                       VertexBytes,   VertexOffset);
-        RHI::UploadBuffer(Block, MData.MeshletTriangles.data(), TriangleBytes, TriangleOffset);
-
-        auto UploadIfPresent = [&Block](const void* Source, uint64 Bytes, uint64 Offset)
+        // A stream the staging ring could not take leaves raw Malloc bytes behind the header, so none may be skipped.
+        bool bQueued = true;
+        auto UploadIfPresent = [&Block, &bQueued](const void* Source, uint64 Bytes, uint64 Offset)
         {
             if (Bytes != 0)
             {
-                RHI::UploadBuffer(Block, Source, Bytes, Offset);
+                bQueued &= RHI::UploadBuffer(Block, Source, Bytes, Offset);
             }
         };
-        UploadIfPresent(MData.VertexPositions.data(),   PositionBytes, PositionOffset);
-        UploadIfPresent(MData.MeshletVertexRefs.data(), RefBytes,      RefOffset);
-        UploadIfPresent(MData.VertexUV1s.data(),        UV1Bytes,      UV1Offset);
-        UploadIfPresent(MData.VertexColors.data(),      ColorBytes,    ColorOffset);
+        UploadIfPresent(MData.Meshlets.GetData(),          MeshletBytes,  MeshletOffset);
+        UploadIfPresent(MData.MeshletSpheres.GetData(),    SphereBytes,   SphereOffset);
+        UploadIfPresent(MData.MeshletCones.GetData(),      ConeBytes,     ConeOffset);
+        UploadIfPresent(VertSrc,                           VertexBytes,   VertexOffset);
+        UploadIfPresent(MData.MeshletTriangles.GetData(),  TriangleBytes, TriangleOffset);
+        UploadIfPresent(MData.VertexPositions.GetData(),   PositionBytes, PositionOffset);
+        UploadIfPresent(MData.MeshletVertexRefs.GetData(), RefBytes,      RefOffset);
+        UploadIfPresent(MData.VertexUV1s.GetData(),        UV1Bytes,      UV1Offset);
+        UploadIfPresent(MData.VertexColors.GetData(),      ColorBytes,    ColorOffset);
+        UploadIfPresent(MData.MeshletLODBounds.GetData(),  LODBoundsBytes, LODBoundsOffset);
 
         if (PaletteBytes != 0 && BoneIdxBytes != 0)
         {
-            RHI::UploadBuffer(Block, MData.MeshletBonePalettes.data(), PaletteBytes, PaletteOffset);
-            RHI::UploadBuffer(Block, MData.MeshletBoneIndices.data(),  BoneIdxBytes, BoneIdxOffset);
+            UploadIfPresent(MData.MeshletBonePalettes.GetData(), PaletteBytes, PaletteOffset);
+            UploadIfPresent(MData.MeshletBoneIndices.GetData(),  BoneIdxBytes, BoneIdxOffset);
+        }
+
+        if (!bQueued)
+        {
+            LOG_ERROR("Mesh rebuild failed: a geometry upload of {} meshlets was dropped. Previous geometry kept.",
+                      MData.Meshlets.Num());
+            RHI::Retire(Block);
+            return;
         }
 
         MB.ReleaseGeometryBuffers();
@@ -535,11 +624,12 @@ namespace Lumina
         MB.VertexUV1Buffer        = UV1Bytes      != 0 ? Block.Gpu + UV1Offset      : 0;
         MB.VertexColorBuffer      = ColorBytes    != 0 ? Block.Gpu + ColorOffset    : 0;
         MB.MeshletTriangleBuffer  = Block.Gpu + TriangleOffset;
+        MB.MeshletLODBoundsBuffer = LODBoundsBytes != 0 ? Block.Gpu + LODBoundsOffset : 0;
 
         // Null for a static mesh; SkinVertex reads that as bind pose rather than misreading the indices.
         MB.MeshletBonePaletteBuffer = (PaletteBytes != 0 && BoneIdxBytes != 0) ? Block.Gpu + PaletteOffset : 0;
         MB.MeshletBoneIndexBuffer   = (PaletteBytes != 0 && BoneIdxBytes != 0) ? Block.Gpu + BoneIdxOffset : 0;
-        MB.MeshletCount          = (uint32)MData.Meshlets.size();
+        MB.MeshletCount          = (uint32)MData.Meshlets.Num();
 
         // The header publishes the heap slot, and a failed allocation leaves the sentinel every SDF path gates on.
         CreateDistanceFieldTexture(Resource);
@@ -549,11 +639,216 @@ namespace Lumina
             MB.MeshletHeaderSlot = MeshletHeaderSlab::Acquire();
         }
         MeshletHeaderSlab::Write(MB.MeshletHeaderSlot, MakeMeshletHeader(Resource));
+
+        // Read after the header write is queued, so it names that write's batch or a later one.
+        MB.UploadBatch = RHI::Upload::BatchForQueuedOps();
     }
 
     bool CMesh::HasDistanceField() const
     {
         return MeshResources != nullptr && MeshResources->DistanceField.IsValid();
+    }
+
+    bool CMesh::HasClusterLOD() const
+    {
+        return MeshResources != nullptr && MeshResources->MeshletData.HasClusterLOD();
+    }
+
+    namespace
+    {
+        // The finest slot of every surface holds the source geometry, so the build streams can be read back out of it into Resource.
+        bool RestoreSourceStreamsFromMeshlets(const FMeshResource& Source, FMeshResource& Resource)
+        {
+            const FMeshletData& MD = Source.MeshletData;
+            if (Source.bSkinnedMesh || MD.IsEmpty() || MD.VertexPositions.IsEmpty())
+            {
+                return false;
+            }
+
+            // Surfaces and the field carry over, and the build inputs the importer set keep steering the rebuild.
+            Resource.Name                = Source.Name;
+            Resource.GeometrySurfaces    = Source.GeometrySurfaces;
+            Resource.DistanceField       = Source.DistanceField;
+            Resource.MaxLODs             = Source.MaxLODs;
+            Resource.bMeshletConeCulling = Source.bMeshletConeCulling;
+            Resource.bOptimizeMeshlets   = Source.bOptimizeMeshlets;
+            Resource.bFastMeshletBuild   = Source.bFastMeshletBuild;
+            Resource.bDestructiveLODs    = Source.bDestructiveLODs;
+
+            const int32 NumVertices = MD.VertexPositions.Num();
+            if (MD.VertexAttributes.Num() != NumVertices)
+            {
+                return false;
+            }
+
+            // Only the finest slot's vertices come back, since coarser levels and splats hold vertices the source never had.
+            constexpr uint32 kUnused = ~0u;
+            TVector<uint32>  Compact(NumVertices, kUnused);
+            TVector<uint32>  Indices;
+            uint32           Used = 0;
+            auto Remap = [&](uint32 Vertex)
+            {
+                uint32& Slot = Compact[Vertex];
+                if (Slot == kUnused)
+                {
+                    Slot = Used++;
+                }
+                Indices.Add(Slot);
+            };
+
+            for (FGeometrySurface& Surface : Resource.GeometrySurfaces)
+            {
+                Surface.StartIndex = (uint32)Indices.Num();
+                const uint32 Begin = Surface.LODMeshletOffset[0];
+                const uint32 End   = Math::Min(Begin + Surface.LODMeshletCount[0], (uint32)MD.Meshlets.Num());
+                for (uint32 m = Begin; m < End; ++m)
+                {
+                    const FMeshlet& M = MD.Meshlets[m];
+                    for (uint32 t = 0; t < M.TriangleCount; ++t)
+                    {
+                        const uint32 Packed = MD.MeshletTriangles[M.TriangleOffset + t];
+                        Remap(GetStaticVertexIndex(MD, M, Packed & 0xFFu));
+                        Remap(GetStaticVertexIndex(MD, M, (Packed >> 8) & 0xFFu));
+                        Remap(GetStaticVertexIndex(MD, M, (Packed >> 16) & 0xFFu));
+                    }
+                }
+                Surface.IndexCount = (uint32)Indices.Num() - Surface.StartIndex;
+            }
+
+            Resource.ResizeVertices(Used);
+            Resource.Indices = Move(Indices);
+
+            const bool bHasUV1   = MD.VertexUV1s.Num()   == NumVertices;
+            const bool bHasColor = MD.VertexColors.Num() == NumVertices;
+            for (int32 v = 0; v < NumVertices; ++v)
+            {
+                const uint32 Slot = Compact[v];
+                if (Slot == kUnused)
+                {
+                    continue;
+                }
+                Resource.Positions[Slot] = DecodeMeshPosition(MD.PositionGrid, MD.VertexPositions[v]);
+                Resource.Normals[Slot]   = MD.VertexAttributes[v].Normal;
+                Resource.Tangents[Slot]  = MD.VertexAttributes[v].Tangent;
+                Resource.UVs[Slot]       = MD.VertexAttributes[v].UV;
+                Resource.UVs1[Slot]      = bHasUV1 ? MD.VertexUV1s[v] : MD.VertexAttributes[v].UV;
+                Resource.Colors[Slot]    = bHasColor ? MD.VertexColors[v] : 0xFFFFFFFFu;
+            }
+            return !Resource.Indices.IsEmpty();
+        }
+    }
+
+    namespace
+    {
+        // Retrofits content imported before virtual geometry existed, which otherwise needs each mesh reimported by hand.
+        void RebuildAllVirtualGeometry()
+        {
+            const CRendererSettings* Settings = GetDefault<CRendererSettings>();
+            if (Settings == nullptr)
+            {
+                return;
+            }
+
+            // Collected first, since a rebuild creates GPU objects while the object array is walked.
+            TVector<CMesh*> Meshes;
+            ForEachObject([&Meshes](CObjectBase* Object, int32)
+            {
+                CMesh* Mesh = Object != nullptr ? Cast<CMesh>(static_cast<CObject*>(Object)) : nullptr;
+                if (Mesh != nullptr && !Mesh->IsSkinned() && !Mesh->HasAnyFlag(OF_NeedsLoad) && Mesh->GetPackage() != nullptr
+                    && !Mesh->GetPackage()->IsTransientPackage())
+                {
+                    Meshes.Add(Mesh);
+                }
+            });
+
+            uint32 Rebuilt = 0;
+            for (CMesh* Mesh : Meshes)
+            {
+                Mesh->VirtualGeometrySettings.bClusterLOD             = Settings->bClusterLODByDefault;
+                Mesh->VirtualGeometrySettings.bVoxelFarRepresentation = Settings->bVoxelFarByDefault;
+                Mesh->VirtualGeometrySettings.VoxelResolution         = (uint32)Math::Clamp(Settings->DefaultVoxelResolution, 4, 128);
+                if (Mesh->RebuildVirtualGeometry())
+                {
+                    Mesh->GetPackage()->MarkDirty();
+                    ++Rebuilt;
+                }
+            }
+            LOG_INFO("Mesh.RebuildVirtualGeometry: rebuilt {} of {} loaded static meshes with the project defaults. Save to keep them.", Rebuilt, Meshes.Num());
+        }
+
+        FAutoConsoleCommand GRebuildVirtualGeometryCommand(
+            "Mesh.RebuildVirtualGeometry",
+            "Rebuild every loaded static mesh's meshlets with the project's cluster hierarchy and voxel defaults, leaving their packages dirty.",
+            &RebuildAllVirtualGeometry);
+
+        void DumpVirtualGeometry()
+        {
+            ForEachObject([](CObjectBase* Object, int32)
+            {
+                CMesh* Mesh = Object != nullptr ? Cast<CMesh>(static_cast<CObject*>(Object)) : nullptr;
+                const FMeshResource* Resource = Mesh != nullptr && !Mesh->HasAnyFlag(OF_NeedsLoad) ? Mesh->TryGetMeshResource() : nullptr;
+                if (Resource == nullptr || Resource->GeometrySurfaces.IsEmpty())
+                {
+                    return;
+                }
+
+                const SAABB& Box = Mesh->GetAABB();
+                LOG_INFO("VG '{}': {} meshlets, {} LOD bounds, LOD distance scale {:.2f}, extent ({:.2f} {:.2f} {:.2f})", Mesh->GetName().ToString(),
+                    Resource->MeshletData.Meshlets.Num(), Resource->MeshletData.MeshletLODBounds.Num(), Mesh->LODDistanceScale,
+                    Box.Max.x - Box.Min.x, Box.Max.y - Box.Min.y, Box.Max.z - Box.Min.z);
+
+                for (int32 SurfaceIdx = 0; SurfaceIdx < Resource->GeometrySurfaces.Num(); ++SurfaceIdx)
+                {
+                    const FGeometrySurface& Surface = Resource->GeometrySurfaces[SurfaceIdx];
+                    LOG_INFO("  surface {} '{}' cluster={} flags={:#x} slots={}", SurfaceIdx, Surface.ID.ToString(), Surface.HasClusterLOD(), Surface.LODFlags, Surface.NumLODs);
+                    for (uint32 Slot = 0; Slot < Surface.NumLODs; ++Slot)
+                    {
+                        LOG_INFO("    slot {}{} meshlets={} error={:.4f} parent={:.4f}", Slot, Surface.IsVoxelLOD(Slot) ? " voxel" : "",
+                            Surface.LODMeshletCount[Slot], Surface.LODError[Slot], Surface.LODParentError[Slot]);
+
+                        const uint32 First = Surface.LODMeshletOffset[Slot];
+                        if (Surface.LODMeshletCount[Slot] > 0u && First < (uint32)Resource->MeshletData.MeshletLODBounds.Num())
+                        {
+                            const FMeshletLODBounds& B = Resource->MeshletData.MeshletLODBounds[First];
+                            LOG_INFO("      first meshlet self=({:.2f} {:.2f} {:.2f}) r={:.2f} e={:.4f} parent=({:.2f} {:.2f} {:.2f}) r={:.2f} e={:.4f} flags={}",
+                                B.SelfCenter.x, B.SelfCenter.y, B.SelfCenter.z, B.SelfRadius, B.SelfError,
+                                B.ParentCenter.x, B.ParentCenter.y, B.ParentCenter.z, B.ParentRadius, B.ParentError, B.Flags);
+                        }
+                    }
+                }
+            });
+        }
+
+        FAutoConsoleCommand GDumpVirtualGeometryCommand(
+            "Mesh.DumpVirtualGeometry",
+            "Log every loaded mesh's per-surface LOD slots, their errors, parent errors and which slots hold voxels.",
+            &DumpVirtualGeometry);
+    }
+
+    bool CMesh::RebuildVirtualGeometry()
+    {
+        if (MeshResources == nullptr || MeshResources->bSkinnedMesh)
+        {
+            return false;
+        }
+
+        LUMINA_MEMORY_SCOPE("Meshes");
+
+        // Built beside the live resource from its finest baked level, so instances keep drawing it until the rebuild has uploaded.
+        TUniquePtr<FMeshResource> Rebuilt = MakeUnique<FMeshResource>();
+        if (!RestoreSourceStreamsFromMeshlets(*MeshResources, *Rebuilt))
+        {
+            LOG_WARN("Virtual geometry rebuild skipped for '{}', it has no finest level to rebuild from.", GetName().ToString());
+            return false;
+        }
+
+        // Normals and UVs survived the bake, and MikkTSpace rebuilds tangents from those.
+        Rebuilt->bGenerateTangents = true;
+        Import::Mesh::ApplyVirtualGeometrySettings(*Rebuilt, VirtualGeometrySettings);
+        Import::Mesh::GenerateMeshlets(*Rebuilt);
+
+        SetMeshResource(Move(Rebuilt));
+        return true;
     }
 
     void CMesh::BuildDistanceField()
@@ -582,10 +877,20 @@ namespace Lumina
         FMeshResolveCache::InvalidateDependency(this);
     }
 
+    void CMesh::UploadGeometry(FMeshResource& Resource)
+    {
+        MeshBuffers::CreateForResource(Resource);
+
+        // Drop import-time scratch.
+        Resource.ClearVertices();
+        Resource.Indices.Reset();
+        Resource.Indices.Shrink();
+    }
+
     void CMesh::GenerateGPUBuffers()
     {
         // A headless process has no RHI, and it keeps the CPU streams a mesh collider still reads.
-        if (GIsHeadless)
+        if (Global::GIsHeadless)
         {
             return;
         }
@@ -593,14 +898,10 @@ namespace Lumina
         // The box is already computed by PostLoad, and the header publishes it for the LocalBounds node.
         MeshResources->LocalBounds = BoundingBox;
 
-        MeshBuffers::CreateForResource(*MeshResources);
+        // Same meshlet layout as before, and the header rides the same upload batch as the block it names.
+        UploadGeometry(*MeshResources);
 
         // Bumping the global epoch here made loading one mesh re-resolve every component in the world.
         FMeshResolveCache::InvalidateDependency(this);
-
-        // Drop import-time scratch.
-        MeshResources->ClearVertices();
-        MeshResources->Indices.clear();
-        MeshResources->Indices.shrink_to_fit();
     }
 }

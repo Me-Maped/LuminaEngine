@@ -20,7 +20,7 @@ namespace Lumina
         // Everything the captured properties point at, such as sub-graphs and transitions, kept alive the same way.
         TVector<TStrongObjectPtr<CObject>> Referenced;
 
-        bool IsValid() const { return !Bytes.empty(); }
+        bool IsValid() const { return !Bytes.IsEmpty(); }
 
         static FNodeGraphImage Capture(CEdNodeGraph* Graph);
 
@@ -39,6 +39,7 @@ namespace Lumina
         void Undo() override;
         void Redo() override;
         bool IsNoOp() const override { return Before.Bytes == After.Bytes; }
+        void MarkChanged() const override;
 
         void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override;
 

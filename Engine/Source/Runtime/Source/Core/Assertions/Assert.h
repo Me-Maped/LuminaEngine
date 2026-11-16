@@ -2,18 +2,9 @@
 #include "Containers/StringFormat.h"
 #include "CheckFailure.h"
 #include <source_location>
-#include <version>
 #include "Containers/String.h"
 #include "Platform/GenericPlatform.h"
 #include "Platform/Platform.h"
-
-
-#if __has_include(<stacktrace>) && defined(__cpp_lib_stacktrace)
-#include <stacktrace>
-#define HAS_STD_STACKTRACE 1
-#else
-#define HAS_STD_STACKTRACE 0
-#endif
 
 #if defined(_MSC_VER)
     extern "C" __declspec(dllimport) int __stdcall IsDebuggerPresent();
@@ -80,7 +71,7 @@ namespace Lumina::Assert
         using namespace Lumina::Assert; \
         LUMINA_HANDLE_ASSERTION_HEADER \
         { \
-            __VA_OPT__(.Message = ::Lumina::Format(__VA_ARGS__).c_str(),) \
+            __VA_OPT__(.Message = *::Lumina::Format(__VA_ARGS__),) \
             .Location = std::source_location::current(), \
             .Expression = #Expr, \
             .Type = EAssertionType::AssertType \
@@ -107,7 +98,7 @@ namespace Lumina::Assert
             using namespace Lumina::Assert; \
             LUMINA_HANDLE_ASSERTION_HEADER \
             { \
-                __VA_OPT__(.Message = ::Lumina::Format(__VA_ARGS__).c_str(),) \
+                __VA_OPT__(.Message = *::Lumina::Format(__VA_ARGS__),) \
                 .Location = std::source_location::current(), \
                 .Expression = #Expr, \
                 .Type = EAssertionType::Alert \
@@ -130,7 +121,7 @@ namespace Lumina::Assert
             using namespace Lumina::Assert; \
             LUMINA_HANDLE_ASSERTION_HEADER \
             { \
-                __VA_OPT__(.Message = ::Lumina::Format(__VA_ARGS__).c_str(),) \
+                __VA_OPT__(.Message = *::Lumina::Format(__VA_ARGS__),) \
                 .Location = std::source_location::current(), \
                 .Expression = #Expr, \
                 .Type = EAssertionType::Alert \

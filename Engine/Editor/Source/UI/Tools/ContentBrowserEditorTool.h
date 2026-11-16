@@ -3,11 +3,13 @@
 #include "EditorTool.h"
 #include "Assets/AssetRegistry/AssetData.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
+#include "Containers/Queue.h"
 #include "Core/LuminaCommonTypes.h"
 #include "FileSystem/FileSystem.h"
 #include "Memory/SmartPtr.h"
 #include "Paths/Paths.h"
 #include "Platform/Filesystem/DirectoryWatcher.h"
+#include "Thumbnails/AssetTilePainters.h"
 #include "Tools/Actions/DeferredActions.h"
 #include "Tools/UI/ImGui/ImGuiDragDrop.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
@@ -17,14 +19,35 @@
 namespace Lumina::ContentBrowserEditorToolInternal
 {
     class FContentBrowserTileViewItem;
+
+    struct FScriptHoverInfo
+    {
+        bool             bValid = false;
+        FString          Namespace;
+        FString          ClassName;
+        FString          BaseClass;
+        FString          Summary;
+        TVector<FString> Lifecycle;
+        TVector<FString> Properties;
+        TVector<FString> PropertyTips;
+    };
+
+    // The hovered tile's tooltip content, rebuilt only when the hovered path or the script's write time changes.
+    struct FHoverTooltipCache
+    {
+        FString          Path;
+        int64            MTime = 0;
+        int32            FolderItemCount = 0;
+        FScriptHoverInfo Script;
+    };
 }
 
 namespace Lumina
 {
     class CImporter;
     class FPropertyTable;
-    struct FAssetData;
     struct FImportRequest;
+    enum class EContentBrowserSortMode : uint8;
 
     class FContentBrowserEditorTool : public FEditorTool
     {
@@ -38,7 +61,6 @@ namespace Lumina
         }
 
         void OnInitialize() override;
-        void OnDeinitialize(const FUpdateContext& UpdateContext) override {}
         void Update(const FUpdateContext& UpdateContext) override;
         void EndFrame() override;
         bool OnEvent(FEvent& Event) override;
@@ -58,18 +80,36 @@ namespace Lumina
         // Shows Folder with Search typed into the search box, the way a user browsing there would.
         void BrowseToFolder(FStringView Folder, FStringView Search);
 
-        NODISCARD FStringView GetBrowsedFolder() const { return FStringView(SelectedPath.c_str(), SelectedPath.size()); }
+        NODISCARD FStringView GetBrowsedFolder() const { return FStringView(*SelectedPath, SelectedPath.Len()); }
 
         // Selects a just-created asset and opens its inline rename as soon as its tile appears.
         void QueueRenameAfterCreate(FStringView VirtualPath);
 
         void HandleContentBrowserDragDrop(FStringView DropPath, FStringView PayloadPath);
 
+        void MoveSelectedTilesInto(FStringView DropPath, FStringView SourcePath);
+
         // The single highlighted asset, or null for an empty selection, a multi-selection, a folder or a loose file.
-        NODISCARD const FAssetData* GetSelectedAsset() const;
+        NODISCARD FAssetDataPtr GetSelectedAsset() const;
 
         // The one selected file's virtual path, or empty when a folder, several items or nothing is selected.
         NODISCARD FFixedString GetSelectedFilePath() const;
+
+        struct FListingEntry
+        {
+            VFS::FFileInfo  Info;
+            FName           TypeLabel;
+            FName           AssetClass;
+
+            // The asset's class is no longer registered, so it cannot be loaded or opened, only deleted.
+            bool            bMissingType = false;
+        };
+
+        // Folders first under every mode, and entries the mode cannot tell apart fall back to name order.
+        EDITOR_API static void SortListing(TVector<FListingEntry>& Entries, EContentBrowserSortMode Mode, bool bAscending);
+
+        // Appends Folder's browsable entries, and with bRecursive those of every visible subfolder too.
+        EDITOR_API static void ReadFolderListing(FStringView Folder, bool bRecursive, TVector<FListingEntry>& OutEntries);
 
     private:
 
@@ -83,17 +123,7 @@ namespace Lumina
         {
             TUniquePtr<FDirectoryWatcher>   Watcher;
             FFixedString                    VirtualPrefix;
-            size_t                          WatchRootLen = 0;
-        };
-
-        struct FListingEntry
-        {
-            VFS::FFileInfo  Info;
-            FName           TypeLabel;
-            FName           AssetClass;
-
-            // The asset's class is no longer registered, so it cannot be loaded or opened, only deleted.
-            bool            bMissingType = false;
+            int32                           WatchRootLen = 0;
         };
 
         void OnProjectLoaded();
@@ -158,8 +188,8 @@ namespace Lumina
         void NavigateTo(FStringView Path);
         void NavigateBack();
         void NavigateForward();
-        NODISCARD bool CanNavigateBack() const { return !NavBackStack.empty(); }
-        NODISCARD bool CanNavigateForward() const { return !NavForwardStack.empty(); }
+        NODISCARD bool CanNavigateBack() const { return !NavBackStack.IsEmpty(); }
+        NODISCARD bool CanNavigateForward() const { return !NavForwardStack.IsEmpty(); }
 
         // Rebuilds FilterState from the asset registry, keeping the user's choices.
         void RefreshFilterClasses();
@@ -176,6 +206,8 @@ namespace Lumina
         FTileViewWidget             ContentBrowserTileView;
         FTileViewContext            ContentBrowserTileViewContext;
         float                       ContentBrowserTileSize = 84.0f;
+        ContentBrowserEditorToolInternal::FHoverTooltipCache HoverTooltipCache;
+        FAssetTilePreviewSlot       TilePreview;
 
         FFixedString                SelectedPath;
         TVector<FFixedString>       NavBackStack;
@@ -194,11 +226,12 @@ namespace Lumina
         TVector<FListingEntry>      Listing;
         FFixedString                ListingFolder;
         bool                        bListingStale = true;
+        bool                        bListingRecursive = false;
 
         TUniquePtr<FPropertyTable>  ImportSettingsTable;
 
         // Files still waiting on an options window, drained one at a time by ProcessNextImport.
-        TVector<FFixedString>       PendingImports;
+        TQueue<FFixedString>        PendingImports;
         bool                        bImportWindowOpen = false;
         bool                        bApplyImportSettingsToAll = false;
         FString                     LastExportDirectory;

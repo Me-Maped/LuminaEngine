@@ -7,17 +7,22 @@
 
 namespace Lumina::Agent
 {
-    namespace
+    namespace AgentEntityTokenInternal
     {
-        // Bumped on a world swap so a token from the old one cannot resolve against the new.
-        TAtomic<uint64> GEpoch { 1 };
+        // Never reused, so a registry allocated where a closed one lived still gets a scope of its own.
+        TAtomic<uint64> GNextScope { 1 };
+
+        struct FTokenScope
+        {
+            uint64 Serial = GNextScope.fetch_add(1, std::memory_order_relaxed);
+        };
 
         constexpr FStringView GPrefix = "ent";
         constexpr char GSeparator = '_';
 
         bool ParseHex(FStringView Text, uint64& OutValue)
         {
-            if (Text.empty() || Text.size() > 16)
+            if (Text.IsEmpty() || Text.Len() > 16)
             {
                 return false;
             }
@@ -38,27 +43,21 @@ namespace Lumina::Agent
         }
     }
 
-    uint64 FEntityTokens::GetEpoch()
-    {
-        return GEpoch.load(std::memory_order_acquire);
-    }
+    using namespace AgentEntityTokenInternal;
 
-    void FEntityTokens::InvalidateAll()
-    {
-        GEpoch.fetch_add(1, std::memory_order_acq_rel);
-    }
-
-    FString FEntityTokens::Mint(const ECS::FRegistry& Registry, ECS::FEntity Entity)
+    FString FEntityTokens::Mint(ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
         if (Entity == ECS::NullEntity || !Registry.IsValid(Entity))
         {
             return FString();
         }
 
+        const uint64 Serial = Registry.Ctx().GetOrEmplace<FTokenScope>().Serial;
+
         // The version rides along in the handle, which is what makes a recycled slot detectable.
         const uint64 Bits = static_cast<uint64>(static_cast<uint32>(Entity));
 
-        return Lumina::Format("{}{}{:x}{}{:x}", GPrefix, GSeparator, GetEpoch(), GSeparator, Bits);
+        return Lumina::Format("{}{}{:x}{}{:x}", GPrefix, GSeparator, Serial, GSeparator, Bits);
     }
 
     bool FEntityTokens::Resolve(const ECS::FRegistry& Registry, FStringView Token,
@@ -68,38 +67,39 @@ namespace Lumina::Agent
 
         const auto Reject = [&OutError](FStringView Reason)
         {
-            OutError = FString(Reason.data(), Reason.size());
+            OutError = FString(Reason.GetData(), Reason.Len());
             return false;
         };
 
-        if (Token.size() < GPrefix.size() + 4 || Token.substr(0, GPrefix.size()) != GPrefix)
+        if (Token.Len() < GPrefix.Len() + 4 || Token.Mid(0, GPrefix.Len()) != GPrefix)
         {
             return Reject("That is not an entity id.");
         }
 
-        FStringView Rest = Token.substr(GPrefix.size());
-        if (Rest.empty() || Rest[0] != GSeparator)
+        FStringView Rest = Token.Mid(GPrefix.Len());
+        if (Rest.IsEmpty() || Rest[0] != GSeparator)
         {
             return Reject("That is not an entity id.");
         }
 
-        Rest = Rest.substr(1);
+        Rest = Rest.Mid(1);
 
-        const size_t Split = Rest.find(GSeparator);
-        if (Split == FStringView::npos)
+        const int32 Split = Rest.Find(GSeparator);
+        if (Split == Constants::kIndexNone)
         {
             return Reject("That is not an entity id.");
         }
 
-        uint64 Epoch = 0;
-        uint64 Bits  = 0;
+        uint64 Serial = 0;
+        uint64 Bits   = 0;
 
-        if (!ParseHex(Rest.substr(0, Split), Epoch) || !ParseHex(Rest.substr(Split + 1), Bits))
+        if (!ParseHex(Rest.Mid(0, Split), Serial) || !ParseHex(Rest.Mid(Split + 1), Bits))
         {
             return Reject("That is not an entity id.");
         }
 
-        if (Epoch != GetEpoch())
+        const FTokenScope* Scope = Registry.Ctx().Find<FTokenScope>();
+        if (Scope == nullptr || Scope->Serial != Serial)
         {
             return Reject("That entity id came from a world that is no longer open.");
         }

@@ -1,7 +1,6 @@
 #include "RuntimePCH.h"
 #include "AudioReverb.h"
 
-#include "Containers/Algorithm.h"
 #include "Core/Math/Math.h"
 
 namespace Lumina
@@ -39,7 +38,7 @@ namespace Lumina
 			for (uint32 i = 0; i < NumCombs; ++i)
 			{
 				const uint32 Size = Math::Max((uint32)((CombTuning[i] + Spread) * RateScale), 1u);
-				Networks[Channel].Combs[i].Buffer.assign(Size, 0.0f);
+				Networks[Channel].Combs[i].Buffer.Init(0.0f, Size);
 				Networks[Channel].Combs[i].Index = 0;
 				Networks[Channel].Combs[i].FilterStore = 0.0f;
 			}
@@ -47,7 +46,7 @@ namespace Lumina
 			for (uint32 i = 0; i < NumAllpass; ++i)
 			{
 				const uint32 Size = Math::Max((uint32)((AllpassTuning[i] + Spread) * RateScale), 1u);
-				Networks[Channel].Allpass[i].Buffer.assign(Size, 0.0f);
+				Networks[Channel].Allpass[i].Buffer.Init(0.0f, Size);
 				Networks[Channel].Allpass[i].Index = 0;
 			}
 		}
@@ -69,33 +68,15 @@ namespace Lumina
 		{
 			for (FCombFilter& Comb : Networks[Channel].Combs)
 			{
-				Comb.Buffer.clear();
+				Comb.Buffer.Reset();
 			}
 			for (FAllpassFilter& Allpass : Networks[Channel].Allpass)
 			{
-				Allpass.Buffer.clear();
+				Allpass.Buffer.Reset();
 			}
 		}
 
 		ChannelCount = 0;
-	}
-
-	void FAudioReverb::Clear()
-	{
-		for (uint32 Channel = 0; Channel < ChannelCount; ++Channel)
-		{
-			for (FCombFilter& Comb : Networks[Channel].Combs)
-			{
-				Algo::Fill(Comb.Buffer, 0.0f);
-				Comb.Index = 0;
-				Comb.FilterStore = 0.0f;
-			}
-			for (FAllpassFilter& Allpass : Networks[Channel].Allpass)
-			{
-				Algo::Fill(Allpass.Buffer, 0.0f);
-				Allpass.Index = 0;
-			}
-		}
 	}
 
 	void FAudioReverb::SetParams(const FAudioReverbParams& InParams)

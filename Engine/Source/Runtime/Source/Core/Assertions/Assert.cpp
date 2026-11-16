@@ -1,9 +1,17 @@
 ﻿#include "RuntimePCH.h"
 #include <atomic>
 #include <string>
+#include <version>
 #include "Assert.h"
 #include "Core/Threading/Thread.h"
 #include "Log/Log.h"
+
+#if __has_include(<stacktrace>) && defined(__cpp_lib_stacktrace)
+#include <stacktrace>
+#define HAS_STD_STACKTRACE 1
+#else
+#define HAS_STD_STACKTRACE 0
+#endif
 
 
 namespace Lumina::Assert
@@ -29,18 +37,17 @@ namespace Lumina::Assert
             LOG_CRITICAL("==================================================================================");
             LOG_CRITICAL("{} FAILED: {}", AssertionTypeToString(Assertion.Type), Assertion.Expression);
             
-            if (!Assertion.Message.empty())
+            if (!Assertion.Message.IsEmpty())
             {
                 LOG_CRITICAL("Message: {}", Assertion.Message);
             }
             
 #if HAS_STD_STACKTRACE
             std::basic_stacktrace Trace = std::stacktrace::current();
-            size_t Skip = 2;
-            for (size_t i = Skip; i < Trace.size(); ++i)
+            for (size_t i = 2; i < Trace.size(); ++i)
             {
                 const std::stacktrace_entry& Entry = Trace[i];
-                LOG_CRITICAL("  #{} {}", i - Skip, std::to_string(Entry));
+                LOG_CRITICAL("  #{} {}", i - 2, std::to_string(Entry));
             }
 #endif
 
@@ -93,7 +100,7 @@ namespace Lumina::Assert
         const FString ExpressionText = Format("{} {} {}", IndexName, Relation, BoundName);
         const FString MessageText = Format("{} is {}, {} is {}.", IndexName, IndexValue, BoundName, BoundValue);
 
-        ReportCheckFailure(ExpressionText.c_str(), MessageText.c_str(), Location);
+        ReportCheckFailure(*ExpressionText, *MessageText, Location);
     }
 
     void Detail::Abort()

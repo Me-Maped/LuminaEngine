@@ -11,6 +11,9 @@
 #include "Scripting/ManagedTypeRegistry.h"
 #include "World/World.h"
 #include "World/Entity/EntityUtils.h"
+#include "World/Entity/Systems/SystemAccess.h"
+#include "Log/Log.h"
+#include "LogCountTestHelpers.h"
 #include "Core/Object/ObjectReinstancer.h"
 #include "Core/Reflection/Type/ObjectReferenceVisitor.h"
 #include "ScriptTestUtil.h"
@@ -21,6 +24,11 @@
 #include "Core/Reflection/Type/LuminaTypes.h"
 #include "Core/Serialization/MemoryArchiver.h"
 #include "Core/Serialization/ObjectArchiver.h"
+#include "World/Entity/Components/EntityTags.h"
+#include "World/Entity/Components/Component.h"
+#include "World/Entity/Components/LifetimeComponent.h"
+#include <chrono>
+#include <cstdio>
 
 using namespace Lumina;
 
@@ -131,7 +139,7 @@ TEST(EntityScriptUnification, CppScriptRunsThroughTheDriver)
     TStrongObjectPtr<CEntityScript> Pinned(Script);
     EntityScripts::DetachAll(Registry, Entity);
     EXPECT_EQ(Script->DetachCount, 1);
-    EXPECT_TRUE(Registry.Get<SEntityScriptComponent>(Entity).Scripts.empty());
+    EXPECT_TRUE(Registry.Get<SEntityScriptComponent>(Entity).Scripts.IsEmpty());
 }
 
 // [Reflect(UpdatePhase = PostPhysics)] moves OnUpdate to the pass after the physics step, keeping OnReady where it was.
@@ -157,6 +165,9 @@ TEST(EntityScriptUnification, UpdatePhaseSelectsWhichPassRunsOnUpdate)
 
     Class->ScriptUpdatePhase = PriorPhase;
 
+    // Only a reload changes a class's phase in practice, and a reload notes a structure change the claim is keyed on.
+    EntityScripts::NoteStructureChange();
+
     EntityScripts::Tick(Registry, 0.5f, EScriptUpdatePhase::PrePhysics);
     EXPECT_EQ(Script->UpdateCount, 2) << "the default phase is PrePhysics, exactly as before";
 
@@ -178,7 +189,7 @@ TEST(EntityScriptUnification, CopyingTheComponentClonesItsScripts)
     Registry.EmplaceOrReplace<SEntityScriptComponent>(Destination, std::move(Copied));
 
     SEntityScriptComponent& Placed = Registry.Get<SEntityScriptComponent>(Destination);
-    ASSERT_EQ(Placed.Scripts.size(), size_t(1));
+    ASSERT_EQ(Placed.Scripts.Num(), 1);
 
     CEntityScript* Clone = Placed.Scripts[0].Get();
     ASSERT_NE(Clone, nullptr);
@@ -202,14 +213,14 @@ TEST(EntityScriptUnification, CloningAScriptCopiesContainerPropertiesWithoutSmas
 
     CEntityScriptTest* Script = AttachTestScript(Registry, Source);
     ASSERT_NE(Script, nullptr);
-    Script->Values.push_back(FName("Alpha"));
-    Script->Values.push_back(FName("Beta"));
+    Script->Values.Emplace("Alpha");
+    Script->Values.Emplace("Beta");
 
     SEntityScriptComponent Copied = Registry.Get<SEntityScriptComponent>(Source);
     const ECS::FEntity Destination = Registry.Create();
     Registry.EmplaceOrReplace<SEntityScriptComponent>(Destination, std::move(Copied));
 
-    ASSERT_EQ(Registry.Get<SEntityScriptComponent>(Destination).Scripts.size(), size_t(1));
+    ASSERT_EQ(Registry.Get<SEntityScriptComponent>(Destination).Scripts.Num(), 1);
     CEntityScript* Cloned = Registry.Get<SEntityScriptComponent>(Destination).Scripts[0].Get();
     ASSERT_NE(Cloned, nullptr);
 
@@ -218,11 +229,11 @@ TEST(EntityScriptUnification, CloningAScriptCopiesContainerPropertiesWithoutSmas
     CEntityScriptTest* Clone = Cast<CEntityScriptTest>(Cloned);
     ASSERT_NE(Clone, nullptr);
 
-    ASSERT_EQ(Clone->Values.size(), size_t(2)) << "the array copied, and copied into the right place";
+    ASSERT_EQ(Clone->Values.Num(), 2) << "the array copied, and copied into the right place";
     EXPECT_EQ(Clone->Values[0], FName("Alpha"));
     EXPECT_EQ(Clone->Values[1], FName("Beta"));
 
-    EXPECT_EQ(Script->Values.size(), size_t(2)) << "the source is untouched";
+    EXPECT_EQ(Script->Values.Num(), 2) << "the source is untouched";
 
     // A virtual call is what a corrupt vtable pointer actually faults on; the driver makes several.
     EntityScripts::Tick(Registry, 0.1f);
@@ -246,24 +257,24 @@ TEST(EntityScriptUnification, PrefabOverridesTrackAScriptComponentAsOneAtomicVal
     };
 
     SEntityScriptComponent Authored;
-    Authored.Scripts.push_back(MakeScript());
-    static_cast<CEntityScriptTest*>(Authored.Scripts[0].Get())->Values.push_back(FName("Prefab"));
+    Authored.Scripts.Add(MakeScript());
+    static_cast<CEntityScriptTest*>(Authored.Scripts[0].Get())->Values.Emplace("Prefab");
 
     SEntityScriptComponent Instance = Authored;   // a placed instance starts as an exact clone
 
     CStruct* Layout = SEntityScriptComponent::StaticStruct();
     TVector<FName> Paths;
     PrefabOverride::CollectOverriddenLeaves(Layout, &Instance, &Authored, Paths);
-    EXPECT_TRUE(Paths.empty()) << "an untouched instance overrides nothing";
+    EXPECT_TRUE(Paths.IsEmpty()) << "an untouched instance overrides nothing";
 
     static_cast<CEntityScriptTest*>(Instance.Scripts[0].Get())->Values[0] = FName("Instance");
-    Paths.clear();
+    Paths.Reset();
     PrefabOverride::CollectOverriddenLeaves(Layout, &Instance, &Authored, Paths);
-    ASSERT_EQ(Paths.size(), size_t(1)) << "editing a script value diverges the component";
+    ASSERT_EQ(Paths.Num(), 1) << "editing a script value diverges the component";
     EXPECT_EQ(Paths[0], PrefabOverride::WholeValuePath());
 
     THashSet<FName> Overridden;
-    Overridden.insert(PrefabOverride::WholeValuePath());
+    Overridden.Add(PrefabOverride::WholeValuePath());
     PrefabOverride::ApplyInheritedLeaves(Layout, &Instance, &Authored, Overridden);
     EXPECT_EQ(ValueOf(Instance), FName("Instance")) << "a refresh must not overwrite the override";
 
@@ -280,7 +291,7 @@ TEST(EntityScriptUnification, DetachSkipsAScriptThatNeverAttached)
     CObject* Created = NewObject(CEntityScriptTest::StaticClass(), nullptr, NAME_None, FGuid::New(), OF_Transient);
     CEntityScriptTest* Unadopted = static_cast<CEntityScriptTest*>(Created);
     ASSERT_NE(Unadopted, nullptr);
-    Registry.GetOrEmplace<SEntityScriptComponent>(Entity).Scripts.push_back(Unadopted);
+    Registry.GetOrEmplace<SEntityScriptComponent>(Entity).Scripts.Add(Unadopted);
 
     EXPECT_FALSE(Unadopted->IsAttached());
 
@@ -385,7 +396,7 @@ TEST(EntityScriptUnification, MintedScriptClassTicksThroughTheSameDriver)
     EntityScripts::Tick(Registry, 0.1f);
     EntityScripts::Tick(Registry, 0.1f);
 
-    EXPECT_EQ(Registry.Get<SEntityScriptComponent>(Entity).Scripts.size(), 2u);
+    EXPECT_EQ(Registry.Get<SEntityScriptComponent>(Entity).Scripts.Num(), 2);
     EXPECT_TRUE(Managed->IsReady()) << "the minted script was readied by the same pass as the C++ one";
     EXPECT_EQ(Native->UpdateCount, 2);
     EXPECT_EQ(Managed->GetClass(), Minted);
@@ -400,6 +411,8 @@ namespace
 {
     CParallelEntityScriptTest* AttachParallelTestScript(ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
+        // The ParallelUpdate promise is class metadata, which only lands once registration finishes.
+        RegisterPendingTypes();
         return static_cast<CParallelEntityScriptTest*>(
             EntityScripts::Attach(Registry, Entity, CParallelEntityScriptTest::StaticClass()));
     }
@@ -414,25 +427,19 @@ TEST(EntityScriptUnification, ParallelUpdateScriptsRunOncePerPassAcrossThreads)
     TVector<CParallelEntityScriptTest*> Scripts;
     for (int32 Index = 0; Index < kParallelTestEntities; ++Index)
     {
-        Scripts.push_back(AttachParallelTestScript(Registry, Registry.Create()));
-        ASSERT_NE(Scripts.back(), nullptr);
+        Scripts.Add(AttachParallelTestScript(Registry, Registry.Create()));
+        ASSERT_NE(Scripts.Last(), nullptr);
     }
 
     EntityScripts::Tick(Registry, 0.5f);
     EntityScripts::Tick(Registry, 0.5f);
     EntityScripts::TickFixed(Registry, 0.5f);
 
-    THashSet<uint64> Threads;
     for (CParallelEntityScriptTest* Script : Scripts)
     {
         EXPECT_EQ(Script->ReadyCount, 1);
         EXPECT_EQ(Script->UpdateCount, 2) << "every promising script updates once per pass, no more and no fewer";
         EXPECT_EQ(Script->FixedUpdateCount, 1);
-        Threads.insert(Script->LastThreadID);
-    }
-    if (Threading::GetNumThreads() > 1)
-    {
-        EXPECT_GT(Threads.size(), 1u) << "thousands of promising scripts should have spread across the workers";
     }
 }
 
@@ -466,11 +473,11 @@ TEST(EntityScriptUnification, AMintedClassOptsInThroughItsFlag)
     TVector<CEntityScriptTest*> Scripts;
     for (int32 Index = 0; Index < kParallelTestEntities; ++Index)
     {
-        Scripts.push_back(AttachMintedTestScript(Registry, Registry.Create(), "EntityScript_GTestParallel"));
-        ASSERT_NE(Scripts.back(), nullptr);
+        Scripts.Add(AttachMintedTestScript(Registry, Registry.Create(), "EntityScript_GTestParallel"));
+        ASSERT_NE(Scripts.Last(), nullptr);
     }
 
-    CScriptClass* Class = ToScriptClass(Scripts.front()->GetClass());
+    CScriptClass* Class = ToScriptClass(Scripts[0]->GetClass());
     ASSERT_NE(Class, nullptr);
     const FName ParallelUpdateName("ParallelUpdate");
     Class->Metadata.SetValue(ParallelUpdateName, FString());
@@ -485,6 +492,56 @@ TEST(EntityScriptUnification, AMintedClassOptsInThroughItsFlag)
     }
 }
 
+// Priority, not attach order, decides which of an entity's scripts updates first, a C# one and a C++ one alike, on either path.
+TEST(EntityScriptUnification, UpdatePriorityOrdersScriptsAcrossLanguagesAndPaths)
+{
+    ECS::FRegistry Registry{};
+    const ECS::FEntity Entity = Registry.Create();
+
+    CEntityScriptTest*         Managed = AttachMintedTestScript(Registry, Entity, "EntityScript_GTestPriority");
+    CParallelEntityScriptTest* Native  = AttachParallelTestScript(Registry, Entity);
+    ASSERT_NE(Managed, nullptr);
+    ASSERT_NE(Native, nullptr);
+
+    // The native script reads how far the managed one got, so a count already bumped this tick means the managed one ran first.
+    struct FProbe { const CEntityScriptTest* Managed; int32 Seen; } Probe{ Managed, -1 };
+    Native->HookContext = &Probe;
+    Native->UpdateHook  = [](CParallelEntityScriptTest&, void* Context)
+    {
+        FProbe& Seen = *static_cast<FProbe*>(Context);
+        Seen.Seen = Seen.Managed->UpdateCount;
+    };
+    auto ManagedRanFirst = [&]
+    {
+        EntityScripts::Tick(Registry, 0.1f);
+        return Probe.Seen == Managed->UpdateCount;
+    };
+
+    EXPECT_TRUE(ManagedRanFirst()) << "equal priorities keep attach order";
+
+    Managed->SetUpdatePriority(1);
+    Native->SetUpdatePriority(-1);
+    EXPECT_FALSE(ManagedRanFirst()) << "the lower priority runs first, though it attached second";
+
+    Managed->SetUpdatePriority(-2);
+    EXPECT_TRUE(ManagedRanFirst()) << "a priority changed after attach reorders the next pass";
+
+    // Promising parallel safety moves the entity onto the claimed span, which must keep the same order.
+    CScriptClass* Class = ToScriptClass(Managed->GetClass());
+    ASSERT_NE(Class, nullptr);
+    const FName ParallelUpdateName("ParallelUpdate");
+    Class->Metadata.SetValue(ParallelUpdateName, FString());
+    EntityScripts::NoteStructureChange();
+
+    EXPECT_TRUE(ManagedRanFirst()) << "the claimed span runs in priority order";
+    Managed->SetUpdatePriority(1);
+    EXPECT_FALSE(ManagedRanFirst()) << "and follows a priority change the same way";
+
+    Class->Metadata.RemoveValue(ParallelUpdateName);
+    EntityScripts::NoteStructureChange();
+    EXPECT_EQ(Native->UpdateCount, Managed->UpdateCount);
+}
+
 // Breaking the promise mid-pass cannot skip or repeat anyone, because each chunk's remainder runs serially.
 TEST(EntityScriptUnification, AStructuralChangeMidPassHandsTheRestToTheSerialPath)
 {
@@ -492,8 +549,8 @@ TEST(EntityScriptUnification, AStructuralChangeMidPassHandsTheRestToTheSerialPat
     TVector<CParallelEntityScriptTest*> Scripts;
     for (int32 Index = 0; Index < kParallelTestEntities; ++Index)
     {
-        Scripts.push_back(AttachParallelTestScript(Registry, Registry.Create()));
-        ASSERT_NE(Scripts.back(), nullptr);
+        Scripts.Add(AttachParallelTestScript(Registry, Registry.Create()));
+        ASSERT_NE(Scripts.Last(), nullptr);
     }
     EntityScripts::Tick(Registry, 0.5f);
 
@@ -507,6 +564,373 @@ TEST(EntityScriptUnification, AStructuralChangeMidPassHandsTheRestToTheSerialPat
     {
         EXPECT_EQ(Script->UpdateCount, 2) << "every script still updates exactly once in the interrupted pass";
     }
+}
+
+#if !defined(LE_SHIPPING)
+extern "C" void* LuminaSharp_GetComponent(uint64 World, uint32 Entity, const void* Ops);
+extern "C" const void* LuminaSharp_GetComponentRead(uint64 World, uint32 Entity, const void* Ops);
+
+namespace
+{
+    struct FPromiseTest
+    {
+        ECS::FRegistry Registry;
+        ECS::FEntity   Bystander = ECS::NullEntity;
+    };
+
+    template<typename TTick>
+    int32 CountPromiseReportsDuring(const char* Call, TTick&& Tick)
+    {
+        // The log backend is asynchronous, so drain an earlier test's report before clearing or it lands in this pass.
+        Logging::Flush();
+        Logging::ClearLogQueue();
+        Tick();
+
+        return CountLoggedMessages(ELogLevel::Error, "CParallelEntityScriptTest", Call);
+    }
+
+    // Few enough entities that the pass runs on the ticking thread, so a hook may change the registry without racing anyone.
+    int32 CountPromiseReports(void (*Hook)(CParallelEntityScriptTest&, void*), const char* Call)
+    {
+        FPromiseTest Test;
+        ConnectComponentAccessValidators(Test.Registry);
+        Test.Bystander = Test.Registry.Create();
+        for (int32 Index = 0; Index < 64; ++Index)
+        {
+            CParallelEntityScriptTest* Script = AttachParallelTestScript(Test.Registry, Test.Registry.Create());
+            Script->UpdateHook  = Hook;
+            Script->HookContext = &Test;
+        }
+
+        return CountPromiseReportsDuring(Call, [&]
+        {
+            EntityScripts::Tick(Test.Registry, 0.5f);
+            EntityScripts::Tick(Test.Registry, 0.5f);
+        });
+    }
+}
+
+TEST(EntityScriptUnification, AParallelScriptTouchingOnlyItsOwnEntityIsNotReported)
+{
+    EXPECT_EQ(CountPromiseReports([](CParallelEntityScriptTest& Script, void*)
+    {
+        LuminaSharp_GetComponent(0, Script.GetOwningEntity().GetPacked(), nullptr);
+        LuminaSharp_GetComponentRead(0, Script.GetOwningEntity().GetPacked(), nullptr);
+    }, "ParallelUpdate"), 0);
+}
+
+TEST(EntityScriptUnification, AParallelScriptReadingAnotherEntityIsReportedOnce)
+{
+    EXPECT_EQ(CountPromiseReports([](CParallelEntityScriptTest&, void* Context)
+    {
+        LuminaSharp_GetComponentRead(0, static_cast<FPromiseTest*>(Context)->Bystander.GetPacked(), nullptr);
+    }, "GetComponentRead"), 1);
+}
+
+TEST(EntityScriptUnification, AParallelScriptWritingAnotherEntityIsReportedOnce)
+{
+    EXPECT_EQ(CountPromiseReports([](CParallelEntityScriptTest&, void* Context)
+    {
+        LuminaSharp_GetComponent(0, static_cast<FPromiseTest*>(Context)->Bystander.GetPacked(), nullptr);
+    }, "GetComponent"), 1);
+}
+
+TEST(EntityScriptUnification, AParallelScriptCreatingAnEntityIsReportedOnce)
+{
+    EXPECT_EQ(CountPromiseReports([](CParallelEntityScriptTest&, void* Context)
+    {
+        (void)static_cast<FPromiseTest*>(Context)->Registry.Create();
+    }, "creating or destroying an entity"), 1);
+}
+
+TEST(EntityScriptUnification, AParallelScriptDestroyingAnEntityIsReportedOnce)
+{
+    EXPECT_EQ(CountPromiseReports([](CParallelEntityScriptTest&, void* Context)
+    {
+        FPromiseTest& Test = *static_cast<FPromiseTest*>(Context);
+        if (Test.Registry.IsValid(Test.Bystander))
+        {
+            Test.Registry.Destroy(Test.Bystander);
+        }
+    }, "creating or destroying an entity"), 1);
+}
+
+TEST(EntityScriptUnification, AParallelScriptAttachingAScriptIsReportedOnce)
+{
+    EXPECT_EQ(CountPromiseReports([](CParallelEntityScriptTest&, void* Context)
+    {
+        FPromiseTest& Test = *static_cast<FPromiseTest*>(Context);
+        AttachTestScript(Test.Registry, Test.Bystander);
+    }, "attaching, detaching or destroying a script"), 1);
+}
+#endif
+
+namespace
+{
+    // Hides the promise from anything that walks the class again, so whether a tick ran in parallel shows whether it re-claimed.
+    struct FHiddenParallelPromise
+    {
+        FHiddenParallelPromise()  { CParallelEntityScriptTest::StaticClass()->Metadata.RemoveValue(FName("ParallelUpdate")); }
+        ~FHiddenParallelPromise() { CParallelEntityScriptTest::StaticClass()->Metadata.SetValue(FName("ParallelUpdate"), FString()); }
+    };
+
+    TVector<CParallelEntityScriptTest*> AttachReadiedParallelScripts(ECS::FRegistry& Registry, int32 Count)
+    {
+        TVector<CParallelEntityScriptTest*> Scripts;
+        for (int32 Index = 0; Index < Count; ++Index)
+        {
+            Scripts.Add(AttachParallelTestScript(Registry, Registry.Create()));
+        }
+        EntityScripts::Tick(Registry, 0.5f);
+        return Scripts;
+    }
+
+    bool AllRanOnThisThread(const TVector<CParallelEntityScriptTest*>& Scripts)
+    {
+        return Algo::AllOf(Scripts, [](const CParallelEntityScriptTest* Script) { return Script->LastThreadID == Threading::GetThreadID(); });
+    }
+}
+
+extern "C" void* LuminaSharp_EmplaceComponent(uint64 World, uint32 Entity, const void* Ops);
+
+// GetOrEmplaceComponent from a worker leaves the live pool to its sibling chunks and adds the configured value at the sync point.
+TEST(EntityScriptUnification, AParallelScriptEmplaceWaitsForTheSyncPoint)
+{
+    CWorld* World = NewObject<CWorld>(nullptr, NAME_None, FGuid::New(), OF_Transient);
+    ECS::FRegistry& Registry = World->GetEntityRegistry();
+    const TVector<CParallelEntityScriptTest*> Scripts = AttachReadiedParallelScripts(Registry, kParallelTestEntities);
+    for (CParallelEntityScriptTest* Script : Scripts)
+    {
+        Script->HookContext = World;
+        Script->UpdateHook  = [](CParallelEntityScriptTest& Self, void* Context)
+        {
+            // The ticking thread's own chunks run undeferred, so only a worker's call is under test.
+            if (Threading::IsMainThread())
+            {
+                return;
+            }
+            const uint32 Entity = Self.GetOwningEntity().GetPacked();
+            void* Added = LuminaSharp_EmplaceComponent(reinterpret_cast<uint64>(Context), Entity, &Meta::GetComponentOps<SLifetimeComponent>());
+            static_cast<SLifetimeComponent*>(Added)->Lifetime = static_cast<float>(Entity);
+        };
+    }
+
+    EntityScripts::Tick(Registry, 0.5f);
+    TVector<CParallelEntityScriptTest*> RanOnWorkers;
+    for (CParallelEntityScriptTest* Script : Scripts)
+    {
+        if (Script->LastThreadID != Threading::GetThreadID())
+        {
+            RanOnWorkers.Add(Script);
+            EXPECT_FALSE(Registry.HasAll<SLifetimeComponent>(Script->GetOwningEntity())) << "a worker's emplace must not touch the live pool";
+        }
+    }
+    ASSERT_FALSE(RanOnWorkers.IsEmpty()) << "no script ran on a worker, so nothing was deferred";
+
+    World->GetCommandBus().Flush();
+    for (CParallelEntityScriptTest* Script : RanOnWorkers)
+    {
+        const SLifetimeComponent* Lifetime = Registry.TryGet<SLifetimeComponent>(Script->GetOwningEntity());
+        ASSERT_NE(Lifetime, nullptr) << "the flush must add what the script staged";
+        EXPECT_EQ(Lifetime->Lifetime, static_cast<float>(Script->GetOwningEntity().GetPacked())) << "the staged value carries what the script configured";
+    }
+}
+
+extern "C" void* LuminaSharp_RegistryConnect(uint64 World, const void* Ops, int32 Kind);
+extern "C" void LuminaSharp_RegistryDisconnect(uint64 World, const void* Ops, int32 Kind, void* Handle);
+
+// Subscribing or unsubscribing writes the pool's shared listener list, so a worker's call waits for the sync point.
+TEST(EntityScriptUnification, AParallelScriptSignalSubscriptionWaitsForTheSyncPoint)
+{
+    struct FSubscription
+    {
+        CWorld*                 World         = nullptr;
+        FManagedSignalListener* Listener      = nullptr;
+        bool                    bUnsubscribed = false;
+    };
+    constexpr int32 Construct = static_cast<int32>(EComponentSignal::Construct);
+    const FComponentOps* Ops = &Meta::GetComponentOps<SLifetimeComponent>();
+
+    CWorld* World = NewObject<CWorld>(nullptr, NAME_None, FGuid::New(), OF_Transient);
+    ECS::FRegistry& Registry = World->GetEntityRegistry();
+    const TVector<CParallelEntityScriptTest*> Scripts = AttachReadiedParallelScripts(Registry, kParallelTestEntities);
+    TVector<FSubscription> Subscriptions;
+    Subscriptions.SetNum(Scripts.Num());
+    for (int32 Index = 0; Index < Scripts.Num(); ++Index)
+    {
+        Subscriptions[Index].World = World;
+        Scripts[Index]->HookContext = &Subscriptions[Index];
+        Scripts[Index]->UpdateHook  = [](CParallelEntityScriptTest&, void* Context)
+        {
+            FSubscription& Subscription = *static_cast<FSubscription*>(Context);
+            if (!Threading::IsMainThread())
+            {
+                Subscription.Listener = static_cast<FManagedSignalListener*>(LuminaSharp_RegistryConnect(
+                    reinterpret_cast<uint64>(Subscription.World), &Meta::GetComponentOps<SLifetimeComponent>(), Construct));
+            }
+        };
+    }
+
+    EntityScripts::Tick(Registry, 0.5f);
+    TVector<FSubscription*> Subscribed;
+    for (FSubscription& Subscription : Subscriptions)
+    {
+        if (Subscription.Listener != nullptr)
+        {
+            Subscribed.Add(&Subscription);
+            EXPECT_FALSE(Subscription.Listener->Connection.IsConnected()) << "a worker's subscribe must not touch the live pool";
+        }
+    }
+    ASSERT_FALSE(Subscribed.IsEmpty()) << "no script ran on a worker, so nothing was deferred";
+
+    World->GetCommandBus().Flush();
+    for (const FSubscription* Subscription : Subscribed)
+    {
+        EXPECT_TRUE(Subscription->Listener->Connection.IsConnected()) << "the flush must connect what the script subscribed";
+    }
+
+    for (CParallelEntityScriptTest* Script : Scripts)
+    {
+        Script->UpdateHook = [](CParallelEntityScriptTest&, void* Context)
+        {
+            FSubscription& Subscription = *static_cast<FSubscription*>(Context);
+            if (!Threading::IsMainThread() && Subscription.Listener != nullptr)
+            {
+                LuminaSharp_RegistryDisconnect(reinterpret_cast<uint64>(Subscription.World), &Meta::GetComponentOps<SLifetimeComponent>(),
+                    Construct, Subscription.Listener);
+                Subscription.bUnsubscribed = true;
+            }
+        };
+    }
+
+    EntityScripts::Tick(Registry, 0.5f);
+    bool bAnyUnsubscribed = false;
+    for (const FSubscription* Subscription : Subscribed)
+    {
+        if (Subscription->bUnsubscribed)
+        {
+            bAnyUnsubscribed = true;
+            EXPECT_TRUE(Subscription->Listener->Connection.IsConnected()) << "a worker's unsubscribe must not touch the live pool or free the listener";
+        }
+    }
+    ASSERT_TRUE(bAnyUnsubscribed) << "no subscribed script ran on a worker, so nothing was deferred";
+
+    World->GetCommandBus().Flush();
+    for (const FSubscription* Subscription : Subscribed)
+    {
+        if (!Subscription->bUnsubscribed)
+        {
+            LuminaSharp_RegistryDisconnect(reinterpret_cast<uint64>(World), Ops, Construct, Subscription->Listener);
+        }
+    }
+    const ECS::FSparseSet* Pool = Registry.FindStorage(Ops->GetTypeID());
+    ASSERT_NE(Pool, nullptr);
+    EXPECT_TRUE(Pool->Signals.OnConstruct.IsEmpty()) << "every subscription was released once its unsubscribe flushed";
+}
+
+#if !defined(LE_SHIPPING)
+// With nothing structural changed the next tick runs the claim it already has, without walking the entities again.
+TEST(EntityScriptUnification, AnUnchangedWorldReusesItsParallelClaim)
+{
+    ECS::FRegistry Registry{};
+    const TVector<CParallelEntityScriptTest*> Scripts = AttachReadiedParallelScripts(Registry, kParallelTestEntities);
+    EntityScripts::Tick(Registry, 0.5f);
+    EntityScripts::TickFixed(Registry, 0.5f);
+    for (CParallelEntityScriptTest* Script : Scripts)
+    {
+        Script->UpdateHook = [](CParallelEntityScriptTest&, void*)
+        {
+            LuminaSharp_GetComponentRead(0, ECS::NullEntity.GetPacked(), nullptr);
+        };
+    }
+
+    int32 Reports = 0;
+    {
+        FHiddenParallelPromise Hidden;
+        EntityScripts::TickFixed(Registry, 0.5f);
+        Reports = CountPromiseReportsDuring("GetComponentRead", [&] { EntityScripts::Tick(Registry, 0.5f); });
+    }
+
+    for (CParallelEntityScriptTest* Script : Scripts)
+    {
+        EXPECT_EQ(Script->UpdateCount, 3);
+        EXPECT_EQ(Script->FixedUpdateCount, 2);
+    }
+    EXPECT_EQ(Reports, 1) << "only the claimed span watches promises, and a re-walk would have found none and run everything serially";
+}
+#endif
+
+// A structural change throws the cached claim away, so the next tick claims from what the entities hold now.
+TEST(EntityScriptUnification, AStructuralChangeInvalidatesTheCachedClaim)
+{
+    ECS::FRegistry Registry{};
+    const TVector<CParallelEntityScriptTest*> Scripts = AttachReadiedParallelScripts(Registry, kParallelTestEntities);
+    EntityScripts::Tick(Registry, 0.5f);
+    {
+        FHiddenParallelPromise Hidden;
+        EntityScripts::NoteStructureChange();
+        EntityScripts::Tick(Registry, 0.5f);
+    }
+
+    EXPECT_TRUE(AllRanOnThisThread(Scripts)) << "the re-claim saw no promise, so every script ran on the ticking thread";
+    for (CParallelEntityScriptTest* Script : Scripts)
+    {
+        EXPECT_EQ(Script->UpdateCount, 3);
+    }
+}
+
+// Entities that come, go or pause after a claim are seen by the next tick, though only the attach moves the script epoch.
+TEST(EntityScriptUnification, TheCachedClaimFollowsSpawnsDestroysAndPauses)
+{
+    ECS::FRegistry Registry{};
+    const TVector<CParallelEntityScriptTest*> Scripts = AttachReadiedParallelScripts(Registry, kParallelTestEntities);
+    EntityScripts::Tick(Registry, 0.5f);
+
+    CParallelEntityScriptTest* Paused = Scripts[1];
+    Registry.Emplace<SScriptDisabledTag>(Paused->GetOwningEntity());
+    Registry.Destroy(Scripts[0]->GetOwningEntity());
+    CParallelEntityScriptTest* Spawned = AttachParallelTestScript(Registry, Registry.Create());
+    EntityScripts::Tick(Registry, 0.5f);
+
+    EXPECT_EQ(Paused->UpdateCount, 2) << "a paused entity's scripts must drop out of the claim";
+    EXPECT_EQ(Spawned->ReadyCount, 1);
+    EXPECT_EQ(Spawned->UpdateCount, 1);
+    for (int32 Index = 2; Index < Scripts.Num(); ++Index)
+    {
+        EXPECT_EQ(Scripts[Index]->UpdateCount, 3);
+    }
+
+    Registry.Remove<SScriptDisabledTag>(Paused->GetOwningEntity());
+    EntityScripts::Tick(Registry, 0.5f);
+    EXPECT_EQ(Paused->UpdateCount, 3) << "resuming it must bring it back";
+}
+
+// Not a pass or fail bound, as wall-clock time under load is noise. Prints a whole tick with the claim rebuilt and cached.
+TEST(EntityScriptUnification, ClaimTimingWithAndWithoutTheCache)
+{
+    constexpr int32 kEntities = 20000;
+    constexpr int32 kTicks    = 50;
+
+    ECS::FRegistry Registry{};
+    AttachReadiedParallelScripts(Registry, kEntities);
+
+    auto MicrosPerCall = [&](bool bInvalidate)
+    {
+        const auto Start = std::chrono::steady_clock::now();
+        for (int32 Tick = 0; Tick < kTicks; ++Tick)
+        {
+            if (bInvalidate)
+            {
+                EntityScripts::NoteStructureChange();
+            }
+            EntityScripts::Tick(Registry, 0.5f);
+        }
+        return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - Start).count() / kTicks;
+    };
+
+    const double Rebuilt = MicrosPerCall(true);
+    const double Cached  = MicrosPerCall(false);
+    std::printf("[ClaimTiming] %d entities, tick with claim rebuilt %.1f us, cached %.1f us\n", kEntities, Rebuilt, Cached);
 }
 
 // A class that is not a CEntityScript must be refused rather than attached and later dispatched to.
@@ -536,7 +960,7 @@ TEST(EntityScriptUnification, ComponentSerializationRoundTripsScriptsAndAdoptsTh
         FObjectProxyArchiver Ar(Writer, /*bLoadIfFindFails*/ false);
         Source.Get<SEntityScriptComponent>(Entity).Serialize(Ar);
     }
-    ASSERT_FALSE(Bytes.empty());
+    ASSERT_FALSE(Bytes.IsEmpty());
 
     // Load into a fresh registry + entity, exactly as scene load would.
     ECS::FRegistry Loaded{};
@@ -548,7 +972,7 @@ TEST(EntityScriptUnification, ComponentSerializationRoundTripsScriptsAndAdoptsTh
         Restored.Serialize(Ar);
     }
 
-    ASSERT_EQ(Restored.Scripts.size(), 2u) << "both scripts must come back";
+    ASSERT_EQ(Restored.Scripts.Num(), 2) << "both scripts must come back";
     ASSERT_NE(Restored.Scripts[0].Get(), nullptr);
     EXPECT_EQ(Restored.Scripts[0].Get()->GetClass(), CEntityScriptTest::StaticClass())
         << "the script's concrete class must round-trip, not its base";
@@ -575,12 +999,12 @@ TEST(EntityScriptUnification, ScriptPropertyValuesSurviveTheComponentRoundTrip)
 {
     Scripting::FScriptExportSchema Schema;
     {
-        Scripting::FScriptExportField& Speed = Schema.Fields.emplace_back();
+        Scripting::FScriptExportField& Speed = Schema.Fields.EmplaceGetRef();
         Speed.Name = FName("Speed");
         Speed.Type = MakeShared<Scripting::FScriptExportType>();
         Speed.Type->Kind = EPropertyTypeFlags::Float;
 
-        Scripting::FScriptExportField& Label = Schema.Fields.emplace_back();
+        Scripting::FScriptExportField& Label = Schema.Fields.EmplaceGetRef();
         Label.Name = FName("Label");
         Label.Type = MakeShared<Scripting::FScriptExportType>();
         Label.Type->Kind = EPropertyTypeFlags::String;
@@ -612,7 +1036,7 @@ TEST(EntityScriptUnification, ScriptPropertyValuesSurviveTheComponentRoundTrip)
         FObjectProxyArchiver Ar(Writer, /*bLoadIfFindFails*/ false);
         Source.Get<SEntityScriptComponent>(Entity).Serialize(Ar);
     }
-    ASSERT_FALSE(Bytes.empty());
+    ASSERT_FALSE(Bytes.IsEmpty());
 
     ECS::FRegistry Loaded{};
     const ECS::FEntity LoadedEntity = Loaded.Create();
@@ -623,7 +1047,7 @@ TEST(EntityScriptUnification, ScriptPropertyValuesSurviveTheComponentRoundTrip)
         Restored.Serialize(Ar);
     }
 
-    ASSERT_EQ(Restored.Scripts.size(), 1u);
+    ASSERT_EQ(Restored.Scripts.Num(), 1);
     CEntityScript* LoadedScript = Restored.Scripts[0].Get();
     ASSERT_NE(LoadedScript, nullptr);
     ASSERT_EQ(LoadedScript->GetClass(), Minted);
@@ -631,7 +1055,7 @@ TEST(EntityScriptUnification, ScriptPropertyValuesSurviveTheComponentRoundTrip)
 
     EXPECT_FLOAT_EQ(*Speed->GetValuePtr<float>(LoadedScript), 12.5f)
         << "an authored scalar reverted; it would silently reset on every Play";
-    EXPECT_STREQ(Label->GetValuePtr<FString>(LoadedScript)->c_str(), "authored in the inspector")
+    EXPECT_STREQ(*(*Label->GetValuePtr<FString>(LoadedScript)), "authored in the inspector")
         << "an authored string reverted";
 
     // And the values survive the driver adopting the loaded script, which runs OnAttach/OnReady on it.
@@ -658,13 +1082,13 @@ TEST(EntityScriptUnification, FindAndRemoveByClass)
 
     TVector<CEntityScript*> All;
     EntityScripts::FindAll(Registry, Entity, CEntityScriptTest::StaticClass(), All);
-    EXPECT_EQ(All.size(), 2u);
+    EXPECT_EQ(All.Num(), 2);
 
     // Held, since Remove drops the component's reference and the reads below would otherwise touch a freed script.
     const TStrongObjectPtr<CEntityScriptTest> PinnedFirst(First);
     EXPECT_TRUE(EntityScripts::Remove(Registry, Entity, First));
     EXPECT_EQ(First->DetachCount, 1) << "Remove must run OnDetach";
-    EXPECT_EQ(Registry.Get<SEntityScriptComponent>(Entity).Scripts.size(), 1u);
+    EXPECT_EQ(Registry.Get<SEntityScriptComponent>(Entity).Scripts.Num(), 1);
     EXPECT_EQ(EntityScripts::Find(Registry, Entity, CEntityScriptTest::StaticClass()), Second);
 
     EXPECT_FALSE(EntityScripts::Remove(Registry, Entity, First)) << "removing twice must be refused";
@@ -681,7 +1105,7 @@ TEST(EntityScriptUnification, ScriptsSurviveAClassLayoutRebuild)
         Speed.Name = FName("Speed");
         Speed.Type = MakeShared<Scripting::FScriptExportType>();
         Speed.Type->Kind = EPropertyTypeFlags::Float;
-        Before.Fields.push_back(std::move(Speed));
+        Before.Fields.Add(std::move(Speed));
     }
 
     CScriptClass* Minted = FScriptableRegistry::Mint("EvacTest_Script", "CEntityScript");
@@ -707,13 +1131,13 @@ TEST(EntityScriptUnification, ScriptsSurviveAClassLayoutRebuild)
         Kept.Name = FName("Speed");
         Kept.Type = MakeShared<Scripting::FScriptExportType>();
         Kept.Type->Kind = EPropertyTypeFlags::Float;
-        After.Fields.push_back(std::move(Kept));
+        After.Fields.Add(std::move(Kept));
 
         Scripting::FScriptExportField Added;
         Added.Name = FName("Health");
         Added.Type = MakeShared<Scripting::FScriptExportType>();
         Added.Type->Kind = EPropertyTypeFlags::Int32;
-        After.Fields.push_back(std::move(Added));
+        After.Fields.Add(std::move(Added));
     }
 
     // A local registry is not reachable from GWorldManager, so it takes part the same way any holder does.
@@ -725,7 +1149,7 @@ TEST(EntityScriptUnification, ScriptsSurviveAClassLayoutRebuild)
 
     SEntityScriptComponent* Component = Registry.TryGet<SEntityScriptComponent>(Entity);
     ASSERT_NE(Component, nullptr);
-    ASSERT_EQ(Component->Scripts.size(), 1u) << "the attached script did not survive the reshape";
+    ASSERT_EQ(Component->Scripts.Num(), 1) << "the attached script did not survive the reshape";
 
     CEntityScript* Restored = Component->Scripts[0].Get();
     ASSERT_NE(Restored, nullptr);
@@ -771,7 +1195,7 @@ TEST(EntityScriptUnification, RenamingAPropertyKeepsItsValueViaAlias)
     ECS::FRegistry Registry{};
 
     Scripting::FScriptExportSchema Before;
-    Before.Fields.push_back(MakeReloadField("Speed", EPropertyTypeFlags::Float));
+    Before.Fields.Add(MakeReloadField("Speed", EPropertyTypeFlags::Float));
 
     CScriptClass* Minted = FScriptableRegistry::Mint("RenameProp_Script", "CEntityScript");
     ASSERT_NE(Minted, nullptr);
@@ -786,7 +1210,7 @@ TEST(EntityScriptUnification, RenamingAPropertyKeepsItsValueViaAlias)
 
     // Speed -> Velocity, declaring the old name.
     Scripting::FScriptExportSchema After;
-    After.Fields.push_back(MakeReloadField("Velocity", EPropertyTypeFlags::Float, "Speed"));
+    After.Fields.Add(MakeReloadField("Velocity", EPropertyTypeFlags::Float, "Speed"));
 
     FLocalRegistryReferenceProvider Provider{ Registry };
     FObjectReferenceProviders::Register(&Provider);
@@ -797,7 +1221,7 @@ TEST(EntityScriptUnification, RenamingAPropertyKeepsItsValueViaAlias)
 
     SEntityScriptComponent* Component = Registry.TryGet<SEntityScriptComponent>(Entity);
     ASSERT_NE(Component, nullptr);
-    ASSERT_EQ(Component->Scripts.size(), 1u);
+    ASSERT_EQ(Component->Scripts.Num(), 1);
     CEntityScript* Restored = Component->Scripts[0].Get();
     ASSERT_NE(Restored, nullptr);
 
@@ -817,7 +1241,7 @@ TEST(EntityScriptUnification, RenamingWithoutAnAliasResetsToDefault)
     ECS::FRegistry Registry{};
 
     Scripting::FScriptExportSchema Before;
-    Before.Fields.push_back(MakeReloadField("Speed", EPropertyTypeFlags::Float));
+    Before.Fields.Add(MakeReloadField("Speed", EPropertyTypeFlags::Float));
 
     CScriptClass* Minted = FScriptableRegistry::Mint("RenameNoAlias_Script", "CEntityScript");
     ASSERT_NE(Minted, nullptr);
@@ -831,7 +1255,7 @@ TEST(EntityScriptUnification, RenamingWithoutAnAliasResetsToDefault)
     Minted->GetProperty(FName("Speed"))->SetValue<float>(Attached, 9.75f);
 
     Scripting::FScriptExportSchema After;
-    After.Fields.push_back(MakeReloadField("Velocity", EPropertyTypeFlags::Float));   // no alias
+    After.Fields.Add(MakeReloadField("Velocity", EPropertyTypeFlags::Float));   // no alias
 
     FLocalRegistryReferenceProvider Provider{ Registry };
     FObjectReferenceProviders::Register(&Provider);
@@ -852,7 +1276,7 @@ TEST(EntityScriptUnification, RenamingAScriptClassMovesItsInstances)
     ECS::FRegistry Registry{};
 
     Scripting::FScriptExportSchema Schema;
-    Schema.Fields.push_back(MakeReloadField("Speed", EPropertyTypeFlags::Float));
+    Schema.Fields.Add(MakeReloadField("Speed", EPropertyTypeFlags::Float));
 
     CScriptClass* Old = FScriptableRegistry::Mint("RenameClass_Before", "CEntityScript");
     ASSERT_NE(Old, nullptr);
@@ -872,7 +1296,7 @@ TEST(EntityScriptUnification, RenamingAScriptClassMovesItsInstances)
         FMemoryWriter Writer(Bytes);
         FObjectProxyArchiver Ar(Writer, /*bLoadIfFindFails*/ false);
         Component->Serialize(Ar);
-        Component->Scripts.clear();
+        Component->Scripts.Reset();
     }
 
     // The reload brings up the renamed type and registers where the old name went.
@@ -890,7 +1314,7 @@ TEST(EntityScriptUnification, RenamingAScriptClassMovesItsInstances)
     // And the class the reload should move across is reported for evacuation.
     THashSet<CClass*> Renamed;
     FScriptableRegistry::GatherRenamedClasses(Renamed);
-    EXPECT_NE(Renamed.find(Old), Renamed.end()) << "the renamed class was not offered for evacuation";
+    EXPECT_TRUE(Renamed.Contains(Old)) << "the renamed class was not offered for evacuation";
 
     {
         SEntityScriptComponent& Component = Registry.GetOrEmplace<SEntityScriptComponent>(Entity);
@@ -901,7 +1325,7 @@ TEST(EntityScriptUnification, RenamingAScriptClassMovesItsInstances)
 
     SEntityScriptComponent* Component = Registry.TryGet<SEntityScriptComponent>(Entity);
     ASSERT_NE(Component, nullptr);
-    ASSERT_EQ(Component->Scripts.size(), 1u) << "the renamed script did not come back";
+    ASSERT_EQ(Component->Scripts.Num(), 1) << "the renamed script did not come back";
 
     CEntityScript* Restored = Component->Scripts[0].Get();
     ASSERT_NE(Restored, nullptr);
@@ -920,11 +1344,11 @@ TEST(EntityScriptUnification, SkipHotReloadFieldsResetOnRestore)
     ECS::FRegistry Registry{};
 
     Scripting::FScriptExportSchema Schema;
-    Schema.Fields.push_back(MakeReloadField("Kept", EPropertyTypeFlags::Float));
+    Schema.Fields.Add(MakeReloadField("Kept", EPropertyTypeFlags::Float));
     {
         Scripting::FScriptExportField Scratch = MakeReloadField("Scratch", EPropertyTypeFlags::Float);
         Scratch.Meta.Set(FName("SkipHotReload"), FString());
-        Schema.Fields.push_back(std::move(Scratch));
+        Schema.Fields.Add(std::move(Scratch));
     }
 
     CScriptClass* Minted = FScriptableRegistry::Mint("SkipHotReload_Script", "CEntityScript");
@@ -945,7 +1369,7 @@ TEST(EntityScriptUnification, SkipHotReloadFieldsResetOnRestore)
         FMemoryWriter Writer(Bytes);
         FObjectProxyArchiver Ar(Writer, /*bLoadIfFindFails*/ false);
         Component->Serialize(Ar);
-        Component->Scripts.clear();
+        Component->Scripts.Reset();
     }
 
     // A unit test has no world contexts to walk, so replay and reset are driven directly.
@@ -1019,13 +1443,74 @@ TEST(EntityScriptUnification, DetachAllInRegistrySurvivesAnOnDetachThatAttachesS
     EXPECT_EQ(SecondScript->DetachCount, 1) << "every entity in the snapshot is detached";
     EXPECT_EQ(ThirdScript->DetachCount, 1) << "a mutation mid-walk must not cut the pass short";
 
-    EXPECT_TRUE(Registry.Get<SEntityScriptComponent>(First).Scripts.empty());
-    EXPECT_TRUE(Registry.Get<SEntityScriptComponent>(Second).Scripts.empty());
-    EXPECT_TRUE(Registry.Get<SEntityScriptComponent>(Third).Scripts.empty());
+    EXPECT_TRUE(Registry.Get<SEntityScriptComponent>(First).Scripts.IsEmpty());
+    EXPECT_TRUE(Registry.Get<SEntityScriptComponent>(Second).Scripts.IsEmpty());
+    EXPECT_TRUE(Registry.Get<SEntityScriptComponent>(Third).Scripts.IsEmpty());
 
     ASSERT_TRUE(Context.Spawned != ECS::NullEntity);
-    EXPECT_FALSE(Registry.Get<SEntityScriptComponent>(Context.Spawned).Scripts.empty())
+    EXPECT_FALSE(Registry.Get<SEntityScriptComponent>(Context.Spawned).Scripts.IsEmpty())
         << "a script attached during the pass is outside the snapshot; the clear that follows drops it";
+}
+
+namespace
+{
+    struct FSpawnChain
+    {
+        ECS::FRegistry*            Registry = nullptr;
+        int32                      Length   = 0;
+        TVector<CEntityScriptTest*> Links;
+
+        CEntityScriptTest* SpawnLink()
+        {
+            CEntityScriptTest* Link = AttachTestScript(*Registry, Registry->Create());
+            Link->HookContext = this;
+            Link->ReadyHook = [](CEntityScriptTest&, void* Ctx)
+            {
+                FSpawnChain& Chain = *static_cast<FSpawnChain*>(Ctx);
+                if (Chain.Links.Num() < Chain.Length)
+                {
+                    Chain.SpawnLink();
+                }
+            };
+            Links.Add(Link);
+            return Link;
+        }
+
+        int32 NumReady() const
+        {
+            int32 Count = 0;
+            for (const CEntityScriptTest* Link : Links)
+            {
+                Count += Link->ReadyCount;
+            }
+            return Count;
+        }
+    };
+}
+
+// Each OnReady spawns the next link, so a chain longer than the per-frame lifecycle rounds spills into the next frame.
+TEST(EntityScriptUnification, ASpawnChainPastTheLifecycleRoundCapWarnsAndFinishesNextFrame)
+{
+    constexpr const char* CapWarning = "spawned past the 8 lifecycle rounds a frame allows, so the 1 still pending run OnAttach or OnReady";
+
+    ECS::FRegistry AtCapRegistry{};
+    FSpawnChain AtCap{ &AtCapRegistry, 8 };
+    AtCap.SpawnLink();
+    EntityScripts::Tick(AtCapRegistry, 0.1f);
+    EXPECT_EQ(AtCap.NumReady(), 8) << "eight links fit the eight rounds of one frame";
+    EXPECT_EQ(CountLoggedMessages(ELogLevel::Warn, "lifecycle rounds a frame allows"), 0) << "using every round with nothing left over is not an overflow";
+
+    ECS::FRegistry PastCapRegistry{};
+    FSpawnChain PastCap{ &PastCapRegistry, 12 };
+    PastCap.SpawnLink();
+    EntityScripts::Tick(PastCapRegistry, 0.1f);
+    EXPECT_LT(PastCap.NumReady(), 12) << "the chain runs past what one frame readies";
+    EXPECT_EQ(CountLoggedMessages(ELogLevel::Warn, CapWarning), 1);
+
+    EntityScripts::Tick(PastCapRegistry, 0.1f);
+    EXPECT_EQ(PastCap.Links.Num(), 12);
+    EXPECT_EQ(PastCap.NumReady(), 12) << "the spilled links are delayed a frame, never dropped";
+    EXPECT_EQ(CountLoggedMessages(ELogLevel::Warn, "lifecycle rounds a frame allows"), 1) << "the warning is not repeated every frame";
 }
 
 // One script class going missing used to end the record, taking its still-resolvable siblings with it.
@@ -1040,11 +1525,11 @@ TEST(EntityScriptUnification, AnUnresolvableScriptClassSkipsOnlyItself)
 
     CEntityScriptTest* First = AttachTestScript(Registry, Entity);
     ASSERT_NE(First, nullptr);
-    First->Values.push_back(FName("KeptFirst"));
+    First->Values.Emplace("KeptFirst");
 
     CEntityScriptTest* Second = AttachTestScript(Registry, Entity);
     ASSERT_NE(Second, nullptr);
-    Second->Values.push_back(FName("KeptSecond"));
+    Second->Values.Emplace("KeptSecond");
 
     // A real two-script payload, so the bogus record below sits between two well-formed ones.
     TVector<uint8> Good;
@@ -1082,8 +1567,8 @@ TEST(EntityScriptUnification, AnUnresolvableScriptClassSkipsOnlyItself)
             Live.Serialize(TailAr);
         }
         const size_t HeaderBytes = sizeof(int32) * 2;
-        ASSERT_GT(Tail.size(), HeaderBytes);
-        Ar.Serialize(Tail.data() + HeaderBytes, (int64)(Tail.size() - HeaderBytes));
+        ASSERT_GT(Tail.Num(), HeaderBytes);
+        Ar.Serialize(Tail.GetData() + HeaderBytes, (int64)(Tail.Num() - HeaderBytes));
     }
 
     SEntityScriptComponent Restored;
@@ -1093,15 +1578,15 @@ TEST(EntityScriptUnification, AnUnresolvableScriptClassSkipsOnlyItself)
         Restored.Serialize(Ar);
     }
 
-    ASSERT_EQ(Restored.Scripts.size(), size_t(2)) << "the siblings of a missing class must survive it";
+    ASSERT_EQ(Restored.Scripts.Num(), 2) << "the siblings of a missing class must survive it";
 
     CEntityScriptTest* RestoredFirst  = Cast<CEntityScriptTest>(Restored.Scripts[0].Get());
     CEntityScriptTest* RestoredSecond = Cast<CEntityScriptTest>(Restored.Scripts[1].Get());
     ASSERT_NE(RestoredFirst, nullptr);
     ASSERT_NE(RestoredSecond, nullptr);
 
-    ASSERT_EQ(RestoredFirst->Values.size(), size_t(1));
-    ASSERT_EQ(RestoredSecond->Values.size(), size_t(1));
+    ASSERT_EQ(RestoredFirst->Values.Num(), 1);
+    ASSERT_EQ(RestoredSecond->Values.Num(), 1);
     EXPECT_EQ(RestoredFirst->Values[0], FName("KeptFirst")) << "skipping must not shift the next script";
     EXPECT_EQ(RestoredSecond->Values[0], FName("KeptSecond"));
 
@@ -1116,11 +1601,11 @@ TEST(EntityScriptUnification, AHeldScriptKeepsItsObjectsThroughAProxyArchive)
     ASSERT_NE(Target, nullptr);
 
     SEntityScriptComponent Source;
-    SHeldValue& Held = Source.Pending.emplace_back();
+    SHeldValue& Held = Source.Pending.EmplaceGetRef();
     Held.TypeName = FName("CScriptClassThatIsNotLoaded");
     Held.Data.Bytes = { 1, 2, 3, 4 };
-    Held.Data.Names.push_back({ 0, FName("HeldName") });
-    Held.Data.Objects.push_back({ 0, Target->GetGUID() });
+    Held.Data.Names.Emplace(0, FName("HeldName"));
+    Held.Data.Objects.Emplace(0, Target->GetGUID());
 
     TVector<uint8> Bytes;
     {
@@ -1137,13 +1622,13 @@ TEST(EntityScriptUnification, AHeldScriptKeepsItsObjectsThroughAProxyArchive)
         EXPECT_FALSE(Ar.HasError());
     }
 
-    ASSERT_EQ(Restored.Pending.size(), size_t(1));
+    ASSERT_EQ(Restored.Pending.Num(), 1);
     const FPortableBytes& Data = Restored.Pending[0].Data;
     EXPECT_EQ(Restored.Pending[0].TypeName, FName("CScriptClassThatIsNotLoaded"));
     EXPECT_EQ(Data.Bytes, Held.Data.Bytes);
-    ASSERT_EQ(Data.Names.size(), size_t(1));
+    ASSERT_EQ(Data.Names.Num(), 1);
     EXPECT_EQ(Data.Names[0].Name, FName("HeldName"));
-    ASSERT_EQ(Data.Objects.size(), size_t(1));
+    ASSERT_EQ(Data.Objects.Num(), 1);
     EXPECT_EQ(Data.Objects[0].Object, Target->GetGUID());
 }
 
@@ -1152,7 +1637,7 @@ namespace
     Scripting::FScriptExportSchema IntSchema(const char* FieldName)
     {
         Scripting::FScriptExportSchema Schema;
-        Scripting::FScriptExportField& Field = Schema.Fields.emplace_back();
+        Scripting::FScriptExportField& Field = Schema.Fields.EmplaceGetRef();
         Field.Name = FName(FieldName);
         Field.Type = MakeShared<Scripting::FScriptExportType>();
         Field.Type->Kind = EPropertyTypeFlags::Int32;
@@ -1248,8 +1733,8 @@ namespace
 TEST(ScriptClassInheritance, ANewChildIsLaidOutPastANewParent)
 {
     TVector<Scripting::FManagedTypeDefinition> Definitions;
-    Definitions.push_back(ScriptClassDefinition("Shell_GTestParent", "CEntityScript", "ParentValue"));
-    Definitions.push_back(ScriptClassDefinition("Shell_GTestChild", "Shell_GTestParent", "ChildValue"));
+    Definitions.Add(ScriptClassDefinition("Shell_GTestParent", "CEntityScript", "ParentValue"));
+    Definitions.Add(ScriptClassDefinition("Shell_GTestChild", "Shell_GTestParent", "ChildValue"));
     ReloadClasses(Definitions);
 
     CClass* Parent = FindObject<CClass>(FName("Shell_GTestParent"));
@@ -1259,9 +1744,9 @@ TEST(ScriptClassInheritance, ANewChildIsLaidOutPastANewParent)
 
     // A parent reshaped in the same reload that adds a child under it hands that child to the replacement.
     TVector<Scripting::FManagedTypeDefinition> Second;
-    Second.push_back(ScriptClassDefinition("Shell_GTestParent", "CEntityScript", "WiderParentValue"));
-    Second.push_back(ScriptClassDefinition("Shell_GTestChild", "Shell_GTestParent", "ChildValue"));
-    Second.push_back(ScriptClassDefinition("Shell_GTestLateChild", "Shell_GTestParent", "LateValue"));
+    Second.Add(ScriptClassDefinition("Shell_GTestParent", "CEntityScript", "WiderParentValue"));
+    Second.Add(ScriptClassDefinition("Shell_GTestChild", "Shell_GTestParent", "ChildValue"));
+    Second.Add(ScriptClassDefinition("Shell_GTestLateChild", "Shell_GTestParent", "LateValue"));
     ReloadClasses(Second);
 
     CClass* Replacement = FindObject<CClass>(FName("Shell_GTestParent"));
@@ -1277,8 +1762,8 @@ TEST(ScriptClassInheritance, ANewChildIsLaidOutPastANewParent)
 TEST(ScriptClassInheritance, ARemovedParentOutlivesTheSubclassStillOnIt)
 {
     TVector<Scripting::FManagedTypeDefinition> First;
-    First.push_back(ScriptClassDefinition("Retire_GTestParent", "CEntityScript", "ParentValue", /*bAbstract*/ true));
-    First.push_back(ScriptClassDefinition("Retire_GTestChild", "Retire_GTestParent", "ChildValue"));
+    First.Add(ScriptClassDefinition("Retire_GTestParent", "CEntityScript", "ParentValue", /*bAbstract*/ true));
+    First.Add(ScriptClassDefinition("Retire_GTestChild", "Retire_GTestParent", "ChildValue"));
     FScriptableRegistry::RefreshMintedClasses(First);
 
     CClass* OldChild = FindObject<CClass>(FName("Retire_GTestChild"));
@@ -1292,7 +1777,7 @@ TEST(ScriptClassInheritance, ARemovedParentOutlivesTheSubclassStillOnIt)
 
     // The parent goes and the child moves up to the native base, the way the stress run reshaped them.
     TVector<Scripting::FManagedTypeDefinition> Second;
-    Second.push_back(ScriptClassDefinition("Retire_GTestChild", "CEntityScript", "ChildValue"));
+    Second.Add(ScriptClassDefinition("Retire_GTestChild", "CEntityScript", "ChildValue"));
     FScriptableRegistry::RefreshMintedClasses(Second);
 
     CClass* NewChild = FindObject<CClass>(FName("Retire_GTestChild"));
@@ -1320,16 +1805,16 @@ TEST(ScriptClassInheritance, AParentThatGainsItsFirstFieldRebuildsItsSubclasses)
     EmptyParent.Schema = Scripting::FScriptExportSchema();
 
     TVector<Scripting::FManagedTypeDefinition> First;
-    First.push_back(EmptyParent);
-    First.push_back(ScriptClassDefinition("Grow_GTestChild", "Grow_GTestParent", "ChildValue"));
+    First.Add(EmptyParent);
+    First.Add(ScriptClassDefinition("Grow_GTestChild", "Grow_GTestParent", "ChildValue"));
     FScriptableRegistry::RefreshMintedClasses(First);
 
     CClass* OldChild = FindObject<CClass>(FName("Grow_GTestChild"));
     ASSERT_NE(OldChild, nullptr);
 
     TVector<Scripting::FManagedTypeDefinition> Second;
-    Second.push_back(ScriptClassDefinition("Grow_GTestParent", "CEntityScript", "ParentValue"));
-    Second.push_back(ScriptClassDefinition("Grow_GTestChild", "Grow_GTestParent", "ChildValue"));
+    Second.Add(ScriptClassDefinition("Grow_GTestParent", "CEntityScript", "ParentValue"));
+    Second.Add(ScriptClassDefinition("Grow_GTestChild", "Grow_GTestParent", "ChildValue"));
     FScriptableRegistry::RefreshMintedClasses(Second);
 
     CClass* Parent = FindObject<CClass>(FName("Grow_GTestParent"));
@@ -1351,9 +1836,9 @@ TEST(ScriptClassInheritance, AClassUnderAScriptParentKeepsItsOverrides)
 {
     Scripting::FManagedTypeDefinition Parent = ScriptClassDefinition("Override_GTestParent", "CEntityScript", "ParentValue");
     Scripting::FManagedTypeDefinition Child = ScriptClassDefinition("Override_GTestChild", "Override_GTestParent", "ChildValue");
-    Parent.OverriddenEvents.push_back("OnReady");
-    Child.OverriddenEvents.push_back("OnReady");
-    Child.OverriddenEvents.push_back("OnUpdate");
+    Parent.OverriddenEvents.Add("OnReady");
+    Child.OverriddenEvents.Add("OnReady");
+    Child.OverriddenEvents.Add("OnUpdate");
     ReloadClasses({ Parent, Child });
 
     const CScriptClass* ChildClass = Cast<CScriptClass>(FindObject<CClass>(FName("Override_GTestChild")));
@@ -1370,7 +1855,7 @@ namespace
         auto* Script = static_cast<CEntityScriptTest*>(NewObject(CEntityScriptTest::StaticClass(), nullptr, NAME_None, FGuid::New(), OF_Transient));
         Script->Label = Label;
         Script->EventLog = &Log;
-        Registry.GetOrEmplace<SEntityScriptComponent>(Entity).Scripts.push_back(Script);
+        Registry.GetOrEmplace<SEntityScriptComponent>(Entity).Scripts.Add(Script);
         return Script;
     }
 
@@ -1387,7 +1872,7 @@ namespace
         FString Out;
         for (const FString& Entry : Log)
         {
-            Out += Out.empty() ? Entry : " " + Entry;
+            Out += Out.IsEmpty() ? Entry : " " + Entry;
         }
         return Out;
     }
@@ -1436,7 +1921,7 @@ TEST(EntityScriptUnification, LifecycleOrderHoldsForAScriptAddedLater)
 
     AddUnattached(Registry, Parent, "parent", Log);
     EntityScripts::Tick(Registry, 0.1f);
-    Log.clear();
+    Log.Reset();
 
     AddUnattached(Registry, Child, "child", Log);
     AddUnattached(Registry, Parent, "late", Log);

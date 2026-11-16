@@ -1,18 +1,13 @@
 #include <gtest/gtest.h>
 
-#include "imgui.h"
-#include "imgui_internal.h"
+#include "ImGuiTestHarness.h"
 #include "Containers/Function.h"
-#include "Tools/UI/ImGui/ImGuiAllocator.h"
 #include "UI/Tools/NodeGraph/GraphEditor.h"
 
 using namespace Lumina;
 
-extern "C" DLL_IMPORT void LuminaModuleSetupImGui(void* InImGui, void* InImPlot);
-
 namespace
 {
-    constexpr ImVec2 kDisplaySize(1280.0f, 720.0f);
     constexpr ImVec2 kNodeContent(120.0f, 40.0f);
     constexpr float  kPinSize = 12.0f;
     constexpr uint64 kFirstTieID = 7;
@@ -25,50 +20,22 @@ namespace
         uint32 OutputPin = 0;
     };
 
-    // Runs ImGui frames with no renderer behind them, standing in for the backend's texture work.
     class FCanvasHarness
     {
     public:
 
         FCanvasHarness()
         {
-            ImGuiX::InstallImGuiAllocator();
-            Context = ImGui::CreateContext();
-            ImGui::SetCurrentContext(Context);
-            LuminaModuleSetupImGui(Context, nullptr);
-
-            ImGuiIO& IO = ImGui::GetIO();
-            IO.DisplaySize  = kDisplaySize;
-            IO.DeltaTime    = 1.0f / 60.0f;
-            IO.IniFilename  = nullptr;
-            IO.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
-
-            Nodes.push_back(FTestNode{ 1, ImVec2(100.0f, 100.0f), 11, 12 });
-            Nodes.push_back(FTestNode{ 2, ImVec2(500.0f, 300.0f), 21, 22 });
+            Nodes.Emplace(1, ImVec2(100.0f, 100.0f), 11, 12);
+            Nodes.Emplace(2, ImVec2(500.0f, 300.0f), 21, 22);
         }
-
-        ~FCanvasHarness()
-        {
-            ImGui::DestroyContext(Context);
-            LuminaModuleSetupImGui(nullptr, nullptr);
-        }
-
-        FCanvasHarness(const FCanvasHarness&) = delete;
-        FCanvasHarness& operator=(const FCanvasHarness&) = delete;
-        FCanvasHarness(FCanvasHarness&&) = delete;
-        FCanvasHarness& operator=(FCanvasHarness&&) = delete;
 
         // One frame of the test graph, with AfterEnd reading back what the canvas saw.
         void Frame(const TFunction<void()>& AfterEnd = nullptr)
         {
-            ImGui::NewFrame();
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-            ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-            ImGui::SetNextWindowSize(kDisplaySize);
-            ImGui::Begin("Host", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-            ImGui::PopStyleVar();
+            FImGuiTestHarness::BeginFrame();
 
-            Editor.Begin("Canvas", (int32)Nodes.size() + 1);
+            Editor.Begin("Canvas", Nodes.Num() + 1);
             for (FTestNode& Node : Nodes)
             {
                 Editor.BeginNode(Node.ID, Node.Position);
@@ -90,7 +57,7 @@ namespace
             {
                 Editor.Link(LinkID, Nodes[0].OutputPin, Nodes[1].InputPin, IM_COL32(200, 120, 60, 255), 2.5f);
             }
-            for (size_t Index = 0; Index < TiePositions.size(); ++Index)
+            for (int32 Index = 0; Index < TiePositions.Num(); ++Index)
             {
                 Editor.ZipTie(kFirstTieID + Index, TiePositions[Index], { LinkID });
             }
@@ -101,22 +68,7 @@ namespace
                 AfterEnd();
             }
             Editor.EndWindow();
-
-            ImGui::End();
-            ImGui::Render();
-            for (ImTextureData* Texture : ImGui::GetPlatformIO().Textures)
-            {
-                if (Texture->Status == ImTextureStatus_WantCreate || Texture->Status == ImTextureStatus_WantUpdates)
-                {
-                    Texture->SetTexID((ImTextureID)1);
-                    Texture->SetStatus(ImTextureStatus_OK);
-                }
-                else if (Texture->Status == ImTextureStatus_WantDestroy)
-                {
-                    Texture->SetTexID(ImTextureID_Invalid);
-                    Texture->SetStatus(ImTextureStatus_Destroyed);
-                }
-            }
+            FImGuiTestHarness::EndFrame();
         }
 
         void Frames(int32 Count)
@@ -170,7 +122,7 @@ namespace
             return Nodes[Index].Position + ImVec2(8.0f + kPinSize * 0.5f, 4.0f + kNodeContent.y + 4.0f + kPinSize * 0.5f);
         }
 
-        ImGuiContext*      Context = nullptr;
+        FImGuiTestHarness  ImGuiHarness;
         FGraphEditor       Editor;
         TVector<FTestNode> Nodes;
 
@@ -302,7 +254,7 @@ TEST(GraphEditor, AltRightDragAcrossAWireAsksForAZipTie)
     Harness.Modifier(ImGuiMod_Alt, false);
 
     EXPECT_EQ(Stroke, EGraphStroke::ZipTie);
-    ASSERT_EQ(Hits.size(), 1u);
+    ASSERT_EQ(Hits.Num(), 1);
     EXPECT_EQ(Hits[0].LinkID, Harness.LinkID);
     EXPECT_NEAR(Hits[0].Point.x, Middle.x, 2.0f);
 }
@@ -334,7 +286,7 @@ TEST(GraphEditor, AWireRunsThroughEveryTieItIsIn)
     Harness.Frames(30);
 
     // One tie above the untied curve and one below it, so the wire can only reach both by routing through each.
-    for (size_t Index = 0; Index < Harness.TiePositions.size(); ++Index)
+    for (int32 Index = 0; Index < Harness.TiePositions.Num(); ++Index)
     {
         uint64 Hovered = 0;
         Harness.MoveTo(Harness.TiePositions[Index] + ImVec2(16.0f, 0.0f));

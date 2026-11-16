@@ -6,6 +6,7 @@
 #include "Containers/Vector.h"
 #include "Containers/String.h"
 #include "Core/Delegates/Delegate.h"
+#include "Core/Object/ObjectHandleTyped.h"
 #include "Renderer/RHI.h"
 #include "Renderer/RHITexture.h"
 #include "Lumina.h"
@@ -20,8 +21,8 @@ namespace Lumina
     class FRmlUiRenderer final : public Rml::RenderInterface
     {
     public:
-        FRmlUiRenderer();
-        ~FRmlUiRenderer() override;
+        RUNTIME_API FRmlUiRenderer();
+        RUNTIME_API ~FRmlUiRenderer() override;
         FRmlUiRenderer(const FRmlUiRenderer&) = delete;
         FRmlUiRenderer& operator = (const FRmlUiRenderer&) = delete;
         FRmlUiRenderer(FRmlUiRenderer&&) = delete;
@@ -51,7 +52,7 @@ namespace Lumina
         void                        NoteTargetStable(RHI::FTextureH Target, bool bStable);
         uint32                      GetTargetStableFrames(RHI::FTextureH Target);
 
-        Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> Vertices, Rml::Span<const int> Indices) override;
+        RUNTIME_API Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> Vertices, Rml::Span<const int> Indices) override;
         void                        RenderGeometry(Rml::CompiledGeometryHandle Geometry, Rml::Vector2f Translation, Rml::TextureHandle Texture) override;
         void                        ReleaseGeometry(Rml::CompiledGeometryHandle Geometry) override;
 
@@ -65,8 +66,8 @@ namespace Lumina
         void                        EnableScissorRegion(bool bEnable) override;
         void                        SetScissorRegion(Rml::Rectanglei Region) override;
 
-        void                        EnableClipMask(bool bEnable) override;
-        void                        RenderToClipMask(Rml::ClipMaskOperation Operation, Rml::CompiledGeometryHandle Geometry,
+        RUNTIME_API void            EnableClipMask(bool bEnable) override;
+        RUNTIME_API void            RenderToClipMask(Rml::ClipMaskOperation Operation, Rml::CompiledGeometryHandle Geometry,
                                                      Rml::Vector2f Translation) override;
 
         void                        SetTransform(const Rml::Matrix4f* Transform) override;
@@ -91,6 +92,10 @@ namespace Lumina
         // Count in the low 8 bits, first PendingClipMasks index above them. Zero means unclipped.
         static constexpr uint32 kMaxClipMasksPerDraw = 8;
         static constexpr uint32 kNoLayer    = Constants::kIndexNoneU32;
+        // A push the layer budget refused, whose draws and composites replay as nothing.
+        static constexpr uint32 kDroppedLayer = kNoLayer - 1;
+
+        friend struct FRmlUiRendererTestAccess;
 
         // CPU bytes cached per element, concatenated at EndFrame into the target's resident vertex and index buffers.
         struct FGeometry
@@ -104,12 +109,12 @@ namespace Lumina
         {
             RHI::FManagedTexture       Managed;                    // owned (generated textures + brush RTs)
             uint32                     ResourceID = RHI::kInvalidHeapSlot; // global-heap sampled slot
-            class CTexture*            AssetKeepalive = nullptr;   // rooted while held; released on ReleaseTexture
+            TStrongObjectPtr<class CTexture>           AssetKeepalive;
             FUIntVector2               AssetExtent = {0, 0};
-            class CMaterialInterface*  BrushMaterial  = nullptr;   // UI-material brush; rooted while held, rendered each frame
+            TStrongObjectPtr<class CMaterialInterface> BrushMaterial;   // rendered each frame
             FUIntVector2               BrushSize = {0, 0};
             FString                    BrushSourcePath;            // resolved asset path; re-validated so a rename/delete breaks the brush
-            bool                       bBrushStale = false;        // source path no longer resolves -> cleared + not rendered (material stays rooted so a rename-back can resume)
+            bool                       bBrushStale = false;        // source path no longer resolves -> cleared + not rendered (material stays held so a rename-back can resume)
             bool                       bBrushCleared = false;      // RT has defined contents; until then a not-yet-ready material would leave the UI sampling garbage
             bool                       bBrushRendered = false;     // Holds a frame of the material, which a compile keeps on screen and a domain change must not
             bool                       bStraightAlpha = false;     // asset textures are not premultiplied like RmlUi's own; the shader premultiplies them
@@ -402,6 +407,8 @@ namespace Lumina
         TVector<FLayer>             OwnedLayers;
         TVector<uint32>             LayerStack;
         TVector<uint32>             FreeLayers;      // pooled across frames, matched to a target by extent
+        TVector<uint32>             ReplayLayerStack;
+        TVector<Rml::TextureHandle> RenderedBrushes;
 
 
         TVector<FLayerCommand>      LayerCommands;

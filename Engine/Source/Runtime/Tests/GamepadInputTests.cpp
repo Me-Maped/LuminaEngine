@@ -143,7 +143,7 @@ TEST(InputGamepad, ButtonBindingDrivesADigitalActionAndQueuesEvents)
 
     EXPECT_TRUE(ActionState(FName("Jump"), Context).IsPressed());
     EXPECT_TRUE(Context.IsGamepadButtonPressed(Lumina::EGamepadButton::FaceBottom));
-    ASSERT_EQ(Context.GetFrameEvents().size(), 1u);
+    ASSERT_EQ(Context.GetFrameEvents().Num(), 1);
     EXPECT_EQ(Context.GetFrameEvents()[0].Type, Lumina::EInputEventType::GamepadDown);
     EXPECT_EQ(Context.GetFrameEvents()[0].GamepadButton, Lumina::EGamepadButton::FaceBottom);
     EXPECT_TRUE(Context.GetFrameEvents()[0].ToKey() == SKey(Lumina::EGamepadButton::FaceBottom));
@@ -154,7 +154,7 @@ TEST(InputGamepad, ButtonBindingDrivesADigitalActionAndQueuesEvents)
     FInputActionMap::Get().UpdateContext(Context, 1.0f / 60.0f);
     EXPECT_TRUE(ActionState(FName("Jump"), Context).IsDown());
     EXPECT_FALSE(ActionState(FName("Jump"), Context).IsPressed());
-    EXPECT_TRUE(Context.GetFrameEvents().empty());
+    EXPECT_TRUE(Context.GetFrameEvents().IsEmpty());
 }
 
 TEST(InputGamepad, StickSourcesFeedAnAxis2DAction)
@@ -202,6 +202,23 @@ TEST(InputGamepad, UIModeHidesThePadFromGameplayQueries)
 
     Context.SetInputMode(Lumina::EInputMode::Game);
     EXPECT_TRUE(Context.IsGamepadButtonDown(Lumina::EGamepadButton::Start));
+}
+
+TEST(InputGamepad, FocusLossStepsThroughReleasedBeforeGoingUp)
+{
+    FInputContext Context;
+    FGamepadState State = Pad();
+    State.Buttons[(uint32)Lumina::EGamepadButton::FaceBottom] = Input::EButtonState::Held;
+    Context.SetGamepadState(State);
+    EXPECT_TRUE(Context.IsGamepadButtonDown(Lumina::EGamepadButton::FaceBottom));
+
+    Context.SetGamepadState(FGamepadState());
+    EXPECT_TRUE(Context.IsGamepadButtonReleased(Lumina::EGamepadButton::FaceBottom));
+    EXPECT_FALSE(Context.IsGamepadButtonDown(Lumina::EGamepadButton::FaceBottom));
+
+    Context.SetGamepadState(FGamepadState());
+    EXPECT_FALSE(Context.IsGamepadButtonReleased(Lumina::EGamepadButton::FaceBottom));
+    EXPECT_FALSE(Context.IsGamepadButtonDown(Lumina::EGamepadButton::FaceBottom));
 }
 
 TEST(InputGamepad, ResetDropsThePad)

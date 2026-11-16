@@ -42,7 +42,7 @@ namespace Lumina::Coro
     template<typename T>
     TCoroutine<TStrongObjectPtr<T>> LoadObject(FAssetHandle Handle)
     {
-        const FAssetHandle Loaded = co_await Load(std::move(Handle));
+        const FAssetHandle Loaded = co_await Load(Move(Handle));
         co_return TStrongObjectPtr<T>(Loaded.IsValid() ? Loaded.template Get<T>() : nullptr);
     }
 
@@ -62,12 +62,11 @@ namespace Lumina::Coro
     template<typename T>
     TCoroutine<TStrongObjectPtr<T>> LoadObject(const TSoftObjectPtr<T>& Object)
     {
-        const FSoftObjectPath& Path = Object.GetSoftPath();
-        return LoadObject<T>(Path.TryResolve() ? FAssetManager::Get().Load(Path.GetCachedGUID()) : FAssetHandle());
+        return LoadObject<T>(Object.GetSoftPath().Load());
     }
 
     inline TCoroutine<TStrongObjectPtr<CObject>> LoadObject(const FSoftObjectPath& Path)
     {
-        return LoadObject<CObject>(Path.TryResolve() ? FAssetManager::Get().Load(Path.GetCachedGUID()) : FAssetHandle());
+        return LoadObject<CObject>(Path.Load());
     }
 }

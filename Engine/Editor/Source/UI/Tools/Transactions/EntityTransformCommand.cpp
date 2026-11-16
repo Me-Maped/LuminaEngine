@@ -1,8 +1,8 @@
 #include "EntityTransformCommand.h"
 #include "World/ECS/Registry.h"
 
-#include "Core/Object/Package/Package.h"
 #include "World/World.h"
+#include "World/ExternalEntities/ExternalEntities.h"
 #include "World/Entity/EntityUtils.h"
 #include "World/Entity/Components/TransformComponent.h"
 
@@ -23,7 +23,7 @@ namespace Lumina
     void FEntityTransformCommand::Capture(TVector<FTransform>& Out) const
     {
         // Index-aligned even if an entity dies mid-drag, and a missing one records identity and is skipped.
-        Out.assign(Entities.size(), FTransform());
+        Out.Init(FTransform(), Entities.Num());
 
         CWorld* W = World.Get();
         if (W == nullptr)
@@ -32,7 +32,7 @@ namespace Lumina
         }
 
         ECS::FRegistry& Registry = W->GetEntityRegistry();
-        for (SIZE_T i = 0; i < Entities.size(); ++i)
+        for (int32 i = 0; i < Entities.Num(); ++i)
         {
             const ECS::FEntity Entity = Entities[i];
             const STransformComponent* Transform =
@@ -47,13 +47,13 @@ namespace Lumina
     void FEntityTransformCommand::Apply(const TVector<FTransform>& In) const
     {
         CWorld* W = World.Get();   // null once the map is closed/swapped -> a stale undo safely no-ops
-        if (W == nullptr || In.size() != Entities.size())
+        if (W == nullptr || In.Num() != Entities.Num())
         {
             return;
         }
 
         ECS::FRegistry& Registry = W->GetEntityRegistry();
-        for (SIZE_T i = 0; i < Entities.size(); ++i)
+        for (int32 i = 0; i < Entities.Num(); ++i)
         {
             const ECS::FEntity Entity = Entities[i];
             if (!Registry.IsValid(Entity) || !Registry.HasAll<STransformComponent>(Entity))
@@ -67,11 +67,11 @@ namespace Lumina
             // The cached dirty signal can fail to raise bAnyDirty, leaving the render primitive pre-undo.
             Registry.EmplaceOrReplace<FNeedsTransformUpdate>(Entity);
         }
+    }
 
-        if (W->GetPackage())
-        {
-            W->GetPackage()->MarkDirty();
-        }
+    void FEntityTransformCommand::MarkChanged() const
+    {
+        ExternalEntities::MarkChanged(World.Get(), Entities);
     }
 
     void FEntityTransformCommand::Undo() { Apply(Before); }

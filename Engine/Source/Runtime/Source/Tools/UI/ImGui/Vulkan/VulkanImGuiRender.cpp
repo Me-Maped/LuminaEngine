@@ -11,6 +11,7 @@
 #include "Core/Engine/Engine.h"
 #include "Core/Profiler/Profile.h"
 #include "Core/Windows/Window.h"
+#include "Input/InputViewport.h"
 #include "Memory/Memcpy.h"
 #include "Renderer/RHICore.h"
 #include "Renderer/RHITexture.h"
@@ -86,17 +87,17 @@ namespace Lumina
 
         RHI::Retire(NewPipeline);
         NewPipeline = {};
-        for (auto& KV : NewFontTextures)
+        for (auto& [FontIndex, Texture] : NewFontTextures)
         {
-            RHI::Textures::Release(KV.second);
+            RHI::Textures::Release(Texture);
         }
-        NewFontTextures.clear();
+        NewFontTextures.Reset();
 
-        for (auto& KV : PathTextures)
+        for (auto& [Path, Texture] : PathTextures)
         {
-            RHI::Textures::Release(KV.second);
+            RHI::Textures::Release(Texture);
         }
-        PathTextures.clear();
+        PathTextures.Reset();
 
         // Teardown calls back into the destroy-window hook, so the backend stays valid until after.
         ImGui_ImplGlfw_Shutdown();
@@ -110,6 +111,20 @@ namespace Lumina
     {
         LUMINA_PROFILE_SCOPE();
 
+        {
+            const bool bGameCursor = FInputViewportRegistry::Get().IsGameCursorShowing();
+            ImGuiIO& IO = ImGui::GetIO();
+            if (bGameCursor && !(IO.ConfigFlags & ImGuiConfigFlags_NoMouseCursorChange))
+            {
+                IO.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+                bHoldingCursorChange = true;
+            }
+            else if (!bGameCursor && bHoldingCursorChange)
+            {
+                IO.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+                bHoldingCursorChange = false;
+            }
+        }
         {
             LUMINA_PROFILE_SECTION_COLORED("ImGui_ImplGlfw_NewFrame", tracy::Color::Aquamarine);
             ImGui_ImplGlfw_NewFrame();
@@ -139,8 +154,8 @@ namespace Lumina
                     continue;
                 }
 
-                auto It = NewFontTextures.find(Tex->UniqueID);
-                if (It == NewFontTextures.end())
+                RHI::FManagedTexture* It = NewFontTextures.Find(Tex->UniqueID);
+                if (It == nullptr)
                 {
                     RHI::FManagedTexture Created = RHI::Textures::Create(RHI::FTexture2DDesc
                     {
@@ -154,26 +169,26 @@ namespace Lumina
                         RHI::Textures::Release(Created);
                         continue;
                     }
-                    It = NewFontTextures.insert_or_assign(Tex->UniqueID, Created).first;
+                    It = &NewFontTextures.Add(Tex->UniqueID, Created);
                 }
 
                 // RHI uploads the complete atlas; acknowledge updates only when the upload was queued.
                 // Failed uploads retain their request so the next frame can retry.
                 const uint64 Bytes = (uint64)Tex->Width * (uint64)Tex->Height * Tex->BytesPerPixel;
-                if (RHI::Textures::Upload(It->second, 0, Tex->GetPixels(), Bytes, (uint32)Tex->Width))
+                if (RHI::Textures::Upload(*It, 0, Tex->GetPixels(), Bytes, (uint32)Tex->Width))
                 {
                     bUploaded = true;
-                    Tex->SetTexID((ImTextureID)(uint32)It->second.ResourceID());
+                    Tex->SetTexID((ImTextureID)It->ResourceID());
                     Tex->SetStatus(ImTextureStatus_OK);
                 }
             }
-            else if (Tex->Status == ImTextureStatus_WantDestroy && Tex->UnusedFrames >= (int)(RHI::kFramesInFlight * 2))
+            else if (Tex->Status == ImTextureStatus_WantDestroy && Tex->UnusedFrames >= (RHI::kFramesInFlight * 2))
             {
-                auto It = NewFontTextures.find(Tex->UniqueID);
-                if (It != NewFontTextures.end())
+                auto It = NewFontTextures.Find(Tex->UniqueID);
+                if (It != nullptr)
                 {
-                    RHI::Textures::Release(It->second);
-                    NewFontTextures.erase(It);
+                    RHI::Textures::Release(*It);
+                    NewFontTextures.Remove(Tex->UniqueID);
                 }
                 Tex->SetTexID(ImTextureID_Invalid);
                 Tex->SetStatus(ImTextureStatus_Destroyed);
@@ -445,31 +460,31 @@ namespace Lumina
         FRecursiveScopeLock Lock(Mutex);
 
         const FName NamePath = Path;
-        if (auto It = PathTextures.find(NamePath); It != PathTextures.end())
+        if (auto It = PathTextures.Find(NamePath); It != nullptr)
         {
-            return (ImTextureID)(uint32)It->second.ResourceID();
+            return (ImTextureID)It->ResourceID();
         }
 
         // Decoded straight into the new heap, so the texture id is one the ImGui shaders sample directly.
         TOptional<Import::Textures::FTextureImportResult> Result = Import::Textures::ImportTexture(Path, false);
-        if (!Result.has_value() || Result->Pixels.empty())
+        if (!Result.IsSet() || Result->Pixels.IsEmpty())
         {
-            return (ImTextureID)(uint32)RHI::Textures::DefaultResourceID();
+            return (ImTextureID)RHI::Textures::DefaultResourceID();
         }
 
-        const FString DebugName = FString("ImGui.") + FString(Path.data(), Path.size());
+        const FString DebugName = FString("ImGui.") + FString(Path.GetData(), Path.Len());
 
         RHI::FManagedTexture Texture = RHI::Textures::Create(RHI::FTexture2DDesc
         {
             .Width  = Result->Dimensions.x,
             .Height = Result->Dimensions.y,
             .Format = Result->Format,
-            .DebugName = DebugName.c_str(),
+            .DebugName = *DebugName,
         });
-        RHI::Textures::Upload(Texture, 0, Result->Pixels.data(), Result->Pixels.size(), Result->Dimensions.x);
+        RHI::Textures::Upload(Texture, 0, Result->Pixels.GetData(), Result->Pixels.Num(), Result->Dimensions.x);
 
         const uint32 ResourceID = Texture.ResourceID();
-        PathTextures.insert_or_assign(NamePath, Move(Texture));
+        PathTextures.Add(NamePath, Move(Texture));
         return (ImTextureID)(uint32)ResourceID;
     }
 

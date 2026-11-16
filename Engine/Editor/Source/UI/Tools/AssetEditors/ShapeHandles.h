@@ -21,6 +21,11 @@ namespace Lumina
         ExtentX,
         ExtentY,
         ExtentZ,
+        SwingLimit1,
+        SwingLimit2,
+        TwistLimit,
+        SoftSwing,
+        SoftTwist,
     };
 
     /** One draggable dot. Dragging measures along Axis from Anchor, and that distance becomes the dimension. */
@@ -81,6 +86,9 @@ namespace Lumina
 
     namespace ShapeHandles
     {
+        /** Commits whichever drag left a transaction open, if either flag is set. */
+        void CloseOpenDragTransaction(IShapeHandleHost& Host, FShapeHandleState& State);
+
         /** Cursor to world ray through an explicit viewport rect. False when it cannot be built. */
         bool BuildViewportRay(CWorld* World, const ImVec2& ViewportOrigin, const ImVec2& ViewportSize,
                               const ImVec2& ScreenPos, FVector3& OutOrigin, FVector3& OutDirection);
@@ -88,6 +96,21 @@ namespace Lumina
         /** Ray against an oriented box. OutT is the world distance, so hits of different shapes sort. */
         bool RayHitsBox(const FVector3& Origin, const FVector3& Direction, const FMatrix4& Matrix,
                         const FVector3& HalfExtent, float& OutT);
+
+        // Ray against a sphere. OutT is the world distance, clamped to zero when the origin is inside.
+        bool RayHitsSphere(const FVector3& Origin, const FVector3& Direction, const FVector3& Center, float Radius, float& OutT);
+
+        // Ray against a capsule. OutT is the ray parameter at closest approach, close enough to order overlapping shapes.
+        bool RayHitsCapsule(const FVector3& Origin, const FVector3& Direction,
+                            const FVector3& SegmentStart, const FVector3& SegmentEnd, float Radius, float& OutT);
+
+        // Parameter along Axis from Anchor closest to the ray. False when the two are near-parallel.
+        bool ClosestParamOnAxisToRay(const FVector3& Anchor, const FVector3& Axis,
+                                     const FVector3& RayOrigin, const FVector3& RayDirection, float& OutT);
+
+        // Signed angle from Zero toward Ninety of where the ray crosses their plane through Anchor. False when the ray runs along the plane.
+        bool AngleOnPlaneToRay(const FVector3& Anchor, const FVector3& Zero, const FVector3& Ninety,
+                               const FVector3& RayOrigin, const FVector3& RayDirection, float& OutRadians);
 
         /** World position to viewport pixels. False when the point is at or behind the eye. */
         bool ProjectToScreen(const FMatrix4& ViewProj, const ImVec2& ViewportOrigin, const ImVec2& ViewportSize,

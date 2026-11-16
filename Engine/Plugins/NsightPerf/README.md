@@ -27,7 +27,7 @@ NvPerf 的 periodic sampler 要求特定的 Vulkan **instance 和 device 扩展�
 设备创建时即已启用**。引擎在启动期间创建设备，早于大多数插件的加载，因此本
 插件的模块在 **Core** 加载阶段（早于 `RHI::CreateDevice`）加载，并通过
 `RHI::Native::RegisterDeviceCreationRequest` 注册所需扩展（见
-`Engine/Source/Runtime/Renderer/RHINative.h`）。它还通过
+`Engine/Source/Runtime/Source/Renderer/RHINative.h`）。它还通过
 `RHI::Native::GetNativeDeviceHandles()` 取得实时设备句柄，该函数返回的是*不透明*句柄
 （不会有任何 Vulkan 类型泄漏出后端），由本插件自行将其重新解释为 `Vk*`。
 

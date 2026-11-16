@@ -15,7 +15,7 @@ namespace Lumina
     class FInputContext;
 }
 
-// The C++ gameplay input surface, which CInputLibrary exposes to scripts. Every read returns neutral values while the world is not receiving.
+// The C++ per-world input polling surface, which CInputSubsystem exposes to scripts as World.Input while CInputLibrary only holds rebinding. Every read returns neutral values while the world is not receiving.
 namespace Lumina::Input
 {
     // The one gate on gameplay input. Null unless the world's viewport is the active one and the editor has handed input to the game.
@@ -115,6 +115,10 @@ namespace Lumina::Input
 
     RUNTIME_API void       SetMouseMode(const CWorld* World, EMouseMode Mode);
     RUNTIME_API EMouseMode GetMouseMode(const CWorld* World);
+
+    // The cursor World shows while it holds the mouse, drawn from the project's hardware cursors in User Interface settings or by the system.
+    RUNTIME_API void         SetMouseCursor(const CWorld* World, EMouseCursor Cursor);
+    RUNTIME_API EMouseCursor GetMouseCursor(const CWorld* World);
 
     RUNTIME_API void       SetInputMode(const CWorld* World, EInputMode Mode);
     RUNTIME_API EInputMode GetInputMode(const CWorld* World);

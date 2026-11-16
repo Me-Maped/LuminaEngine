@@ -10,18 +10,21 @@ public sealed class ProcessResult
 
     public required string Output { get; init; }
 
+    public string Error { get; init; } = string.Empty;
+
     public bool bSucceeded => ExitCode == 0;
 }
 
 public static class ProcessRunner
 {
-    /// <summary>Runs a tool to completion, merging its standard output and error in arrival order.</summary>
+    /// <summary>Runs a tool to completion, merging its standard output and error in arrival order; StandardInput, when set, is written to the tool and then closed.</summary>
     public static async Task<ProcessResult> RunAsync(
         string ToolPath,
         string Arguments,
         string WorkingDirectory,
         IReadOnlyDictionary<string, string>? EnvironmentOverrides,
-        CancellationToken Cancellation)
+        CancellationToken Cancellation,
+        string? StandardInput = null)
     {
         ProcessStartInfo StartInfo = new(ToolPath)
         {
@@ -33,7 +36,13 @@ public static class ProcessRunner
             CreateNoWindow = true,
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
+            RedirectStandardInput = StandardInput is not null,
         };
+
+        if (StandardInput is not null)
+        {
+            StartInfo.StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        }
 
         if (EnvironmentOverrides is not null)
         {
@@ -83,6 +92,19 @@ public static class ProcessRunner
 
         try
         {
+            if (StandardInput is not null)
+            {
+                try
+                {
+                    await Runner.StandardInput.WriteAsync(StandardInput.AsMemory(), Cancellation).ConfigureAwait(false);
+                    Runner.StandardInput.Close();
+                }
+                catch (IOException)
+                {
+                    // The tool exited before reading everything; its exit code and output say why.
+                }
+            }
+
             await Runner.WaitForExitAsync(Cancellation).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -101,14 +123,61 @@ public static class ProcessRunner
         return new ProcessResult { ExitCode = Runner.ExitCode, Output = Output };
     }
 
-    private static void TryKill(Process Runner)
+    // Output holds standard output only; null means the tool could not start or outlived TimeoutMs and was killed.
+    public static ProcessResult? RunCaptured(ProcessStartInfo StartInfo, int TimeoutMs)
     {
+        StartInfo.RedirectStandardOutput = true;
+        StartInfo.RedirectStandardError = true;
+        StartInfo.UseShellExecute = false;
+        StartInfo.CreateNoWindow = true;
+
         try
         {
-            if (!Runner.HasExited)
+            using Process? Runner = Process.Start(StartInfo);
+
+            if (Runner is null)
             {
-                Runner.Kill(entireProcessTree: true);
+                return null;
             }
+
+            Stopwatch Budget = Stopwatch.StartNew();
+
+            // Both pipes drain together so a child that fills stderr cannot stall while stdout is read.
+            Task<string> Output = Runner.StandardOutput.ReadToEndAsync();
+            Task<string> Errors = Runner.StandardError.ReadToEndAsync();
+
+            if (!Runner.WaitForExit(TimeoutMs))
+            {
+                Log.Verbose("'{0}' did not finish within {1} ms and was killed.", StartInfo.FileName, TimeoutMs);
+                TryKill(Runner);
+                return null;
+            }
+
+            // The exit left the deadline this much to drain pipes whose write end a surviving child still holds open.
+            int RemainingMs = Math.Max(0, TimeoutMs - (int)Budget.ElapsedMilliseconds);
+
+            if (!Task.WaitAll(new Task[] { Output, Errors }, RemainingMs))
+            {
+                Log.Verbose("'{0}' exited but its output pipe stayed open past {1} ms and was killed.", StartInfo.FileName, TimeoutMs);
+                TryKill(Runner);
+                return null;
+            }
+
+            return new ProcessResult { ExitCode = Runner.ExitCode, Output = Output.Result, Error = Errors.Result };
+        }
+        catch (Exception Ex) when (Ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            Log.Verbose("Could not run '{0}': {1}", StartInfo.FileName, Ex.Message);
+            return null;
+        }
+    }
+
+    internal static void TryKill(Process Runner)
+    {
+        // No HasExited guard, since descendants still holding inherited pipes outlive a root that already exited.
+        try
+        {
+            Runner.Kill(entireProcessTree: true);
         }
         catch (Exception Ex) when (Ex is InvalidOperationException or NotSupportedException or SystemException)
         {

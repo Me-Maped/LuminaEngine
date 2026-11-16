@@ -66,14 +66,18 @@ public static class ManagedProjectStep
                 Action.DiscoverLatePrerequisites = () => EnumerateGeneratedBindings(Target, Project);
             }
 
-            Action.ProducedItems.Add(FileItem.Get(Project.OutputAssembly));
+            FileItem OutputAssembly = FileItem.Get(Project.OutputAssembly);
+            Action.ProducedItems.Add(OutputAssembly);
+
+            // Every configuration writes this one assembly but keeps its own history, so a rewrite by another configuration must rebuild.
+            Action.PrerequisiteItems.Add(OutputAssembly);
 
             yield return Action;
         }
     }
 
     /// <summary>A project's own file and sources, plus those of every project it references, transitively.</summary>
-    private static IEnumerable<FileItem> EnumerateProjectAndReferences(string ProjectFile)
+    internal static IEnumerable<FileItem> EnumerateProjectAndReferences(string ProjectFile)
     {
         HashSet<string> Visited = new(StringComparer.OrdinalIgnoreCase);
         Queue<string> Pending = new();
@@ -110,8 +114,9 @@ public static class ManagedProjectStep
         {
             Text = File.ReadAllText(ProjectFile);
         }
-        catch (IOException)
+        catch (IOException Ex)
         {
+            Log.Warning("Could not read '{0}': {1}. Its project references are not tracked.", ProjectFile, Ex.Message);
             yield break;
         }
 
@@ -165,6 +170,16 @@ public static class ManagedProjectStep
                 yield return FileItem.Get(Source);
             }
         }
+
+        // MSBuild imports these implicitly, so they are compile inputs even though they are not *.cs.
+        foreach (string Name in new[] { "Directory.Build.props", "Directory.Build.targets" })
+        {
+            string ImplicitImport = Path.Combine(ProjectDirectory, Name);
+            if (File.Exists(ImplicitImport))
+            {
+                yield return FileItem.Get(ImplicitImport);
+            }
+        }
     }
 
     /// <summary>The generated bindings this assembly compiles.</summary>
@@ -186,7 +201,7 @@ public static class ManagedProjectStep
         }
     }
 
-    private static string ResolveDotNet()
+    internal static string ResolveDotNet()
     {
         // The tool itself runs on the SDK, so the host executable is the one to reuse.
         string? HostPath = Environment.ProcessPath;

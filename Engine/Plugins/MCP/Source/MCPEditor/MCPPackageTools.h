@@ -3,6 +3,11 @@
 #include "Containers/String.h"
 #include "Containers/Vector.h"
 #include "Core/Object/ObjectMacros.h"
+#include "Core/Threading/Sync.h"
+#include "Core/Threading/Thread.h"
+#include "Platform/Process/PlatformProcess.h"
+
+#include <atomic>
 
 #include "MCPPackageTools.generated.h"
 
@@ -70,9 +75,13 @@ namespace Lumina
         PROPERTY()
         bool bExtractScriptsAsLooseFiles = false;
 
-        // Builds the headless dedicated server target as <ProjectName>Server.exe instead of the game.
+        // Builds the headless dedicated server target, <ProjectName>Server, instead of the game.
         PROPERTY()
         bool bServer = false;
+
+        // Windows64 or Linux64.
+        PROPERTY()
+        FString Platform = "Windows64";
     };
 
     REFLECT()
@@ -152,6 +161,9 @@ namespace Lumina
         int32 LogLineCount = 0;
 
         PROPERTY()
+        int32 Errors = 0;
+
+        PROPERTY()
         int32 Warnings = 0;
 
         PROPERTY()
@@ -159,23 +171,28 @@ namespace Lumina
     };
 
     REFLECT()
-    struct MCPEDITOR_API SPackageLaunchParams
+    enum class EPackageRunAction : uint8
     {
-        GENERATED_BODY()
-
-        // Empty runs the executable the last package.build produced.
-        PROPERTY()
-        FString Executable;
-
-        // Command line for the game, such as -benchmark -frames=600 to run a timed pass and quit.
-        PROPERTY()
-        FString Arguments;
+        Launch,
+        Stop,
+        Status,
     };
 
     REFLECT()
-    struct MCPEDITOR_API SPackageGameStatusParams
+    struct MCPEDITOR_API SPackageRunParams
     {
         GENERATED_BODY()
+
+        PROPERTY()
+        EPackageRunAction Action = EPackageRunAction::Status;
+
+        // Launch only. Empty runs the executable the last package.build produced.
+        PROPERTY()
+        FString Executable;
+
+        // Launch only. Game command line, such as -benchmark -frames=600 to run a timed pass and quit.
+        PROPERTY()
+        FString Arguments;
 
         // Most lines of the game's log to return, newest kept.
         PROPERTY()
@@ -187,7 +204,7 @@ namespace Lumina
     };
 
     REFLECT()
-    struct MCPEDITOR_API SPackageGameStatusResult
+    struct MCPEDITOR_API SPackageRunResult
     {
         GENERATED_BODY()
 
@@ -222,6 +239,68 @@ namespace Lumina
 
     namespace MCP
     {
+        enum class EPackageStage : uint8
+        {
+            Idle,
+            Cooking,
+            Building,
+            Succeeded,
+            Failed,
+        };
+
+        struct MCPEDITOR_API FPackageSession
+        {
+            FMutex Mutex;
+            TVector<FString> Lines;
+            int32 Errors = 0;
+            int32 Warnings = 0;
+
+            std::atomic<EPackageStage> Stage{ EPackageStage::Idle };
+            FString Error;
+            FString Configuration;
+            FString OutputDirectory;
+            FString Executable;
+            int32 AssetsCooked = 0;
+            TVector<SPackageChunkInfo> Chunks;
+            double StartSeconds = 0.0;
+            std::atomic<double> EndSeconds{ 0.0 };
+
+            FThread Worker;
+
+            void Append(FStringView Line);
+            void Finish(bool bSucceeded, const FString& InError);
+        };
+
+        struct MCPEDITOR_API FPackageGameSession
+        {
+            Platform::FProcessHandle Process;
+            FString Executable;
+            FString LogPath;
+            double StartSeconds = 0.0;
+            double EndSeconds = 0.0;
+            int64 PreLaunchLogSize = -1;
+            int64 PreLaunchLogModifyTime = 0;
+            bool bLockedOntoLog = false;
+            uint64 ScannedLogBytes = 0;
+            int32 Errors = 0;
+            int32 Warnings = 0;
+
+            // Kills the game if it still runs and releases its handle, keeping the id and exit code Status reports. True when it killed a live game.
+            bool Close();
+
+            // Tallies new Errors/Warnings, ignoring a leftover log from the previous run and restarting the cursor if the file gets replaced.
+            void ScanNewLogLines();
+        };
+
+        // Owned by FMCPEditorModule, which shuts it down before the DLL unloads.
+        struct FPackageToolsState
+        {
+            FPackageSession Build;
+            FPackageGameSession Game;
+
+            void Shutdown();
+        };
+
         void RegisterPackageTools(FStringView Owner);
     }
 }

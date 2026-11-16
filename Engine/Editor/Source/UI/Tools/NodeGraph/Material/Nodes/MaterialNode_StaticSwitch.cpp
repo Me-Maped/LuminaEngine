@@ -25,7 +25,7 @@ namespace Lumina
     {
         if (bDynamic && !ParameterName.IsNone())
         {
-            ImGui::TextColored(ImVec4(0.62f, 0.55f, 0.85f, 1.0f), "%s", ParameterName.c_str());
+            ImGui::TextColored(ImVec4(0.62f, 0.55f, 0.85f, 1.0f), "%s", *ParameterName);
         }
 
         if (ImGui::Checkbox(bDynamic ? LOC("Default") : LOC("Value"), &bDefaultValue))

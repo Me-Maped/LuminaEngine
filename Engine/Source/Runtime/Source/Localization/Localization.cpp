@@ -6,14 +6,12 @@
 #include "Core/Threading/Thread.h"
 #include "Core/Object/ObjectCore.h"
 #include "Core/Templates/LuminaTemplate.h"
+#include "Core/Json/Json.h"
 #include "FileSystem/FileSystem.h"
 #include "Log/Log.h"
 
-#include "nlohmann/json.hpp"
-
 #include <cstdio>
 #include <cstring>
-#include <string>
 
 namespace Lumina
 {
@@ -62,58 +60,56 @@ namespace Lumina
         // failing the load, so a table can carry nested sections for tooling without breaking the UI.
         bool ParseTable(FStringView JsonText, THashMap<FString, FString>& OutTranslations)
         {
-            if (JsonText.empty())
+            if (JsonText.IsEmpty())
             {
                 return false;
             }
 
-            try
+            FJsonValue Root;
+            FJsonParseError Error;
+            if (!FJsonValue::Parse(JsonText, Root, &Error))
             {
-                const nlohmann::json Root = nlohmann::json::parse(JsonText.data(), JsonText.data() + JsonText.size());
-                if (!Root.is_object())
-                {
-                    LOG_ERROR("Localization: table root is not a JSON object.");
-                    return false;
-                }
-
-                for (auto It = Root.begin(); It != Root.end(); ++It)
-                {
-                    if (!It.value().is_string())
-                    {
-                        continue;
-                    }
-
-                    const std::string& Key = It.key();
-                    const std::string& Value = It.value().get_ref<const std::string&>();
-                    FStringView Source(Key.data(), Key.size());
-                    // Context tags are metadata, never part of the displayed format string.
-                    const size_t Separator = Source.rfind('|');
-                    if (Separator != FStringView::npos && Separator + 1 < Source.size())
-                    {
-                        const FStringView Context = Source.substr(Separator + 1);
-                        bool bContext = Context.front() >= 'a' && Context.front() <= 'z';
-                        for (const char Character : Context)
-                        {
-                            bContext &= (Character >= 'a' && Character <= 'z')
-                                || (Character >= '0' && Character <= '9') || Character == '_' || Character == '-';
-                        }
-                        if (bContext)
-                        {
-                            Source = Source.substr(0, Separator);
-                        }
-                    }
-                    if (!Localization::HaveCompatibleFormatArguments(Source, FStringView(Value.data(), Value.size())))
-                    {
-                        LOG_WARN("Localization: incompatible format for '{0}'; using the English source.", Key.c_str());
-                        continue;
-                    }
-                    OutTranslations.emplace(FString(Key.c_str(), Key.size()), FString(Value.c_str(), Value.size()));
-                }
-            }
-            catch (const std::exception& Ex)
-            {
-                LOG_ERROR("Localization: failed to parse table ({0})", Ex.what());
+                LOG_ERROR("Localization: failed to parse table ({0})", *Error.Message);
                 return false;
+            }
+            if (!Root.IsObject())
+            {
+                LOG_ERROR("Localization: table root is not a JSON object.");
+                return false;
+            }
+
+            for (const FJsonMember& Member : Root.Members())
+            {
+                if (!Member.Value.IsString())
+                {
+                    continue;
+                }
+
+                const FStringView Key = Member.Key.View();
+                const FStringView Value = Member.Value.AsString();
+                FStringView Source = Key;
+                // Context tags are metadata, never part of the displayed format string.
+                const int32 Separator = Source.FindLast('|');
+                if (Separator != Constants::kIndexNone && Separator + 1 < Source.Len())
+                {
+                    const FStringView Context = Source.Mid(Separator + 1);
+                    bool bContext = Context[0] >= 'a' && Context[0] <= 'z';
+                    for (const char Character : Context)
+                    {
+                        bContext &= (Character >= 'a' && Character <= 'z')
+                            || (Character >= '0' && Character <= '9') || Character == '_' || Character == '-';
+                    }
+                    if (bContext)
+                    {
+                        Source = Source.Left(Separator);
+                    }
+                }
+                if (!Localization::HaveCompatibleFormatArguments(Source, Value))
+                {
+                    LOG_WARN("Localization: incompatible format for '{0}'; using the English source.", Key.GetData());
+                    continue;
+                }
+                OutTranslations.Add(FString(Key), FString(Value));
             }
 
             return true;
@@ -226,11 +222,11 @@ namespace Lumina
         FString Text;
         if (!VFS::ReadFile(Text, Path))
         {
-            LOG_WARN("Localization: no table at '{0}'; strings fall back to their English source.", Path.c_str());
+            LOG_WARN("Localization: no table at '{0}'; strings fall back to their English source.", *Path);
             SetLanguageFromString(NewLanguage, "{}");
             return false;
         }
-        const bool bLoaded = SetLanguageFromString(NewLanguage, FStringView(Text.c_str(), Text.size()));
+        const bool bLoaded = SetLanguageFromString(NewLanguage, Text.View());
         if (bLoaded)
         {
             LOG_DISPLAY("Localization: {0} loaded.", Desc->Code);
@@ -245,7 +241,7 @@ namespace Lumina
         const bool bLoaded = ParseTable(JsonText, Table->Translations);
         if (!bLoaded)
         {
-            Table->Translations.clear();
+            Table->Translations.Reset();
         }
         Publish(Move(Table));
         return bLoaded;
@@ -266,7 +262,7 @@ namespace Lumina
     const char* FLocalizationSnapshot::Translate(FStringView Source, FStringView Context) const
     {
         const FStringView Text = TranslateView(Source, Context);
-        return Text.data() != nullptr ? Text.data() : "";
+        return Text.GetData() != nullptr ? Text.GetData() : "";
     }
 
     FStringView FLocalizationSnapshot::TranslateView(FStringView Source) const
@@ -276,26 +272,27 @@ namespace Lumina
 
     FStringView FLocalizationSnapshot::TranslateView(FStringView Source, FStringView Context) const
     {
-        if (Source.empty() || !Table)
+        if (Source.IsEmpty() || !Table)
         {
             return Source;
         }
-        if (!Context.empty())
+        if (!Context.IsEmpty())
         {
             thread_local FString Key;
-            Key.clear();
-            Key.append(Source.data(), Source.size());
-            Key.push_back('|');
-            Key.append(Context.data(), Context.size());
-            const auto Found = Table->Translations.find(FStringView(Key.c_str(), Key.size()));
-            if (Found != Table->Translations.end())
+            Key.Reset();
+            Key.Append(Source);
+            Key.AppendChar('|');
+            Key.Append(Context);
+            if (const FString* Found = Table->Translations.Find(Key))
             {
-                return FStringView(Found->second.c_str(), Found->second.size());
+                return Found->View();
             }
         }
-        const auto Found = Table->Translations.find(Source);
-        return Found != Table->Translations.end()
-            ? FStringView(Found->second.c_str(), Found->second.size()) : Source;
+        if (const FString* Found = Table->Translations.Find(FString(Source)))
+        {
+            return Found->View();
+        }
+        return Source;
     }
 
     const char* FLocalization::Translate(FStringView Source) const
@@ -329,18 +326,18 @@ namespace Lumina
         FString Directory = "/Engine/Resources/Localization";
         if (const CLocalizationSettings* Settings = GetDefault<CLocalizationSettings>())
         {
-            if (!Settings->TableDirectory.empty())
+            if (!Settings->TableDirectory.IsEmpty())
             {
                 Directory = Settings->TableDirectory;
             }
         }
 
-        if (Directory.empty() || Directory.back() != '/')
+        if (Directory.IsEmpty() || Directory.Last() != '/')
         {
-            Directory.push_back('/');
+            Directory.AppendChar('/');
         }
 
-        Directory.append(Desc->TableFile);
+        Directory.Append(Desc->TableFile);
         return Directory;
     }
 
@@ -391,8 +388,8 @@ namespace Lumina
 
             snprintf(Out, BufferSize, "%s %.*s",
                 Icon != nullptr ? Icon : "",
-                (int)Text.size(),
-                Text.empty() ? "" : Text.data());
+                Text.Len(),
+                Text.IsEmpty() ? "" : Text.GetData());
             return Out;
         }
 
@@ -413,11 +410,11 @@ namespace Lumina
             Next = (Next + 1) % BufferCount;
 
             const FStringView Text = FLocalization::Get().TranslateView(Source, Context);
-            const size_t Length = Math::Min(Text.size(), BufferSize - 1);
+            const int32 Length = Math::Min(Text.Len(), static_cast<int32>(BufferSize - 1));
 
             if (Length > 0)
             {
-                memcpy(Out, Text.data(), Length);
+                memcpy(Out, Text.GetData(), static_cast<size_t>(Length));
             }
             Out[Length] = '\0';
             return Out;
@@ -448,7 +445,7 @@ namespace Lumina
                 constexpr size_t Size      = GLabelBufferSize;
                 constexpr size_t Separator = 3;
 
-                const size_t Identity = Math::Min(Source.size(), Size - 1 - Separator);
+                const size_t Identity = Math::Min(static_cast<size_t>(Source.Len()), Size - 1 - Separator);
                 size_t Room = Size - 1 - Separator - Identity;
                 size_t Write = 0;
 
@@ -469,10 +466,10 @@ namespace Lumina
                     }
                 }
 
-                const size_t Visible = Math::Min(Text.size(), Room);
+                const size_t Visible = Math::Min(static_cast<size_t>(Text.Len()), Room);
                 if (Visible > 0)
                 {
-                    memcpy(Out + Write, Text.data(), Visible);
+                    memcpy(Out + Write, Text.GetData(), Visible);
                     Write += Visible;
                 }
 
@@ -481,7 +478,7 @@ namespace Lumina
 
                 if (Identity > 0)
                 {
-                    memcpy(Out + Write, Source.data(), Identity);
+                    memcpy(Out + Write, Source.GetData(), Identity);
                     Write += Identity;
                 }
 
@@ -523,19 +520,19 @@ namespace Lumina
                 // than by strlen, since the whole run is one string with embedded terminators.
                 const FStringView Display(Cursor);
                 const FStringView Translated = FLocalization::Get().TranslateView(Display);
-                Out.append(Translated.data(), Translated.size());
-                Out.push_back('\0');
-                Cursor += Display.size() + 1;
+                Out.Append(Translated);
+                Out.AppendChar('\0');
+                Cursor += Display.Len() + 1;
 
                 const FStringView Patterns(Cursor);
-                Out.append(Patterns.data(), Patterns.size());
-                Out.push_back('\0');
-                Cursor += Patterns.size() + 1;
+                Out.Append(Patterns);
+                Out.AppendChar('\0');
+                Cursor += Patterns.Len() + 1;
             }
 
             // The empty display name that ends the run, which is also what Win32 wants for the
             // terminating null pair.
-            Out.push_back('\0');
+            Out.AppendChar('\0');
             return Out;
         }
     }

@@ -11,6 +11,7 @@
 #include "Assets/AssetTypes/Mesh/StaticMesh/StaticMesh.h"
 #include "Assets/AssetTypes/PhysicsMaterial/PhysicsMaterial.h"
 #include "Log/Log.h"
+#include "Physics/CollisionGen.h"
 #include "TaskSystem/TaskSystem.h"
 #include "World/Entity/Components/DynamicMeshComponent.h"
 #include "World/Entity/Components/PhysicsComponent.h"
@@ -27,17 +28,17 @@ namespace Lumina::Physics
         b3HeightFieldData* BuildTerrainHeightField(const STerrainComponent& Terrain)
         {
             const int32 Res = Terrain.Resolution;
-            if (Res < 2 || (int64)Terrain.Heightmap.size() < (int64)Res * (int64)Res)
+            if (Res < 2 || Terrain.Heightmap.Num() < (int64)Res * (int64)Res)
             {
                 return nullptr;
             }
 
             TVector<float> Heights;
-            Heights.resize((size_t)Res * (size_t)Res);
+            Heights.SetNum(IntCastChecked<int32>(static_cast<int64>(Res) * Res));
 
             float MinHeight = FLT_MAX;
             float MaxHeight = -FLT_MAX;
-            for (size_t i = 0; i < Heights.size(); ++i)
+            for (int32 i = 0; i < Heights.Num(); ++i)
             {
                 const float H = Terrain.Heightmap[i] * Terrain.MaxHeight;
                 Heights[i] = H;
@@ -48,7 +49,7 @@ namespace Lumina::Physics
             const float Stride = Terrain.TileWorldSize / float(Res - 1);
 
             b3HeightFieldDef Def = b3HeightFieldDef{};
-            Def.heights = Heights.data();
+            Def.heights = Heights.GetData();
             Def.countX = Res;
             Def.countZ = Res;
             Def.scale = b3Vec3{ Stride, 1.0f, Stride };
@@ -59,9 +60,23 @@ namespace Lumina::Physics
         }
     }
 
+    CStaticMesh* FBox3DPhysicsScene::ResolveColliderMesh(const ECS::FRegistry& Registry, ECS::FEntity Entity, const SMeshColliderComponent& Collider)
+    {
+        if (CStaticMesh* Mesh = Collider.Mesh.Get())
+        {
+            return Mesh;
+        }
+        const SStaticMeshComponent* StaticMesh = Registry.TryGet<SStaticMeshComponent>(Entity);
+        return StaticMesh ? StaticMesh->StaticMesh.Get() : nullptr;
+    }
+
     EBodyBuildStatus FBox3DPhysicsScene::TryBuildRigidBody(ECS::FRegistry& Registry, ECS::FEntity Entity, FRigidBodyBuildResult& Out)
     {
-        // No zone, since fiber-mode Tracy serializes every zone on one lock and this runs per body across all workers.
+        // No zone, since this runs per body across all workers and the zone would cost more than the work.
+
+        Out.Shapes.Reset();
+        Out.OwnedHulls.Reset();
+        Out.Geometry = {};
 
         const SRigidBodyComponent* RigidBody = Registry.TryGet<SRigidBodyComponent>(Entity);
         if (RigidBody == nullptr)
@@ -79,8 +94,6 @@ namespace Lumina::Physics
         {
             return EBodyBuildStatus::Defer;
         }
-
-        Out.Shapes.clear();
 
         FVector3 ColliderTranslationOffset(0.0f);
         FVector3 ColliderRotationOffset(0.0f);
@@ -117,7 +130,7 @@ namespace Lumina::Physics
                 Out.BoxHull = MakeUnique<b3BoxHull>();
             }
             *Out.BoxHull = b3MakeBoxHull(HalfExtent.x, HalfExtent.y, HalfExtent.z);
-            Out.Shapes.push_back(MakeHullShape(&Out.BoxHull->base, FVector3(0.0f), FQuat::Identity()));
+            Out.Shapes.Add(MakeHullShape(&Out.BoxHull->base, FVector3(0.0f), FQuat::Identity()));
         }
         else if (const SSphereColliderComponent* SC = Registry.TryGet<SSphereColliderComponent>(Entity))
         {
@@ -125,7 +138,7 @@ namespace Lumina::Physics
             bColliderIsTrigger = SC->bIsTrigger;
             ResolvedMaterial = SC->PhysicsMaterial.Get();
 
-            Out.Shapes.push_back(MakeSphereShape(FVector3(0.0f), SC->Radius * UniformScale));
+            Out.Shapes.Add(MakeSphereShape(FVector3(0.0f), SC->Radius * UniformScale));
         }
         else if (const SCapsuleColliderComponent* CC = Registry.TryGet<SCapsuleColliderComponent>(Entity))
         {
@@ -134,7 +147,7 @@ namespace Lumina::Physics
             bColliderIsTrigger = CC->bIsTrigger;
             ResolvedMaterial = CC->PhysicsMaterial.Get();
 
-            Out.Shapes.push_back(MakeCapsuleShape(FVector3(0.0f), FQuat::Identity(), CC->Radius * UniformScale, CC->HalfHeight * UniformScale));
+            Out.Shapes.Add(MakeCapsuleShape(FVector3(0.0f), FQuat::Identity(), CC->Radius * UniformScale, CC->HalfHeight * UniformScale));
         }
         else if (const SCylinderColliderComponent* CyC = Registry.TryGet<SCylinderColliderComponent>(Entity))
         {
@@ -149,7 +162,7 @@ namespace Lumina::Physics
                 LOG_ERROR("Failed to create CylinderCollider shape for Entity: {}", (Entity).Value);
                 return EBodyBuildStatus::Error;
             }
-            Out.Shapes.push_back(MakeHullShape(Hull, FVector3(0.0f), FQuat::Identity()));
+            Out.Shapes.Add(MakeHullShape(Hull, FVector3(0.0f), FQuat::Identity()));
         }
         else if (const STaperedCapsuleColliderComponent* TCC = Registry.TryGet<STaperedCapsuleColliderComponent>(Entity))
         {
@@ -158,7 +171,7 @@ namespace Lumina::Physics
             bColliderIsTrigger = TCC->bIsTrigger;
             ResolvedMaterial = TCC->PhysicsMaterial.Get();
 
-            WarnTaperedCapsuleOnce();
+            LOG_WARN_ONCE("Tapered capsule colliders are approximated by a cone hull under Box3D; the rounded caps are lost.");
 
             const b3HullData* Hull = GetOrCreateTaperedCylinderHull(TCC->HalfHeight * UniformScale, TCC->TopRadius * UniformScale, TCC->BottomRadius * UniformScale);
             if (Hull == nullptr)
@@ -166,7 +179,7 @@ namespace Lumina::Physics
                 LOG_ERROR("Failed to create TaperedCapsuleCollider shape for Entity: {}", (Entity).Value);
                 return EBodyBuildStatus::Error;
             }
-            Out.Shapes.push_back(MakeHullShape(Hull, FVector3(0.0f), FQuat::Identity()));
+            Out.Shapes.Add(MakeHullShape(Hull, FVector3(0.0f), FQuat::Identity()));
         }
         else if (const STaperedCylinderColliderComponent* TCyC = Registry.TryGet<STaperedCylinderColliderComponent>(Entity))
         {
@@ -181,7 +194,7 @@ namespace Lumina::Physics
                 LOG_ERROR("Failed to create TaperedCylinderCollider shape for Entity: {}", (Entity).Value);
                 return EBodyBuildStatus::Error;
             }
-            Out.Shapes.push_back(MakeHullShape(Hull, FVector3(0.0f), FQuat::Identity()));
+            Out.Shapes.Add(MakeHullShape(Hull, FVector3(0.0f), FQuat::Identity()));
         }
         else if (const SPlaneColliderComponent* PC = Registry.TryGet<SPlaneColliderComponent>(Entity))
         {
@@ -197,7 +210,7 @@ namespace Lumina::Physics
                 LOG_ERROR("Failed to create PlaneCollider shape for Entity: {}", (Entity).Value);
                 return EBodyBuildStatus::Error;
             }
-            Out.Shapes.push_back(MakeHullShape(Hull, FVector3(0.0f, -PlaneThickness, 0.0f), FQuat::Identity()));
+            Out.Shapes.Add(MakeHullShape(Hull, FVector3(0.0f, -PlaneThickness, 0.0f), FQuat::Identity()));
             bMustBeStatic = true;
         }
         else if (const SCompoundColliderComponent* CompC = Registry.TryGet<SCompoundColliderComponent>(Entity))
@@ -218,15 +231,7 @@ namespace Lumina::Physics
             bColliderIsTrigger = MC->bIsTrigger;
             ResolvedMaterial = MC->PhysicsMaterial.Get();
 
-            CStaticMesh* Mesh = MC->Mesh.Get();
-            if (Mesh == nullptr)
-            {
-                if (const SStaticMeshComponent* SMC = Registry.TryGet<SStaticMeshComponent>(Entity))
-                {
-                    Mesh = SMC->StaticMesh.Get();
-                }
-            }
-
+            CStaticMesh* Mesh = ResolveColliderMesh(Registry, Entity, *MC);
             if (Mesh == nullptr || Mesh->HasAnyFlag(OF_NeedsLoad) || Mesh->GetMeshResource().MeshletData.IsEmpty())
             {
                 return EBodyBuildStatus::Defer;
@@ -238,12 +243,11 @@ namespace Lumina::Physics
                 {
                     ResolvedMaterial = Collision->PhysicsMaterial.Get();
                 }
-                if (!BuildMeshCollision(*Collision, Scale, Out.Shapes))
+                if (!BuildMeshCollision(*Collision, Scale, Out))
                 {
                     LOG_ERROR("Failed to build the mesh collision of the MeshCollider on Entity: {}", (Entity).Value);
                     return EBodyBuildStatus::Error;
                 }
-                bMustBeStatic = Collision->IsConcave();
             }
             else if (MC->bConvex)
             {
@@ -256,7 +260,7 @@ namespace Lumina::Physics
 
                 FPendingShape Shape = MakeHullShape(Hull, FVector3(0.0f), FQuat::Identity());
                 Shape.Scale = Box3DUtils::ToB3Vec3(Scale);
-                Out.Shapes.push_back(Shape);
+                Out.Shapes.Add(Shape);
             }
             else
             {
@@ -271,9 +275,9 @@ namespace Lumina::Physics
                 Shape.Type = b3_meshShape;
                 Shape.Mesh = MeshData;
                 Shape.Scale = Box3DUtils::ToB3Vec3(Scale);
-                Out.Shapes.push_back(Shape);
-                bMustBeStatic = true;
+                Out.Shapes.Add(Shape);
             }
+            bMustBeStatic = CollisionGen::IsConcaveMeshCollider(*Mesh, MC->bConvex);
         }
         else if (const SDynamicMeshColliderComponent* DMC = Registry.TryGet<SDynamicMeshColliderComponent>(Entity))
         {
@@ -282,51 +286,49 @@ namespace Lumina::Physics
 
             const SDynamicMeshComponent* DM = Registry.TryGet<SDynamicMeshComponent>(Entity);
             const TSharedPtr<FDynamicMeshRenderData> MeshData = DM ? DM->LoadRenderData() : nullptr;
-            if (!MeshData || MeshData->Resource.MeshletData.IsEmpty())
+            if (!MeshData || !HasCollisionGeometry(MeshData->Resource))
             {
                 if (MeshData && MeshData->MeshletHeaderSlot != 0)
                 {
-                    LOG_ERROR("Entity {} needs the dynamic mesh CPU meshlet data, which was dropped after upload. "
-                              "Set bKeepCPUMeshletData on the SDynamicMeshComponent.", (Entity).Value);
+                    LOG_ERROR("Entity {} needs CPU geometry from its dynamic mesh, which was dropped after upload. "
+                              "Set bKeepCollisionTriangles or bKeepCPUMeshletData on the SDynamicMeshComponent.", (Entity).Value);
                     return EBodyBuildStatus::Error;
                 }
                 return EBodyBuildStatus::Defer;
             }
 
             // StartDynamicMeshCooks launched the build, and the entity waits in the pending list until it lands.
-            const auto CookIt = DynamicMeshCooks.find(Entity);
-            if (CookIt == DynamicMeshCooks.end() || CookIt->second.RenderData != MeshData
-                || !CookIt->second.Cook->bDone.load(std::memory_order_acquire))
+            const auto CookIt = DynamicMeshCooks.Find(Entity);
+            if (CookIt == nullptr || CookIt->RenderData != MeshData
+                || !CookIt->Cook->bDone.load(std::memory_order_acquire))
             {
                 return EBodyBuildStatus::Defer;
             }
 
-            FDynamicMeshCook& Cook = *CookIt->second.Cook;
+            FDynamicMeshCook& Cook = *CookIt->Cook;
             if (DMC->bConvex)
             {
-                b3HullData* Hull = std::exchange(Cook.Hull, nullptr);
-                if (Hull == nullptr)
+                if (!Cook.Hull)
                 {
                     LOG_ERROR("Failed to create DynamicMeshCollider shape for Entity: {}", (Entity).Value);
                     return EBodyBuildStatus::Error;
                 }
-                TrackOwnedHull(Hull);
-                Out.Shapes.push_back(MakeHullShape(Hull, FVector3(0.0f), FQuat::Identity()));
+                Out.Shapes.Add(MakeHullShape(Cook.Hull.Get(), FVector3(0.0f), FQuat::Identity()));
+                Out.OwnedHulls.Add(Move(Cook.Hull));
             }
             else
             {
-                b3MeshData* Built = std::exchange(Cook.Mesh, nullptr);
-                if (Built == nullptr)
+                if (!Cook.Mesh)
                 {
                     LOG_ERROR("Failed to create DynamicMeshCollider shape for Entity: {}", (Entity).Value);
                     return EBodyBuildStatus::Error;
                 }
-                TrackOwnedMesh(Built);
 
                 FPendingShape Shape;
                 Shape.Type = b3_meshShape;
-                Shape.Mesh = Built;
-                Out.Shapes.push_back(Shape);
+                Shape.Mesh = Cook.Mesh.Get();
+                Out.Geometry.Mesh = Move(Cook.Mesh);
+                Out.Shapes.Add(Shape);
                 bMustBeStatic = true;
             }
         }
@@ -335,8 +337,8 @@ namespace Lumina::Physics
             bColliderIsTrigger = TC->bIsTrigger;
             ResolvedMaterial = TC->PhysicsMaterial.Get();
 
-            const STerrainComponent* Terrain = Registry.TryGet<STerrainComponent>(Entity);
-            if (Terrain == nullptr || Terrain->Heightmap.empty())
+            const STerrainComponent* Terrain = Registry.TryGet<ECS::Read<STerrainComponent>>(Entity);
+            if (Terrain == nullptr || Terrain->Heightmap.IsEmpty())
             {
                 return EBodyBuildStatus::Defer;
             }
@@ -348,20 +350,19 @@ namespace Lumina::Physics
                 return EBodyBuildStatus::Error;
             }
 
-            b3HeightFieldData* Field = BuildTerrainHeightField(*Terrain);
-            if (Field == nullptr)
+            Out.Geometry.HeightField.Reset(BuildTerrainHeightField(*Terrain));
+            if (!Out.Geometry.HeightField)
             {
                 LOG_ERROR("Failed to create TerrainCollider shape for Entity: {}", (Entity).Value);
                 return EBodyBuildStatus::Error;
             }
-            TrackOwnedHeightField(Field);
 
             FPendingShape Shape;
             Shape.Type = b3_heightShape;
-            Shape.HeightField = Field;
+            Shape.HeightField = Out.Geometry.HeightField.Get();
             // Box3D indexes the grid from a corner, so it is recentered onto the tile.
             Shape.Transform.p = b3Vec3{ Terrain->TileWorldSize * -0.5f, 0.0f, Terrain->TileWorldSize * -0.5f };
-            Out.Shapes.push_back(Shape);
+            Out.Shapes.Add(Shape);
             bMustBeStatic = true;
         }
         else
@@ -428,7 +429,7 @@ namespace Lumina::Physics
         Out.ShapeDef.userData = Box3DUtils::PackProfileUserData(RigidBody->CollisionProfile);
         Out.ShapeDef.enableCustomFiltering = Box3DUtils::UsesPermissiveCollisionFilter();
         Out.ShapeDef.isSensor = RigidBody->bIsSensor || bColliderIsTrigger;
-        Out.ShapeDef.enableSensorEvents = Out.ShapeDef.isSensor;
+        Out.ShapeDef.enableSensorEvents = Out.ShapeDef.isSensor || BodyType != EBodyType::Static;
         Out.ShapeDef.enableContactEvents = true;
         Out.ShapeDef.enableHitEvents = true;
 
@@ -475,12 +476,25 @@ namespace Lumina::Physics
         return EBodyBuildStatus::Success;
     }
 
+    bool FBox3DPhysicsScene::HasBodyCapacity(uint32 Count)
+    {
+        if (GetBodyCount() + Count <= MaxBodies)
+        {
+            return true;
+        }
+        if (!bWarnedBodyCap)
+        {
+            bWarnedBodyCap = true;
+            LOG_WARN("[Box3D] Physics body cap of {} reached, so new bodies are not created. Raise World Settings > Physics > MaxPhysicsBodies.", MaxBodies);
+        }
+        return false;
+    }
+
     uint32 FBox3DPhysicsScene::CommitRigidBody(ECS::FEntity Entity, FRigidBodyBuildResult& Build)
     {
         LUMINA_PROFILE_SCOPE();
 
-        // b3CreateHeightFieldShape takes no transform and indexes the grid from the body origin, so a
-        // height field's local offset has to be folded into the body before it is created.
+        // b3CreateHeightFieldShape takes no transform and indexes from the body origin, so the height field's local offset is folded into the body.
         for (const FPendingShape& Shape : Build.Shapes)
         {
             if (Shape.Type != b3_heightShape || b3LengthSquared(Shape.Transform.p) <= 0.0f)
@@ -494,7 +508,7 @@ namespace Lumina::Physics
             break;
         }
 
-        if (BodyHandles.size() - FreeBodyHandles.size() >= MaxBodies)
+        if (!HasBodyCapacity(1))
         {
             return InvalidBodyHandle;
         }
@@ -576,27 +590,24 @@ namespace Lumina::Physics
         }
 
         StoreBodyMaterial(Handle, Build);
+        AdoptBodyGeometry(Handle, Build);
 
         return Handle;
     }
 
-    FBox3DPhysicsScene::FDynamicMeshCook::~FDynamicMeshCook()
+    void FBox3DPhysicsScene::AdoptBodyGeometry(uint32 Handle, FRigidBodyBuildResult& Build)
     {
-        // Only a cook nobody consumed still owns its result, as when the entity went away mid-build.
-        if (Mesh != nullptr)
+        Build.OwnedHulls.Reset();
+        if (Build.Geometry.Mesh || Build.Geometry.HeightField)
         {
-            b3DestroyMesh(Mesh);
-        }
-        if (Hull != nullptr)
-        {
-            b3DestroyHull(Hull);
+            BodyGeometry.Add(Handle, Move(Build.Geometry));
         }
     }
 
     bool FBox3DPhysicsScene::IsDynamicMeshCookPending(ECS::FEntity Entity) const
     {
-        const auto It = DynamicMeshCooks.find(Entity);
-        return It != DynamicMeshCooks.end() && !It->second.Cook->bDone.load(std::memory_order_acquire);
+        const auto It = DynamicMeshCooks.Find(Entity);
+        return It != nullptr && !It->Cook->bDone.load(std::memory_order_acquire);
     }
 
     void FBox3DPhysicsScene::RunDynamicMeshCook(FPendingDynamicMeshCook& Pending)
@@ -604,20 +615,19 @@ namespace Lumina::Physics
         FDynamicMeshCook& Cook = *Pending.Cook;
         if (Pending.bConvex)
         {
-            Cook.Hull = b3CreateHull(Pending.Positions.data(), (int)Pending.Positions.size(), B3_MAX_HULL_VERTICES);
+            Cook.Hull.Reset(b3CreateHull(Pending.Positions.GetData(), Pending.Positions.Num(), B3_MAX_HULL_VERTICES));
         }
         else
         {
             b3MeshDef Def = b3MeshDef{};
-            Def.vertices      = Pending.Positions.data();
-            Def.vertexCount   = (int)Pending.Positions.size();
-            Def.indices       = Pending.Indices.data();
-            Def.triangleCount = (int)(Pending.Indices.size() / 3);
+            Def.vertices      = Pending.Positions.GetData();
+            Def.vertexCount   = Pending.Positions.Num();
+            Def.indices       = Pending.Indices.GetData();
+            Def.triangleCount = Pending.Indices.Num() / 3;
             Def.weldVertices  = true;
             Def.identifyEdges = true;
-            Cook.Mesh = b3CreateMesh(&Def, nullptr, 0);
+            Cook.Mesh.Reset(b3CreateMesh(&Def, nullptr, 0));
         }
-        Cook.bFailed = Pending.bConvex ? Cook.Hull == nullptr : Cook.Mesh == nullptr;
         Cook.bDone.store(true, std::memory_order_release);
     }
 
@@ -635,7 +645,7 @@ namespace Lumina::Physics
             }
 
             TSharedPtr<FDynamicMeshRenderData> MeshData = DM->LoadRenderData();
-            if (!MeshData || MeshData->Resource.MeshletData.IsEmpty())
+            if (!MeshData || !HasCollisionGeometry(MeshData->Resource))
             {
                 continue;
             }
@@ -660,17 +670,16 @@ namespace Lumina::Physics
             TVector<int32>  Indices;
             if (!GatherMeshResourceGeometry(MeshData->Resource, Scale, Positions, bConvex ? nullptr : &Indices))
             {
-                Cook->bFailed = true;
                 Cook->bDone.store(true, std::memory_order_release);
                 continue;
             }
 
-            Cooks.push_back({ Cook, Move(Positions), Move(Indices), bConvex });
+            Cooks.Emplace(Cook, Move(Positions), Move(Indices), bConvex);
         }
 
         if (bCookDynamicMeshesInline)
         {
-            Task::ParallelFor((uint32)Cooks.size(), [&Cooks](uint32 Index)
+            Jobs::ParallelFor((uint32)Cooks.Num(), [&Cooks](uint32 Index)
             {
                 RunDynamicMeshCook(Cooks[Index]);
             });
@@ -679,10 +688,11 @@ namespace Lumina::Physics
 
         for (FPendingDynamicMeshCook& Pending : Cooks)
         {
-            Task::AsyncTask(1, 1, [Pending = Move(Pending)](uint32, uint32, uint32) mutable
+            Jobs::Spawn(Jobs::EJobPriority::Background, [](FPendingDynamicMeshCook Cook) -> Jobs::TTask<void>
             {
-                RunDynamicMeshCook(Pending);
-            }, ETaskPriority::Background);
+                RunDynamicMeshCook(Cook);
+                co_return;
+            }, Move(Pending));
         }
     }
 }

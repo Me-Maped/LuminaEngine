@@ -1,6 +1,7 @@
 #pragma once
 
 #include "UI/Tools/EditorTool.h"
+#include "Containers/RingBuffer.h"
 #include "Containers/Vector.h"
 #include "Scripting/DotNet/DotNetHost.h"
 
@@ -25,7 +26,6 @@ namespace Lumina
         const char* GetTitlebarIcon() const override { return LE_ICON_LANGUAGE_CSHARP; }
 
         void OnInitialize() override;
-        void OnDeinitialize(const FUpdateContext& UpdateContext) override;
 
     private:
 
@@ -47,8 +47,8 @@ namespace Lumina
         float  AllocRateMBs   = 0.0f;
 
         // Rolling history for the timelines (newest at the back).
-        TVector<float> HistHeapMB;
-        TVector<float> HistAllocRateMB;
-        TVector<float> HistWorkingSetMB;
+        TRingBuffer<float> HistHeapMB;
+        TRingBuffer<float> HistAllocRateMB;
+        TRingBuffer<float> HistWorkingSetMB;
     };
 }

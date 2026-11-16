@@ -43,16 +43,16 @@ namespace Lumina
     {
         if (CStruct* SupportedType = Visualizer->GetSupportedComponentType())
         {
-            Visualizers.emplace(SupportedType, Visualizer);
+            Visualizers.TryAdd(SupportedType, Visualizer);
         }
     }
 
     CComponentVisualizer* CComponentVisualizerRegistry::GetComponentVisualizer(CStruct* Component)
     {
-        auto It = Visualizers.find(Component);
-        if (It != Visualizers.end())
+        auto It = Visualizers.Find(Component);
+        if (It != nullptr)
         {
-            return It->second;
+            return (*It);
         }
         
         return nullptr;
@@ -69,6 +69,11 @@ namespace Lumina
         FVector4 ColliderColor(bool bIsTrigger)
         {
             return bIsTrigger ? FColor::Green : FColor::Blue;
+        }
+
+        FVector3 WorldPointFromLocal(const STransformComponent& Transform, const FVector3& LocalOffset)
+        {
+            return Transform.GetWorldLocationCached() + Transform.GetWorldRotationCached() * (LocalOffset * Transform.GetWorldScaleCached());
         }
 
         struct FBoxFace
@@ -212,7 +217,7 @@ namespace Lumina
             if (Settings.AttenuationSettings != nullptr && !Settings.bOverrideAttenuation)
             {
                 const FString AssetName = Settings.AttenuationSettings->GetName().ToString();
-                Context.Label(Center + Axis * Resolved.MaxDistance, kAudioAsset, "%s", AssetName.c_str());
+                Context.Label(Center + Axis * Resolved.MaxDistance, kAudioAsset, "%s", *AssetName);
                 return;
             }
 
@@ -415,7 +420,7 @@ namespace Lumina
 
     void CComponentVisualizer_PointLight::Draw(IPrimitiveDrawInterface* PDI, ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
-        const SPointLightComponent& PointLight = Registry.Get<SPointLightComponent>(Entity);
+        const SPointLightComponent& PointLight = Registry.Get<ECS::Read<SPointLightComponent>>(Entity);
         const STransformComponent& Transform = Registry.Get<STransformComponent>(Entity);
         
         PDI->DrawSphere(Transform.GetWorldLocationCached(), PointLight.Attenuation, 
@@ -460,7 +465,7 @@ namespace Lumina
 
     void CComponentVisualizer_AreaLight::Draw(IPrimitiveDrawInterface* PDI, ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
-        const SAreaLightComponent& Light     = Registry.Get<SAreaLightComponent>(Entity);
+        const SAreaLightComponent& Light     = Registry.Get<ECS::Read<SAreaLightComponent>>(Entity);
         const STransformComponent& Transform = Registry.Get<STransformComponent>(Entity);
         const FQuat    Rotation = Transform.GetWorldRotationCached();
         const FVector3 Center   = Transform.GetWorldLocationCached();
@@ -485,7 +490,7 @@ namespace Lumina
 
     void CComponentVisualizer_SpotLight::Draw(IPrimitiveDrawInterface* PDI, ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
-        const SSpotLightComponent& SpotLight    = Registry.Get<SSpotLightComponent>(Entity);
+        const SSpotLightComponent& SpotLight    = Registry.Get<ECS::Read<SSpotLightComponent>>(Entity);
         const STransformComponent& Transform    = Registry.Get<STransformComponent>(Entity);
         FVector3 Forward                       = Transform.GetWorldRotationCached() * FViewVolume::ForwardAxis;
 
@@ -574,7 +579,7 @@ namespace Lumina
 
     void CComponentVisualizer_DirectionalLight::Draw(IPrimitiveDrawInterface* PDI, ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
-        const auto& Light       = Registry.Get<SDirectionalLightComponent>(Entity);
+        const auto& Light       = Registry.Get<ECS::Read<SDirectionalLightComponent>>(Entity);
         const auto& Transform   = Registry.Get<STransformComponent>(Entity);
         
         PDI->DrawArrow(Transform.GetWorldLocationCached(), -Light.Direction, 1.5f, FColor::Yellow, 4.0f);
@@ -591,7 +596,7 @@ namespace Lumina
         const SSphereColliderComponent& Sphere = Registry.Get<SSphereColliderComponent>(Entity);
         const STransformComponent& Transform = Registry.Get<STransformComponent>(Entity);
 
-        const FVector3 Center = Transform.GetWorldLocationCached() + Transform.GetWorldRotationCached() * (Sphere.TranslationOffset * Transform.GetWorldScaleCached());
+        const FVector3 Center = WorldPointFromLocal(Transform, Sphere.TranslationOffset);
         PDI->DrawSphere(Center, Sphere.Radius * Transform.GetWorldMaxScaleCached(), ColliderColor(Sphere.bIsTrigger), 8, 3.5f, true, 0.0f);
     }
 
@@ -601,7 +606,7 @@ namespace Lumina
         const STransformComponent& Transform = Context.Get<STransformComponent>();
 
         const float Scale = Math::Max(Transform.GetWorldMaxScaleCached(), 1e-4f);
-        const FVector3 Center = Transform.GetWorldLocationCached() + Transform.GetWorldRotationCached() * (Sphere.TranslationOffset * Transform.GetWorldScaleCached());
+        const FVector3 Center = WorldPointFromLocal(Transform, Sphere.TranslationOffset);
         const FVector3 Axis = ScreenRightAt(Context.View, Center);
 
         const FVisualizerHandleResult Result = Context.AxisHandle(0, Center + Axis * (Sphere.Radius * Scale), Axis,
@@ -632,7 +637,7 @@ namespace Lumina
         const SBoxColliderComponent& Box = Registry.Get<SBoxColliderComponent>(Entity);
         const STransformComponent& Transform = Registry.Get<STransformComponent>(Entity);
 
-        const FVector3 Center  = Transform.GetWorldLocationCached() + Transform.GetWorldRotationCached() * (Box.TranslationOffset * Transform.GetWorldScaleCached());
+        const FVector3 Center  = WorldPointFromLocal(Transform, Box.TranslationOffset);
         const FQuat    WorldRot = Transform.GetWorldRotationCached() * FQuat(Box.RotationOffset);
         PDI->DrawBox(Center, Box.HalfExtent * Transform.GetWorldScaleCached(), WorldRot, ColliderColor(Box.bIsTrigger), 3.5f, true, 0.0f);
     }
@@ -645,7 +650,7 @@ namespace Lumina
         const FQuat EntityRotation = Transform.GetWorldRotationCached();
         const FQuat LocalRotation = FQuat(Box.RotationOffset);
         const FVector3 Scale = Transform.GetWorldScaleCached();
-        const FVector3 Center = Transform.GetWorldLocationCached() + EntityRotation * (Box.TranslationOffset * Transform.GetWorldScaleCached());
+        const FVector3 Center = WorldPointFromLocal(Transform, Box.TranslationOffset);
 
         FBoxFace Faces[6];
         BuildBoxFaces(Center, EntityRotation * LocalRotation, Box.HalfExtent * Scale, Faces);
@@ -686,7 +691,7 @@ namespace Lumina
         }
 
         FBoxFace Current[6];
-        BuildBoxFaces(Transform.GetWorldLocationCached() + EntityRotation * (Box.TranslationOffset * Transform.GetWorldScaleCached()),
+        BuildBoxFaces(WorldPointFromLocal(Transform, Box.TranslationOffset),
             EntityRotation * LocalRotation, Box.HalfExtent * Scale, Current);
 
         const FBoxFace& Face = Current[SelectedFace];
@@ -762,7 +767,7 @@ namespace Lumina
         // DrawCapsule wants the two cylinder-axis endpoints (caps tangent there), Y-aligned in local space.
         const float Scale     = Transform.GetWorldMaxScaleCached();
         const FQuat WorldRot  = Transform.GetWorldRotationCached() * FQuat(Capsule.RotationOffset);
-        const FVector3 Center = Transform.GetWorldLocationCached() + Transform.GetWorldRotationCached() * (Capsule.TranslationOffset * Transform.GetWorldScaleCached());
+        const FVector3 Center = WorldPointFromLocal(Transform, Capsule.TranslationOffset);
         const FVector3 Axis   = WorldRot * FVector3(0.0f, Capsule.HalfHeight * Scale, 0.0f);
 
         PDI->DrawCapsule(Center - Axis, Center + Axis, Capsule.Radius * Scale, ColliderColor(Capsule.bIsTrigger), 12, 3.5f, true, 0.0f);
@@ -778,7 +783,7 @@ namespace Lumina
         const FQuat LocalRotation = FQuat(Capsule.RotationOffset);
         const FQuat WorldRotation = EntityRotation * LocalRotation;
 
-        const FVector3 Center = Transform.GetWorldLocationCached() + EntityRotation * (Capsule.TranslationOffset * Transform.GetWorldScaleCached());
+        const FVector3 Center = WorldPointFromLocal(Transform, Capsule.TranslationOffset);
         const FVector3 Up = WorldRotation * FVector3(0.0f, 1.0f, 0.0f);
         const FVector4 Color = ColliderColor(Capsule.bIsTrigger);
 
@@ -842,7 +847,7 @@ namespace Lumina
 
         const float Scale     = Transform.GetWorldMaxScaleCached();
         const FQuat WorldRot  = Transform.GetWorldRotationCached() * FQuat(Cyl.RotationOffset);
-        const FVector3 Center = Transform.GetWorldLocationCached() + Transform.GetWorldRotationCached() * (Cyl.TranslationOffset * Transform.GetWorldScaleCached());
+        const FVector3 Center = WorldPointFromLocal(Transform, Cyl.TranslationOffset);
         const float Radius    = Cyl.Radius * Scale;
 
         DrawWireCylinder(PDI, Center, WorldRot, Radius, Radius, Cyl.HalfHeight * Scale, ColliderColor(Cyl.bIsTrigger), 3.5f);
@@ -885,7 +890,7 @@ namespace Lumina
             return;
         }
 
-        const FVector3 WorldCOM = Transform.GetWorldLocationCached() + Transform.GetWorldRotationCached() * (Body.CenterOfMassOffset * Transform.GetWorldScaleCached());
+        const FVector3 WorldCOM = WorldPointFromLocal(Transform, Body.CenterOfMassOffset);
 
         PDI->DrawSphere(WorldCOM, 0.08f, FVector4(1.0f, 0.0f, 1.0f, 1.0f), 12, 2.0f, false, 0.0f);
         PDI->DrawLine(Transform.GetWorldLocationCached(), WorldCOM, FVector4(1.0f, 0.0f, 1.0f, 1.0f), 2.0f, false, 0.0f);
@@ -923,7 +928,7 @@ namespace Lumina
 
     void CComponentVisualizer_Decal::Draw(IPrimitiveDrawInterface* PDI, ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
-        const SDecalComponent& Decal         = Registry.Get<SDecalComponent>(Entity);
+        const SDecalComponent& Decal         = Registry.Get<ECS::Read<SDecalComponent>>(Entity);
         const STransformComponent& Transform = Registry.Get<STransformComponent>(Entity);
 
         const FVector3 Location  = Transform.GetWorldLocationCached();
@@ -994,11 +999,13 @@ namespace Lumina
 
     void CComponentVisualizer_ReflectionProbe::Draw(IPrimitiveDrawInterface* PDI, ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
-        const SReflectionProbeComponent& Probe = Registry.Get<SReflectionProbeComponent>(Entity);
+        const SReflectionProbeComponent& Probe = Registry.Get<ECS::Read<SReflectionProbeComponent>>(Entity);
         const STransformComponent& Transform   = Registry.Get<STransformComponent>(Entity);
 
         const FVector3 Location = Transform.GetWorldLocationCached();
         const FQuat    Rotation = Transform.GetWorldRotationCached();
+        const FVector3 Scale    = Transform.GetWorldScaleCached();
+        const float    MaxScale = Transform.GetWorldMaxScaleCached();
 
         // Dimmed when switched off, so a disabled probe shows where it sits without reading as active.
         const float Alpha = Probe.bEnabled ? 1.0f : 0.35f;
@@ -1016,7 +1023,7 @@ namespace Lumina
         if (Probe.Shape == EReflectionProbeShape::Sphere)
         {
             // Sphere mode ignores Y and Z, and extraction collapses them too, so the shader test matches.
-            const float Radius = Math::Max(Probe.Extent.x, 0.001f) * Transform.MaxScale();
+            const float Radius = Math::Max(Probe.Extent.x, 0.001f) * MaxScale;
             PDI->DrawSphere(Location, Radius, OuterColor, 24, 2.0f, true, 0.0f);
             if (Band > 0.01f)
             {
@@ -1025,7 +1032,7 @@ namespace Lumina
         }
         else
         {
-            const FVector3 HalfExtent = Math::Max(Probe.Extent, FVector3(0.001f)) * Transform.GetWorldScaleCached();
+            const FVector3 HalfExtent = Math::Max(Probe.Extent, FVector3(0.001f)) * Scale;
             PDI->DrawBox(Location, HalfExtent, Rotation, OuterColor, 2.0f, true, 0.0f);
             if (Band > 0.01f)
             {
@@ -1034,12 +1041,12 @@ namespace Lumina
         }
 
         // CaptureOffset can put the origin well away from the entity, so drawing it explains an offset probe.
-        const FVector3 CaptureWorld = Location + Rotation * Probe.CaptureOffset;
+        const FVector3 CaptureWorld = Location + Rotation * (Probe.CaptureOffset * Scale);
         const FVector4 CaptureColor(1.00f, 0.80f, 0.25f, Alpha);
 
         // Scaled off the volume so the marker stays readable on both a 1 m prop probe and a 50 m room.
         const float MarkerRadius = Math::Max(Math::Max(Probe.Extent.x, Probe.Extent.y), Probe.Extent.z)
-                                 * Transform.MaxScale() * 0.05f;
+                                 * MaxScale * 0.05f;
         PDI->DrawSphere(CaptureWorld, Math::Max(MarkerRadius, 0.05f), CaptureColor, 12, 2.0f, false, 0.0f);
 
         if (Math::LengthSquared(Probe.CaptureOffset) > 1e-6f)
@@ -1060,7 +1067,7 @@ namespace Lumina
 
         const float Scale     = Transform.GetWorldMaxScaleCached();
         const FQuat WorldRot  = Transform.GetWorldRotationCached() * FQuat(TC.RotationOffset);
-        const FVector3 Center = Transform.GetWorldLocationCached() + Transform.GetWorldRotationCached() * (TC.TranslationOffset * Transform.GetWorldScaleCached());
+        const FVector3 Center = WorldPointFromLocal(Transform, TC.TranslationOffset);
         const float TopR  = TC.TopRadius * Scale;
         const float BotR  = TC.BottomRadius * Scale;
         const float HalfH = TC.HalfHeight * Scale;
@@ -1084,7 +1091,7 @@ namespace Lumina
 
         const float Scale     = Transform.GetWorldMaxScaleCached();
         const FQuat WorldRot  = Transform.GetWorldRotationCached() * FQuat(TC.RotationOffset);
-        const FVector3 Center = Transform.GetWorldLocationCached() + Transform.GetWorldRotationCached() * (TC.TranslationOffset * Transform.GetWorldScaleCached());
+        const FVector3 Center = WorldPointFromLocal(Transform, TC.TranslationOffset);
 
         DrawWireCylinder(PDI, Center, WorldRot, TC.TopRadius * Scale, TC.BottomRadius * Scale, TC.HalfHeight * Scale, ColliderColor(TC.bIsTrigger), 3.5f);
     }
@@ -1263,10 +1270,10 @@ namespace Lumina
 
     void CComponentVisualizer_Spline::Draw(IPrimitiveDrawInterface* PDI, ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
-        const SSplineComponent&    Spline    = Registry.Get<SSplineComponent>(Entity);
+        const SSplineComponent&    Spline    = Registry.Get<ECS::Read<SSplineComponent>>(Entity);
         const STransformComponent& Transform = Registry.Get<STransformComponent>(Entity);
 
-        if (!Spline.bDrawDebug || Spline.Points.empty())
+        if (!Spline.bDrawDebug || Spline.Points.IsEmpty())
         {
             return;
         }
@@ -1349,7 +1356,7 @@ namespace Lumina
             Source.bSpatialized, "Edit Audio Attenuation");
 
         const FString SoundName = Source.Sound.IsValid() ? Source.Sound->GetName().ToString() : FString("No Sound");
-        LabelAudioEmitter(Context, Center, SoundName.c_str(), Source.Bus, Source.Volume, Source.bSpatialized, Source.bPlaying);
+        LabelAudioEmitter(Context, Center, *SoundName, Source.Bus, Source.Volume, Source.bSpatialized, Source.bPlaying);
     }
 
     CStruct* CComponentVisualizer_AudioVolume::GetSupportedComponentType() const
@@ -1389,7 +1396,7 @@ namespace Lumina
         const SAudioVolumeComponent& Volume = Context.Get<SAudioVolumeComponent>();
         const STransformComponent& Transform = Context.Get<STransformComponent>();
         const FString SoundName = Volume.Sound.IsValid() ? Volume.Sound->GetName().ToString() : FString("No Sound");
-        LabelAudioEmitter(Context, Transform.GetWorldLocationCached(), SoundName.c_str(), Volume.Bus, Volume.Volume * Volume.Gain, false, Volume.bPlaying);
+        LabelAudioEmitter(Context, Transform.GetWorldLocationCached(), *SoundName, Volume.Bus, Volume.Volume * Volume.Gain, false, Volume.bPlaying);
     }
 
     CStruct* CComponentVisualizer_ProceduralAudio::GetSupportedComponentType() const
@@ -1417,7 +1424,7 @@ namespace Lumina
             Source.bSpatialized, "Edit Audio Attenuation");
 
         const FFixedString Name = FormatAs<FFixedString>("Procedural {} Hz", Source.SampleRate);
-        LabelAudioEmitter(Context, Center, Name.c_str(), Source.Bus, Source.Volume, Source.bSpatialized, Source.bPlaying);
+        LabelAudioEmitter(Context, Center, *Name, Source.Bus, Source.Volume, Source.bSpatialized, Source.bPlaying);
     }
 
     CStruct* CComponentVisualizer_AudioListener::GetSupportedComponentType() const
@@ -1478,7 +1485,7 @@ namespace Lumina
 
         if (Context.BeginPanel("##SplinePoint", Anchor))
         {
-            const bool bHasPoint = PointIndex >= 0 && PointIndex < (int32)Spline.Points.size();
+            const bool bHasPoint = PointIndex >= 0 && PointIndex < Spline.Points.Num();
 
             if (bHasPoint)
             {
@@ -1490,7 +1497,7 @@ namespace Lumina
             }
 
             ImGui::SameLine();
-            ImGui::TextDisabled(LOC("of %d"), (int32)Spline.Points.size());
+            ImGui::TextDisabled("of %d", Spline.Points.Num());
             ImGui::Separator();
 
             if (ImGui::SmallButton(LOC_ICON(LE_ICON_VECTOR_POINT_PLUS, "Add")))
@@ -1498,15 +1505,15 @@ namespace Lumina
                 Context.BeginEdit("Add Spline Point");
 
                 SSplinePoint NewPoint;
-                if (!Spline.Points.empty())
+                if (!Spline.Points.IsEmpty())
                 {
                     // Continues the curve so a new point lands somewhere visible rather than on the last.
-                    const SSplinePoint& Last = Spline.Points.back();
+                    const SSplinePoint& Last = Spline.Points.Last();
                     FVector3 Direction = Last.LeaveTangent;
                     if (Math::LengthSquared(Direction) <= 1.0e-6f)
                     {
-                        Direction = (Spline.Points.size() >= 2)
-                                  ? (Last.Location - Spline.Points[Spline.Points.size() - 2].Location)
+                        Direction = (Spline.Points.Num() >= 2)
+                                  ? (Last.Location - Spline.Points[Spline.Points.Num() - 2].Location)
                                   : FVector3(0.0f, 0.0f, 1.0f);
                     }
                     if (Math::LengthSquared(Direction) <= 1.0e-6f)
@@ -1519,9 +1526,9 @@ namespace Lumina
                     NewPoint.Roll = Last.Roll;
                 }
 
-                Spline.Points.push_back(NewPoint);
+                Spline.Points.Add(NewPoint);
                 Spline.UpdateTangents();
-                Context.SelectSubElement(PackSplineHandle((int32)Spline.Points.size() - 1, ESplineHandle::Point));
+                Context.SelectSubElement(PackSplineHandle(Spline.Points.Num() - 1, ESplineHandle::Point));
 
                 Context.MarkDirty();
                 Context.EndEdit();
@@ -1534,7 +1541,7 @@ namespace Lumina
             {
                 Context.BeginEdit("Delete Spline Point");
 
-                Spline.Points.erase(Spline.Points.begin() + PointIndex);
+                Spline.Points.RemoveAt(PointIndex);
                 Spline.UpdateTangents();
                 Context.ClearSubElementSelection();
 
@@ -1627,7 +1634,7 @@ namespace Lumina
         auto ToWorld = [&](const FVector3& Local) { return FVector3(LocalToWorld * FVector4(Local, 1.0f)); };
         auto ToLocal = [&](const FVector3& World) { return FVector3(WorldToLocal * FVector4(World, 1.0f)); };
 
-        const int32 NumPoints = (int32)Spline.Points.size();
+        const int32 NumPoints = Spline.Points.Num();
 
         // A point removed from the details panel or by undo can leave the selection past the end.
         int32 Selected = Context.GetSelectedSubElement();
@@ -1746,7 +1753,7 @@ namespace Lumina
                 const int32 Segment = Math::Clamp((int32)Math::Floor(BestKey), 0, NumSegments - 1);
                 const int32 InsertAt = Segment + 1;
 
-                Spline.Points.insert(Spline.Points.begin() + InsertAt, NewPoint);
+                Spline.Points.Insert(NewPoint, InsertAt);
                 Spline.UpdateTangents();
                 Context.SelectSubElement(PackSplineHandle(InsertAt, ESplineHandle::Point));
 
@@ -1766,7 +1773,7 @@ namespace Lumina
         {
             Context.BeginEdit("Delete Spline Point");
 
-            Spline.Points.erase(Spline.Points.begin() + SelectedPoint);
+            Spline.Points.RemoveAt(SelectedPoint);
             Spline.UpdateTangents();
             Context.ClearSubElementSelection();
 

@@ -52,7 +52,7 @@ namespace Lumina
     void FDirectoryWatcher::WatchThreadFunc(const FThreadStop& Stop)
     {
         HANDLE hDir = CreateFileA(
-            Path.c_str(),
+            *Path,
             FILE_LIST_DIRECTORY,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             nullptr,
@@ -69,11 +69,13 @@ namespace Lumina
 
         constexpr DWORD BufferSize = 64 * 1024;
         TVector<BYTE> Buffer;
-        Buffer.resize(BufferSize);
+        Buffer.SetNum(BufferSize);
         
         OVERLAPPED Overlapped = {};
         Overlapped.hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
 
+        // A rename's old and new names can arrive in separate reads.
+        FString PendingRenameOldPath;
         bool bReadPending = false;
         while (!Stop.ShouldStop())
         {
@@ -85,7 +87,7 @@ namespace Lumina
                 ResetEvent(Overlapped.hEvent);
                 if (!ReadDirectoryChangesW(
                     hDir,
-                    Buffer.data(),
+                    Buffer.GetData(),
                     BufferSize,
                     bWatchRecursive ? TRUE : FALSE,
                     FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
@@ -120,20 +122,19 @@ namespace Lumina
                 continue;
             }
 
-            FILE_NOTIFY_INFORMATION* Info = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(Buffer.data());
+            FILE_NOTIFY_INFORMATION* Info = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(Buffer.GetData());
             
             while (true)
             {
                 FWString FileName(Info->FileName, Info->FileNameLength / sizeof(WCHAR));
                 FString FileNameUtf8 = WideToUtf8(FileName);
                 
-                FString FullPathStr(Path.c_str(), Path.size());
-                FullPathStr.push_back('/');
-                FullPathStr.append(FileNameUtf8);
+                FString FullPathStr(*Path, Path.Len());
+                FullPathStr.AppendChar('/');
+                FullPathStr.Append(FileNameUtf8);
                 Paths::Normalize(FullPathStr);
                 FFileEvent Event;
-                Event.Path = FullPathStr;
-                
+                Event.Path = Move(FullPathStr);
 
                 switch (Info->Action)
                 {
@@ -147,15 +148,16 @@ namespace Lumina
                         Event.Action = EFileAction::Modified;
                         break;
                     case FILE_ACTION_RENAMED_OLD_NAME:
-                        Event.Action = EFileAction::Renamed;
-                        Event.OldPath = Move(FullPathStr);
+                        PendingRenameOldPath = Move(Event.Path);
                         break;
                     case FILE_ACTION_RENAMED_NEW_NAME:
-                        Event.Action = EFileAction::Renamed;
+                        Event.Action = PendingRenameOldPath.IsEmpty() ? EFileAction::Added : EFileAction::Renamed;
+                        Event.OldPath = Move(PendingRenameOldPath);
+                        PendingRenameOldPath.Reset();
                         break;
                 }
 
-                if (Callback)
+                if (Callback && Info->Action != FILE_ACTION_RENAMED_OLD_NAME)
                 {
                     Callback(Event);
                 }
@@ -183,15 +185,15 @@ namespace Lumina
 
     FString FDirectoryWatcher::WideToUtf8(const FWString& Wide)
     {
-        if (Wide.empty())
+        if (Wide.IsEmpty())
         {
             return FString();
         }
         
-        int SizeNeeded = WideCharToMultiByte(CP_UTF8, 0, Wide.data(), (int)Wide.size(), nullptr, 0, nullptr, nullptr);
+        int SizeNeeded = WideCharToMultiByte(CP_UTF8, 0, Wide.GetData(), Wide.Len(), nullptr, 0, nullptr, nullptr);
         FString Result;
-        Result.resize(SizeNeeded);
-        WideCharToMultiByte(CP_UTF8, 0, Wide.data(), (int)Wide.size(), Result.data(), SizeNeeded, nullptr, nullptr);
+        Result.SetLen(SizeNeeded);
+        WideCharToMultiByte(CP_UTF8, 0, Wide.GetData(), Wide.Len(), Result.GetData(), SizeNeeded, nullptr, nullptr);
         
         return Result;
     }

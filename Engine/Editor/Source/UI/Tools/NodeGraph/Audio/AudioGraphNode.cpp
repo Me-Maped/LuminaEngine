@@ -75,7 +75,7 @@ namespace Lumina
             }
         }
 
-        NodePins[(uint32)ENodePinDirection::Output].clear();
+        NodePins[(uint32)ENodePinDirection::Output].Reset();
         BuildNode();
 
         if (CEdNodeGraph* Graph = GetOwningGraph())
@@ -87,12 +87,12 @@ namespace Lumina
 
     FString CAudioGraphInputNode::GetNodeTitleText() const
     {
-        return FString(ParameterName.c_str()) + LOC(" (") + ToString(Type) + LOC(")");
+        return FString(*ParameterName) + " (" + ToString(Type) + ")";
     }
 
     bool CAudioGraphInputNode::GetRenameText(FString& OutText) const
     {
-        OutText = ParameterName.c_str();
+        OutText = *ParameterName;
         return true;
     }
 
@@ -109,12 +109,12 @@ namespace Lumina
 
     FString CAudioGraphNamedOutputNode::GetNodeTitleText() const
     {
-        return FString(ParameterName.c_str()) + LOC(" (Output)");
+        return FString(*ParameterName) + " (Output)";
     }
 
     bool CAudioGraphNamedOutputNode::GetRenameText(FString& OutText) const
     {
-        OutText = ParameterName.c_str();
+        OutText = *ParameterName;
         return true;
     }
 
@@ -131,12 +131,12 @@ namespace Lumina
 
     FString CAudioGraphTriggerOutputNode::GetNodeTitleText() const
     {
-        return FString(ParameterName.c_str()) + LOC(" (Trigger Out)");
+        return FString(*ParameterName) + " (Trigger Out)";
     }
 
     bool CAudioGraphTriggerOutputNode::GetRenameText(FString& OutText) const
     {
-        OutText = ParameterName.c_str();
+        OutText = *ParameterName;
         return true;
     }
 

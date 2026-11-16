@@ -33,9 +33,12 @@ namespace Lumina
     void FDefaultSceneRenderer::PickerResolvePass(RHI::FCmdListH CL)
     {
         // Only the selection outline reads the whole image; a hover reads one cursor window, and otherwise nothing does.
-        const bool   bOutline = !RenderFrame->Extracts.SelectionBits.empty();
+        const bool   bOutline = !RenderFrame->Extracts.SelectionBits.IsEmpty();
         const uint64 Cursor   = PickerCursorPacked.load(std::memory_order_relaxed);
         const bool   bHover   = (Cursor & 1ull) != 0;
+
+        // The readback copies the window this resolve scissors to, so both read the cursor once.
+        PickerCursorThisFrame = Cursor;
 
         const uint32 SnapshotRequest = SurfaceSnapshotRequest.load(std::memory_order_acquire);
         bSurfaceSnapshotThisFrame    = bSurfaceSnapshotWanted.load(std::memory_order_acquire) && SnapshotRequest != SurfaceSnapshotServed;
@@ -56,7 +59,6 @@ namespace Lumina
             return;
         }
 
-        LUMINA_PROFILE_SECTION_COLORED("Picker Resolve", tracy::Color::SlateBlue);
         SCENE_GPU_SCOPE(CL, "Picker Resolve");
 
         const FSceneImage& PickerImg  = GetNamedImage(ENamedImage::Picker);
@@ -65,7 +67,7 @@ namespace Lumina
         const FUIntVector2 Extent    = GetNamedImage(ENamedImage::HDR).GetExtent();
 
         // With no mesh draws the VisBuffer was never written, but the outline and the later picker writers still read this image.
-        if (RenderFrame->Geometry.DrawCommands.empty())
+        if (RenderFrame->Geometry.DrawCommands.IsEmpty())
         {
             RHI::FRenderAttachment Cleared[2];
             Cleared[0].Texture = PickerImg.Texture;
@@ -107,8 +109,8 @@ namespace Lumina
         FGraphicsPipelineKey Key;
         Key.VS = VertexShader;
         Key.PS = PixelShader;
-        Key.ColorTargets.push_back({ PickerImg.Desc.Format, {} });
-        Key.ColorTargets.push_back({ FoliageImg.Desc.Format, {} });
+        Key.ColorTargets.Add({ PickerImg.Desc.Format, {} });
+        Key.ColorTargets.Add({ FoliageImg.Desc.Format, {} });
         RHI::CmdSetPipeline(CL, GetOrCreatePipeline(Key));
 
         struct FVisBufferPickerPC
@@ -151,17 +153,8 @@ namespace Lumina
 
         LUMINA_PROFILE_SECTION_COLORED("Editor Grid", tracy::Color::Gray);
 
-        // The output is past the temporal resolve, so the grid is placed with the camera's unjittered projection.
-        const FSceneGlobalData& Globals = Frame.SceneGlobalData;
-        FMatrix4 Projection = Globals.CameraData.Projection;
-        Projection[2][0] -= Globals.TemporalJitterU * 2.0f;
-        Projection[2][1] -= Globals.TemporalJitterV * 2.0f;
-        const FMatrix4 ViewProjection = Projection * Globals.CameraData.View;
-
         struct FEditorGridPC
         {
-            FMatrix4 ViewProjection;
-            FMatrix4 InverseViewProjection;
             FVector4 MinorColor;
             FVector4 MajorColor;
             FVector4 AxisXColor;
@@ -175,10 +168,8 @@ namespace Lumina
             uint32   _Pad1;
             uint32   _Pad2;
         } PC = {};
-        static_assert(sizeof(FEditorGridPC) == 224, "FEditorGridPC must match EditorGrid.slang.");
+        static_assert(sizeof(FEditorGridPC) == 96, "FEditorGridPC must match EditorGrid.slang.");
 
-        PC.ViewProjection        = ViewProjection;
-        PC.InverseViewProjection = Math::Inverse(ViewProjection);
         PC.MinorColor            = Grid.MinorColor;
         PC.MajorColor            = Grid.MajorColor;
         PC.AxisXColor            = FVector4(0.86f, 0.30f, 0.33f, 0.95f);
@@ -215,7 +206,7 @@ namespace Lumina
         FGraphicsPipelineKey Key;
         Key.VS = VertexShader;
         Key.PS = PixelShader;
-        Key.ColorTargets.push_back({ Output.Desc.Format, PremultipliedBlend });
+        Key.ColorTargets.Emplace(Output.Desc.Format, PremultipliedBlend);
         RHI::CmdSetPipeline(CL, GetOrCreatePipeline(Key));
 
         RHI::CmdDraw(CL, MakeArgs(PC), 3, 1, 0, 0);
@@ -231,7 +222,7 @@ namespace Lumina
     void FDefaultSceneRenderer::SelectionOutlinePass(RHI::FCmdListH CL)
     {
         const TVector<uint32>& SelectionBits = RenderFrame->Extracts.SelectionBits;
-        if (SelectionBits.empty() || !CurrentView->Output.IsValid())
+        if (SelectionBits.IsEmpty() || !CurrentView->Output.IsValid())
         {
             return;
         }
@@ -252,7 +243,6 @@ namespace Lumina
             return;
         }
 
-        LUMINA_PROFILE_SECTION_COLORED("Selection Outline", tracy::Color::Orange);
         SCENE_GPU_SCOPE(CL, "Selection Outline");
 
         const FSceneImage& Output = CurrentView->Output;
@@ -260,11 +250,11 @@ namespace Lumina
         constexpr float  OutlineThickness = 2.0f;
         constexpr uint32 OutlineTileSize  = 8;
         const FUIntVector2 Extent = Output.GetExtent();
-        const uint32 TilesX   = (Extent.x + OutlineTileSize - 1u) / OutlineTileSize;
-        const uint32 TilesY   = (Extent.y + OutlineTileSize - 1u) / OutlineTileSize;
+        const uint32 TilesX   = RenderUtils::GetGroupCount(Extent.x, OutlineTileSize);
+        const uint32 TilesY   = RenderUtils::GetGroupCount(Extent.y, OutlineTileSize);
         const uint32 NumTiles = TilesX * TilesY;
 
-        const RHI::TGPUSpan<uint32> SelectionSpan = RHI::CopyTransientArray(SelectionBits.data(), SelectionBits.size());
+        const RHI::TGPUSpan<uint32> SelectionSpan = RHI::CopyTransientArray(SelectionBits.GetData(), SelectionBits.Num());
 
         ReserveBuffer(CL, SelectionTileStampBuffer, (uint64)NumTiles * sizeof(uint32));
         ReserveBuffer(CL, SelectionTileListBuffer, (uint64)NumTiles * sizeof(uint32));
@@ -311,7 +301,7 @@ namespace Lumina
             TilePC.TileStamp       = SelectionTileStamp;
             TilePC.TilesX          = TilesX;
             TilePC.TilesY          = TilesY;
-            TilePC.TileReach       = ((uint32)Math::Ceil(OutlineThickness) + OutlineTileSize - 1u) / OutlineTileSize;
+            TilePC.TileReach       = RenderUtils::GetGroupCount((uint32)Math::Ceil(OutlineThickness), OutlineTileSize);
 
             // The previous frame's draw read the list and its arguments, and this frame rewrites both.
             RHI::CmdBarrier(CL, RHI::EStageFlags::AllCommands, RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::IndirectRead,
@@ -349,7 +339,7 @@ namespace Lumina
         FGraphicsPipelineKey Key;
         Key.VS = bTiled ? QuadShader : VertexShader;
         Key.PS = PixelShader;
-        Key.ColorTargets.push_back({ Output.Desc.Format, AlphaBlend });
+        Key.ColorTargets.Emplace(Output.Desc.Format, AlphaBlend);
         RHI::CmdSetPipeline(CL, GetOrCreatePipeline(Key));
 
         // Mirrors FSelectionOutlineArgs field for field, IN ORDER; OutlineColor leads for alignment.
@@ -377,16 +367,13 @@ namespace Lumina
         PC.TileList          = TileList;
         PC.OutlineColor      = FVector4(1.0f, 0.42f, 0.05f, 1.0f);
 
-        if (!PC.SelectionBits.IsEmpty())
+        if (bTiled)
         {
-            if (bTiled)
-            {
-                RHI::CmdDrawIndirect(CL, MakeArgs(PC), DrawArgs, 1u, sizeof(RHI::FDrawIndirectArguments));
-            }
-            else
-            {
-                RHI::CmdDraw(CL, MakeArgs(PC), 3, 1, 0, 0);
-            }
+            RHI::CmdDrawIndirect(CL, MakeArgs(PC), DrawArgs, 1u, sizeof(RHI::FDrawIndirectArguments));
+        }
+        else
+        {
+            RHI::CmdDraw(CL, MakeArgs(PC), 3, 1, 0, 0);
         }
 
         RHI::CmdEndRenderPass(CL);
@@ -396,7 +383,7 @@ namespace Lumina
 
     FUIntVector2 FDefaultSceneRenderer::DisplayToPickerTexel(uint32 X, uint32 Y) const
     {
-        if (SceneViews.empty())
+        if (SceneViews.IsEmpty())
         {
             return FUIntVector2(X, Y);
         }
@@ -407,21 +394,13 @@ namespace Lumina
     }
 
     #if USING(WITH_EDITOR)
+    // Only the newest landed copy answers, since an older one would report what the cursor was over before.
     const FDefaultSceneRenderer::FPickerReadbackSlot* FDefaultSceneRenderer::FindPickerReadbackSlot(FUIntVector2 Texel) const
     {
         const FPickerReadbackSlot* Best = nullptr;
         for (const FPickerReadbackSlot& Slot : PickerReadbackRing)
         {
-            if (!Slot.bPending || Slot.Readback.Gpu == 0)
-            {
-                continue;
-            }
-            if (PickerReadbackFrame - Slot.SubmittedFrame <= RHI::kFramesInFlight)
-            {
-                continue;
-            }
-            if (Texel.x < Slot.OriginX || Texel.x >= Slot.OriginX + Slot.Width ||
-                Texel.y < Slot.OriginY || Texel.y >= Slot.OriginY + Slot.Height)
+            if (!Slot.bPending || Slot.Readback.Gpu == 0 || PickerReadbackFrame - Slot.SubmittedFrame <= RHI::kFramesInFlight)
             {
                 continue;
             }
@@ -429,6 +408,12 @@ namespace Lumina
             {
                 Best = &Slot;
             }
+        }
+        if (Best == nullptr ||
+            Texel.x < Best->OriginX || Texel.x >= Best->OriginX + Best->Width ||
+            Texel.y < Best->OriginY || Texel.y >= Best->OriginY + Best->Height)
+        {
+            return nullptr;
         }
         return Best;
     }
@@ -468,7 +453,7 @@ namespace Lumina
         {
             Slot = &SurfaceSnapshot;
         }
-        if (Slot == nullptr || Slot->ImageWidth == 0 || Slot->ImageHeight == 0)
+        if (Slot == nullptr || Slot->ImageWidth == 0 || Slot->ImageHeight == 0 || !Slot->bHasDepth)
         {
             return false;
         }
@@ -488,8 +473,8 @@ namespace Lumina
         {
             const float U = ((float)(Slot->OriginX + LocalX) + 0.5f) / (float)Slot->ImageWidth;
             const float V = ((float)(Slot->OriginY + LocalY) + 0.5f) / (float)Slot->ImageHeight;
-            const FVector4 Clip = Slot->InverseViewProjection * FVector4(U * 2.0f - 1.0f, V * 2.0f - 1.0f, Depth, 1.0f);
-            return FVector3(Clip) / Clip.w;
+            const FVector4 Unprojected = Slot->InverseViewProjection * FVector4(U * 2.0f - 1.0f, V * 2.0f - 1.0f, Depth, 1.0f);
+            return FVector3(Unprojected) / Unprojected.w;
         };
 
         // Reverse Z clears to zero, so sky has no depth, and foliage and the ignored entities are read through as if absent.
@@ -670,7 +655,8 @@ namespace Lumina
 
         // The depth image shares the picker's render resolution, so the same window lines up texel for texel.
         const FSceneImage& DepthImage = GetNamedImage(ENamedImage::DepthAttachment);
-        if (DepthImage.IsValid() && DepthImage.GetSizeX() == PickerImage.GetSizeX() && DepthImage.GetSizeY() == PickerImage.GetSizeY())
+        Slot.bHasDepth = DepthImage.IsValid() && DepthImage.GetSizeX() == PickerImage.GetSizeX() && DepthImage.GetSizeY() == PickerImage.GetSizeY();
+        if (Slot.bHasDepth)
         {
             RHI::CmdCopyTextureToMemory(CL, DepthImage.Texture, SrcSlice, Slot.DepthReadback, Width);
         }
@@ -708,17 +694,19 @@ namespace Lumina
 
         if (bSurfaceSnapshotThisFrame)
         {
+            SCENE_GPU_SCOPE(CL, "Picker Readback");
             bSurfaceSnapshotThisFrame = false;
             CopyPickerRegion(CL, SurfaceSnapshot, 0, 0, PickerImage.GetSizeX(), PickerImage.GetSizeY());
         }
 
-        const uint64 Packed = PickerCursorPacked.load(std::memory_order_relaxed);
+        const uint64 Packed = PickerCursorThisFrame;
         if ((Packed & 1ull) == 0)
         {
             // The cursor is not over the viewport, so no pick can happen and the copy is skipped.
             return;
         }
 
+        SCENE_GPU_SCOPE(CL, "Picker Readback");
         const FPickerRegion Region = PickerCursorRegion(Packed, PickerImage.GetSizeX(), PickerImage.GetSizeY(), PickerRegionExtent);
         CopyPickerRegion(CL, PickerReadbackRing[PickerReadbackWriteIndex], Region.X, Region.Y, Region.Width, Region.Height);
 

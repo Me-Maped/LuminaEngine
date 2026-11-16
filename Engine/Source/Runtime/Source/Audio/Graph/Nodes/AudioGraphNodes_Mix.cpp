@@ -20,15 +20,15 @@ namespace Lumina
                 , Out(Params.AudioOut(0))
             {}
 
-            void Reset() override { Gain.Reset(); }
-
             void Execute(const FAudioGraphBlockContext& Context) override
             {
                 Gain.Begin(*GainIn, Context.NumFrames);
 
+                const float* RESTRICT InSamples = In;
+                float* RESTRICT OutSamples = Out;
                 for (uint32 Frame = 0; Frame < Context.NumFrames; ++Frame)
                 {
-                    Out[Frame] = In[Frame] * Gain.Next();
+                    OutSamples[Frame] = InSamples[Frame] * Gain.Next();
                 }
 
                 Gain.End();
@@ -56,14 +56,6 @@ namespace Lumina
                 }
             }
 
-            void Reset() override
-            {
-                for (FAudioGraphSmoothedFloat& Value : Gain)
-                {
-                    Value.Reset();
-                }
-            }
-
             void Execute(const FAudioGraphBlockContext& Context) override
             {
                 for (uint32 Channel = 0; Channel < NumChannels; ++Channel)
@@ -71,6 +63,7 @@ namespace Lumina
                     Gain[Channel].Begin(*GainIn[Channel], Context.NumFrames);
                 }
 
+                float* RESTRICT OutSamples = Out;
                 for (uint32 Frame = 0; Frame < Context.NumFrames; ++Frame)
                 {
                     float Sum = 0.0f;
@@ -78,7 +71,7 @@ namespace Lumina
                     {
                         Sum += In[Channel][Frame] * Gain[Channel].Next();
                     }
-                    Out[Frame] = Sum;
+                    OutSamples[Frame] = Sum;
                 }
 
                 for (FAudioGraphSmoothedFloat& Value : Gain)
@@ -107,8 +100,6 @@ namespace Lumina
                 , OutLeft(Params.AudioOut(0))
                 , OutRight(Params.AudioOut(1))
             {}
-
-            void Reset() override { Pan.Reset(); }
 
             void Execute(const FAudioGraphBlockContext& Context) override
             {
@@ -144,16 +135,17 @@ namespace Lumina
                 , Out(Params.AudioOut(0))
             {}
 
-            void Reset() override { Alpha.Reset(); }
-
             void Execute(const FAudioGraphBlockContext& Context) override
             {
                 Alpha.Begin(Math::Clamp(*AlphaIn, 0.0f, 1.0f), Context.NumFrames);
 
+                const float* RESTRICT ASamples = A;
+                const float* RESTRICT BSamples = B;
+                float* RESTRICT OutSamples = Out;
                 for (uint32 Frame = 0; Frame < Context.NumFrames; ++Frame)
                 {
                     const float Blend = Alpha.Next();
-                    Out[Frame] = A[Frame] * (1.0f - Blend) + B[Frame] * Blend;
+                    OutSamples[Frame] = ASamples[Frame] * (1.0f - Blend) + BSamples[Frame] * Blend;
                 }
 
                 Alpha.End();
@@ -180,20 +172,22 @@ namespace Lumina
                 , OutRight(Params.AudioOut(1))
             {}
 
-            void Reset() override { Width.Reset(); }
-
             void Execute(const FAudioGraphBlockContext& Context) override
             {
                 Width.Begin(Math::Max(*WidthIn, 0.0f), Context.NumFrames);
 
+                const float* RESTRICT LeftIn = InLeft;
+                const float* RESTRICT RightIn = InRight;
+                float* RESTRICT LeftOut = OutLeft;
+                float* RESTRICT RightOut = OutRight;
                 for (uint32 Frame = 0; Frame < Context.NumFrames; ++Frame)
                 {
                     const float Amount = Width.Next();
-                    const float Mid  = (InLeft[Frame] + InRight[Frame]) * 0.5f;
-                    const float Side = (InLeft[Frame] - InRight[Frame]) * 0.5f * Amount;
+                    const float Mid  = (LeftIn[Frame] + RightIn[Frame]) * 0.5f;
+                    const float Side = (LeftIn[Frame] - RightIn[Frame]) * 0.5f * Amount;
 
-                    OutLeft[Frame]  = Mid + Side;
-                    OutRight[Frame] = Mid - Side;
+                    LeftOut[Frame]  = Mid + Side;
+                    RightOut[Frame] = Mid - Side;
                 }
 
                 Width.End();

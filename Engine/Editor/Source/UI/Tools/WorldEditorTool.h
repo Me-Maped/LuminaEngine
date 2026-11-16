@@ -29,7 +29,7 @@ namespace Lumina
 
     DECLARE_MULTICAST_DELEGATE(FOnGamePreview);
 
-    class FWorldEditorTool : public FSceneEditorTool, public IEditorModeContext
+    class EDITOR_API FWorldEditorTool : public FSceneEditorTool, public IEditorModeContext
     {
         using Super = FSceneEditorTool;
 
@@ -48,6 +48,7 @@ namespace Lumina
         void OnSave() override;
         void SetWorld(CWorld* InWorld) override;
         bool IsUnsavedDocument() override;
+        TVector<FString> GetUnsavedItemLabels() override;
         NODISCARD bool IsAssetEditorTool() const override;
         bool ShouldGenerateThumbnailOnSave() const override { return true; }
         FName GetToolName() const override;
@@ -69,10 +70,11 @@ namespace Lumina
         void BeginModeTransaction() override { BeginTransaction(); }
         void EndModeTransaction(const char* Name) override { EndTransaction(FName(Name)); }
         void BeginModeCreationTransaction() override { BeginCreationTransaction(); }
+        void BeginModeObjectTransaction(CObject* Object, const FObjectSnapshotCommand::FSerializer& Serializer) override;
+        void RunModeObjectTransaction(const char* Name, CObject* Object, const FObjectSnapshotCommand::FSerializer& Serializer, const TFunction<void()>& Edit) override { RunObjectTransacted(FName(Name), Object, Edit, Serializer); }
         ECS::FEntity GetModeSelectionFocus() const override { return GetLastSelectedEntity(); }
         void SetModeSelection(ECS::FEntity Entity) override { SetSingleSelectedEntity(Entity); }
 
-        void OnEntityCreated(ECS::FRegistry& Registry, ECS::FEntity Entity);
         void OnEntityDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity);
         void OnEntityScriptChanged(ECS::FRegistry& Registry, ECS::FEntity Entity);
 
@@ -87,11 +89,11 @@ namespace Lumina
         void PushCreatePrefabModalForEntity(ECS::FEntity Entity);
 
         // The modal's Create button, also reached from agent tools so both take one path.
-        EDITOR_API CPrefab* CreatePrefabFromSelection(FStringView Folder, FStringView Name, FFixedString& OutError);
+        CPrefab* CreatePrefabFromSelection(FStringView Folder, FStringView Name, FFixedString& OutError);
         CPrefab* CreatePrefabFromRoots(const TVector<ECS::FEntity>& Roots, const FVector3& Pivot, FStringView Folder, FStringView Name, FFixedString& OutError);
         TVector<ECS::FEntity> GatherPrefabSelectionRoots() const;
-        EDITOR_API void ResyncPrefabInstance(ECS::FEntity InstanceRoot);
-        EDITOR_API void DetachPrefabInstance(ECS::FEntity InstanceRoot);
+        void ResyncPrefabInstance(ECS::FEntity InstanceRoot);
+        void DetachPrefabInstance(ECS::FEntity InstanceRoot);
 
         // The assign or change dropdown is always offered, Remove Script only when a script is present.
         void DrawScriptAttachMenuItems(ECS::FEntity Entity);
@@ -111,16 +113,16 @@ namespace Lumina
         void NotifyPlayInEditorStart();
         void NotifyPlayInEditorStop();
         bool HasSimulatingWorld() const { return bSimulatingWorld || bGamePreviewRunning; }
-        EDITOR_API void StopAllSimulations();
+        void StopAllSimulations();
 
         // Play in editor for a caller outside the tool; false when a session is already running.
-        EDITOR_API bool StartPlayInEditor();
+        bool StartPlayInEditor();
 
         // Players clamps to 1..MaxPlayers, and every player past the first is a client of player one.
-        EDITOR_API void SetPlayNetwork(int32 NumPlayers, ENetMode NetMode);
+        void SetPlayNetwork(int32 NumPlayers, ENetMode NetMode);
 
-        EDITOR_API bool IsPlaySessionPaused() const;
-        EDITOR_API void SetPlaySessionPaused(bool bPause);
+        bool IsPlaySessionPaused() const;
+        void SetPlaySessionPaused(bool bPause);
         NODISCARD bool IsEjectedFromPlay() const { return bEjectedFromPlay; }
         void SetEjectedFromPlay(bool bEject);
         void TickEjectState();
@@ -189,6 +191,9 @@ namespace Lumina
 
         // A drop onto a folder row files entities, reparents a folder, or spawns a dropped asset into it.
         void HandleFolderDragDrop(uint32 FolderID);
+
+        // Switches the world between one package and one file per entity, as an undo step the next save carries out.
+        void ConvertEntityStorage();
 
         void DrawWorldSettings(bool bFocused);
         void DrawSystemsPanel(bool bFocused);

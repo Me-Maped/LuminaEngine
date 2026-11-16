@@ -4,13 +4,13 @@
 #include "Core/Object/ObjectReferenceProvider.h"
 #include <imgui/imgui.h>
 #include "Events/EventProcessor.h"
-#include "nlohmann/json.hpp"
 #include "Tools/EditorToolContext.h"
 #include "Tools/EditorToolModal.h"
 #include "Tools/UI/DevelopmentToolUI.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "UI/Tools/NodeGraph/Material/MaterialCompileScheduler.h"
 #include "Particles/ParticleCompileScheduler.h"
+#include "Play/StandaloneLauncher.h"
 
 
 
@@ -58,7 +58,6 @@ namespace Lumina
         void Deinitialize(const FUpdateContext& UpdateContext) override;
 
         void OnStartFrame(const FUpdateContext& UpdateContext) override;
-        void OnUpdate(const FUpdateContext& UpdateContext) override;
         void OnEndFrame(const FUpdateContext& UpdateContext) override;
 
         /**
@@ -70,13 +69,13 @@ namespace Lumina
 
         void DestroyTool(const FUpdateContext& UpdateContext, FEditorTool* Tool);
 
+        void AddPendingTools();
+
         void PushModal(const FString& Title, ImVec2 Size, TMoveOnlyFunction<bool()> DrawFunction) override;
 
         void OpenScriptEditor(FStringView ScriptPath) override;
 
-        /** Opens a script source file in the editor chosen in CScriptEditorSettings (falls back to the OS association). */
-        // Opens the file in the script editor chosen in the editor settings, at Line when it is above zero.
-        static void OpenScriptInExternalEditor(FStringView ScriptPath, int32 Line = 0);
+        void OpenScriptInExternalEditor(FStringView ScriptPath, int32 Line) override;
 
         void OpenAssetEditor(const FGuid& AssetGUID) override;
         void OpenFileEditor(FStringView VirtualPath) override;
@@ -86,7 +85,7 @@ namespace Lumina
         FCodeWorkspaceTool* OpenCodeWorkspace();
         void BrowseToAsset(FStringView VirtualPath) override;
         bool BrowseToFolder(FStringView Folder, FStringView Search);
-        const FAssetData* GetContentBrowserSelectedAsset() const override;
+        FAssetDataPtr GetContentBrowserSelectedAsset() const override;
 
         // The one file selected in the Content Browser, asset or not, for slots that take loose files.
         NODISCARD FFixedString GetContentBrowserSelectedFilePath() const;
@@ -97,6 +96,11 @@ namespace Lumina
         template<typename T, typename... Args>
         requires std::is_base_of_v<FEditorTool, T> && std::is_constructible_v<T, Args...>
         T* CreateTool(Args&&... args);
+
+        // A tool that lives in the footer bar and docks like the console, which is also how a plugin adds one.
+        template<typename T, typename... Args>
+        requires std::is_base_of_v<FEditorTool, T> && std::is_constructible_v<T, Args...>
+        T* CreateDrawerTool(const char* Icon, const char* Label, ImGuiKeyChord Shortcut, Args&&... args);
 
         // The tool editing this asset, or null when nothing has it open.
         NODISCARD FEditorTool* FindAssetEditor(CObject* Asset) const;
@@ -142,18 +146,43 @@ namespace Lumina
         requires std::is_base_of_v<FEditorTool, T> && std::is_constructible_v<T, Args...>
         void ToggleTool(Args&&... args);
 
-        // Convenience for the Tools menu, draws a MenuItem whose check state
-        // mirrors the tool's existence and whose click toggles it.
-        template<typename T, typename... Args>
-        requires std::is_base_of_v<FEditorTool, T> && std::is_constructible_v<T, Args...>
-        void DrawToolMenuItem(const char* Label, Args&&... args);
+        // A singleton tool window the menus toggle, and OpenToolPanel opens by the label after its icon.
+        struct FToolPanel
+        {
+            const char*  Label  = nullptr;
+            uint32       TypeID = 0;
+            FEditorTool* (*Create)(FEditorUI&) = nullptr;
+        };
+
+        template<typename T>
+        requires std::is_base_of_v<FEditorTool, T> && std::is_constructible_v<T, FEditorUI*>
+        static constexpr FToolPanel MakeToolPanel(const char* Label)
+        {
+            return { Label, T::s_toolTypeID, [](FEditorUI& UI) -> FEditorTool* { return UI.CreateTool<T>(&UI); } };
+        }
+
+        // A MenuItem whose check state mirrors the panel's existence and whose click toggles it.
+        void DrawToolMenuItem(const FToolPanel& Panel);
+
+        // Opens a Tools menu debug window or plugin entry by name, focusing it when it is already open.
+        bool OpenToolPanel(FStringView Name, FString& OutError);
 
         void VerifyDirtyPackages();
 
         // Lists the packages and unsaved file editors with a checkbox each, and saves, discards or cancels the pending exit.
         void OpenUnsavedChangesDialog(TVector<CPackage*> Packages, TVector<FEditorTool*> FileTools);
 
-        FEditorTool* FindAssetToolForPackage(const CPackage* Package) const;
+        // The asset editor of the package, else the tool whose world lives in it.
+        FEditorTool* FindToolForPackage(const CPackage* Package) const;
+
+        // Dirty, or an open world whose package stays clean while its external entities wait to be written.
+        NODISCARD bool IsPackageUnsaved(const CPackage* Package) const;
+        NODISCARD TVector<CPackage*> GatherUnsavedPackages() const;
+
+        static constexpr int32 MaxListedUnsavedItems = 8;
+
+        // A count line, then up to MaxListedUnsavedItems labels, then "+N more" for the rest.
+        NODISCARD static TVector<FString> DescribeUnsavedItems(const TVector<FString>& Labels);
 
         bool SaveToolBeforeClose(FEditorTool* Tool);
 
@@ -184,6 +213,12 @@ namespace Lumina
 
         // Exits a few frames from now past the unsaved-changes prompt and any other modal, so an agent's reply goes out first.
         void QuitWithoutPrompt();
+
+        FStandaloneLauncher& GetStandaloneLauncher() { return StandaloneLauncher; }
+
+        // Empty targets the world editor; otherwise the tab name of another scene editor, such as a prefab.
+        const FString& GetSceneTargetTab() const { return SceneTargetTab; }
+        void SetSceneTargetTab(FString InTab) { SceneTargetTab = std::move(InTab); }
 
         // Re-entry guard for the dirty-packages prompt; true while the dialog is open.
         // A member (not a function-local static) so Cancel can re-arm it.
@@ -339,10 +374,18 @@ namespace Lumina
         FEditorModalManager                             ModalManager;
         TFunction<void()>                               PendingDialogAction;
 
+        char                                            NewProjectName[256] = "MyProject";
+        char                                            NewProjectPath[512] = "";
+        FString                                         NewProjectError;
+
+        FString                                         VisualStudio2022Exe;
+        FString                                         VisualStudio2026Exe;
+        FString                                         VSCodeExe;
+        FString                                         RiderExe;
+
         ImGuiX::FApplicationTitleBar                    TitleBar;
         ImGuiWindowClass                                EditorWindowClass;
 
-        FGamePreviewTool*                               GamePreviewTool = nullptr;
         FWorldEditorTool*                               WorldEditorTool = nullptr;
 
         // Tracks the game-owns-input state so the ImGui stand-down flags are reasserted while the game owns
@@ -370,6 +413,9 @@ namespace Lumina
         TVector<FEditorTool*>                           EditorTools;
         FMaterialCompileScheduler                       MaterialCompiles;
         FParticleCompileScheduler                       ParticleCompiles;
+        FStandaloneLauncher                             StandaloneLauncher;
+
+        FString                                         SceneTargetTab;
 
         TVector<FFooterDrawer>                          FooterDrawers;
         FEditorTool*                                    OpenDrawer = nullptr;   // tool whose drawer is open (nullptr = none)
@@ -470,6 +516,15 @@ namespace Lumina
         return static_cast<T*>(FinalizeNewTool(Memory::New<T>(std::forward<Args>(args)...)));
     }
 
+    template <typename T, typename ... Args>
+    requires std::is_base_of_v<FEditorTool, T> && std::is_constructible_v<T, Args...>
+    T* FEditorUI::CreateDrawerTool(const char* Icon, const char* Label, ImGuiKeyChord Shortcut, Args&&... args)
+    {
+        T* Tool = CreateTool<T>(std::forward<Args>(args)...);
+        FooterDrawers.Emplace(Tool, Icon, Label, Shortcut);
+        return Tool;
+    }
+
     template <typename T>
     requires std::is_base_of_v<FEditorTool, T>
     T* FEditorUI::FindTool() const
@@ -483,20 +538,9 @@ namespace Lumina
     {
         if (FEditorTool* Existing = FindToolByTypeID(T::s_toolTypeID))
         {
-            ToolsPendingDestroy.push(Existing);
+            ToolsPendingDestroy.Enqueue(Existing);
             return;
         }
         CreateTool<T>(std::forward<Args>(args)...);
-    }
-
-    template <typename T, typename... Args>
-    requires std::is_base_of_v<FEditorTool, T> && std::is_constructible_v<T, Args...>
-    void FEditorUI::DrawToolMenuItem(const char* Label, Args&&... args)
-    {
-        const bool bActive = IsToolActive<T>();
-        if (ImGui::MenuItem(Label, nullptr, bActive))
-        {
-            ToggleTool<T>(std::forward<Args>(args)...);
-        }
     }
 }

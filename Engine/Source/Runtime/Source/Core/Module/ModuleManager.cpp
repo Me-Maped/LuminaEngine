@@ -11,7 +11,7 @@
 #include "Platform/Filesystem/FileHelper.h"
 #include <cstring>
 #include "Log/Log.h"
-#include "nlohmann/json.hpp"
+#include "Core/Json/Json.h"
 
 
 namespace Lumina
@@ -28,20 +28,14 @@ namespace Lumina
                 return {};
             }
 
-            const nlohmann::json Manifest = nlohmann::json::parse(Json.data(), Json.data() + Json.size(), nullptr, false);
-            if (!Manifest.is_object() || !Manifest.contains("Modules") || !Manifest["Modules"].is_object())
+            FJsonValue Manifest;
+            if (!FJsonValue::Parse(Json.View(), Manifest))
             {
                 return {};
             }
 
-            const nlohmann::json& Modules = Manifest["Modules"];
-            const auto Entry = Modules.find(std::string(ModuleName.data(), ModuleName.size()));
-            if (Entry == Modules.end() || !Entry->is_string())
-            {
-                return {};
-            }
-            const std::string& BuildId = Entry->get_ref<const std::string&>();
-            return FString(BuildId.data(), BuildId.size());
+            const FJsonValue& Entry = Manifest["Modules"][ModuleName];
+            return Entry.IsString() ? FString(Entry.AsString()) : FString();
         }
 
         const FString& GetEngineBuildId()
@@ -57,48 +51,67 @@ namespace Lumina
         return Instance;
     }
 
+    bool FModuleManager::AddDLLSearchPath(const FString& Directory)
+    {
+        return DLLSearchPaths.WithLock([&](TVector<FString>& Paths)
+        {
+            if (Paths.Contains(Directory))
+            {
+                return false;
+            }
+
+            Paths.Add(Directory);
+            return true;
+        });
+    }
+
+    TVector<FString> FModuleManager::GetDLLSearchPaths() const
+    {
+        return DLLSearchPaths.WithLock([](const TVector<FString>& Paths) { return Paths; });
+    }
+
     IModuleInterface* FModuleManager::LoadModule(FStringView ModulePath)
     {
-        LastLoadError.clear();
+        LastLoadError.Reset();
 
         // VFS::FileName returns empty with no slash, so fall back to the input itself.
         FStringView FileNameView = VFS::FileName(ModulePath, true);
-        FString BareName = FileNameView.empty()
-            ? FString(ModulePath.data(), ModulePath.size())
-            : FString(FileNameView.data(), FileNameView.size());
+        FString BareName = FileNameView.IsEmpty()
+            ? FString(ModulePath.GetData(), ModulePath.Len())
+            : FString(FileNameView.GetData(), FileNameView.Len());
 
         // Covers a caller passing a bare filename with an extension rather than a full path.
         {
-            const size_t Dot = BareName.find_last_of('.');
-            if (Dot != FString::npos)
+            const int32 Dot = BareName.FindLastOf('.');
+            if (Dot != Constants::kIndexNone)
             {
-                BareName.erase(Dot);
+                BareName.LeftInline(Dot);
             }
         }
 
         const FString BinarySuffix = LUMINA_BINARY_SUFFIX;
-        if (BareName.size() > BinarySuffix.size()
-            && BareName.substr(BareName.size() - BinarySuffix.size()) == BinarySuffix)
+        if (BareName.Len() > BinarySuffix.Len()
+            && BareName.Mid(BareName.Len() - BinarySuffix.Len()) == BinarySuffix)
         {
-            BareName.erase(BareName.size() - BinarySuffix.size());
+            BareName.LeftChopInline(BinarySuffix.Len());
         }
 
         // Leaving the prefix keys the module differently from what PluginManager unloads, firing the assert.
         const FStringView LibPrefix = LUMINA_SHAREDLIB_PREFIX_NAME;
-        if (!LibPrefix.empty()
-            && BareName.size() > LibPrefix.size()
-            && BareName.substr(0, LibPrefix.size()) == FString(LibPrefix.data(), LibPrefix.size()))
+        if (!LibPrefix.IsEmpty()
+            && BareName.Len() > LibPrefix.Len()
+            && BareName.Mid(0, LibPrefix.Len()) == FString(LibPrefix.GetData(), LibPrefix.Len()))
         {
-            BareName.erase(0, LibPrefix.size());
+            BareName.RemoveAt(0, LibPrefix.Len());
         }
 
         const FName BareFName(BareName);
 
         // Reloading would strand the first handle, skip its shutdown, and run StartupModule a second time.
-        if (const auto Loaded = ModuleHashMap.find(BareFName);
-            Loaded != ModuleHashMap.end() && Loaded->second.ModuleInterface)
+        if (const auto Loaded = ModuleHashMap.Find(BareFName);
+            Loaded != nullptr && Loaded->ModuleInterface)
         {
-            return Loaded->second.ModuleInterface.get();
+            return Loaded->ModuleInterface.get();
         }
 
         // The monolithic path uses no LoadLibrary and touches no filesystem.
@@ -123,10 +136,10 @@ namespace Lumina
         }
 
         // Loading queues the module's type table, which a refusal must drop before the code it points into is freed.
-        const size_t PendingTypesSnapshot = SnapshotPendingTypes();
+        const int32 PendingTypesSnapshot = SnapshotPendingTypes();
 
-        const FString ModulePathStr(ModulePath.data(), ModulePath.size());
-        void* ModuleHandle = Platform::GetDLLHandle(UTF8_TO_TCHAR(ModulePathStr.c_str()));
+        const FString ModulePathStr(ModulePath.GetData(), ModulePath.Len());
+        void* ModuleHandle = Platform::GetDLLHandle(UTF8_TO_TCHAR(*ModulePathStr));
 
         if (!ModuleHandle)
         {
@@ -159,13 +172,13 @@ namespace Lumina
         }
 
         // An engine without a manifest was not linked by LuminaBuildTool, so it has nothing to compare against.
-        if (const FString& EngineBuildId = GetEngineBuildId(); !EngineBuildId.empty())
+        if (const FString& EngineBuildId = GetEngineBuildId(); !EngineBuildId.IsEmpty())
         {
             const FString ModuleBuildId = ReadModuleBuildId(ModulePath, BareName);
             if (ModuleBuildId != EngineBuildId)
             {
                 LastLoadError = FString("built against engine BuildId '")
-                    + (ModuleBuildId.empty() ? FString("<none>") : ModuleBuildId)
+                    + (ModuleBuildId.IsEmpty() ? FString("<none>") : ModuleBuildId)
                     + "', but the engine is '" + EngineBuildId + "'";
                 LOG_ERROR("[Module Manager] - Refusing to load '{}': {}. Rebuild the project against this engine.", ModulePath, LastLoadError);
                 RejectModule();
@@ -230,40 +243,36 @@ namespace Lumina
         ImGuiContextPtr  = InImGuiContext;
         ImPlotContextPtr = InImPlotContext;
 
-        for (auto& Pair : ModuleHashMap)
+        for (auto& [Name, Info] : ModuleHashMap)
         {
-            SyncModuleImGui(Pair.second);
+            SyncModuleImGui(Info);
         }
     }
 
     void FModuleManager::AddStaticModuleFactory(const FName& Name, ModuleInitFunc Factory)
     {
-        StaticModuleFactories.emplace_back(Name, Factory);
-    }
-
-    // Called lazily on first use, by which point the allocators and FName pool are up.
-    static void DrainStaticRegistrationsOnce(FModuleManager& Mgr)
-    {
-        static bool bDrained = false;
-        if (bDrained) return;
-        bDrained = true;
-
-        FStaticModuleRegistration* Node = FStaticModuleRegistration::Head;
-        while (Node != nullptr)
-        {
-            Mgr.AddStaticModuleFactory(FName(Node->Name), Node->Factory);
-            Node = Node->Next;
-        }
+        StaticModuleFactories.Emplace(Name, Factory);
     }
 
     ModuleInitFunc FModuleManager::FindStaticFactory(const FName& Name) const
     {
-        DrainStaticRegistrationsOnce(const_cast<FModuleManager&>(*this));
-        for (const auto& Entry : StaticModuleFactories)
+        // Drained lazily on first use, by which point the allocators and FName pool are up.
+        if (!bStaticFactoriesDrained)
         {
-            if (Entry.first == Name)
+            bStaticFactoriesDrained = true;
+
+            FStaticModuleRegistration* Node = FStaticModuleRegistration::Head;
+            while (Node != nullptr)
             {
-                return Entry.second;
+                const_cast<FModuleManager&>(*this).AddStaticModuleFactory(FName(Node->Name), Node->Factory);
+                Node = Node->Next;
+            }
+        }
+        for (const auto& [FactoryName, Factory] : StaticModuleFactories)
+        {
+            if (FactoryName == Name)
+            {
+                return Factory;
             }
         }
         return nullptr;
@@ -283,33 +292,33 @@ namespace Lumina
     bool FModuleManager::UnloadModule(FStringView ModuleName)
     {
         FName ModuleFName = FName(ModuleName);
-        auto it = ModuleHashMap.find(ModuleFName);
+        auto it = ModuleHashMap.Find(ModuleFName);
 
-        DEBUG_ASSERT(it != ModuleHashMap.end());
-        if (it == ModuleHashMap.end())
+        DEBUG_ASSERT(it != nullptr);
+        if (it == nullptr)
         {
             return false;
         }
 
-        DEBUG_ASSERT(it->second.ModuleInterface.get());
+        DEBUG_ASSERT(it->ModuleInterface.get());
 
-        if (it->second.ModuleInterface)
+        if (it->ModuleInterface)
         {
-            it->second.ModuleInterface->ShutdownModule();
+            it->ModuleInterface->ShutdownModule();
         }
 
         // Re-found, since ShutdownModule may have inserted into the registry and invalidated the iterator.
-        it = ModuleHashMap.find(ModuleFName);
-        if (it == ModuleHashMap.end())
+        it = ModuleHashMap.Find(ModuleFName);
+        if (it == nullptr)
         {
             return true;
         }
 
-        // Both must leave the node before erase frees it, or the read double-frees and jumps through a garbage handle.
-        TUniquePtr<IModuleInterface> ModuleInterface = Move(it->second.ModuleInterface);
-        void* ModulePtr = it->second.ModuleHandle;
+        // Both must leave the node before Remove frees it, or the read double-frees and jumps through a garbage handle.
+        TUniquePtr<IModuleInterface> ModuleInterface = Move(it->ModuleInterface);
+        void* ModulePtr = it->ModuleHandle;
 
-        ModuleHashMap.erase(it);
+        ModuleHashMap.Remove(ModuleFName);
 
         ModuleInterface.reset();
 
@@ -332,10 +341,7 @@ namespace Lumina
     void FModuleManager::UnloadAllModules()
     {
         TVector<FName> Keys;
-        for (const auto& Pair : ModuleHashMap)
-        {
-            Keys.push_back(Pair.first);
-        }
+        ModuleHashMap.GenerateKeyArray(Keys);
 
         for (const FName& Key : Keys)
         {
@@ -345,17 +351,17 @@ namespace Lumina
 
     FModuleInfo* FModuleManager::GetOrCreateModuleInfo(const FName& ModuleName)
     {
-        auto it = ModuleHashMap.find(ModuleName);
+        auto it = ModuleHashMap.Find(ModuleName);
 
-        if (it != ModuleHashMap.end())
+        if (it != nullptr)
         {
-            return &it->second;
+            return &(*it);
         }
 
         FModuleInfo NewInfo;
         NewInfo.ModuleName = ModuleName;
 
-        ModuleHashMap.emplace(ModuleName, Move(NewInfo));
+        ModuleHashMap.TryAdd(ModuleName, Move(NewInfo));
 
         return &ModuleHashMap[ModuleName];
     }

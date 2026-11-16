@@ -9,10 +9,12 @@
 #include "Core/Object/SubclassOf.h"
 #include "Core/UpdateContext.h"
 #include "Memory/SmartPtr.h"
+#include "TaskSystem/Fork/ForkRuntime.h"
 
 #include "World/ECS/CommandBus.h"
 #include "World/ECS/EventQueue.h"
 #include "World/ECS/Registry.h"
+#include "World/ExternalEntities/ExternalEntities.h"
 #include "World/Entity/Components/CameraComponent.h"
 #include "World/Entity/Systems/EntitySystem.h"
 #include "World/Entity/Systems/SystemContext.h"
@@ -82,8 +84,11 @@ namespace Lumina
         uint8           Stage      = 0;     // EUpdateStage
         uint8           Batch      = 0;     // Parallel batch index within the stage
         uint8           BatchSize  = 1;     // Systems running together in that batch
+        // Position in the stage's declared order, which holds whether or not the system has work this frame.
+        uint16          Order      = 0;
         bool            bExclusive = false;
         bool            bManaged   = false;
+        bool            bHasWork   = true;
     };
 
     REFLECT()
@@ -111,13 +116,28 @@ namespace Lumina
             // Row First, column Second, set when First has to finish before Second starts, directly or through other systems.
             TVector<uint8>          Precedes;
 
-            bool MustPrecede(size_t First, size_t Second) const { return Precedes[First * Systems.size() + Second] != 0; }
+            bool MustPrecede(int32 First, int32 Second) const { return Precedes[First * Systems.Num() + Second] != 0; }
         };
 
-        // Systems that may run together, as indices into an FStageSchedule.
+        // One dependency level of a stage, which the editor shows as a batch. Indices are into an FStageSchedule.
         struct FSystemBatch
         {
             TVector<uint16> Members;
+
+            // The flush-bounded segment it belongs to, so a report can show where the stage synchronizes.
+            int32           Segment = 0;
+        };
+
+        // A run of systems with no flush inside it, each starting once its own predecessors finish. Indices are into an FStageSchedule.
+        struct FSystemSegment
+        {
+            TVector<uint16>          Members;
+
+            // Per member, the members that wait on it and how many members it waits on.
+            TVector<TVector<uint16>> Successors;
+            TVector<uint16>          PredecessorCounts;
+
+            bool                     bExclusive = false;
         };
 
         // One reflected engine system as the World Editor's Systems panel lists it.
@@ -130,6 +150,8 @@ namespace Lumina
             // As declared, which a disabled system still reports.
             TVector<FName>        RunsAfter;
             TVector<FName>        RunsBefore;
+            // The declared names no system class or set answers to, so they order nothing.
+            TVector<FName>        UnknownOrder;
         };
 
         //~ Construction and the CObject contract.
@@ -159,7 +181,7 @@ namespace Lumina
         // Runs the systems of the current update stage.
         void Update(const FUpdateContext& Context);
 
-        // Steps physics on the game thread, between the DuringPhysics and PostPhysics stages.
+        // Steps physics on the game thread, between the PrePhysics and PostPhysics stages.
         void TickPhysics();
 
         // Sends the contact events the step recorded, right after it.
@@ -241,7 +263,7 @@ namespace Lumina
 
         // Whether a paused editor world still previews animation, which an asset preview may not want.
         FUNCTION()
-        void SetAnimatesWhilePaused(bool bAnimate) { bAnimatesWhilePaused = bAnimate; }
+        void SetAnimatesWhilePaused(bool bAnimate);
 
         FUNCTION()
         bool AnimatesWhilePaused() const { return bAnimatesWhilePaused; }
@@ -274,6 +296,12 @@ namespace Lumina
         // Deep copies Source and its children, returning the new root.
         FUNCTION()
         ECS::FEntity DuplicateEntity(ECS::FEntity Source);
+
+        // Gives a created or copied entity its own persistent id, only in a world that gets saved, since play spawns never are.
+        void AssignNewEntityGuid(ECS::FEntity Entity);
+
+        // Gives every entity a new persistent id, so a copy of a whole world never shares one with its source.
+        void AssignNewEntityGuids();
 
         // Destroys Entity after Seconds, where 0 never does. A second call retimes it.
         FUNCTION()
@@ -500,6 +528,8 @@ namespace Lumina
         //~ Registry, deferred commands and events.
 
         NODISCARD auto& GetEntityRegistry(this auto& Self);
+        NODISCARD ECS::FEventQueues& GetEventQueues() { return EventQueues; }
+        NODISCARD FExternalEntityChanges& GetExternalEntityChanges() { return ExternalEntityChanges; }
 
         NODISCARD auto& GetCommandBus(this auto& Self);
 
@@ -554,8 +584,11 @@ namespace Lumina
         FUNCTION()
         void SetSystemEnabled(TSubclassOf<CEntitySystem> System, bool bEnabled);
 
-        // The last frame's per-stage batches with each system's declared access, for Gameplay Insights. Main thread.
-        void GetSystemSchedule(TVector<FSystemScheduleEntry>& Out) const;
+        // The last frame's per-stage batches with declared access, then with bIncludeIdle every system that had no work. Main thread.
+        void GetSystemSchedule(TVector<FSystemScheduleEntry>& Out, bool bIncludeIdle = false) const;
+
+        // Every stage as SystemSchedule::DescribeParallelism reports it, from the last frame's work or as if every system had work.
+        FString DescribeSystemParallelism(bool bAssumeAllWork) const;
 
         //~ Subsystems, one per class per world, so a C++ and a C# one are the same thing to the world.
 
@@ -731,6 +764,16 @@ namespace Lumina
 
         void TickSystems(SSystemContext& Context);
 
+        // Runs the FixedUpdate stage 0..MaxPhysicsSteps times at 1/PhysicsHz, from this world's own accumulator.
+        void TickFixedUpdate(double FrameDeltaSeconds);
+
+        void RunScheduledSystem(const FStageSchedule& Stage, uint16 Index, SSystemContext& Context);
+        void RunSegment(const FStageSchedule& Stage, const FSystemSegment& Segment, SSystemContext& Context);
+
+        struct FSegmentRun;
+        static Jobs::TTask<void> RunSegmentRoots(FSegmentRun* Run);
+        static Jobs::TTask<void> RunSegmentMember(FSegmentRun* Run, uint16 Local);
+
         // Rebuilds the per-stage slot lists and their parallel batches from Systems.
         void RebuildSystemSchedule();
 
@@ -740,23 +783,31 @@ namespace Lumina
         // Applies a SetSystemEnabled request at the top of Update, so it never runs inside a batch.
         void ApplyPendingSystemChanges();
 
+        // Copies the settings systems read into the registry's SWorldSettingsState.
+        void SyncWorldSettingsState();
+
         // Latches whether this frame runs, from FWorldManager::BeginFrame.
         void AdvanceThrottle(double NowSeconds);
 
         //~ Registry signal handlers, connected in InitializeWorld.
 
         void OnTransformComponentConstruct(ECS::FRegistry& Registry, ECS::FEntity Entity);
+        void OnDecalComponentConstruct(ECS::FRegistry& Registry, ECS::FEntity Entity);
         void OnCSharpScriptComponentDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity);
         void OnWidgetComponentDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity);
 
         // Logs Caller when Entity has no transform, for the script-facing transform setters.
         STransformComponent* FindScriptTransform(ECS::FEntity Entity, const char* Caller);
 
+        // A world serialized before InitializeWorld still holds its entities in RegistryPending.
+        ECS::FRegistry& GetAuthoredRegistry() { return EntityRegistry.NumEntities() != 0 ? EntityRegistry : RegistryPending; }
+
         //~ Entities and the buses that record against them, in construction order.
 
         ECS::FRegistry          RegistryPending;
         ECS::FRegistry          EntityRegistry;
         ECS::FEntity            SingletonEntity;
+        FExternalEntityChanges  ExternalEntityChanges;
 
         // After the registry it records against, before the context that hands it out.
         ECS::FCommandBus        CommandBus;
@@ -780,10 +831,16 @@ namespace Lumina
         // Per stage, the dependency-ordered systems TickSystems runs.
         FStageSchedule          StageSchedules[(int32)EUpdateStage::Max];
 
-        // Which slots with work may run together, rebuilt only when that set changes between frames.
-        TVector<FSystemBatch>   SystemBatches[(int32)EUpdateStage::Max];
+        // Hashes of the stage, system pair and component of every ambiguity already warned about, so rebuilds only report new ones.
+        THashSet<uint64>        ReportedAmbiguities;
 
-        // Per slot, whether it had work when SystemBatches was built. Empty forces a rebuild.
+        // Hashes of each system and declared order name already warned about for matching no system.
+        THashSet<uint64>        ReportedUnknownOrder;
+
+        // What TickSystems runs, rebuilt only when the set of systems with work changes between frames.
+        TVector<FSystemSegment> SystemSegments[(int32)EUpdateStage::Max];
+
+        // Per slot, whether it had work when SystemSegments was built. Empty forces a rebuild.
         TVector<uint8>          SystemsWithWork[(int32)EUpdateStage::Max];
 
         // Set once the world has run its startup pass, which gates StartupPendingSystems.
@@ -818,6 +875,12 @@ namespace Lumina
         double                  RealDeltaTime = 0.0;
         double                  TimeSinceCreation = 0.0;
 
+        // Unspent frame time toward the next FixedUpdate step.
+        float                   FixedUpdateAccumulator = 0.0f;
+
+        // Advances by the fixed delta per FixedUpdate step, the Time those steps see.
+        double                  FixedUpdateTime = 0.0;
+
         // Engine clock time the world went suspended, or -1 while active, for the idle reclaim grace.
         double                  SuspendedTime = -1.0;
 
@@ -841,11 +904,31 @@ namespace Lumina
         // True when First's or Second's own declarations put First ahead of Second.
         RUNTIME_API bool DeclaresOrder(const CEntitySystem* First, const CEntitySystem* Second);
 
-        // Declared dependencies first, then shared systems ahead of exclusive ones, then the class name, so the order never depends on discovery.
+        // Declared dependencies first, then the earliest batch, the longest declared chain, shared over exclusive and the class name, so the order never depends on discovery.
         RUNTIME_API CWorld::FStageSchedule OrderStage(const TVector<CEntitySystem*>& Systems, EUpdateStage Stage);
 
-        // A system lands in the first batch after every earlier one it must follow or conflicts with, and systems without work are left out.
-        RUNTIME_API TVector<CWorld::FSystemBatch> BuildBatches(const CWorld::FStageSchedule& Stage, const TVector<uint8>& WithWork);
+        // Whether Later must wait for a flush after Earlier rather than only for Earlier to finish: a declared order, an event it sends Later, or an exclusive side.
+        RUNTIME_API bool NeedsFlushBetween(const FSystemAccess& Earlier, const FSystemAccess& Later, bool bDeclaredOrder);
+
+        // Each system with work joins the earliest segment its predecessors allow, and systems without work are left out.
+        RUNTIME_API TVector<CWorld::FSystemSegment> BuildSegments(const CWorld::FStageSchedule& Stage, const TVector<uint8>& WithWork);
+
+        // The segments as dependency levels, which is how the editor draws a stage.
+        RUNTIME_API TVector<CWorld::FSystemBatch> BuildLevels(const TVector<CWorld::FSystemSegment>& Segments);
+
+        // The batch widths, the critical path (one system per batch, since each batch waits on the one before) and each batch's members.
+        RUNTIME_API FString DescribeParallelism(const CWorld::FStageSchedule& Stage, const TVector<CWorld::FSystemSegment>& Segments, EUpdateStage StageId);
+
+        // Two shared systems of a stage that conflict on ConflictId with no declared order, so only registration order sequences them.
+        struct FAmbiguity
+        {
+            int32  First      = 0;
+            int32  Second     = 0;
+            uint32 ConflictId = 0;
+        };
+
+        // Every ambiguous pair in a stage once, First before Second; exclusive systems are skipped since they run alone anyway.
+        RUNTIME_API TVector<FAmbiguity> FindAmbiguities(const CWorld::FStageSchedule& Stage);
     }
 }
 

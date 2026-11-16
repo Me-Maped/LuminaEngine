@@ -1,11 +1,14 @@
 using System.Diagnostics;
+using System.Formats.Tar;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LuminaBuildTool.Configuration;
 using LuminaBuildTool.Core;
+using LuminaBuildTool.Execution;
 using LuminaBuildTool.Graph;
 using LuminaBuildTool.Platform;
+using LuminaBuildTool.Platform.Linux;
 using LuminaBuildTool.Rules;
 using LuminaBuildTool.Toolchain.Windows;
 
@@ -15,21 +18,26 @@ namespace LuminaBuildTool.Modes;
 public static class PackageMode
 {
     private const string LauncherTarget = "LuminaLauncher";
-    private const string LauncherFileName = "Lumina Editor.exe";
+    private const string LauncherBaseName = "Lumina Editor";
     private const string EngineTarget = "Lumina";
 
     // Must match Paths::InstalledBuildMarker, which is how the engine knows it was packaged.
     private const string InstalledBuildMarker = "Engine/InstalledBuild.json";
 
     // Build and IDE leftovers that only ever appear inside otherwise shipped folders.
-    private static readonly HashSet<string> ExcludedDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
+    internal static readonly HashSet<string> ExcludedDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "obj", "bin", ".idea", ".vs", "Intermediates", "Saved",
     };
 
     private static readonly HashSet<string> ExcludedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".csproj", ".user", ".ilk", ".exp", ".lib",
+        ".csproj", ".user", ".ilk", ".exp", ".lib", ".a", ".o",
+    };
+
+    private static readonly HashSet<string> SymbolExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".pdb", ".debug",
     };
 
     public static async Task<int> RunAsync(CommandLine Arguments, BuildDirectories Directories, CancellationToken Cancellation)
@@ -40,10 +48,7 @@ public static class PackageMode
         }
 
         BuildPlatform PlatformValue = Arguments.GetEnum("Platform", BuildPlatformRegistry.HostPlatform);
-        if (PlatformValue != BuildPlatform.Windows64)
-        {
-            throw new BuildException("Package currently produces Windows64 packages only.");
-        }
+        bool bWindows = PlatformValue == BuildPlatform.Windows64;
 
         BuildConfiguration ConfigurationValue = Arguments.GetEnum("Configuration", BuildConfiguration.Development);
         if (ConfigurationValue == BuildConfiguration.Debug)
@@ -110,12 +115,27 @@ public static class PackageMode
         }
 
         StageLauncher(Stager, new TargetAssembler(Assembly, Directories, PlatformSupport), Directories, PlatformValue, Options);
-        StageRuntimeLibraries(Stager, Directories.BinariesDirectory(PlatformValue));
+        if (bWindows)
+        {
+            StageRuntimeLibraries(Stager, Directories.BinariesDirectory(PlatformValue));
+        }
 
         Stager.CopyTree(Path.Combine(Directories.EngineRoot, "Engine", "Resources"));
         Stager.CopyTree(Path.Combine(Directories.EngineEditorDirectory, "Config"));
         Stager.CopyTree(Path.Combine(Directories.EngineEditorDirectory, "Resources"));
-        Stager.CopyTree(Path.Combine(Directories.EngineRoot, "External", "DotNet", "runtime"));
+
+        // DotNetHost resolves runtime/<rid>, and a Windows host may also hold the win-x64 runtime.
+        string DotNetRuntime = Path.Combine(Directories.EngineRoot, "External", "DotNet", "runtime");
+        string LinuxRuntime = Path.Combine(DotNetRuntime, "linux-x64");
+        if (bWindows)
+        {
+            Stager.CopyTree(DotNetRuntime);
+        }
+        else
+        {
+            Stager.CopyTree(Directory.Exists(LinuxRuntime) ? LinuxRuntime : WslBuild.SyncedDotNetRuntime(Directories.EngineRoot),
+                RelativeRoot: Path.GetRelativePath(Directories.EngineRoot, LinuxRuntime));
+        }
         StageTemplates(Stager, Directories);
 
         // Last, so a packaged README or template file replaces the source tree's version of it.
@@ -127,15 +147,23 @@ public static class PackageMode
 
         if (!Arguments.HasFlag("NoZip"))
         {
-            string ZipPath = StageDirectory + ".zip";
-            Log.Info("Compressing {0}", ZipPath);
+            string ArchivePath = StageDirectory + (bWindows ? ".zip" : ".tar.gz");
+            Log.Info("Compressing {0}", ArchivePath);
 
-            if (File.Exists(ZipPath))
+            if (File.Exists(ArchivePath))
             {
-                File.Delete(ZipPath);
+                File.Delete(ArchivePath);
             }
-            ZipFile.CreateFromDirectory(StageDirectory, ZipPath, CompressionLevel.Optimal, includeBaseDirectory: true);
-            Log.Info("Package written to {0} ({1:F1} MB).", ZipPath, new FileInfo(ZipPath).Length / (1024.0 * 1024.0));
+
+            if (bWindows)
+            {
+                ZipFile.CreateFromDirectory(StageDirectory, ArchivePath, CompressionLevel.Optimal, includeBaseDirectory: true);
+            }
+            else
+            {
+                WriteTarball(StageDirectory, ArchivePath);
+            }
+            Log.Info("Package written to {0} ({1:F1} MB).", ArchivePath, new FileInfo(ArchivePath).Length / (1024.0 * 1024.0));
         }
 
         Log.Info("Total package time: {0:F2}s.", Timer.Elapsed.TotalSeconds);
@@ -166,6 +194,38 @@ public static class PackageMode
             System.IO.File.SetAttributes(File, FileAttributes.Normal);
         }
         Directory.Delete(StageDirectory, recursive: true);
+    }
+
+    // Zip and a Windows host both lose the executable bit, so every ELF image is marked executable explicitly.
+    private static void WriteTarball(string StageDirectory, string ArchivePath)
+    {
+        const UnixFileMode Readable = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
+        const UnixFileMode Executable = Readable | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+
+        using FileStream Output = File.Create(ArchivePath);
+        using GZipStream Compressed = new(Output, CompressionLevel.Optimal);
+        using TarWriter Writer = new(Compressed, TarEntryFormat.Pax);
+
+        string BaseName = Path.GetFileName(StageDirectory);
+        foreach (string File in Directory.EnumerateFiles(StageDirectory, "*", SearchOption.AllDirectories))
+        {
+            using FileStream Data = System.IO.File.OpenRead(File);
+            string EntryName = Path.Combine(BaseName, Path.GetRelativePath(StageDirectory, File)).Replace('\\', '/');
+            Writer.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, EntryName)
+            {
+                Mode = IsElfImage(Data) ? Executable : Readable,
+                DataStream = Data,
+            });
+        }
+    }
+
+    private static bool IsElfImage(FileStream Data)
+    {
+        Span<byte> Magic = stackalloc byte[4];
+        bool bElf = Data.ReadAtLeast(Magic, Magic.Length, throwOnEndOfStream: false) == Magic.Length
+            && Magic.SequenceEqual("\u007FELF"u8);
+        Data.Position = 0;
+        return bElf;
     }
 
     private static async Task<int> BuildEverything(
@@ -266,7 +326,7 @@ public static class PackageMode
             throw new BuildException($"The launcher '{Launcher}' is missing. Build {LauncherTarget} first.");
         }
 
-        Stager.CopyFileAs(Launcher, LauncherFileName);
+        Stager.CopyFileAs(Launcher, LauncherBaseName + PlatformValue.GetExecutableExtension());
     }
 
     // The editor links the dynamic MSVC runtime, which a designer's machine may not have installed.
@@ -381,31 +441,11 @@ public static class PackageMode
 
     private static string ReadCommit(string EngineRoot)
     {
-        try
-        {
-            ProcessStartInfo Start = new("git", "rev-parse --short HEAD")
-            {
-                WorkingDirectory = EngineRoot,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+        ProcessResult? Git = ProcessRunner.RunCaptured(
+            new ProcessStartInfo("git", "rev-parse --short HEAD") { WorkingDirectory = EngineRoot },
+            30_000);
 
-            using Process? Git = Process.Start(Start);
-            if (Git is null)
-            {
-                return string.Empty;
-            }
-
-            string Output = Git.StandardOutput.ReadToEnd().Trim();
-            Git.WaitForExit();
-            return Git.ExitCode == 0 ? Output : string.Empty;
-        }
-        catch (Exception)
-        {
-            return string.Empty;
-        }
+        return Git is { bSucceeded: true } ? Git.Output.Trim() : string.Empty;
     }
 
     private sealed class PackageStager
@@ -429,9 +469,12 @@ public static class PackageMode
         public void CopyBinary(string SourcePath)
         {
             CopyFile(SourcePath);
+            if (!bIncludeSymbols)
+            {
+                return;
+            }
 
-            string Symbols = Path.ChangeExtension(SourcePath, ".pdb");
-            if (bIncludeSymbols && File.Exists(Symbols))
+            foreach (string Symbols in SymbolExtensions.Select(Extension => Path.ChangeExtension(SourcePath, Extension)).Where(File.Exists))
             {
                 CopyFile(Symbols);
             }
@@ -477,7 +520,7 @@ public static class PackageMode
                     continue;
                 }
 
-                if (!bIncludeSymbols && Path.GetExtension(File).Equals(".pdb", StringComparison.OrdinalIgnoreCase))
+                if (!bIncludeSymbols && SymbolExtensions.Contains(Path.GetExtension(File)))
                 {
                     continue;
                 }

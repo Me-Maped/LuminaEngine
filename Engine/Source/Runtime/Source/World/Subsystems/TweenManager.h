@@ -8,6 +8,7 @@
 #include "Core/Math/Math.h"
 #include "Core/Templates/LuminaTemplate.h"
 #include "World/ECS/Registry.h"
+#include "World/Entity/Systems/SystemResources.h"
 #include "World/Subsystems/TweenTypes.h"
 
 namespace Lumina
@@ -160,8 +161,8 @@ namespace Lumina
         FTweenHandle   Handle;
     };
 
-    /** Per-world tween runner, advanced once per frame from the world's tick. */
-    class RUNTIME_API FTweenManager
+    /** Per-world tween runner, advanced once per frame by CTweenSystem. */
+    class RUNTIME_API FTweenManager : public ECS::FResource
     {
     public:
 
@@ -176,7 +177,6 @@ namespace Lumina
 
         void Kill(FTweenHandle Handle);
         void Complete(FTweenHandle Handle);
-        void KillTweensForEntity(ECS::FEntity Owner);
         void Clear();
 
         NODISCARD bool IsRunning(FTweenHandle Handle) const;
@@ -255,6 +255,7 @@ namespace Lumina
 
         mutable ECS::FRegistry Registry;
         ECS::FRegistry*        WorldRegistry = nullptr;
+        TVector<ECS::FEntity>  Completed;
         uint32                 NextShakeSeed = 1;
         bool                   bTicking = false;
     };

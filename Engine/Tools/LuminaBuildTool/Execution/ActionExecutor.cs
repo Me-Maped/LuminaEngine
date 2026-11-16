@@ -15,6 +15,9 @@ public sealed class ExecutionResult
 
     public int ActionsFailed { get; set; }
 
+    // Dependents of a failed action that never reached a worker.
+    public int ActionsBlocked { get; set; }
+
     public TimeSpan Elapsed { get; set; }
 
     public bool bSucceeded => ActionsFailed == 0;
@@ -92,8 +95,6 @@ public sealed class ActionExecutor
             throw new BuildException("Every outdated action is blocked, which means the action graph has a cycle.");
         }
 
-        using CancellationTokenSource Aborted = CancellationTokenSource.CreateLinkedTokenSource(Cancellation);
-
         Channel<BuildAction> Queue = Channel.CreateUnbounded<BuildAction>(new UnboundedChannelOptions
         {
             SingleReader = false,
@@ -104,6 +105,7 @@ public sealed class ActionExecutor
         int Total = OutdatedActions.Count;
         int Started = 0;
         int Unfinished = Total;
+        bool bStopping = false;
 
         foreach (BuildAction Action in Ready)
         {
@@ -126,6 +128,7 @@ public sealed class ActionExecutor
                 {
                     // A failed dependency blocks its dependents, which stops a broken build linking against stale outputs.
                     RemainingDependencies[Dependent] = 0;
+                    Result.ActionsBlocked++;
                     RetireLocked(Dependent, bSucceeded: false);
                     continue;
                 }
@@ -155,7 +158,7 @@ public sealed class ActionExecutor
 
         async Task WorkerAsync()
         {
-            while (await Queue.Reader.WaitToReadAsync(Aborted.Token).ConfigureAwait(false))
+            while (await Queue.Reader.WaitToReadAsync(Cancellation).ConfigureAwait(false))
             {
                 while (Queue.Reader.TryRead(out BuildAction? Action))
                 {
@@ -163,39 +166,63 @@ public sealed class ActionExecutor
 
                     lock (Gate)
                     {
+                        // A completed channel still hands out its buffered actions, so stopping needs its own check.
+                        if (bStopping)
+                        {
+                            return;
+                        }
+
                         Index = ++Started;
                     }
 
-                    RefreshLatePrerequisites(Action);
+                    bool bSkipped = false;
+                    bool bSucceeded = true;
 
-                    // Inputs are final now; catches a dependency that ran but rewrote nothing.
-                    if (!ActionGraph.IsOutdated(Action, History, Dependencies, out string Reason))
+                    try
                     {
-                        Log.Verbose("Skipping {0}: still up to date", DescribeAction(Action));
+                        RefreshLatePrerequisites(Action);
 
-                        lock (Gate)
+                        // Inputs are final now; catches a dependency that ran but rewrote nothing.
+                        if (!ActionGraph.IsOutdated(Action, History, Dependencies, out string Reason))
                         {
-                            Result.ActionsSkipped++;
+                            Log.Verbose("Skipping {0}: still up to date", DescribeAction(Action));
+                            bSkipped = true;
                         }
+                        else
+                        {
+                            Log.Info("[{0}/{1}] {2}", Index, Total, DescribeAction(Action));
+                            Log.Trace("  because: {0}", Reason);
 
-                        Retire(Action, bSucceeded: true);
-                        continue;
+                            bSucceeded = await RunWithConcurrencyLimitAsync(Action, Cancellation).ConfigureAwait(false);
+                        }
                     }
-
-                    Log.Info("[{0}/{1}] {2}", Index, Total, DescribeAction(Action));
-                    Log.Trace("  because: {0}", Reason);
-
-                    bool bSucceeded = await RunWithConcurrencyLimitAsync(Action, Aborted.Token).ConfigureAwait(false);
+                    catch (OperationCanceledException) when (Cancellation.IsCancellationRequested)
+                    {
+                        // A killed tool can leave a truncated output whose old fingerprint still matches.
+                        InvalidateOutputs(Action);
+                        throw;
+                    }
+                    catch (Exception Ex)
+                    {
+                        Log.Error("{0}: {1}", DescribeAction(Action), Ex.Message);
+                        InvalidateOutputs(Action);
+                        bSucceeded = false;
+                    }
 
                     lock (Gate)
                     {
-                        if (bSucceeded)
+                        if (bSkipped)
+                        {
+                            Result.ActionsSkipped++;
+                        }
+                        else if (bSucceeded)
                         {
                             Result.ActionsExecuted++;
                         }
                         else
                         {
                             Result.ActionsFailed++;
+                            bStopping |= bStopOnFirstError;
                         }
                     }
 
@@ -204,7 +231,6 @@ public sealed class ActionExecutor
                     if (!bSucceeded && bStopOnFirstError)
                     {
                         Queue.Writer.TryComplete();
-                        return;
                     }
                 }
             }
@@ -212,14 +238,8 @@ public sealed class ActionExecutor
 
         Task[] Workers = Enumerable.Range(0, MaxParallelism).Select(_ => WorkerAsync()).ToArray();
 
-        try
-        {
-            await Task.WhenAll(Workers).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Cancellation is reported through ActionsFailed.
-        }
+        // Cancellation propagates once every worker has settled, so the caller reports it instead of success.
+        await Task.WhenAll(Workers).ConfigureAwait(false);
 
         Result.Elapsed = Timer.Elapsed;
 
@@ -280,64 +300,55 @@ public sealed class ActionExecutor
         }
 
         TimeSpan Start = Timeline.Now;
-        bool bSucceeded = await ExecuteActionAsync(Action, Cancellation).ConfigureAwait(false);
+        bool bSucceeded = false;
 
-        Timeline.Record(DescribeAction(Action), Action.Type.ToString(), Start, Timeline.Now - Start, bSucceeded);
-
-        return bSucceeded;
+        try
+        {
+            bSucceeded = await ExecuteActionAsync(Action, Cancellation).ConfigureAwait(false);
+            return bSucceeded;
+        }
+        finally
+        {
+            Timeline.Record(DescribeAction(Action), Action.Type.ToString(), Start, Timeline.Now - Start, bSucceeded);
+        }
     }
 
     private async Task<bool> ExecuteActionAsync(BuildAction Action, CancellationToken Cancellation)
     {
-        try
+        PrepareDirectories(Action);
+
+        if (Action.Operation is BuildOperation Operation)
         {
-            PrepareDirectories(Action);
-
-            if (Action.Operation is not null)
-            {
-                return ExecuteOperation(Action, Action.Operation);
-            }
-
-            WriteResponseFile(Action);
-
-            ProcessResult Process = await ProcessRunner.RunAsync(
-                Action.ToolPath,
-                Action.Arguments,
-                Action.WorkingDirectory,
-                Action.EnvironmentOverrides,
-                Cancellation).ConfigureAwait(false);
-
-            string Output = FilterToolOutput(Action, Process.Output);
-
-            if (Output.Length > 0)
-            {
-                Log.Raw(Output);
-            }
-
-            if (!Process.bSucceeded && !Action.bIgnoreExitCode)
-            {
-                Log.Error("{0} failed with exit code {1}", DescribeAction(Action), Process.ExitCode);
-                InvalidateOutputs(Action);
-                return false;
-            }
-
-            RecordSuccess(Action);
-            return true;
+            // Run off the worker so in-process work overlaps like a tool would, instead of one worker draining the queue.
+            return await Task.Run(() => ExecuteOperation(Action, Operation), Cancellation).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+
+        WriteResponseFile(Action);
+
+        ProcessResult Process = await ProcessRunner.RunAsync(
+            Action.ToolPath,
+            Action.Arguments,
+            Action.WorkingDirectory,
+            Action.EnvironmentOverrides,
+            Cancellation,
+            Action.StandardInput).ConfigureAwait(false);
+
+        string Output = FilterToolOutput(Action, Process.Output);
+
+        if (Output.Length > 0)
         {
-            throw;
+            Log.Raw(Output);
         }
-        catch (BuildException Ex)
+
+        if (!Process.bSucceeded && !Action.bIgnoreExitCode)
         {
-            Log.Error("{0}: {1}", DescribeAction(Action), Ex.Message);
+            Log.Error("{0} failed with exit code {1}", DescribeAction(Action), Process.ExitCode);
+            InvalidateOutputs(Action);
             return false;
         }
-        catch (IOException Ex)
-        {
-            Log.Error("{0}: {1}", DescribeAction(Action), Ex.Message);
-            return false;
-        }
+
+        RecordSuccess(Action);
+        return true;
     }
 
     /// <summary>Runs an action that does its work in process.</summary>
@@ -411,7 +422,7 @@ public sealed class ActionExecutor
         {
             string PrimaryOutput = Action.ProducedItems[0].Location;
 
-            History.RecordCommand(PrimaryOutput, Action.GetCommandKey());
+            History.RecordCommand(Action.HistoryKey, Action.GetCommandKey());
 
             // Headers first, since the fingerprint must see the list the compiler just reported, not the previous build's.
             if (Action.DependencyListFile is not null)
@@ -419,7 +430,7 @@ public sealed class ActionExecutor
                 Dependencies.RecordFromCompilerOutput(PrimaryOutput, Action.DependencyListFile, Action.DependencyListFormat);
             }
 
-            History.RecordInputFingerprint(PrimaryOutput, ActionGraph.ComputeInputFingerprint(Action, Dependencies));
+            History.RecordInputFingerprint(Action.HistoryKey, ActionGraph.ComputeInputFingerprint(Action, Dependencies));
         }
     }
 
@@ -431,6 +442,11 @@ public sealed class ActionExecutor
             Produced.Invalidate();
             History.Forget(Produced.Location);
             Dependencies.Forget(Produced.Location);
+        }
+
+        if (Action.ProducedItems.Count > 0)
+        {
+            History.Forget(Action.HistoryKey);
         }
     }
 
@@ -450,6 +466,12 @@ public sealed class ActionExecutor
         if (Action.WorkingDirectory.Length > 0)
         {
             PathUtils.EnsureDirectory(Action.WorkingDirectory);
+        }
+
+        // A dependency list left over from an earlier build must never be mistaken for this run's.
+        if (Action.DependencyListFile is not null && File.Exists(Action.DependencyListFile))
+        {
+            File.Delete(Action.DependencyListFile);
         }
     }
 
@@ -497,7 +519,7 @@ public sealed class ActionExecutor
     {
         return Action.Type switch
         {
-            ActionType.Compile => $"Compile {Action.ModuleName}: {Action.StatusText}",
+            ActionType.Compile or ActionType.ResourceCompile => $"Compile {Action.ModuleName}: {Action.StatusText}",
             ActionType.Link => $"Link {Action.StatusText}",
             ActionType.Archive => $"Archive {Action.StatusText}",
             ActionType.Generate => $"Generate {Action.ModuleName}: {Action.StatusText}",

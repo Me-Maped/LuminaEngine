@@ -23,14 +23,14 @@ namespace Lumina
         // "/Game/UI/Menu.rml" reads as "Menu" in "/Game/UI".
         void SplitDocumentPath(FStringView Path, FStringView& OutName, FStringView& OutFolder)
         {
-            const size_t Slash = Path.find_last_of('/');
-            OutFolder = Slash == FStringView::npos ? FStringView() : Path.substr(0, Slash);
-            OutName   = Slash == FStringView::npos ? Path : Path.substr(Slash + 1);
+            const int32 Slash = Path.FindLastOf('/');
+            OutFolder = Slash == Constants::kIndexNone ? FStringView() : Path.Mid(0, Slash);
+            OutName   = Slash == Constants::kIndexNone ? Path : Path.Mid(Slash + 1);
 
-            const size_t Dot = OutName.find_last_of('.');
-            if (Dot != FStringView::npos)
+            const int32 Dot = OutName.FindLastOf('.');
+            if (Dot != Constants::kIndexNone)
             {
-                OutName = OutName.substr(0, Dot);
+                OutName = OutName.Mid(0, Dot);
             }
         }
 
@@ -41,7 +41,7 @@ namespace Lumina
 
         void OpenInUIEditor(FStringView Path)
         {
-            if (IEditorToolContext* Tools = SessionOps::GetToolContext(); Tools != nullptr && !Path.empty())
+            if (IEditorToolContext* Tools = SessionOps::GetToolContext(); Tools != nullptr && !Path.IsEmpty())
             {
                 Tools->OpenFileEditor(Path);
             }
@@ -62,8 +62,8 @@ namespace Lumina
         }
 
         const FStringView ResolvedView = Ref->ResolvePath();
-        const FString     Resolved(ResolvedView.data(), ResolvedView.size());
-        const bool        bHasDocument = !Resolved.empty();
+        const FString     Resolved(ResolvedView.GetData(), ResolvedView.Len());
+        const bool        bHasDocument = !Resolved.IsEmpty();
         const bool        bMissing     = bHasDocument && FAssetRegistry::Get().GetTextAssetByPath(ResolvedView) == nullptr;
 
         FStringView Name, Folder;
@@ -76,7 +76,7 @@ namespace Lumina
             bWasChanged = true;
         };
 
-        FEditorUI* EditorUI = static_cast<FEditorUI*>(GEditorEngine->GetDevelopmentToolsUI());
+        FEditorUI* EditorUI = static_cast<FEditorUI*>(Global::GEditorEngine->GetDevelopmentToolsUI());
 
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
         ImGui::PushID(this);
@@ -96,7 +96,7 @@ namespace Lumina
                 FFixedString Dropped;
                 if (DragDrop::AcceptFile("rml", Dropped))
                 {
-                    const FString NewPath(Dropped.c_str(), Dropped.size());
+                    const FString NewPath(*Dropped, Dropped.Len());
                     Assign([Ref, NewPath] { Ref->SetPath(NewPath); });
                 }
                 ImGui::EndDragDropTarget();
@@ -106,14 +106,14 @@ namespace Lumina
             ImGui::SameLine();
             ImGui::BeginGroup();
 
-            const FString Preview = !bHasDocument ? FString(LOC("<None>"))
-                                  : bMissing      ? FString(LE_ICON_ALERT " ") + FString(Name.data(), Name.size())
-                                  :                 FString(Name.data(), Name.size());
+            const FString Preview = !bHasDocument ? FString("<None>")
+                                  : bMissing      ? FString(LE_ICON_ALERT " ") + FString(Name.GetData(), Name.Len())
+                                  :                 FString(Name.GetData(), Name.Len());
             const ImVec4 PreviewColor = bHasDocument && !bMissing ? ImVec4(0.6f, 0.6f, 0.6f, 1.0f) : ImVec4(1.0f, 0.19f, 0.19f, 1.0f);
 
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
             ImGui::PushStyleColor(ImGuiCol_Text, PreviewColor);
-            const bool bOpen = ImGui::BeginCombo("##Pick", Preview.c_str(), ImGuiComboFlags_HeightLarge | ImGuiComboFlags_PopupAlignLeft);
+            const bool bOpen = ImGui::BeginCombo("##Pick", *Preview, ImGuiComboFlags_HeightLarge | ImGuiComboFlags_PopupAlignLeft);
             ImGui::PopStyleColor();
             if (!bOpen)
             {
@@ -125,6 +125,10 @@ namespace Lumina
                 if (ImGui::IsWindowAppearing())
                 {
                     ImGui::SetKeyboardFocusHere();
+
+                    // Rebuilt once on popup open rather than every frame it stays open.
+                    CachedDocuments = FAssetRegistry::Get().GetTextAssetsOfKind(ETextAssetKind::RmlDocument);
+                    Algo::Sort(CachedDocuments, [](const FTextAssetDataPtr& A, const FTextAssetDataPtr& B) { return strcmp(*A->Path, *B->Path) < 0; });
                 }
                 ImGui::SetNextItemWidth(-1.0f);
                 SearchFilter.DrawWithHint("##Search", LOC("Search..."));
@@ -135,34 +139,31 @@ namespace Lumina
                 }
                 ImGui::Separator();
 
-                TVector<FTextAssetData*> Documents = FAssetRegistry::Get().GetTextAssetsOfKind(ETextAssetKind::RmlDocument);
-                Algo::Sort(Documents, [](const FTextAssetData* A, const FTextAssetData* B) { return strcmp(A->Path.c_str(), B->Path.c_str()) < 0; });
-
-                for (const FTextAssetData* Data : Documents)
+                for (const FTextAssetDataPtr& Data : CachedDocuments)
                 {
-                    if (!ImGuiX::PassSearchFilter(SearchFilter, Data->Path.c_str()))
+                    if (!ImGuiX::PassSearchFilter(SearchFilter, *Data->Path))
                     {
                         continue;
                     }
 
                     FStringView ItemName, ItemFolder;
-                    SplitDocumentPath(FStringView(Data->Path.c_str(), Data->Path.size()), ItemName, ItemFolder);
+                    SplitDocumentPath(FStringView(*Data->Path, Data->Path.Len()), ItemName, ItemFolder);
 
-                    ImGui::PushID(Data);
-                    const bool bCurrent = FStringView(Data->Path.c_str(), Data->Path.size()) == ResolvedView;
-                    const FString Label = FString(LE_ICON_VIEW_DASHBOARD_OUTLINE " ") + FString(ItemName.data(), ItemName.size());
-                    if (ImGui::Selectable(Label.c_str(), bCurrent))
+                    ImGui::PushID(Data.Get());
+                    const bool bCurrent = FStringView(*Data->Path, Data->Path.Len()) == ResolvedView;
+                    const FString Label = FString(LE_ICON_VIEW_DASHBOARD_OUTLINE " ") + FString(ItemName.GetData(), ItemName.Len());
+                    if (ImGui::Selectable(*Label, bCurrent))
                     {
-                        const FString NewPath(Data->Path.c_str(), Data->Path.size());
+                        const FString NewPath(*Data->Path, Data->Path.Len());
                         const FGuid   NewGuid = Data->Guid;
                         Assign([Ref, NewPath, NewGuid] { Ref->Set(NewPath, NewGuid); });
                     }
                     ImGui::SameLine();
-                    ImGui::TextDisabled("%.*s", (int)ItemFolder.size(), ItemFolder.data());
+                    ImGui::TextDisabled("%.*s", ItemFolder.Len(), ItemFolder.GetData());
                     ImGui::PopID();
                 }
 
-                if (Documents.empty())
+                if (CachedDocuments.IsEmpty())
                 {
                     ImGui::TextDisabled(LOC("No .rml documents in the project."));
                 }
@@ -172,48 +173,34 @@ namespace Lumina
 
             // Outside the disabled block, since this is most useful exactly when the slot is empty.
             const FFixedString Selected = EditorUI != nullptr ? EditorUI->GetContentBrowserSelectedFilePath() : FFixedString();
-            const bool bSelectionFits = IsDocumentPath(FStringView(Selected.c_str(), Selected.size()));
+            const bool bSelectionFits = IsDocumentPath(FStringView(*Selected, Selected.Len()));
 
-            ImGui::BeginDisabled(!bSelectionFits);
-            if (ImGui::Button(LE_ICON_ARROW_LEFT_CIRCLE "##UseSelected", AssetPickerFilter::kButtonSize))
+            if (AssetPickerFilter::DrawUseSelectedButton(bSelectionFits, "Select an .rml in the Content Browser to use it here."))
             {
-                const FString NewPath(Selected.c_str(), Selected.size());
+                const FString NewPath(*Selected, Selected.Len());
                 Assign([Ref, NewPath] { Ref->SetPath(NewPath); });
             }
-            ImGui::EndDisabled();
-            ImGuiX::TextTooltip("{}", bSelectionFits
-                ? LOC("Use the document selected in the Content Browser.")
-                : LOC("Select an .rml in the Content Browser to use it here."));
+
+            ImGui::SameLine();
+
+            AssetPickerFilter::DrawBrowseButton(ResolvedView);
 
             ImGui::SameLine();
 
             ImGui::BeginDisabled(!bHasDocument);
 
-            if (ImGui::Button(LE_ICON_MAGNIFY "##Browse", AssetPickerFilter::kButtonSize) && EditorUI != nullptr)
-            {
-                EditorUI->BrowseToAsset(ResolvedView);
-            }
-            ImGuiX::TextTooltip("{}", LOC("Show this document in the Content Browser."));
-
-            ImGui::SameLine();
-
             if (ImGui::Button(LE_ICON_CONTENT_COPY "##Copy", AssetPickerFilter::kButtonSize))
             {
-                ImGui::SetClipboardText(Resolved.c_str());
+                ImGui::SetClipboardText(*Resolved);
             }
             ImGuiX::TextTooltip("{}", LOC("Copy the path."));
 
             ImGui::SameLine();
 
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.25f, 0.25f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f, 0.15f, 0.15f, 1.0f));
-            if (ImGui::Button(LE_ICON_CLOSE_CIRCLE "##Clear", AssetPickerFilter::kButtonSize))
+            if (AssetPickerFilter::DrawClearButton("Clear the document."))
             {
                 Assign([Ref] { Ref->Reset(); });
             }
-            ImGui::PopStyleColor(3);
-            ImGuiX::TextTooltip("{}", LOC("Clear the document."));
 
             ImGui::EndDisabled();
             ImGui::EndGroup();

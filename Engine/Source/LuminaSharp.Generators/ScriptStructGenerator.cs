@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
+using LuminaSharp.ScriptProperties;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -12,11 +13,6 @@ namespace LuminaSharp.Generators;
 [Generator]
 public sealed class ScriptStructGenerator : IIncrementalGenerator
 {
-    private const string ReflectAttribute = "LuminaSharp.ReflectAttribute";
-    private const string ExtendsInterface = "LuminaSharp.IExtends<TBase>";
-    private const string ComponentInterface = "LuminaSharp.IComponent<TSelf>";
-    private const string RootInterface = "LuminaSharp.INativeStruct<TSelf>";
-
     private static readonly DiagnosticDescriptor NotPartial = new(
         id: "LUM0110",
         title: "Script struct must be partial",
@@ -33,49 +29,62 @@ public sealed class ScriptStructGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    private sealed record Model(string Name, SourceSpot Where, DiagnosticDescriptor? Error, string Hint = "", string Source = "", string? ReadAccess = null);
+
     public void Initialize(IncrementalGeneratorInitializationContext Context)
     {
-        IncrementalValueProvider<ImmutableArray<INamedTypeSymbol?>> Structs = Context.SyntaxProvider
+        IncrementalValueProvider<ImmutableArray<Model?>> Structs = Context.SyntaxProvider
             .CreateSyntaxProvider(
                 static (Node, _) => Node is StructDeclarationSyntax { BaseList: not null, AttributeLists.Count: > 0 },
-                static (Syntax, _) => Syntax.SemanticModel.GetDeclaredSymbol((StructDeclarationSyntax)Syntax.Node) as INamedTypeSymbol)
-            .Where(static Symbol => Symbol != null && IsNativeBackedStruct(Symbol))
+                static (Syntax, _) => Syntax.SemanticModel.GetDeclaredSymbol((StructDeclarationSyntax)Syntax.Node) is INamedTypeSymbol Symbol && IsNativeBackedStruct(Symbol) ? Describe(Symbol) : null)
+            .Where(static Struct => Struct != null)
             .Collect();
 
-        Context.RegisterSourceOutput(Structs, static (Output, Symbols) =>
+        Context.RegisterSourceOutput(Structs, static (Output, Models) =>
         {
-            foreach (INamedTypeSymbol Symbol in Symbols.Distinct(SymbolEqualityComparer.Default).Cast<INamedTypeSymbol>())
+            foreach (Model Struct in Models.Distinct().Cast<Model>().Where(Struct => Struct.Error == null))
             {
-                Emit(Output, Symbol);
+                Output.AddSource(Struct.Hint + ".ScriptStruct.g.cs", SourceText.From(Struct.Source, Encoding.UTF8));
+                if (Struct.ReadAccess != null)
+                {
+                    Output.AddSource(Struct.Hint + ".ReadAccess.g.cs", SourceText.From(Struct.ReadAccess, Encoding.UTF8));
+                }
+            }
+        });
+
+        Context.RegisterSourceOutput(Structs.Combine(Context.CompilationProvider), static (Output, Input) =>
+        {
+            foreach (Model Struct in Input.Left.Distinct().Cast<Model>().Where(Struct => Struct.Error != null))
+            {
+                Output.ReportDiagnostic(Diagnostic.Create(Struct.Error!, Struct.Where.ToLocation(Input.Right), Struct.Name));
             }
         });
     }
 
     private static bool IsNativeBackedStruct(INamedTypeSymbol Symbol)
     {
-        return Symbol.GetAttributes().Any(Data => Data.AttributeClass?.ToDisplayString() == ReflectAttribute)
-            && Symbol.AllInterfaces.Any(Interface => Interface.OriginalDefinition.ToDisplayString() is ExtendsInterface or ComponentInterface
-                || (Interface.OriginalDefinition.ToDisplayString() == RootInterface && SymbolEqualityComparer.Default.Equals(Interface.TypeArguments[0], Symbol)));
+        return ScriptPropertyClassifier.FindAttribute(Symbol, ScriptPropertyTypeNames.ReflectAttribute) != null
+            && Symbol.AllInterfaces.Any(Interface => Interface.OriginalDefinition.ToDisplayString() is ScriptPropertyTypeNames.Extends or ScriptPropertyTypeNames.Component
+                || (Interface.OriginalDefinition.ToDisplayString() == ScriptPropertyTypeNames.NativeStructRoot && SymbolEqualityComparer.Default.Equals(Interface.TypeArguments[0], Symbol)));
     }
 
-    private static void Emit(SourceProductionContext Output, INamedTypeSymbol Symbol)
+    private static Model Describe(INamedTypeSymbol Symbol)
     {
-        Location Where = Symbol.Locations.FirstOrDefault() ?? Location.None;
+        SourceSpot Where = SourceSpot.Of(Symbol);
         bool bPartial = Symbol.DeclaringSyntaxReferences.All(Reference =>
             Reference.GetSyntax() is StructDeclarationSyntax Declaration && Declaration.Modifiers.Any(SyntaxKind.PartialKeyword));
         if (!bPartial)
         {
-            Output.ReportDiagnostic(Diagnostic.Create(NotPartial, Where, Symbol.Name));
-            return;
+            return new Model(Symbol.Name, Where, NotPartial);
         }
         if (Symbol.ContainingType != null)
         {
-            Output.ReportDiagnostic(Diagnostic.Create(Nested, Where, Symbol.Name));
-            return;
+            return new Model(Symbol.Name, Where, Nested);
         }
 
         string Name = Symbol.Name;
         string Namespace = Symbol.ContainingNamespace.IsGlobalNamespace ? string.Empty : Symbol.ContainingNamespace.ToDisplayString();
+        string Hint = (Namespace.Length > 0 ? Namespace + "." : string.Empty) + Name;
         var Source = new StringBuilder();
         Source.AppendLine("// <auto-generated/>");
         Source.AppendLine("#nullable enable");
@@ -83,11 +92,10 @@ public sealed class ScriptStructGenerator : IIncrementalGenerator
         {
             Source.Append("namespace ").Append(Namespace).AppendLine(";");
         }
-        if (IsComponent(Symbol))
+        if (ScriptPropertyClassifier.IsComponent(Symbol))
         {
-            EmitComponent(Source, Name, Symbol.GetMembers("CopyFrom").IsEmpty);
-            Output.AddSource(Name + ".ScriptStruct.g.cs", SourceText.From(Source.ToString(), Encoding.UTF8));
-            return;
+            EmitComponent(Source, Symbol, Symbol.GetMembers("CopyFrom").IsEmpty);
+            return new Model(Name, Where, null, Hint, Source.ToString(), ReadAccess(Symbol));
         }
         Source.Append("partial struct ").Append(Name).Append(" : global::LuminaSharp.INativeStruct<").Append(Name).AppendLine(">");
         Source.AppendLine("{");
@@ -104,18 +112,13 @@ public sealed class ScriptStructGenerator : IIncrementalGenerator
             Source.Append("    public readonly void CopyFrom(").Append(Name).AppendLine(" Source) => global::LuminaSharp.Native.StructAssign(Handle, Source.Handle, NativeName);");
         }
         Source.AppendLine("}");
-
-        Output.AddSource(Name + ".ScriptStruct.g.cs", SourceText.From(Source.ToString(), Encoding.UTF8));
-    }
-
-    private static bool IsComponent(INamedTypeSymbol Symbol)
-    {
-        return Symbol.AllInterfaces.Any(Interface => Interface.OriginalDefinition.ToDisplayString() == ComponentInterface);
+        return new Model(Name, Where, null, Hint, Source.ToString());
     }
 
     // A component is only ever reached in place, so its own address is the storage, and the private constructor only satisfies field initializers.
-    private static void EmitComponent(StringBuilder Source, string Name, bool bEmitCopyFrom)
+    private static void EmitComponent(StringBuilder Source, INamedTypeSymbol Symbol, bool bEmitCopyFrom)
     {
+        string Name = Symbol.Name;
         Source.Append("unsafe partial struct ").AppendLine(Name);
         Source.AppendLine("{");
         Source.Append("    private ").Append(Name).AppendLine("(global::LuminaSharp.NativeRef __Unused) { }");
@@ -125,6 +128,67 @@ public sealed class ScriptStructGenerator : IIncrementalGenerator
         {
             Source.Append("    public readonly void CopyFrom(in ").Append(Name).AppendLine(" Source) => global::LuminaSharp.Native.StructAssign(Handle, Source.Handle, NativeName);");
         }
+        EmitReadOnlyView(Source, Symbol);
         Source.AppendLine("}");
+    }
+
+    // The same storage seen through ref readonly values and getters only, which Read<T> hands out; views with no read-only form are left out.
+    private static void EmitReadOnlyView(StringBuilder Source, INamedTypeSymbol Symbol)
+    {
+        string Name = Symbol.Name;
+        Source.AppendLine("    public readonly struct ReadOnly");
+        Source.AppendLine("    {");
+        Source.AppendLine("        private readonly global::LuminaSharp.NativeRef __Ref;");
+        Source.AppendLine("        public ReadOnly(global::LuminaSharp.NativeRef Ref) { __Ref = Ref; }");
+        Source.AppendLine("        public ReadOnly(nint Address) { __Ref = new global::LuminaSharp.NativeRef(Address); }");
+        Source.Append("        public static implicit operator ReadOnly(in ").Append(Name).AppendLine(" Value) => new(Value.Handle);");
+        Source.Append("        private ref ").Append(Name).Append(" Owner => ref global::System.Runtime.CompilerServices.Unsafe.AsRef<").Append(Name).AppendLine(">((void*)__Ref.Address);");
+        // A stored member is a field in the authored source and a property once the script compiler has rewritten it.
+        foreach (ISymbol Stored in Symbol.GetMembers())
+        {
+            ITypeSymbol? FieldType = Stored switch
+            {
+                IFieldSymbol { IsStatic: false, IsConst: false, IsImplicitlyDeclared: false } Field => Field.Type,
+                IPropertySymbol { IsStatic: false } Property when ScriptPropertyClassifier.FindAttribute(Property, ScriptPropertyTypeNames.PropertyAttribute) != null => Property.Type,
+                _ => null,
+            };
+            if (FieldType == null)
+            {
+                continue;
+            }
+            string Member = SyntaxFacts.GetKeywordKind(Stored.Name) != SyntaxKind.None ? "@" + Stored.Name : Stored.Name;
+            string Type = FieldType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            switch (ScriptPropertyClassifier.ClassifyMember(Stored, FieldType).Access)
+            {
+                case EScriptAccess.Blittable or EScriptAccess.Enum:
+                    Source.Append("        public ref readonly ").Append(Type).Append(' ').Append(Member).Append(" => ref Owner.").Append(Member).AppendLine(";");
+                    break;
+                case EScriptAccess.MarshalledStruct or EScriptAccess.String or EScriptAccess.AssetPath or EScriptAccess.Object or EScriptAccess.ObjectPtr:
+                    Source.Append("        public ").Append(Type).Append(' ').Append(Member).Append(" => Owner.").Append(Member).AppendLine(";");
+                    break;
+                case EScriptAccess.NativeStruct when !FieldType.GetTypeMembers("ReadOnly").IsEmpty:
+                    Source.Append("        public ").Append(Type).Append(".ReadOnly ").Append(Member).Append(" => Owner.").Append(Member).AppendLine(";");
+                    break;
+            }
+        }
+        Source.AppendLine("    }");
+    }
+
+    // Beside the generic extensions in LuminaSharp, so it is found in the same scope wherever Read<T> is.
+    private static string ReadAccess(INamedTypeSymbol Symbol)
+    {
+        string Type = Symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        string Access = Symbol.DeclaredAccessibility == Accessibility.Public ? "public" : "internal";
+        var Source = new StringBuilder();
+        Source.AppendLine("// <auto-generated/>");
+        Source.AppendLine("namespace LuminaSharp");
+        Source.AppendLine("{");
+        Source.AppendLine("    [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]");
+        Source.Append("    ").Append(Access).Append(" static class ").Append(Type.Replace("global::", string.Empty).Replace('.', '_')).AppendLine("ParamAccess");
+        Source.AppendLine("    {");
+        Source.Append("        extension(Read<").Append(Type).Append("> Term) { public ").Append(Type).AppendLine(".ReadOnly Value => new(Term.Address); }");
+        Source.AppendLine("    }");
+        Source.AppendLine("}");
+        return Source.ToString();
     }
 }

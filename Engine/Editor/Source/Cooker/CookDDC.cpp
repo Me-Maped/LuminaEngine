@@ -2,12 +2,12 @@
 
 #include "Core/Math/Hash/Hash.h"
 #include "Log/Log.h"
+#include "Memory/Memcpy.h"
 #include "Paths/Paths.h"
 #include "Platform/Filesystem/FileHelper.h"
 
 #include <atomic>
 #include <cstdio>
-#include <cstring>
 #include "Platform/Filesystem/PlatformFilesystem.h"
 
 
@@ -34,7 +34,7 @@ namespace Lumina
         FString DDCBaseDir()
         {
             FString Out = Paths::GetEngineInstallDirectory();
-            if (Out.empty()) return {};
+            if (Out.IsEmpty()) return {};
             Out += "/Intermediates/DDC";
             return Out;
         }
@@ -46,7 +46,7 @@ namespace Lumina
                 static_cast<unsigned long long>(Key.Hash));
 
             FString Out = DDCBaseDir();
-            if (Out.empty()) return {};
+            if (Out.IsEmpty()) return {};
             Out += '/';
             Out += Hex[0];
             Out += Hex[1];
@@ -58,15 +58,16 @@ namespace Lumina
     }
 
 
-    FCookInputHash FCookDDC::ComputeKey(uint64 SourceContentHash)
+    FCookInputHash FCookDDC::ComputeKey(uint64 SourceContentHash, uint32 EngineVersion)
     {
         if (SourceContentHash == 0)
         {
             return {};
         }
-        // Mix the cook stamp via a large odd multiplier so a stamp bump shuffles every key off its prior bucket (not cryptographic; source hash dominates collision risk).
+        // Mix the cook stamp and engine version via a large odd multiplier so either bump shuffles every key off its prior bucket (not cryptographic; source hash dominates collision risk).
         static constexpr uint64 kMixer = 0x9E3779B97F4A7C15ull;
-        const uint64 H = SourceContentHash ^ (static_cast<uint64>(kCookStamp) * kMixer);
+        const uint64 VersionMix = (static_cast<uint64>(kCookStamp) ^ (static_cast<uint64>(EngineVersion) << 32)) * kMixer;
+        const uint64 H = SourceContentHash ^ VersionMix;
         return { H == 0 ? 1ull : H };
     }
 
@@ -78,7 +79,7 @@ namespace Lumina
         }
 
         const FString Path = DDCPathFor(Key);
-        if (Path.empty())
+        if (Path.IsEmpty())
         {
             LOG_WARN("[CookDDC] TryGet: engine install dir not set; cache disabled");
             return false;
@@ -105,15 +106,15 @@ namespace Lumina
             GMisses.fetch_add(1, std::memory_order_relaxed);
         };
 
-        if (Raw.size() < sizeof(FDDCFileHeader))
+        if (static_cast<size_t>(Raw.Num()) < sizeof(FDDCFileHeader))
         {
             DropCorrupt("short file");
             return false;
         }
 
         FDDCFileHeader Header{};
-        std::memcpy(&Header, Raw.data(), sizeof(Header));
-        if (std::memcmp(Header.Magic, kMagic, sizeof(kMagic)) != 0)
+        Memory::Memcpy(&Header, Raw.GetData(), sizeof(Header));
+        if (Memory::Memcmp(Header.Magic, kMagic, sizeof(kMagic)) != 0)
         {
             DropCorrupt("bad magic");
             return false;
@@ -124,8 +125,8 @@ namespace Lumina
             return false;
         }
 
-        const size_t PayloadSize = Raw.size() - sizeof(FDDCFileHeader);
-        const uint8* PayloadPtr  = Raw.data() + sizeof(FDDCFileHeader);
+        const size_t PayloadSize = Raw.Num() - sizeof(FDDCFileHeader);
+        const uint8* PayloadPtr  = Raw.GetData() + sizeof(FDDCFileHeader);
         const uint64 PayloadHash = PayloadSize > 0
             ? Hash::XXHash::GetHash64(PayloadPtr, PayloadSize)
             : 0ull;
@@ -135,7 +136,8 @@ namespace Lumina
             return false;
         }
 
-        OutBytes.assign(PayloadPtr, PayloadPtr + PayloadSize);
+        OutBytes.Reset();
+        OutBytes.Append(PayloadPtr, PayloadPtr + PayloadSize);
 
         GHits.fetch_add(1, std::memory_order_relaxed);
         return true;
@@ -143,13 +145,13 @@ namespace Lumina
 
     bool FCookDDC::Put(const FCookInputHash& Key, const TVector<uint8>& Bytes)
     {
-        if (!Key.IsValid() || Bytes.empty())
+        if (!Key.IsValid() || Bytes.IsEmpty())
         {
             return false;
         }
 
         const FString Path = DDCPathFor(Key);
-        if (Path.empty())
+        if (Path.IsEmpty())
         {
             LOG_WARN("[CookDDC] Put: engine install dir not set; cache disabled");
             return false;
@@ -162,24 +164,24 @@ namespace Lumina
         }
 
         FDDCFileHeader Header{};
-        std::memcpy(Header.Magic, kMagic, sizeof(kMagic));
+        Memory::Memcpy(Header.Magic, kMagic, sizeof(kMagic));
         Header.FileVersion = kFileVersion;
-        Header.PayloadHash = Hash::XXHash::GetHash64(Bytes.data(), Bytes.size());
+        Header.PayloadHash = Hash::XXHash::GetHash64(Bytes.GetData(), Bytes.Num());
 
         TVector<uint8> Framed;
-        Framed.reserve(sizeof(Header) + Bytes.size());
-        Framed.resize(sizeof(Header));
-        std::memcpy(Framed.data(), &Header, sizeof(Header));
-        Framed.insert(Framed.end(), Bytes.begin(), Bytes.end());
+        Framed.Reserve(sizeof(Header) + Bytes.Num());
+        Framed.SetNum(sizeof(Header));
+        Memory::Memcpy(Framed.GetData(), &Header, sizeof(Header));
+        Framed.Append(Bytes);
 
         // A kill mid-write would otherwise leave a short file that TryGet accepts as truth.
-        if (!Filesystem::AtomicWriteFile(Path, TSpan<const uint8>(Framed.data(), Framed.size())))
+        if (!Filesystem::AtomicWriteFile(Path, TSpan<const uint8>(Framed.GetData(), Framed.Num())))
         {
             LOG_WARN("[CookDDC] Put: failed to publish {}", Path);
             return false;
         }
 
-        GWrittenBytes.fetch_add(Bytes.size(), std::memory_order_relaxed);
+        GWrittenBytes.fetch_add(Bytes.Num(), std::memory_order_relaxed);
         return true;
     }
 

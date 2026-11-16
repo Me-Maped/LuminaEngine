@@ -8,12 +8,16 @@
 
 #include "Containers/Function.h"
 #include "Core/Delegates/ScriptDelegate.h"
-#include "Core/Engine/Engine.h"
 #include "Core/Object/Class.h"
 #include "Core/Serialization/Archiver.h"
 #include "Memory/Memory.h"
 #include "Traits/ComponentTraits.h"
 #include "World/Entity/Systems/SystemAccess.h"
+
+namespace Lumina::ECS
+{
+    class FCommandBus;
+}
 
 namespace Lumina
 {
@@ -44,7 +48,12 @@ namespace Lumina
 
         NODISCARD ECS::FComponentTypeID GetTypeID() const { return static_cast<ECS::FComponentTypeID>(TypeId); }
 
+        // Mutable access, so a tracked pool stamps the element and treats the pointer as one a holder may cache.
         NODISCARD void* Get(ECS::FRegistry& Registry, ECS::FEntity Entity) const;
+
+        // Neither stamps nor marks the pointer cached, so a caller that writes through it records the write with Registry.MarkChangedRaw.
+        NODISCARD void* GetUnmarked(ECS::FRegistry& Registry, ECS::FEntity Entity) const;
+
         NODISCARD int32 Has(ECS::FRegistry& Registry, ECS::FEntity Entity) const;
 
         // Get or emplace, never replacing a value already there. Null for a tag.
@@ -58,6 +67,9 @@ namespace Lumina
         // Emplace or replace from Source, so hooks on the add path already see the copied value.
         void* EmplaceCopy(ECS::FRegistry& Registry, ECS::FEntity Entity, const void* Source) const;
         void* EmplaceDefault(ECS::FRegistry& Registry, ECS::FEntity Entity) const;
+
+        // A default value the next flush emplaces or replaces with, which the caller may fill until then. Null for a tag.
+        void* StageEmplace(ECS::FCommandBus& Commands, ECS::FEntity Entity) const;
 
         // Reads one value into a temporary first, so a corrupt archive cannot leave a live component half written.
         void* EmplaceSerialized(ECS::FRegistry& Registry, ECS::FEntity Entity, FArchive& Ar) const;

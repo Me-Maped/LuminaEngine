@@ -8,11 +8,12 @@
 
 namespace Lumina
 {
-    FObjectSnapshotCommand::FObjectSnapshotCommand(CObject* InObject, FName InName)
+    FObjectSnapshotCommand::FObjectSnapshotCommand(CObject* InObject, FName InName, FSerializer InSerializer)
         : Object(InObject)
         , Name(InName)
+        , Serializer(Move(InSerializer))
     {
-        Capture(InObject, Before);
+        Capture(InObject, Before, Serializer);
         CollectReferenced(InObject, Referenced);
     }
 
@@ -40,7 +41,7 @@ namespace Lumina
         {
             if (Referenced != nullptr)
             {
-                Out.push_back(Referenced);
+                Out.Add(Referenced);
             }
             return Referenced;
         });
@@ -60,7 +61,7 @@ namespace Lumina
     {
         LUMINA_PROFILE_SCOPE();
 
-        Out.clear();
+        Out.Reset();
         if (Obj == nullptr)
         {
             return;
@@ -81,7 +82,7 @@ namespace Lumina
     void FObjectSnapshotCommand::Restore(const TVector<uint8>& In) const
     {
         CObject* Obj = Object.Get();
-        if (Obj == nullptr || In.empty())
+        if (Obj == nullptr || In.IsEmpty())
         {
             return;
         }

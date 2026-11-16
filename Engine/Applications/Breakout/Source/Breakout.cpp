@@ -97,7 +97,7 @@ namespace
         {
             Sound.Post(Request);
         }
-        Pending.clear();
+        Pending.Reset();
 
         const FGameState& State = Game.GetState();
         Sound.SetMusic(true, MusicIntensityFor(State, Game.IsPaused()), State.Level, MusicMoodFor(State));
@@ -115,7 +115,7 @@ namespace
         Game.Initialize();
 
         int32 Failures = 0;
-        const int32 Rounds = GCommandLine->Has("soakrounds") ? 4 : 1;
+        const int32 Rounds = Global::GCommandLine->Has("soakrounds") ? 4 : 1;
         for (int32 Round = 0; Round < Rounds; ++Round)
         for (int32 ModeIndex = 0; ModeIndex < int32(EGameMode::Count); ++ModeIndex)
         {
@@ -208,14 +208,14 @@ namespace
                 if (State.Phase == EPhase::Playing && Frame % 450 == 300)
                 {
                     TVector<ECS::FEntity> Doomed;
-                    for (const ECS::FEntity Entity : Registry.View<FBrick>()) { Doomed.push_back(Entity); }
-                    for (const ECS::FEntity Entity : Registry.View<FBoss>()) { Doomed.push_back(Entity); }
+                    for (const ECS::FEntity Entity : Registry.View<FBrick>()) { Doomed.Add(Entity); }
+                    for (const ECS::FEntity Entity : Registry.View<FBoss>()) { Doomed.Add(Entity); }
                     for (const ECS::FEntity Entity : Doomed) { Registry.Destroy(Entity); }
                     Registry.GetSingleton<FGameState>().BricksAlive = 0;
                 }
 
                 Game.Advance(Frame % 5 == 0 ? 0.05f : 1.0f / 60.0f);
-                Game.GetPendingSounds().clear();
+                Game.GetPendingSounds().Reset();
 
             }
 
@@ -287,16 +287,16 @@ int main(int ArgC, char** ArgV)
     Memory::Initialize();
 
     FApplicationGlobalState GlobalState("Breakout Main");
-    Task::Initialize();
+    Jobs::Initialize();
 
     FCommandLine ParsedCommandLine { ArgC, ArgV };
-    GCommandLine = &ParsedCommandLine;
+    Global::GCommandLine = &ParsedCommandLine;
 
     if (ParsedCommandLine.Has("soak"))
     {
         const int Result = RunSoak();
-        Task::Shutdown();
-        GCommandLine = nullptr;
+        Jobs::Shutdown();
+        Global::GCommandLine = nullptr;
         return Result;
     }
 
@@ -305,7 +305,7 @@ int main(int ArgC, char** ArgV)
     RHI::CreateDevice(RHI::FDeviceDesc{ .bValidation = !ParsedCommandLine.Has("novalidation") });
 
     FSpirVShaderCompiler ShaderCompiler;
-    GShaderCompiler = &ShaderCompiler;
+    Global::GShaderCompiler = &ShaderCompiler;
 
     RHI::FSwapchainTarget Target;
     Target.Initialize(RHI::CreateSurface(Window.GetWindow()), Window.GetExtent());
@@ -337,11 +337,11 @@ int main(int ArgC, char** ArgV)
     Renderer.Shutdown();
     Target.Shutdown();
 
-    GShaderCompiler = nullptr;
+    Global::GShaderCompiler = nullptr;
     RHI::FreeDevice();
 
-    Task::Shutdown();
-    GCommandLine = nullptr;
+    Jobs::Shutdown();
+    Global::GCommandLine = nullptr;
 
     return bReady ? 0 : 1;
 }

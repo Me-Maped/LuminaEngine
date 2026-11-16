@@ -60,14 +60,14 @@ namespace Lumina
         ImFont* TerminalFont(bool bBold)
         {
             const ImGuiX::Font::EFont Wanted = bBold ? ImGuiX::Font::EFont::MonoBold : ImGuiX::Font::EFont::Mono;
-            ImFont* Font = ImGuiX::Font::GFonts[static_cast<int32>(Wanted)];
+            ImFont* Font = Global::GFonts[static_cast<int32>(Wanted)];
             return Font != nullptr ? Font : ImGui::GetFont();
         }
 
         FString ShortenPath(const FString& Path)
         {
-            const size_t Slash = Path.find_last_of("/\\");
-            return Slash == FString::npos ? Path : Path.substr(Slash + 1);
+            const int32 Slash = Path.FindLastOf("/\\");
+            return Slash == Constants::kIndexNone ? Path : Path.Mid(Slash + 1);
         }
     }
 
@@ -90,15 +90,15 @@ namespace Lumina
 
     void FTerminalEditorTool::OnDeinitialize(const FUpdateContext& UpdateContext)
     {
-        Tabs.clear();
+        Tabs.Reset();
     }
 
     FString FTerminalEditorTool::GetStartDirectory() const
     {
-        if (GEngine != nullptr && GEngine->HasLoadedProject())
+        if (Global::GEngine != nullptr && Global::GEngine->HasLoadedProject())
         {
-            const FStringView ProjectPath = GEngine->GetProjectPath();
-            return FString(ProjectPath.data(), ProjectPath.size());
+            const FStringView ProjectPath = Global::GEngine->GetProjectPath();
+            return FString(ProjectPath.GetData(), ProjectPath.Len());
         }
 
         return Paths::GetEngineDirectory();
@@ -114,7 +114,7 @@ namespace Lumina
             }
         }
 
-        return Tabs.empty() ? nullptr : Tabs.front().Get();
+        return Tabs.IsEmpty() ? nullptr : Tabs[0].Get();
     }
 
     FTerminalTab* FTerminalEditorTool::OpenTab(const FString& WorkingDirectory)
@@ -144,25 +144,25 @@ namespace Lumina
         ActiveTabId = Tab->Id;
 
         FTerminalTab* Raw = Tab.Get();
-        Tabs.push_back(Move(Tab));
+        Tabs.Add(Move(Tab));
 
         return Raw;
     }
 
     void FTerminalEditorTool::CloseTab(uint32 Id)
     {
-        for (size_t Index = 0; Index < Tabs.size(); ++Index)
+        for (int32 Index = 0; Index < Tabs.Num(); ++Index)
         {
             if (Tabs[Index]->Id != Id)
             {
                 continue;
             }
 
-            Tabs.erase(Tabs.begin() + static_cast<int32>(Index));
+            Tabs.RemoveAt(static_cast<int32>(Index));
 
             if (ActiveTabId == Id)
             {
-                ActiveTabId = Tabs.empty() ? 0 : Tabs.front()->Id;
+                ActiveTabId = Tabs.IsEmpty() ? 0 : Tabs[0]->Id;
             }
             return;
         }
@@ -175,6 +175,7 @@ namespace Lumina
         Tab.Screen.Initialize(Math::Max(Tab.Columns, 1), Math::Max(Tab.Rows, 1), Settings.ScrollbackLimit);
         Tab.ScrollOffset = 0;
         Tab.Selection    = FTerminalSelection();
+        Tab.Label        = ShortenPath(Tab.WorkingDirectory);
 
         Platform::FPtyLaunchParams Params;
         Params.WorkingDirectory = Tab.WorkingDirectory;
@@ -208,12 +209,12 @@ namespace Lumina
                 continue;
             }
 
-            ReadBuffer.clear();
+            ReadBuffer.Reset();
             const int32 ReadCount = Tab.Session->Read(ReadBuffer, GMaxReadBytesPerFrame);
 
             if (ReadCount > 0)
             {
-                Tab.Screen.Write(ReadBuffer.data(), static_cast<int32>(ReadBuffer.size()));
+                Tab.Screen.Write(ReadBuffer.GetData(), ReadBuffer.Num());
 
                 // New output pins the view to the bottom, matching every other terminal.
                 Tab.ScrollOffset = 0;
@@ -222,11 +223,11 @@ namespace Lumina
             FString Reply;
             while (Tab.Screen.ConsumePendingReply(Reply))
             {
-                Tab.Session->Write(reinterpret_cast<const uint8*>(Reply.data()), static_cast<int32>(Reply.size()));
+                Tab.Session->Write(reinterpret_cast<const uint8*>(Reply.GetData()), Reply.Len());
             }
 
             const FString& Title = Tab.Screen.GetTitle();
-            if (!Title.empty())
+            if (!Title.IsEmpty())
             {
                 Tab.Label = Title;
             }
@@ -238,11 +239,11 @@ namespace Lumina
                 const FString Notice = Lumina::Format("\r\n\x1b[90m[process exited with code {}]\x1b[0m\r\n",
                     Tab.Session->GetExitCode());
 
-                Tab.Screen.Write(reinterpret_cast<const uint8*>(Notice.data()), static_cast<int32>(Notice.size()));
+                Tab.Screen.Write(reinterpret_cast<const uint8*>(Notice.GetData()), Notice.Len());
             }
         }
 
-        for (size_t Index = Tabs.size(); Index > 0; --Index)
+        for (int32 Index = Tabs.Num(); Index > 0; --Index)
         {
             if (Tabs[Index - 1]->bCloseWanted)
             {
@@ -267,7 +268,7 @@ namespace Lumina
 
     void FTerminalEditorTool::SendText(FTerminalTab& Tab, FStringView Text)
     {
-        SendBytes(Tab, Text.data(), static_cast<int32>(Text.size()));
+        SendBytes(Tab, Text.GetData(), Text.Len());
     }
 
     void FTerminalEditorTool::PasteClipboard(FTerminalTab& Tab)
@@ -311,9 +312,9 @@ namespace Lumina
             Tab.Selection.AnchorRow, Tab.Selection.AnchorColumn,
             Tab.Selection.HeadRow, Tab.Selection.HeadColumn);
 
-        if (!Text.empty())
+        if (!Text.IsEmpty())
         {
-            ImGui::SetClipboardText(Text.c_str());
+            ImGui::SetClipboardText(*Text);
         }
     }
 
@@ -376,9 +377,12 @@ namespace Lumina
         }
 
         const bool bApplication = Tab.Screen.IsApplicationCursorKeys();
+        const ImGuiID KeyOwner  = ImGui::GetCurrentWindow()->ID;
         for (const FSpecialKey& Special : GSpecialKeys)
         {
-            if (ImGui::IsKeyPressed(Special.Key, true))
+            // Claimed every focused frame, so the press frame already finds the key owned and global hotkeys skip it.
+            ImGui::SetKeyOwner(Special.Key, KeyOwner);
+            if (ImGui::IsKeyPressed(Special.Key, ImGuiInputFlags_Repeat, KeyOwner))
             {
                 const char* Sequence = bApplication ? Special.Application : Special.Normal;
                 SendBytes(Tab, Sequence, static_cast<int32>(strlen(Sequence)));
@@ -446,7 +450,7 @@ namespace Lumina
             FString Encoded;
             if (bAlt)
             {
-                Encoded.push_back('\x1b');
+                Encoded.AppendChar('\x1b');
             }
 
             TerminalAppendUtf8(Encoded, static_cast<char32_t>(Character));
@@ -523,7 +527,7 @@ namespace Lumina
         if (Tab != nullptr)
         {
             ImGui::SameLine();
-            ImGui::TextColored(EditorColors::TextMuted(), LE_ICON_FOLDER " %s", Tab->WorkingDirectory.c_str());
+            ImGui::TextColored(EditorColors::TextMuted(), LE_ICON_FOLDER " %s", *Tab->WorkingDirectory);
 
             ImGui::SameLine();
             ImGui::TextColored(EditorColors::TextMuted(), "  %dx%d", Tab->Columns, Tab->Rows);
@@ -535,7 +539,7 @@ namespace Lumina
 
     void FTerminalEditorTool::DrawTabBar()
     {
-        if (Tabs.size() <= 1)
+        if (Tabs.Num() <= 1)
         {
             return;
         }
@@ -549,10 +553,10 @@ namespace Lumina
         {
             FTerminalTab& Tab = *TabPtr;
 
-            const FString Label = Lumina::Format("{}###TerminalTab{}", Tab.Label.empty() ? FString(LOC("shell")) : Tab.Label, Tab.Id);
+            const FString Label = Lumina::Format("{}###TerminalTab{}", Tab.Label.IsEmpty() ? FString("shell") : Tab.Label, Tab.Id);
 
             bool bOpen = true;
-            if (ImGui::BeginTabItem(Label.c_str(), &bOpen))
+            if (ImGui::BeginTabItem(*Label, &bOpen))
             {
                 ActiveTabId = Tab.Id;
                 ImGui::EndTabItem();
@@ -713,7 +717,7 @@ namespace Lumina
 
         Tab.Screen.SetThemeDefaults(ThemeForeground, ThemeBackground);
 
-        const ImU32 DefaultBackground = static_cast<ImU32>(Tab.Screen.GetDefaultBackgroundColor());
+        const ImU32 DefaultBackground = Tab.Screen.GetDefaultBackgroundColor();
 
         // The child owns the field it paints on, so the whole surface is cleared to its background first.
         DrawList->AddRectFilled(Origin, ImVec2(Origin.x + Available.x, Origin.y + Available.y), DefaultBackground);
@@ -731,13 +735,13 @@ namespace Lumina
             const FTerminalLine& Line = Tab.Screen.GetLine(SourceRow);
 
             const float RowY = Origin.y + static_cast<float>(ScreenRow) * CellHeight;
-            const int32 LineWidth = static_cast<int32>(Line.Cells.size());
+            const int32 LineWidth = Line.Cells.Num();
 
             int32 Column = 0;
             while (Column < Tab.Columns)
             {
                 const bool bInside = Column < LineWidth;
-                const FTerminalCell& Cell = bInside ? Line.Cells[static_cast<size_t>(Column)] : FTerminalCell();
+                const FTerminalCell& Cell = bInside ? Line.Cells[Column] : FTerminalCell();
 
                 uint32 Foreground = 0;
                 uint32 Background = 0;
@@ -749,7 +753,7 @@ namespace Lumina
                 while (Column < Tab.Columns)
                 {
                     const bool bNextInside = Column < LineWidth;
-                    const FTerminalCell& Next = bNextInside ? Line.Cells[static_cast<size_t>(Column)] : FTerminalCell();
+                    const FTerminalCell& Next = bNextInside ? Line.Cells[Column] : FTerminalCell();
 
                     if (Next.Flags != Cell.Flags || Next.Foreground != Cell.Foreground || Next.Background != Cell.Background)
                     {
@@ -774,19 +778,19 @@ namespace Lumina
                 {
                     for (int32 GlyphColumn = RunStart; GlyphColumn < Column && GlyphColumn < LineWidth; ++GlyphColumn)
                     {
-                        const char32_t Codepoint = Line.Cells[static_cast<size_t>(GlyphColumn)].Codepoint;
+                        const char32_t Codepoint = Line.Cells[GlyphColumn].Codepoint;
                         if (Codepoint == U' ' || Codepoint == 0)
                         {
                             continue;
                         }
 
-                        Glyph.clear();
+                        Glyph.Reset();
                         TerminalAppendUtf8(Glyph, Codepoint);
 
                         const float GlyphX = Origin.x + static_cast<float>(GlyphColumn) * CellWidth;
 
                         DrawList->AddText(RunFont, GlyphSize, ImVec2(GlyphX, RowY), Foreground,
-                            Glyph.c_str(), Glyph.c_str() + Glyph.size());
+                            *Glyph, *Glyph + Glyph.Len());
                     }
                 }
 
@@ -896,12 +900,12 @@ namespace Lumina
 
         // The block covers the glyph, so it is redrawn in the background color to stay readable underneath.
         const FTerminalLine& Line = Tab.Screen.GetLine(Tab.Screen.GetCursorRow());
-        if (CursorColumn >= static_cast<int32>(Line.Cells.size()))
+        if (CursorColumn >= Line.Cells.Num())
         {
             return;
         }
 
-        const FTerminalCell& Cell = Line.Cells[static_cast<size_t>(CursorColumn)];
+        const FTerminalCell& Cell = Line.Cells[CursorColumn];
         if (Cell.Codepoint == U' ' || Cell.Codepoint == 0)
         {
             return;
@@ -912,8 +916,8 @@ namespace Lumina
 
         ImFont* const Font = TerminalFont(Cell.HasFlag(ETerminalCellFlag::Bold));
 
-        DrawList->AddText(Font, GlyphSize, Min, static_cast<ImU32>(Tab.Screen.GetDefaultBackgroundColor()),
-            Glyph.c_str(), Glyph.c_str() + Glyph.size());
+        DrawList->AddText(Font, GlyphSize, Min, Tab.Screen.GetDefaultBackgroundColor(),
+            *Glyph, *Glyph + Glyph.Len());
     }
 
     void FTerminalEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)

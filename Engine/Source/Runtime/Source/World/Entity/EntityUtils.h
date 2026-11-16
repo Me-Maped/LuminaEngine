@@ -11,7 +11,6 @@
 #include "Containers/Name.h"
 #include "Core/Math/TransformFwd.h"
 #include "Core/Serialization/Archiver.h"
-#include "TaskSystem/TaskSystem.h"
 
 
 namespace Lumina
@@ -47,7 +46,8 @@ namespace Lumina::ECS::Utils
 
 	// Without Links, a loaded parent link is attached at once, so its parent has to exist already.
 	RUNTIME_API bool SerializeEntity(FArchive& Ar, ECS::FRegistry& Registry, ECS::FEntity& Entity, FParentLinks* Links = nullptr);
-	RUNTIME_API bool SerializeRegistry(FArchive& Ar, ECS::FRegistry& Registry);
+	// A write skips every entity ShouldWrite refuses.
+	RUNTIME_API bool SerializeRegistry(FArchive& Ar, ECS::FRegistry& Registry, bool (*ShouldWrite)(const ECS::FRegistry&, ECS::FEntity) = nullptr);
 
 	//-------------------------------------------------------------------------
 	// Hierarchy
@@ -64,6 +64,12 @@ namespace Lumina::ECS::Utils
 	RUNTIME_API void DestroyEntity(ECS::FRegistry& Registry, ECS::FEntity Entity);
 	RUNTIME_API void DestroyEntityHierarchy(ECS::FRegistry& Registry, ECS::FEntity Entity);
 	RUNTIME_API void DetachImmediateChildren(ECS::FRegistry& Registry, ECS::FEntity Entity);
+
+	// A new id for a prefab node or an authored entity, the same every time for the same Seed.
+	NODISCARD RUNTIME_API FName NewStableID(FStringView Seed = {});
+
+	// Gives each entity without an SEntityGuidComponent one, derived from Seed and its index when Seed is set.
+	RUNTIME_API void AssignMissingEntityGuids(ECS::FRegistry& Registry, FStringView Seed = {});
 
 	//-------------------------------------------------------------------------
 	// Transform resolve
@@ -155,6 +161,8 @@ namespace Lumina::ECS::Utils
 	RUNTIME_API void QueueDirtyTransform(FTransformDirtyGate* Gate, ECS::FEntity Entity, bool bQueueTransform, bool bQueueBody);
 
 
+	inline constexpr uint32 kMaxMovedTransformConsumers = 4;
+
 	// Start recording which entities the resolve moved for one more consumer, such as the render scene or navigation, each draining its own copy.
 	// A filtered consumer records only the entities it marks with SetMovedTransformInterest, so a world of moving props costs it nothing.
 	RUNTIME_API uint32 AddMovedTransformConsumer(ECS::FRegistry& Registry, bool bFiltered = false);
@@ -163,7 +171,7 @@ namespace Lumina::ECS::Utils
 	RUNTIME_API void SetMovedTransformInterest(ECS::FRegistry& Registry, uint32 Consumer, ECS::FEntity Entity, bool bInterested);
 	RUNTIME_API void RemoveMovedTransformConsumer(ECS::FRegistry& Registry, uint32 Consumer);
 
-	// Appends every entity moved since this consumer last drained. Game thread. False when none.
+	// Appends every entity moved since this consumer last drained, false when none. Only while no system writes transforms, since a setter racing the epoch bump loses its publish.
 	RUNTIME_API bool DrainMovedTransforms(ECS::FRegistry& Registry, uint32 Consumer, TVector<ECS::FEntity>& Out);
 
 	// Reports an entity whose drawn pose changed while its transform did not.

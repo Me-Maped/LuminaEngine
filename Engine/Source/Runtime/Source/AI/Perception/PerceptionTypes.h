@@ -1,16 +1,15 @@
 #pragma once
 
-#include "World/ECS/Registry.h"
+#include "World/ECS/Entity.h"
 
 #include "Core/Object/ObjectMacros.h"
 #include "Core/Math/Math.h"
-#include "GameplayTags/GameplayTag.h"
+#include "HierarchicalTags/HierarchicalTag.h"
 #include "PerceptionTypes.generated.h"
 
 namespace Lumina
 {
-    // The senses a perceiver can run and a stimulus source can register for. A BitMask so one source can
-    // be both seen and heard, and a perceiver can report which senses currently detect a target.
+    // Senses a perceiver runs and a stimulus source registers for, combinable so one source can be seen and heard.
     REFLECT(BitMask)
     enum class EAISenseChannel : uint8
     {
@@ -21,8 +20,7 @@ namespace Lumina
 
     ENUM_CLASS_FLAGS(EAISenseChannel);
 
-    // One target a perceiver is currently aware of (or recently was). Runtime-only, never serialized: it is
-    // recomputed by SPerceptionSystem every tick, so it lives as a plain array on SPerceptionComponent.
+    // A target a perceiver is or recently was aware of, recomputed by CPerceptionSystem every tick and never serialized.
     struct FPerceivedTarget
     {
         ECS::FEntity    Target              = ECS::NullEntity;
@@ -33,8 +31,7 @@ namespace Lumina
         bool            bIsNew              = false;   // set the tick it crossed the perceive threshold.
     };
 
-    // A queued hearing/damage report, drained by SPerceptionSystem each tick. Pushed by World.Perception
-    // ReportNoise/ReportDamage (C# or C++) and by native damage paths.
+    // A queued hearing or damage report from ReportNoise, ReportDamage or native damage, drained by CPerceptionSystem each tick.
     struct FAIStimulusEvent
     {
         EAISenseChannel         Sense       = EAISenseChannel::Hearing;
@@ -42,6 +39,6 @@ namespace Lumina
         ECS::FEntity            Target      = ECS::NullEntity;   // damage victim; ECS::NullEntity for area noise.
         FVector3                Location    = FVector3(0.0f);
         float                   Strength    = 1.0f;         // noise loudness (radius scale) or damage amount.
-        SGameplayTagContainer   Tags;                       // optional affiliation override (empty => look up Instigator).
+        SHierarchicalTagContainer   Tags;                       // optional affiliation override (empty => look up Instigator).
     };
 }

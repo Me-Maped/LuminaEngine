@@ -15,7 +15,6 @@
 #include "UI/Tools/EditorEntityUtils.h"
 #include "Core/Object/Cast.h"
 #include "Core/Object/Package/Package.h"
-#include "GUID/GUID.h"
 #include "Core/Math/Math.h"
 #include "Tools/ComponentVisualizers/ComponentVisualizer.h"
 #include "Tools/PrimitiveManager/PrimitiveManager.h"
@@ -43,7 +42,7 @@
 namespace Lumina
 {
     FPrefabEditorTool::FPrefabEditorTool(IEditorToolContext* Context, CObject* InAsset)
-        : FSceneEditorTool(Context, InAsset->GetName().c_str(), InAsset, NewObject<CWorld>())
+        : FSceneEditorTool(Context, *InAsset->GetName(), InAsset, NewObject<CWorld>())
     {
     }
 
@@ -85,7 +84,7 @@ namespace Lumina
         OutlinerContext.FilterFunction = [this](FTreeListView& Tree, FTreeNodeID Item)
         {
             const FTreeNodeDisplay& Display = Tree.Get<FTreeNodeDisplay>(Item);
-            return ImGuiX::PassSearchFilter(EntityFilterState.FilterName, Display.DisplayName.c_str());
+            return ImGuiX::PassSearchFilter(EntityFilterState.FilterName, *Display.DisplayName);
         };
 
         OutlinerContext.bAllowRangeSelect = true;
@@ -139,7 +138,7 @@ namespace Lumina
 
             if (ImGui::MenuItem(LOC("Copy Entity ID")))
             {
-                ImGui::SetClipboardText(Format("{}", (Data.Entity).Value).c_str());
+                ImGui::SetClipboardText(*Format("{}", (Data.Entity).Value));
             }
 
             DrawAddCollisionMenuItem(Data.Entity);
@@ -160,7 +159,7 @@ namespace Lumina
                 if (ImGui::MenuItem(LOC("Detach Children")))
                 {
                     TVector<ECS::FEntity> Children;
-                    Registry.GetHierarchy().ForEachChild(Data.Entity, [&](ECS::FEntity Child) { Children.push_back(Child); });
+                    Registry.GetHierarchy().ForEachChild(Data.Entity, [&](ECS::FEntity Child) { Children.Add(Child); });
                     BeginRelationshipTransaction({ Data.Entity });
                     ECS::Utils::DetachImmediateChildren(Registry, Data.Entity);
                     EndTransaction(LOC("Detach Children"));
@@ -203,22 +202,7 @@ namespace Lumina
 
         OutlinerContext.RenameFunction = [this](FTreeListView& Tree, FTreeNodeID Item, FStringView NewName)
         {
-            FEntityListViewItemData& Data = Tree.Get<FEntityListViewItemData>(Item);
-            ECS::FRegistry& Registry = World->GetEntityRegistry();
-            if (!Registry.IsValid(Data.Entity))
-            {
-                return;
-            }
-
-            BeginComponentTransaction({ Data.Entity }, SNameComponent::StaticStruct());
-            if (SNameComponent* NameComp = Registry.TryGet<SNameComponent>(Data.Entity))
-            {
-                NameComp->Name = NewName;
-            }
-            EndTransaction("Rename");
-
-            EditorEntityUtils::RenameOutlinerRow(Tree.Get<FTreeNodeDisplay>(Item), NewName);
-            Asset->GetPackage()->MarkDirty();
+            RenameEntityTransacted(Tree.Get<FEntityListViewItemData>(Item).Entity, NewName);
         };
 
         OutlinerContext.VisibilityToggleFunction = [this](FTreeListView& Tree, FTreeNodeID Item)
@@ -313,6 +297,7 @@ namespace Lumina
     void FPrefabEditorTool::SetupWorldForTool()
     {
         FEditorTool::SetupWorldForTool();
+        World->GetRenderSettings().bDrawBillboards = false;
 
         // A prefab is edited in its authored pose, so animation preview starts off and the toolbar turns it on.
         World->SetAnimatesWhilePaused(false);
@@ -401,7 +386,7 @@ namespace Lumina
         TVector<ECS::FEntity> ToDestroy;
         WorldRegistry.View<SPrefabComponent>().ForEach([&](ECS::FEntity E, const SPrefabComponent&)
         {
-            ToDestroy.push_back(E);
+            ToDestroy.Add(E);
         });
         for (ECS::FEntity E : ToDestroy)
         {
@@ -419,7 +404,7 @@ namespace Lumina
             ECS::FEntity Root = WorldRegistry.Create();
             WorldRegistry.Emplace<SNameComponent>(Root).Name = FName("Root");
             WorldRegistry.Emplace<STransformComponent>(Root);
-            WorldRegistry.Emplace<SPrefabComponent>(Root).StableID = FName(FGuid::New().ToShortString());
+            WorldRegistry.Emplace<SPrefabComponent>(Root).StableID = ECS::Utils::NewStableID();
             SetSingleSelectedEntity(Root);
             return;
         }
@@ -501,7 +486,7 @@ namespace Lumina
         TVector<ECS::FEntity> PrefabEntities;
         WorldRegistry.View<SPrefabComponent>().ForEach([&](ECS::FEntity E, const SPrefabComponent&)
         {
-            PrefabEntities.push_back(E);
+            PrefabEntities.Add(E);
         });
 
         // Taken before the registry is replaced, so the save's refresh can tell which instance children never diverged.
@@ -567,7 +552,7 @@ namespace Lumina
                 if (!bParentChangeDeferred)
                 {
                     bParentChangeDeferred = true;
-                    ImGuiX::Notifications::NotifyInfo("The parent of '{0}' changed. Its edits are kept, and the view refreshes after you save.", Prefab->GetName().c_str());
+                    ImGuiX::Notifications::NotifyInfo("The parent of '{0}' changed. Its edits are kept, and the view refreshes after you save.", *Prefab->GetName());
                 }
             }
             else if (ResolveCount != LastVariantResolveCount)
@@ -579,8 +564,6 @@ namespace Lumina
                 ClearTransactionHistory();
             }
         }
-
-        World->GetRenderSettings().bDrawBillboards = false;
 
         // Drive the selected-camera preview (shared with the world editor) before extract.
         UpdateCameraPreview();
@@ -605,9 +588,9 @@ namespace Lumina
                 RebuildPropertyTables(LastSelected);
             }
         }
-        else if (!PropertyTables.empty() || DetailsEntity != ECS::NullEntity)
+        else if (!PropertyTables.IsEmpty() || DetailsEntity != ECS::NullEntity)
         {
-            PropertyTables.clear();
+            PropertyTables.Reset();
             DetailsEntity = ECS::NullEntity;
             bDetailsDirty = false;
         }
@@ -615,10 +598,10 @@ namespace Lumina
         // Drain queued reflected-component removals (the shared DrawComponentHeader pushes here).
         ProcessComponentEditRequests();
 
-        if (bViewportHovered)
+        if (bViewportHovered && !ImGui::GetIO().WantTextInput)
         {
             // Delete every selected entity (root is filtered out inside the destroy queue).
-            if (ImGui::IsKeyPressed(ImGuiKey_Delete) && !HasVisualizerSubSelection())
+            if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !HasVisualizerSubSelection())
             {
                 Registry.View<FSelectedInEditorComponent>().ForEach([&](ECS::FEntity Entity)
                 {
@@ -640,7 +623,7 @@ namespace Lumina
 
     void FPrefabEditorTool::ProcessDestroyRequests()
     {
-        if (EntityDestroyRequests.empty())
+        if (EntityDestroyRequests.IsEmpty())
         {
             return;
         }
@@ -650,10 +633,10 @@ namespace Lumina
 
         // Drained to a list first, since the command has to read them while they are still alive.
         TVector<ECS::FEntity> Doomed;
-        while (!EntityDestroyRequests.empty())
+        while (!EntityDestroyRequests.IsEmpty())
         {
-            Doomed.push_back(EntityDestroyRequests.front());
-            EntityDestroyRequests.pop();
+            Doomed.Add(EntityDestroyRequests.Peek());
+            EntityDestroyRequests.Pop();
         }
 
         BeginDestroyTransaction(Doomed);
@@ -697,8 +680,8 @@ namespace Lumina
 
     void FPrefabEditorTool::OnDeinitialize(const FUpdateContext& UpdateContext)
     {
-        PropertyTables.clear();
-        SelectedEntities.clear();
+        PropertyTables.Reset();
+        SelectedEntities.Reset();
     }
 
     ECS::FEntity FPrefabEditorTool::FindPrefabRoot() const
@@ -731,7 +714,7 @@ namespace Lumina
         // Resolve the root BEFORE tagging the new entity, or it becomes a root candidate itself.
         const ECS::FEntity Root = FindPrefabRoot();
 
-        Registry.Emplace<SPrefabComponent>(Entity).StableID = FName(FGuid::New().ToShortString());
+        Registry.Emplace<SPrefabComponent>(Entity).StableID = ECS::Utils::NewStableID();
 
         // One the spawn already parented, such as a drop onto a row, is inside the prefab already.
         if (Root != ECS::NullEntity && Root != Entity && Registry.GetHierarchy().GetParent(Entity) == ECS::NullEntity)
@@ -754,7 +737,7 @@ namespace Lumina
         {
             return;
         }
-        EntityDestroyRequests.push(Entity);
+        EntityDestroyRequests.Enqueue(Entity);
     }
 
     bool FPrefabEditorTool::IsComponentHiddenInDetails(const CStruct* Type) const
@@ -772,16 +755,16 @@ namespace Lumina
 
         ECS::FRegistry& Registry = World->GetEntityRegistry();
 
-        TFixedVector<ECS::FEntity, 64> Targets;
+        TInlineVector<ECS::FEntity, 64> Targets;
         Registry.View<FSelectedInEditorComponent>().ForEach([&](ECS::FEntity Selected)
         {
             if (Registry.IsValid(Selected))
             {
-                Targets.push_back(Selected);
+                Targets.Add(Selected);
             }
         });
 
-        if (Targets.empty())
+        if (Targets.IsEmpty())
         {
             return;
         }
@@ -924,7 +907,7 @@ namespace Lumina
 
         if (!Registry.HasAny<SPrefabComponent>(Entity))
         {
-            Registry.Emplace<SPrefabComponent>(Entity).StableID = FName(FGuid::New().ToShortString());
+            Registry.Emplace<SPrefabComponent>(Entity).StableID = ECS::Utils::NewStableID();
         }
 
         // Authored data, not a placed copy. Captured as-is these would spawn an instance of another prefab.
@@ -991,7 +974,7 @@ namespace Lumina
         {
             if (SPrefabComponent* Prefab = Registry.TryGet<SPrefabComponent>(E))
             {
-                Prefab->StableID = FName(FGuid::New().ToShortString());
+                Prefab->StableID = ECS::Utils::NewStableID();
             }
         };
         FreshenStableID(NewEntity);
@@ -1019,6 +1002,10 @@ namespace Lumina
         }
 
         const ImGuiIO& IO = ImGui::GetIO();
+        if (IO.WantTextInput || IO.KeyAlt)
+        {
+            return;
+        }
         const bool bCopyPressed      = IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C);
         const bool bDuplicatePressed = IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D);
         const bool bPastePressed     = IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false);
@@ -1042,16 +1029,16 @@ namespace Lumina
 
         if (bDuplicatePressed)
         {
-            TFixedVector<ECS::FEntity, 64> Sources;
-            Registry.View<FSelectedInEditorComponent>().ForEach([&](ECS::FEntity Selected) { Sources.push_back(Selected); });
-            DuplicateAndSelect(TSpan<const ECS::FEntity>(Sources.data(), Sources.size()), LOC_ICON(LE_ICON_CONTENT_DUPLICATE, "Duplicate"));
+            TInlineVector<ECS::FEntity, 64> Sources;
+            Registry.View<FSelectedInEditorComponent>().ForEach([&](ECS::FEntity Selected) { Sources.Add(Selected); });
+            DuplicateAndSelect(TSpan<const ECS::FEntity>(Sources.GetData(), Sources.Num()), "Duplicate");
         }
 
         if (bPastePressed)
         {
-            TFixedVector<ECS::FEntity, 64> Sources;
-            Registry.View<FCopiedTag>().ForEach([&](ECS::FEntity Tagged) { Sources.push_back(Tagged); });
-            DuplicateAndSelect(TSpan<const ECS::FEntity>(Sources.data(), Sources.size()), LOC("Paste"));
+            TInlineVector<ECS::FEntity, 64> Sources;
+            Registry.View<FCopiedTag>().ForEach([&](ECS::FEntity Tagged) { Sources.Add(Tagged); });
+            DuplicateAndSelect(TSpan<const ECS::FEntity>(Sources.GetData(), Sources.Num()), "Paste");
         }
     }
 
@@ -1171,13 +1158,13 @@ namespace Lumina
                 {
                     // The pivot is driven directly and the rest co-move, so the record covers both.
                     TVector<ECS::FEntity> Dragged;
-                    Dragged.reserve(SelectedEntities.size() + 1);
-                    Dragged.push_back(PivotEntity);
+                    Dragged.Reserve(SelectedEntities.Num() + 1);
+                    Dragged.Add(PivotEntity);
                     for (ECS::FEntity Selected : SelectedEntities)
                     {
                         if (Selected != PivotEntity)
                         {
-                            Dragged.push_back(Selected);
+                            Dragged.Add(Selected);
                         }
                     }
                     BeginTransformTransaction(Dragged);
@@ -1318,14 +1305,14 @@ namespace Lumina
         Settings->GizmoSnapTranslate = GuizmoSnapTranslate;
         Settings->GizmoSnapRotate    = GuizmoSnapRotate;
         Settings->GizmoSnapScale     = GuizmoSnapScale;
-        GConfig->SaveSettings(CPrefabEditorSettings::StaticClass());
+        Global::GConfig->SaveSettings(CPrefabEditorSettings::StaticClass());
     }
 
     void FPrefabEditorTool::PersistCameraPreviewScale()
     {
         CPrefabEditorSettings* Settings = GetMutableDefault<CPrefabEditorSettings>();
         Settings->CameraPreviewScale = CameraPreviewScale;
-        GConfig->SaveSettings(CPrefabEditorSettings::StaticClass());
+        Global::GConfig->SaveSettings(CPrefabEditorSettings::StaticClass());
     }
 
     void FPrefabEditorTool::DrawHelpMenu()
@@ -1353,17 +1340,7 @@ namespace Lumina
 
         if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_MOVE_RESIZE, "Gizmo")))
         {
-            const char* Ops[] = { LOC("Translate"), LOC("Rotate"), LOC("Scale") };
-            int Current = (GuizmoOp == ImGuizmo::TRANSLATE) ? 0 : (GuizmoOp == ImGuizmo::ROTATE ? 1 : 2);
-            if (ImGui::Combo("##GizmoOp", &Current, Ops, IM_ARRAYSIZE(Ops)))
-            {
-                switch (Current)
-                {
-                case 0: GuizmoOp = ImGuizmo::TRANSLATE; break;
-                case 1: GuizmoOp = ImGuizmo::ROTATE;    break;
-                case 2: GuizmoOp = ImGuizmo::SCALE;     break;
-                }
-            }
+            DrawGizmoOperationCombo(GuizmoOp);
 
             const char* Modes[] = { LOC("World"), LOC("Local") };
             int ModeIdx = (GuizmoMode == ImGuizmo::WORLD) ? 0 : 1;
@@ -1416,16 +1393,14 @@ namespace Lumina
 
     void FPrefabEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const
     {
-        ImGui::DockBuilderRemoveNodeChildNodes(InDockspaceID);
-
         ImGuiID LeftDockID = 0, RightDockID = 0;
-        ImGui::DockBuilderSplitNode(InDockspaceID, ImGuiDir_Right, 0.3f, &RightDockID, &LeftDockID);
+        SplitDockingLayoutLeftRight(InDockspaceID, 0.3f, LeftDockID, RightDockID);
 
         ImGuiID LeftOutlinerID = 0, LeftViewportID = 0;
         ImGui::DockBuilderSplitNode(LeftDockID, ImGuiDir_Left, 0.25f, &LeftOutlinerID, &LeftViewportID);
 
-        ImGui::DockBuilderDockWindow(GetToolWindowName(ViewportWindowName).c_str(), LeftViewportID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(OutlinerWindowName).c_str(), LeftOutlinerID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(PropertiesWindowName).c_str(), RightDockID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(ViewportWindowName), LeftViewportID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(OutlinerWindowName), LeftOutlinerID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(PropertiesWindowName), RightDockID);
     }
 }

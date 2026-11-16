@@ -19,10 +19,27 @@ namespace Lumina
         constexpr ImU32 kInClipColor   = IM_COL32(80, 170, 255, 90);
         constexpr ImU32 kCurrentColor  = IM_COL32(255, 200, 60, 255);
         constexpr ImU32 kOrderTextCol  = IM_COL32(255, 255, 255, 220);
+
+        bool IsClipNameTaken(const CSpriteSheet& Sheet, const FString& Name, int32 IgnoredIndex)
+        {
+            for (int32 Index = 0; Index < Sheet.Animations.Num(); ++Index)
+            {
+                if (Index != IgnoredIndex && Name.EqualsIgnoreCase(*Sheet.Animations[Index].Name))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        FName MakeUniqueClipName(const CSpriteSheet& Sheet)
+        {
+            return MakeUniqueName("NewAnimation", [&Sheet](const FName& Name) { return IsClipNameTaken(Sheet, Name.ToString(), Constants::kIndexNone); });
+        }
     }
 
     FSpriteSheetEditorTool::FSpriteSheetEditorTool(IEditorToolContext* Context, CObject* InAsset)
-        : FAssetEditorTool(Context, InAsset->GetName().c_str(), InAsset)
+        : FAssetEditorTool(Context, *InAsset->GetName(), InAsset)
     {
     }
 
@@ -48,7 +65,7 @@ namespace Lumina
     SSpriteAnimation* FSpriteSheetEditorTool::GetSelectedAnimation()
     {
         CSpriteSheet* Sheet = GetAsset<CSpriteSheet>();
-        if (Sheet == nullptr || SelectedAnimation < 0 || SelectedAnimation >= (int32)Sheet->Animations.size())
+        if (Sheet == nullptr || SelectedAnimation < 0 || SelectedAnimation >= Sheet->Animations.Num())
         {
             return nullptr;
         }
@@ -132,7 +149,7 @@ namespace Lumina
         // Cells already in the clip get a wash plus their play order, so a sheet reads as a storyboard.
         if (Clip != nullptr)
         {
-            for (int32 Slot = 0; Slot < (int32)Clip->Frames.size(); ++Slot)
+            for (int32 Slot = 0; Slot < Clip->Frames.Num(); ++Slot)
             {
                 const int32 Cell = Math::Clamp(Clip->Frames[Slot], 0, HF * VF - 1);
                 const ImVec2 Min(Origin.x + (Cell % HF) * CellW, Origin.y + (Cell / HF) * CellH);
@@ -158,9 +175,9 @@ namespace Lumina
         }
 
         // The frame the preview is on, so playback and the sheet always agree.
-        if (Clip != nullptr && !Clip->Frames.empty())
+        if (Clip != nullptr && !Clip->Frames.IsEmpty())
         {
-            const int32 Slot = Math::Clamp(Preview.Frame, 0, (int32)Clip->Frames.size() - 1);
+            const int32 Slot = Math::Clamp(Preview.Frame, 0, Clip->Frames.Num() - 1);
             const int32 Cell = Math::Clamp(Clip->Frames[Slot], 0, HF * VF - 1);
             const ImVec2 Min(Origin.x + (Cell % HF) * CellW, Origin.y + (Cell / HF) * CellH);
             DrawList->AddRect(Min, ImVec2(Min.x + CellW, Min.y + CellH), kCurrentColor, 0.0f, 2.0f, 0);
@@ -175,8 +192,8 @@ namespace Lumina
 
             if (SSpriteAnimation* Target = GetSelectedAnimation())
             {
-                Target->Frames.push_back(Row * HF + Column);
-                SelectedFrameSlot = (int32)Target->Frames.size() - 1;
+                Target->Frames.Add(Row * HF + Column);
+                SelectedFrameSlot = Target->Frames.Num() - 1;
                 MarkEdited();
             }
         }
@@ -192,9 +209,9 @@ namespace Lumina
 
         if (ImGui::Button(LOC_ICON(LE_ICON_PLUS, "Add")))
         {
-            SSpriteAnimation& Added = Sheet->Animations.emplace_back();
-            Added.Name = FName("NewAnimation");
-            SelectedAnimation = (int32)Sheet->Animations.size() - 1;
+            const FName AddedName = MakeUniqueClipName(*Sheet);
+            Sheet->Animations.EmplaceGetRef().Name = AddedName;
+            SelectedAnimation = Sheet->Animations.Num() - 1;
             SelectedFrameSlot = -1;
             MarkEdited();
         }
@@ -203,8 +220,8 @@ namespace Lumina
         ImGui::BeginDisabled(GetSelectedAnimation() == nullptr);
         if (ImGui::Button(LOC_ICON(LE_ICON_MINUS, "Remove")))
         {
-            Sheet->Animations.erase(Sheet->Animations.begin() + SelectedAnimation);
-            SelectedAnimation = Math::Max(SelectedAnimation - 1, 0);
+            Sheet->Animations.RemoveAt(SelectedAnimation);
+            SelectedAnimation = Math::Min(SelectedAnimation, Sheet->Animations.Num() - 1);
             SelectedFrameSlot = -1;
             MarkEdited();
         }
@@ -215,14 +232,14 @@ namespace Lumina
         const float ListHeight = ImGui::GetContentRegionAvail().y * 0.35f;
         if (ImGui::BeginChild("##Clips", ImVec2(0.0f, ListHeight), ImGuiChildFlags_Borders))
         {
-            for (int32 Index = 0; Index < (int32)Sheet->Animations.size(); ++Index)
+            for (int32 Index = 0; Index < Sheet->Animations.Num(); ++Index)
             {
                 const SSpriteAnimation& Animation = Sheet->Animations[Index];
 
                 char Label[160];
                 std::snprintf(Label, sizeof(Label), "%s  (%d frames)##Clip%d",
-                              Animation.Name.IsNone() ? LOC("(unnamed)") : Animation.Name.c_str(),
-                              (int32)Animation.Frames.size(), Index);
+                              Animation.Name.IsNone() ? "(unnamed)" : *Animation.Name,
+                              Animation.Frames.Num(), Index);
 
                 if (ImGui::Selectable(Label, Index == SelectedAnimation))
                 {
@@ -244,14 +261,23 @@ namespace Lumina
         ImGui::Separator();
 
         // Committed on enter or focus loss, since FName interns every string it is handed.
-        char NameBuffer[128];
-        std::snprintf(NameBuffer, sizeof(NameBuffer), "%s", Clip->Name.IsNone() ? "" : Clip->Name.c_str());
-        const bool bNameSubmitted = ImGui::InputText(LOC("Name"), NameBuffer, sizeof(NameBuffer),
-                                                    ImGuiInputTextFlags_EnterReturnsTrue);
+        FString TypedName = Clip->Name.IsNone() ? "" : *Clip->Name;
+        const bool bNameSubmitted = ImGuiX::InputText("Name", TypedName, ImGuiInputTextFlags_EnterReturnsTrue);
         if (bNameSubmitted || ImGui::IsItemDeactivatedAfterEdit())
         {
-            Clip->Name = FName(NameBuffer);
-            MarkEdited();
+            if (TypedName.IsEmpty())
+            {
+                ImGuiX::Notifications::NotifyWarning("An animation needs a name, kept '{0}'.", *Clip->Name);
+            }
+            else if (IsClipNameTaken(*Sheet, TypedName, SelectedAnimation))
+            {
+                ImGuiX::Notifications::NotifyWarning("Another animation is already named '{0}', kept '{1}'.", *TypedName, *Clip->Name);
+            }
+            else
+            {
+                Clip->Name = FName(*TypedName);
+                MarkEdited();
+            }
         }
 
         if (ImGui::DragFloat(LOC("FPS"), &Clip->FPS, 0.25f, 0.0f, 240.0f, "%.2f"))
@@ -277,7 +303,7 @@ namespace Lumina
             MarkEdited();
         }
         ImGui::SameLine();
-        if (ImGui::Button(LE_ICON_ARROW_RIGHT "##MoveRight") && SelectedFrameSlot + 1 < (int32)Clip->Frames.size())
+        if (ImGui::Button(LE_ICON_ARROW_RIGHT "##MoveRight") && SelectedFrameSlot + 1 < Clip->Frames.Num())
         {
             const int32 Temp = Clip->Frames[SelectedFrameSlot + 1];
             Clip->Frames[SelectedFrameSlot + 1] = Clip->Frames[SelectedFrameSlot];
@@ -288,8 +314,8 @@ namespace Lumina
         ImGui::SameLine();
         if (ImGui::Button(LOC_ICON(LE_ICON_DELETE, "Remove Frame")))
         {
-            Clip->Frames.erase(Clip->Frames.begin() + SelectedFrameSlot);
-            SelectedFrameSlot = Math::Min(SelectedFrameSlot, (int32)Clip->Frames.size() - 1);
+            Clip->Frames.RemoveAt(SelectedFrameSlot);
+            SelectedFrameSlot = Math::Min(SelectedFrameSlot, Clip->Frames.Num() - 1);
             MarkEdited();
         }
         ImGui::EndDisabled();
@@ -302,7 +328,7 @@ namespace Lumina
         {
             constexpr float kThumb = 56.0f;
 
-            for (int32 Slot = 0; Slot < (int32)Clip->Frames.size(); ++Slot)
+            for (int32 Slot = 0; Slot < Clip->Frames.Num(); ++Slot)
             {
                 ImGui::PushID(Slot);
 
@@ -337,7 +363,7 @@ namespace Lumina
 
                 ImGui::PopID();
 
-                if (Slot + 1 < (int32)Clip->Frames.size())
+                if (Slot + 1 < Clip->Frames.Num())
                 {
                     ImGui::SameLine();
                 }
@@ -351,7 +377,7 @@ namespace Lumina
         CSpriteSheet* Sheet = GetAsset<CSpriteSheet>();
         const SSpriteAnimation* Clip = GetSelectedAnimation();
 
-        if (Sheet == nullptr || Clip == nullptr || Clip->Frames.empty())
+        if (Sheet == nullptr || Clip == nullptr || Clip->Frames.IsEmpty())
         {
             ImGui::TextDisabled(LOC("Select an animation with at least one frame."));
             return;
@@ -367,12 +393,12 @@ namespace Lumina
             Preview = FSpritePlayback{};
         }
         ImGui::SameLine();
-        ImGui::Text(LOC("Frame %d / %d"), Preview.Frame + 1, (int32)Clip->Frames.size());
+        ImGui::Text("Frame %d / %d", Preview.Frame + 1, Clip->Frames.Num());
 
         // The same stepper the runtime system uses, so the preview cannot drift from playback.
         if (bPreviewPlaying)
         {
-            SpriteAnimation::Advance(Preview, (int32)Clip->Frames.size(), Clip->FPS, Clip->bLoop,
+            SpriteAnimation::Advance(Preview, Clip->Frames.Num(), Clip->FPS, Clip->bLoop,
                                      1.0f, ImGui::GetIO().DeltaTime);
         }
 
@@ -382,7 +408,7 @@ namespace Lumina
             return;
         }
 
-        const int32 Slot = Math::Clamp(Preview.Frame, 0, (int32)Clip->Frames.size() - 1);
+        const int32 Slot = Math::Clamp(Preview.Frame, 0, Clip->Frames.Num() - 1);
         const ImVec4 UV  = CellUVs(Clip->Frames[Slot]);
 
         const ImVec2 Avail = ImGui::GetContentRegionAvail();
@@ -411,10 +437,10 @@ namespace Lumina
         ImGui::DockBuilderSplitNode(LeftDockID, ImGuiDir_Down, 0.40f, &BottomLeftID, &LeftDockID);
         ImGui::DockBuilderSplitNode(RightDockID, ImGuiDir_Up, 0.40f, &TopRightID, &RightDockID);
 
-        ImGui::DockBuilderDockWindow(GetToolWindowName(SheetWindowName).c_str(), LeftDockID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(AnimationsWindowName).c_str(), BottomLeftID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(PreviewWindowName).c_str(), TopRightID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(SpriteSheetDetailsWindowName).c_str(), RightDockID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(SheetWindowName), LeftDockID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(AnimationsWindowName), BottomLeftID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(PreviewWindowName), TopRightID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(SpriteSheetDetailsWindowName), RightDockID);
     }
 
     void FSpriteSheetEditorTool::OnPostUndoRedo()
@@ -424,7 +450,7 @@ namespace Lumina
         // The selection is an index into animations a restore may have shortened.
         if (CSpriteSheet* Sheet = GetAsset<CSpriteSheet>())
         {
-            SelectedAnimation = Math::Clamp(SelectedAnimation, 0, Math::Max((int32)Sheet->Animations.size() - 1, 0));
+            SelectedAnimation = Math::Clamp(SelectedAnimation, 0, Math::Max(Sheet->Animations.Num() - 1, 0));
         }
         SelectedFrameSlot = -1;
     }

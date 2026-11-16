@@ -9,6 +9,7 @@
 #include "UI/Properties/PropertyTable.h"
 #include "UI/Tools/AssetEditors/AssetEditorTool.h"
 #include "UI/Tools/AssetEditors/Animation/AnimPreview.h"
+#include "UI/Tools/AssetEditors/Animation/TimelineDrawing.h"
 
 namespace Lumina
 {
@@ -17,13 +18,14 @@ namespace Lumina
     class CAnimationMontage;
     struct SSimpleAnimationComponent;
 
-    class FAnimationMontageEditorTool : public FAssetEditorTool
+    class EDITOR_API FAnimationMontageEditorTool : public FAssetEditorTool
     {
     public:
 
         LUMINA_EDITOR_TOOL(FAnimationMontageEditorTool)
 
         FAnimationMontageEditorTool(IEditorToolContext* Context, CObject* InAsset);
+        ~FAnimationMontageEditorTool() override;
 
         bool IsSingleWindowTool() const override { return false; }
         bool ShouldGenerateThumbnailOnSave() const override { return true; }
@@ -33,13 +35,14 @@ namespace Lumina
         void OnPostUndoRedo() override;
         void SetupWorldForTool() override;
         void Update(const FUpdateContext& UpdateContext) override;
-        void OnDeinitialize(const FUpdateContext& UpdateContext) override;
         void OnAssetLoadFinished() override;
         void DrawToolMenu(const FUpdateContext& UpdateContext) override;
         void DrawHelpMenu() override;
         void InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const override;
 
     private:
+
+        friend struct FAnimationMontageEditorToolTestAccess;
 
         // What a click or drag on the timeline refers to.
         enum class ESelectionKind : uint8 { None, Segment, Section, Notify, NotifyState };
@@ -101,6 +104,8 @@ namespace Lumina
         int32 LaneAddTrack = 0;
         int32 SelectedNotifyTrack = 0;
         float TrackScroll = 0.0f;
+        FString RenameBuffer;
+        FString InspectorNameBuffer;
 
         ECS::FEntity DirectionalLightEntity = ECS::NullEntity;
         ECS::FEntity MeshEntity = ECS::NullEntity;

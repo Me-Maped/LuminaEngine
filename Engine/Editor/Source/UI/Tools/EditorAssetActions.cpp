@@ -14,12 +14,13 @@
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/Package/Package.h"
+#include "Core/Serialization/MemoryArchiver.h"
 #include "Core/Serialization/ObjectArchiver.h"
 #include "FileSystem/FileSystem.h"
 #include "Paths/Paths.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
-#include "Localization/Localization.h"
+#include "World/World.h"
 
 namespace Lumina
 {
@@ -36,7 +37,7 @@ namespace Lumina
             return;
         }
 
-        Actions[AssetClass].push_back(Move(Action));
+        Actions[AssetClass].Add(Move(Action));
     }
 
     void FAssetActionRegistry::GatherActions(CClass* AssetClass, TVector<const FAssetAction*>& Out) const
@@ -44,15 +45,15 @@ namespace Lumina
         // Accumulates rather than stopping at the first match, since an asset can contribute at several levels.
         for (CClass* Class = AssetClass; Class != nullptr; Class = Class->GetSuperClass())
         {
-            const auto Itr = Actions.find(Class);
-            if (Itr == Actions.end())
+            const auto Itr = Actions.Find(Class);
+            if (Itr == nullptr)
             {
                 continue;
             }
 
-            for (const FAssetAction& Action : Itr->second)
+            for (const FAssetAction& Action : (*Itr))
             {
-                Out.push_back(&Action);
+                Out.Add(&Action);
             }
         }
     }
@@ -63,12 +64,12 @@ namespace Lumina
         const FStringView Parent = VFS::Parent(NoExt);
         const FStringView Base   = VFS::FileName(NoExt, true);
 
-        FFixedString Name(Base.data(), Base.size());
-        Name.append(Suffix);
+        FFixedString Name(Base.GetData(), Base.Len());
+        Name.Append(Suffix);
 
         // Free of loaded packages and in-flight imports as well as files, since CreatePackage refuses all three.
         FFixedString Path = Import::PathReservations::FindFree(Paths::Combine(Parent, Name));
-        if (!Path.empty())
+        if (!Path.IsEmpty())
         {
             CPackage::AddPackageExt(Path);
         }
@@ -90,16 +91,16 @@ namespace Lumina
         }
 
         TVector<CObject*> SourceObjects;
-        SourceObjects.reserve(SourcePackage->ExportTable.size());
+        SourceObjects.Reserve(SourcePackage->ExportTable.Num());
         for (const FObjectExport& Export : SourcePackage->ExportTable)
         {
             if (CObject* Object = Export.Object.Get())
             {
-                SourceObjects.push_back(Object);
+                SourceObjects.Add(Object);
             }
         }
 
-        if (SourceObjects.empty())
+        if (SourceObjects.IsEmpty())
         {
             return nullptr;
         }
@@ -116,17 +117,26 @@ namespace Lumina
         {
             return Source == PrimaryAsset ? DestAssetName : Source->GetName();
         });
-        if (Remap.empty() || !CPackage::SavePackage(DestPackage, DestPath))
+        CObject* Copy = Remap.IsEmpty() ? nullptr : Remap.FindChecked(PrimaryAsset);
+
+        // The copy's entities are new entities, so its save writes them under new ids into its own entity files.
+        if (CWorld* World = Cast<CWorld>(Copy))
         {
+            World->AssignNewEntityGuids();
+        }
+
+        if (Copy == nullptr || !CPackage::SavePackage(DestPackage, DestPath))
+        {
+            CFactory::DiscardNewPackage(DestPackage);
             return nullptr;
         }
 
-        return Remap.find(PrimaryAsset)->second;
+        return Copy;
     }
 
     CObject* DuplicateAsset(FStringView SourcePath, FFixedString& OutPath)
     {
-        const FAssetData* Data   = FAssetRegistry::Get().GetAssetByPath(SourcePath);
+        const FAssetDataPtr Data   = FAssetRegistry::Get().GetAssetByPath(SourcePath);
         CObject*          Source = Data != nullptr ? LoadObject<CObject>(Data->AssetGUID) : nullptr;
         if (Source == nullptr)
         {
@@ -135,7 +145,7 @@ namespace Lumina
 
         // A material keeps its node graph as a second export, so the whole package is copied and rewritten.
         OutPath = MakeSiblingAssetPath(SourcePath, "_Copy");
-        CObject* Copy = DuplicateAssetPackage(Source, FStringView(OutPath.c_str(), OutPath.size()));
+        CObject* Copy = DuplicateAssetPackage(Source, FStringView(*OutPath, OutPath.Len()));
         if (Copy != nullptr)
         {
             FAssetRegistry::Get().AssetCreated(Copy);
@@ -147,7 +157,7 @@ namespace Lumina
     {
         // Pass 1 constructs every copy first, so pass 2 can resolve a reference to any sibling.
         THashMap<CObject*, CObject*> Remap;
-        Remap.reserve(Sources.size());
+        Remap.Reserve(Sources.Num());
 
         for (CObject* Source : Sources)
         {
@@ -158,7 +168,7 @@ namespace Lumina
             }
 
             // The saver rebuilds ExportTable, so being outered to Dest is what makes a copy an export.
-            Remap.emplace(Source, Copy);
+            Remap.TryAdd(Source, Copy);
         }
 
         // Copying reflected properties alone loses state a class serializes by hand, such as a mesh resource.
@@ -200,10 +210,10 @@ namespace Lumina
             }
 
             const FFixedString NewPath = MakeSiblingAssetPath(
-                FStringView(Context.Asset->Path.c_str(), Context.Asset->Path.size()), "_Inst");
+                FStringView(*Context.Asset->Path, Context.Asset->Path.Len()), "_Inst");
 
-            CMaterialInstance* Instance = CFactory::CreateNewOf<CMaterialInstance>(NewPath);
-            if (Instance == nullptr)
+            const TStrongObjectPtr<CMaterialInstance> Instance(CFactory::CreateNewOf<CMaterialInstance>(NewPath));
+            if (!Instance)
             {
                 ImGuiX::Notifications::NotifyError(LOCF("Failed to create a material instance at '{0}'."), NewPath);
                 return;
@@ -212,8 +222,8 @@ namespace Lumina
             // Through the setter so instancing at the depth limit is rejected rather than silently allowed.
             if (!Instance->SetParentMaterial(Parent))
             {
-                ImGuiX::Notifications::NotifyError(LOCF("'{0}' cannot be instanced any deeper."), Context.Asset->AssetName);
-                Instance->ConditionalBeginDestroy();
+                ImGuiX::Notifications::NotifyError("'{0}' cannot be instanced any deeper.", Context.Asset->AssetName);
+                CFactory::DiscardNew(Instance.Get());
                 return;
             }
 
@@ -222,19 +232,20 @@ namespace Lumina
 
             if (!CPackage::SavePackage(Instance->GetPackage(), NewPath))
             {
-                ImGuiX::Notifications::NotifyError(LOCF("Failed to save '{0}'."), NewPath);
+                ImGuiX::Notifications::NotifyError("Failed to save '{0}'.", NewPath);
+                CFactory::DiscardNew(Instance.Get());
                 return;
             }
 
             // Without this the asset exists on disk but not in the registry, so nothing can find it.
-            FAssetRegistry::Get().AssetCreated(Instance);
+            FAssetRegistry::Get().AssetCreated(Instance.Get());
 
             ImGuiX::Notifications::NotifySuccess(LOCF("Created '{0}'."), NewPath);
 
             // Opened, since creating an instance is nearly always a prelude to tweaking its parameters.
             if (Context.ToolContext != nullptr)
             {
-                if (const FAssetData* NewData = FAssetRegistry::Get().GetAssetByPath(FStringView(NewPath.c_str(), NewPath.size())))
+                if (const FAssetDataPtr NewData = FAssetRegistry::Get().GetAssetByPath(FStringView(*NewPath, NewPath.Len())))
                 {
                     Context.ToolContext->OpenAssetEditor(NewData->AssetGUID);
                 }
@@ -251,10 +262,10 @@ namespace Lumina
             }
 
             const FFixedString NewPath = MakeSiblingAssetPath(
-                FStringView(Context.Asset->Path.c_str(), Context.Asset->Path.size()), "_Montage");
+                FStringView(*Context.Asset->Path, Context.Asset->Path.Len()), "_Montage");
 
-            CAnimationMontage* Montage = CFactory::CreateNewOf<CAnimationMontage>(NewPath);
-            if (Montage == nullptr)
+            const TStrongObjectPtr<CAnimationMontage> Montage(CFactory::CreateNewOf<CAnimationMontage>(NewPath));
+            if (!Montage)
             {
                 ImGuiX::Notifications::NotifyError("Failed to create a montage at '{0}'.", NewPath);
                 return;
@@ -265,16 +276,17 @@ namespace Lumina
             if (!CPackage::SavePackage(Montage->GetPackage(), NewPath))
             {
                 ImGuiX::Notifications::NotifyError("Failed to save '{0}'.", NewPath);
+                CFactory::DiscardNew(Montage.Get());
                 return;
             }
 
-            FAssetRegistry::Get().AssetCreated(Montage);
+            FAssetRegistry::Get().AssetCreated(Montage.Get());
 
             ImGuiX::Notifications::NotifySuccess("Created '{0}'.", NewPath);
 
             if (Context.ToolContext != nullptr)
             {
-                if (const FAssetData* NewData = FAssetRegistry::Get().GetAssetByPath(FStringView(NewPath.c_str(), NewPath.size())))
+                if (const FAssetDataPtr NewData = FAssetRegistry::Get().GetAssetByPath(FStringView(*NewPath, NewPath.Len())))
                 {
                     Context.ToolContext->OpenAssetEditor(NewData->AssetGUID);
                 }
@@ -302,7 +314,7 @@ namespace Lumina
             if (Context.ToolContext != nullptr)
             {
                 const FString PackageName = Parent->GetPackage()->GetName().ToString();
-                Context.ToolContext->BrowseToAsset(FStringView(PackageName.c_str(), PackageName.size()));
+                Context.ToolContext->BrowseToAsset(FStringView(*PackageName, PackageName.Len()));
             }
         }
     }

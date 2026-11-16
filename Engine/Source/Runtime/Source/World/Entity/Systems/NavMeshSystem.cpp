@@ -1,9 +1,10 @@
 #include "RuntimePCH.h"
+#include "SignificanceSystem.h"
 #include "NavMeshSystem.h"
 #include "BlockoutSystem.h"
 #include "FoliageTerrainSystem.h"
 
-#include <algorithm>
+#include "Memory/Memcpy.h"
 
 #include "Platform/Time/PlatformTime.h"
 #include "World/ECS/Registry.h"
@@ -40,14 +41,12 @@
 
 namespace Lumina
 {
-    void SNavMeshSystem::Configure()
+    void CNavMeshSystem::Configure()
     {
         RequireUpdate(EUpdateStage::FrameStart);
         RequireUpdate(EUpdateStage::Paused);
         // Rebuilt tiles read the terrain, foliage and blockout meshes those systems settle.
-        RunsAfter<SFoliageTerrainSystem, SBlockoutSystem>();
-        Writes<SNavMeshComponent>();
-        Reads<SRigidBodyComponent, SBoxColliderComponent, SSphereColliderComponent, SMeshColliderComponent, SCapsuleColliderComponent, SCylinderColliderComponent, SCharacterPhysicsComponent, STerrainColliderComponent, STerrainComponent, STransformComponent, SStaticMeshComponent, SDynamicMeshColliderComponent, SDynamicMeshComponent, SCompoundColliderComponent, SNavModifierComponent, SNavLinkComponent, SFoliageComponent>();
+        RunsAfter<CFoliageTerrainSystem, CBlockoutSystem, CSignificanceSystem>();
     }
 
     // NOLINTBEGIN(bugprone-throwing-static-initialization)
@@ -75,7 +74,7 @@ namespace Lumina
 
     // NOLINTEND(bugprone-throwing-static-initialization)
 
-    namespace
+    namespace NavMeshSystemInternal
     {
         // Alpha is unused by the line batcher but kept consistent for future translucent rendering.
         FORCEINLINE FVector4 NavAreaColor(uint8 Area)
@@ -100,7 +99,7 @@ namespace Lumina
             }
         }
 
-        void DrawNavDebug(const SSystemContext& Context, SNavMeshComponent& Comp)
+        void DrawNavDebug(const SSystemContext& Context, CNavMeshSystem::FSourceQueries& Queries, SNavMeshComponent& Comp)
         {
             const FNavMesh& Mesh = *Comp.Runtime.Mesh;
             const FVector3 Lift(0.0f, CVarNavDebugLift.GetValue(), 0.0f);
@@ -118,16 +117,16 @@ namespace Lumina
                     || RT.DebugSurfaceAlpha != Alpha || RT.bDebugSurfaceByArea != bColorByArea)
                 {
                     const FNavDebugStats Stats = Mesh.GetDebugStats();
-                    RT.DebugSurface.clear();
-                    RT.DebugSurface.reserve((size_t)Stats.Triangles * 3);
+                    RT.DebugSurface.Reset();
+                    RT.DebugSurface.Reserve(IntCastChecked<int32>(static_cast<int64>(Stats.Triangles) * 3));
                     Mesh.ForEachTriangle([&](const FVector3& A, const FVector3& B, const FVector3& C, uint8 Area)
                     {
                         FVector4 Color = bColorByArea ? NavAreaColor(Area) : FVector4(0.15f, 0.85f, 0.35f, 1.0f);
                         Color.w = Alpha;
                         const uint32 Packed = PackColor(Color);
-                        RT.DebugSurface.push_back({ A + Lift, Packed });
-                        RT.DebugSurface.push_back({ B + Lift, Packed });
-                        RT.DebugSurface.push_back({ C + Lift, Packed });
+                        RT.DebugSurface.Emplace(A + Lift, Packed);
+                        RT.DebugSurface.Emplace(B + Lift, Packed);
+                        RT.DebugSurface.Emplace(C + Lift, Packed);
                     });
                     RT.DebugSurfaceEpoch   = Epoch;
                     RT.DebugSurfaceAlpha   = Alpha;
@@ -135,11 +134,11 @@ namespace Lumina
                     RT.bDebugSurfaceValid  = true;
                 }
 
-                if (!RT.DebugSurface.empty())
+                if (!RT.DebugSurface.IsEmpty())
                 {
                     // The batcher takes ownership, so the cache is copied rather than moved out of.
                     TVector<FSimpleElementVertex> Frame(RT.DebugSurface);
-                    Context.DrawDebugSolidTriangles(std::move(Frame), ESolidDrawMode::Translucent, -1.0f);
+                    Context.DrawDebugSolidTriangles(Move(Frame), ESolidDrawMode::Translucent, -1.0f);
                 }
             }
 
@@ -152,18 +151,16 @@ namespace Lumina
             // Modifiers are authored, not baked, so they draw from their components rather than the navmesh.
             if (CVarNavDebugModifiers.GetValue())
             {
-                auto ModifierView = Context.CreateView<SNavModifierComponent, STransformComponent>();
-                for (ECS::FEntity E : ModifierView)
+                Queries.Modifiers.ForEach([&](const SNavModifierComponent& Modifier, const STransformComponent& Xform)
                 {
-                    const SNavModifierComponent& Modifier = ModifierView.Get<SNavModifierComponent>(E);
-                    if (!Modifier.bEnabled) continue;
+                    if (!Modifier.bEnabled) return;
 
-                    const FTransform& WT = ModifierView.Get<STransformComponent>(E).GetWorldTransform();
+                    const FTransform& WT = Xform.GetWorldTransform();
                     const FVector3 Scale = WT.GetScale();
                     const FVector3 Center = WT.GetLocation() + Math::Rotate(WT.GetRotation(), Modifier.Offset * Scale);
                     const FVector3 Half(Modifier.Extents.x * std::fabs(Scale.x), Modifier.Extents.y * std::fabs(Scale.y), Modifier.Extents.z * std::fabs(Scale.z));
                     Context.DrawDebugBox(Center, Half, WT.GetRotation(), NavAreaColor((uint8)Modifier.Area), 3.0f, -1.0f);
-                }
+                });
             }
 
             if (CVarNavDebugTiles.GetValue())
@@ -242,70 +239,7 @@ namespace Lumina
         }
     }
 
-    // External linkage on purpose. FNavFoliageCache is forward declared in NavMeshComponent.h and
-    // holds these through FNavFoliageEntity, so an external-linkage class would otherwise carry
-    // subobjects whose types have internal linkage.
-
-    // A window of a heightfield copied on the game thread, so a bake worker tessellates it without touching the live component.
-    // Moved out of the anonymous namespace with the external-linkage types below, since FNavSourcePrim stores one.
-    struct FNavTerrainPatch
-    {
-        TVector<float> Heights;
-        FMatrix4       World = FMatrix4(1.0f);
-        FVector3       BakeMin = FVector3(0.0f);
-        FVector3       BakeMax = FVector3(0.0f);
-        float          Stride = 1.0f;
-        float          Half = 0.0f;
-        int32          ColBegin = 0;
-        int32          ColEnd = 0;
-        int32          RowBegin = 0;
-        int32          RowEnd = 0;
-        int32          Step = 1;
-    };
-
-    // Tag-bit packed into cache key so one entity may track one collider of each type.
-    enum class ENavColliderType : uint8 { Box = 0, Sphere = 1, Mesh = 2, CharacterCapsule = 3, Capsule = 4, Cylinder = 5, Terrain = 6, TriangleSoup = 7, DynamicMesh = 8, AreaVolume = 9, OffMeshLink = 10, Foliage = 11 };
-
-    // POD shape snapshot; safe to ship to a bake worker (Mesh ptr / terrain tri-soup are read-only there).
-    struct FNavSourcePrim
-    {
-        ENavColliderType                Type  = ENavColliderType::Box;
-        FMatrix4                        World = FMatrix4(1.0f);
-        FVector3                        Shape = FVector3(0.0f);   // Box half-extent, or Radius and HalfHeight
-        CStaticMesh*                    Mesh  = nullptr;
-        TSharedPtr<FDynamicMeshRenderData> DynamicMesh;          // held so a re-commit on the game thread cannot free it under the bake
-        TSharedPtr<TVector<FVector3>>   TriangleSoup;             // world-space tri soup (groups of 3); Terrain and TriangleSoup types
-        TSharedPtr<FNavTerrainPatch>    TerrainPatch;
-        TSharedPtr<FNavAreaVolume>      AreaVolume;               // AreaVolume type
-        TSharedPtr<FNavOffMeshLink>     Link;                     // OffMeshLink type
-        // Foliage type, shared by every instance of a species in its local space and placed by World.
-        TSharedPtr<const TVector<FNavSourcePrim>> Children;
-        // Reads the mesh's coarsest LOD, enough for a footprint at a fraction of the triangles.
-        bool                            bCoarsestLOD = false;
-    };
-
-    // A species' collision in its own space, built once per scan and placed per instance.
-    struct FFoliageNavTemplate
-    {
-        TSharedPtr<const TVector<FNavSourcePrim>> Children;
-        FVector3 LocalMin = FVector3( FLT_MAX);
-        FVector3 LocalMax = FVector3(-FLT_MAX);
-        uint64   ContentId = 0;
-    };
-
-    // Stored by FNavSourceTracker, which has external linkage.
-    struct FNavSourceEntry
-    {
-        uint64          Key = 0;
-        FNavSourcePrim  Prim;
-        FVector3        AABBMin = FVector3( FLT_MAX);
-        FVector3        AABBMax = FVector3(-FLT_MAX);
-
-        // Identifies the geometry behind the AABB; a change dirties the tiles exactly like a move.
-        uint64          ContentId = 0;
-    };
-
-    namespace
+    namespace NavMeshSystemInternal
     {
         const CNavigationSettings& NavSettings()
         {
@@ -320,12 +254,34 @@ namespace Lumina
             FVector3          AABBMax = FVector3(-FLT_MAX);
         };
 
-        // 8-bit local indices packed 3 per uint32; vertex indices local to Meshlet.VertexOffset.
-        FORCEINLINE void UnpackTri(uint32 Packed, uint32& A, uint32& B, uint32& C)
+        void BuildBoxCorners(const FVector3& HalfExtent, FVector3 Out[8])
         {
-            A = (Packed >> 0)  & 0xFFu;
-            B = (Packed >> 8)  & 0xFFu;
-            C = (Packed >> 16) & 0xFFu;
+            const FVector3& H = HalfExtent;
+            Out[0] = {-H.x,-H.y,-H.z}; Out[1] = { H.x,-H.y,-H.z};
+            Out[2] = { H.x,-H.y, H.z}; Out[3] = {-H.x,-H.y, H.z};
+            Out[4] = {-H.x, H.y,-H.z}; Out[5] = { H.x, H.y,-H.z};
+            Out[6] = { H.x, H.y, H.z}; Out[7] = {-H.x, H.y, H.z};
+        }
+
+        void TransformCorners(const FMatrix4& W, const FVector3 In[8], FVector3 Out[8])
+        {
+            for (int32 i = 0; i < 8; ++i)
+            {
+                Out[i] = FVector3(W * FVector4(In[i], 1.0f));
+            }
+        }
+
+        // Change detector and cache rebuild must agree byte for byte, so every caller shares this walk.
+        void CornersAABB(const FMatrix4& W, const FVector3* Local, int32 N, FVector3& Mn, FVector3& Mx)
+        {
+            Mn = FVector3( FLT_MAX);
+            Mx = FVector3(-FLT_MAX);
+            for (int32 i = 0; i < N; ++i)
+            {
+                const FVector3 Pt = FVector3(W * FVector4(Local[i], 1.0f));
+                Mn = Math::Min(Mn, Pt);
+                Mx = Math::Max(Mx, Pt);
+            }
         }
 
 
@@ -355,7 +311,7 @@ namespace Lumina
         // Catches geometry that changed under a bounding box that did not move.
         FORCEINLINE uint64 MakeContentId(const void* Asset, size_t CountA, size_t CountB)
         {
-            size_t Seed = (size_t)(uintptr_t)Asset;
+            size_t Seed = (uintptr_t)Asset;
             Hash::HashCombine(Seed, CountA);
             Hash::HashCombine(Seed, CountB);
             return (uint64)Seed;
@@ -381,38 +337,29 @@ namespace Lumina
             {
                 return;
             }
-            const uint32 Base = (uint32)Acc.Vertices.size();
-            Acc.Vertices.push_back(A);
-            Acc.Vertices.push_back(B);
-            Acc.Vertices.push_back(C);
-            Acc.Indices.push_back(Base + 0);
-            Acc.Indices.push_back(Base + 1);
-            Acc.Indices.push_back(Base + 2);
+            const uint32 Base = (uint32)Acc.Vertices.Num();
+            Acc.Vertices.Add(A);
+            Acc.Vertices.Add(B);
+            Acc.Vertices.Add(C);
+            Acc.Indices.Add(Base + 0);
+            Acc.Indices.Add(Base + 1);
+            Acc.Indices.Add(Base + 2);
             Acc.AABBMin = Math::Min(Acc.AABBMin, Math::Min(A, Math::Min(B, C)));
             Acc.AABBMax = Math::Max(Acc.AABBMax, Math::Max(A, Math::Max(B, C)));
         }
 
-        // 12 tris (2 per face); world matrix precomputed by caller.
         // Background work is never run by a waiting thread, so a gather the game thread blocks on has to outrank a bake in flight.
-        ETaskPriority GatherPriority()
+        Jobs::EJobPriority GatherPriority()
         {
-            return Threading::IsMainThread() ? ETaskPriority::High : ETaskPriority::Background;
+            return Threading::IsMainThread() ? Jobs::EJobPriority::High : Jobs::EJobPriority::Background;
         }
 
         void EmitBoxGeometry(const FMatrix4& W, const FVector3& HalfExtent, const FVector3& BakeMin, const FVector3& BakeMax, FGatherAccumulator& Acc)
         {
-            const FVector3 H = HalfExtent;
-            const FVector3 LocalCorners[8] = {
-                {-H.x,-H.y,-H.z}, { H.x,-H.y,-H.z},
-                { H.x,-H.y, H.z}, {-H.x,-H.y, H.z},
-                {-H.x, H.y,-H.z}, { H.x, H.y,-H.z},
-                { H.x, H.y, H.z}, {-H.x, H.y, H.z},
-            };
+            FVector3 LocalCorners[8];
+            BuildBoxCorners(HalfExtent, LocalCorners);
             FVector3 V[8];
-            for (int i = 0; i < 8; ++i)
-            {
-                V[i] = FVector3(W * FVector4(LocalCorners[i], 1.0f));
-            }
+            TransformCorners(W, LocalCorners, V);
             // Outward-wound for Recast's slope test (top face = walkable).
             EmitTri(Acc, BakeMin, BakeMax, V[0], V[1], V[2]); EmitTri(Acc, BakeMin, BakeMax, V[0], V[2], V[3]);
             EmitTri(Acc, BakeMin, BakeMax, V[4], V[6], V[5]); EmitTri(Acc, BakeMin, BakeMax, V[4], V[7], V[6]);
@@ -462,7 +409,7 @@ namespace Lumina
             const int Rings = 2 * HemiStacks + 2;
 
             TVector<FVector3> Verts;
-            Verts.resize(Rings * (Segments + 1));
+            Verts.SetNum(Rings * (Segments + 1));
 
             int RingIdx = 0;
             // Top hemisphere at +Y * HalfHeight.
@@ -534,12 +481,12 @@ namespace Lumina
         // Monotone chain over the XZ projection, which survives the top and bottom of a box landing on the same points.
         void BuildXZHull(const FVector3* Pts, int32 N, TVector<FVector3>& Out)
         {
-            Out.clear();
+            Out.Reset();
             TVector<FVector3> Sorted;
-            Sorted.reserve(N);
+            Sorted.Reserve(N);
             for (int32 i = 0; i < N; ++i)
             {
-                Sorted.push_back(FVector3(Pts[i].x, 0.0f, Pts[i].z));
+                Sorted.Emplace(Pts[i].x, 0.0f, Pts[i].z);
             }
             Algo::Sort(Sorted, [](const FVector3& A, const FVector3& B) { return A.x < B.x || (A.x == B.x && A.z < B.z); });
 
@@ -549,22 +496,22 @@ namespace Lumina
             };
             for (int32 Pass = 0; Pass < 2; ++Pass)
             {
-                const size_t ChainStart = Out.size();
-                for (int32 k = 0; k < (int32)Sorted.size(); ++k)
+                const int32 ChainStart = Out.Num();
+                for (int32 k = 0; k < Sorted.Num(); ++k)
                 {
-                    const FVector3& P = Sorted[Pass == 0 ? k : (int32)Sorted.size() - 1 - k];
-                    while (Out.size() >= ChainStart + 2 && Turn(Out[Out.size() - 2], Out.back(), P) <= 0.0f)
+                    const FVector3& P = Sorted[Pass == 0 ? k : Sorted.Num() - 1 - k];
+                    while (Out.Num() >= ChainStart + 2 && Turn(Out[Out.Num() - 2], Out.Last(), P) <= 0.0f)
                     {
-                        Out.pop_back();
+                        Out.Pop();
                     }
-                    Out.push_back(P);
+                    Out.Add(P);
                 }
                 // Each chain ends on the point the other starts from.
-                Out.pop_back();
+                Out.Pop();
             }
-            if (Out.size() < 3)
+            if (Out.Num() < 3)
             {
-                Out.clear();
+                Out.Reset();
             }
         }
 
@@ -578,52 +525,99 @@ namespace Lumina
             return Fallback ? Fallback->StaticMesh.Get() : nullptr;
         }
 
-        void EmitMeshGeometry(const FMatrix4& W, const FMeshResource& Res, const FVector3& BakeMin, const FVector3& BakeMax, FGatherAccumulator& Acc, bool bCoarsestLOD = false)
+        // Mesh-space triangles, three corners each, placed by World as they are emitted.
+        void EmitLocalTriangles(const FMatrix4& World, const TVector<FVector3>& Tris, const FVector3& BakeMin, const FVector3& BakeMax, FGatherAccumulator& Acc)
         {
-            const FMeshletData&  Md  = Res.MeshletData;
-            if (Md.IsEmpty() || Res.bSkinnedMesh) return;
-
-            const TVector<uint32>& MT = Md.MeshletTriangles;
-
-            for (const FGeometrySurface& Surface : Res.GeometrySurfaces)
+            for (int32 i = 0; i + 2 < Tris.Num(); i += 3)
             {
-                uint32 Lod = 0;
-                if (bCoarsestLOD)
-                {
-                    for (uint32 Candidate = 1; Candidate < MAX_MESH_LODS; ++Candidate)
-                    {
-                        Lod = Surface.LODMeshletCount[Candidate] != 0u ? Candidate : Lod;
-                    }
-                }
-                const uint32 First = Surface.LODMeshletOffset[Lod];
-                const uint32 Count = Surface.LODMeshletCount[Lod];
-                for (uint32 m = 0; m < Count; ++m)
-                {
-                    const FMeshlet& Meshlet = Md.Meshlets[First + m];
-
-                    FVector3 LocalVerts[MESHLET_MAX_VERTICES];
-                    for (uint32 v = 0; v < Meshlet.VertexCount; ++v)
-                    {
-                        const FVector3 Local = GetMeshletVertexPosition(Md, Meshlet, v, false);
-                        LocalVerts[v] = FVector3(W * FVector4(Local, 1.0f));
-                    }
-
-                    const uint32 T0 = Meshlet.TriangleOffset;
-                    for (uint32 t = 0; t < Meshlet.TriangleCount; ++t)
-                    {
-                        uint32 A, B, C;
-                        UnpackTri(MT[T0 + t], A, B, C);
-                        EmitTri(Acc, BakeMin, BakeMax, LocalVerts[A], LocalVerts[B], LocalVerts[C]);
-                    }
-                }
+                EmitTri(Acc, BakeMin, BakeMax, FVector3(World * FVector4(Tris[i], 1.0f)),
+                    FVector3(World * FVector4(Tris[i + 1], 1.0f)), FVector3(World * FVector4(Tris[i + 2], 1.0f)));
             }
         }
+
+        // What physics collides with for a mesh that has no authored collision, as mesh-space triangles; empty while the mesh has no geometry yet.
+        TSharedPtr<TVector<FVector3>> BuildFallbackTriangles(const FMeshResource& Resource, bool bConvex, FVector3& OutMin, FVector3& OutMax)
+        {
+            TVector<FVector3> Vertices;
+            TVector<uint32> Indices;
+            if (!Physics::CollisionGen::BuildFallbackColliderTriangles(Resource, bConvex, Vertices, Indices))
+            {
+                return nullptr;
+            }
+
+            auto Soup = MakeShared<TVector<FVector3>>();
+            Soup->Reserve(Indices.Num());
+            OutMin = FVector3( FLT_MAX);
+            OutMax = FVector3(-FLT_MAX);
+            for (uint32 Index : Indices)
+            {
+                Soup->Add(Vertices[Index]);
+                OutMin = Math::Min(OutMin, Vertices[Index]);
+                OutMax = Math::Max(OutMax, Vertices[Index]);
+            }
+            return Soup;
+        }
+
+        // One mesh's fallback triangles, shared by every collider and foliage instance that places it.
+        struct FNavMeshTriangles
+        {
+            TWeakObjectPtr<CStaticMesh>   Mesh;
+            uint32                        GeometryVersion = 0;
+            TSharedPtr<TVector<FVector3>> Triangles;
+            FVector3                      LocalMin = FVector3( FLT_MAX);
+            FVector3                      LocalMax = FVector3(-FLT_MAX);
+        };
+
+        // Keyed by mesh and hull choice; the weak pointer tells a freed mesh from a new one at the same address.
+        struct FNavMeshTriangleCache
+        {
+            THashMap<uint64, FNavMeshTriangles> Entries;
+
+            const FNavMeshTriangles* Acquire(CStaticMesh* Mesh, bool bConvex)
+            {
+                if (Mesh == nullptr || Mesh->GetMeshResource().bSkinnedMesh)
+                {
+                    return nullptr;
+                }
+
+                FNavMeshTriangles& Entry = Entries[(uint64)(uintptr_t)Mesh | (bConvex ? 1u : 0u)];
+                if (Entry.Triangles == nullptr || Entry.Mesh.Get() != Mesh || Entry.GeometryVersion != Mesh->GetGeometryVersion())
+                {
+                    Entry = FNavMeshTriangles();
+                    Entry.Mesh = Mesh;
+                    Entry.GeometryVersion = Mesh->GetGeometryVersion();
+                    Entry.Triangles = BuildFallbackTriangles(Mesh->GetMeshResource(), bConvex, Entry.LocalMin, Entry.LocalMax);
+                }
+                return Entry.Triangles != nullptr ? &Entry : nullptr;
+            }
+
+            void ForgetFreedMeshes()
+            {
+                Entries.RemoveAll([](const auto& Pair) { return Pair.Value.Mesh.Get() == nullptr; });
+            }
+        };
+
+        // A window of a heightfield copied on the game thread, so a bake worker tessellates it without touching the live component.
+        struct FNavTerrainPatch
+        {
+            TVector<float> Heights;
+            FMatrix4       World = FMatrix4(1.0f);
+            FVector3       BakeMin = FVector3(0.0f);
+            FVector3       BakeMax = FVector3(0.0f);
+            float          Stride = 1.0f;
+            float          Half = 0.0f;
+            int32          ColBegin = 0;
+            int32          ColEnd = 0;
+            int32          RowBegin = 0;
+            int32          RowEnd = 0;
+            int32          Step = 1;
+        };
 
         // Clipped to the bake box first, or a volume covering a slice of a huge terrain still pays for the whole thing and gets coarsened by it.
         TSharedPtr<FNavTerrainPatch> CaptureTerrainPatch(const STerrainComponent& T, const FMatrix4& W, const FVector3& BakeMin, const FVector3& BakeMax, float CellSize)
         {
             const int32 Res = T.Resolution;
-            if (Res < 2 || (int64)T.Heightmap.size() < (int64)Res * (int64)Res)
+            if (Res < 2 || T.Heightmap.Num() < static_cast<int64>(Res) * Res)
             {
                 return nullptr;
             }
@@ -635,21 +629,12 @@ namespace Lumina
             Patch->Stride = T.TileWorldSize / float(Res - 1);
             Patch->Half = T.TileWorldSize * 0.5f;
 
-            const FMatrix4 ToLocal = Math::Inverse(W);
-            FVector3 LocalMin( FLT_MAX);
-            FVector3 LocalMax(-FLT_MAX);
-            const FVector3 Corners[8] = {
-                {BakeMin.x, BakeMin.y, BakeMin.z}, {BakeMax.x, BakeMin.y, BakeMin.z},
-                {BakeMin.x, BakeMax.y, BakeMin.z}, {BakeMax.x, BakeMax.y, BakeMin.z},
-                {BakeMin.x, BakeMin.y, BakeMax.z}, {BakeMax.x, BakeMin.y, BakeMax.z},
-                {BakeMin.x, BakeMax.y, BakeMax.z}, {BakeMax.x, BakeMax.y, BakeMax.z},
-            };
-            for (const FVector3& Corner : Corners)
-            {
-                const FVector3 L = FVector3(ToLocal * FVector4(Corner, 1.0f));
-                LocalMin = Math::Min(LocalMin, L);
-                LocalMax = Math::Max(LocalMax, L);
-            }
+            const FVector3 BakeCenter = (BakeMin + BakeMax) * 0.5f;
+            const FMatrix4 ToLocal = Math::Inverse(W) * Math::Translate(FMatrix4(1.0f), BakeCenter);
+            FVector3 LocalCorners[8];
+            BuildBoxCorners((BakeMax - BakeMin) * 0.5f, LocalCorners);
+            FVector3 LocalMin, LocalMax;
+            CornersAABB(ToLocal, LocalCorners, 8, LocalMin, LocalMax);
 
             // One quad of slack each way, so the clipped edge still shares vertices with its neighbor.
             Patch->ColBegin = Math::Clamp((int32)std::floor((LocalMin.x + Patch->Half) / Patch->Stride) - 1, 0, Res - 2);
@@ -664,11 +649,11 @@ namespace Lumina
 
             const int32 Cols = Patch->ColEnd - Patch->ColBegin + 1;
             const int32 Rows = Patch->RowEnd - Patch->RowBegin + 1;
-            Patch->Heights.resize((size_t)Cols * (size_t)Rows);
+            Patch->Heights.SetNum(IntCastChecked<int32>(static_cast<int64>(Cols) * Rows));
             for (int32 Row = 0; Row < Rows; ++Row)
             {
-                const float* Source = &T.Heightmap[(size_t)(Patch->RowBegin + Row) * (size_t)Res + (size_t)Patch->ColBegin];
-                float* Dest = &Patch->Heights[(size_t)Row * (size_t)Cols];
+                const float* Source = &T.Heightmap[(Patch->RowBegin + Row) * Res + Patch->ColBegin];
+                float* Dest = &Patch->Heights[Row * Cols];
                 for (int32 Col = 0; Col < Cols; ++Col)
                 {
                     Dest[Col] = Source[Col] * T.MaxHeight;
@@ -683,7 +668,7 @@ namespace Lumina
             const int32 Cols = Patch.ColEnd - Patch.ColBegin + 1;
             auto Pos = [&](int32 Col, int32 Row) -> FVector3
             {
-                const float Height = Patch.Heights[(size_t)(Row - Patch.RowBegin) * (size_t)Cols + (size_t)(Col - Patch.ColBegin)];
+                const float Height = Patch.Heights[(Row - Patch.RowBegin) * Cols + (Col - Patch.ColBegin)];
                 const FVector3 Local(-Patch.Half + (float)Col * Patch.Stride, Height, -Patch.Half + (float)Row * Patch.Stride);
                 return FVector3(Patch.World * FVector4(Local, 1.0f));
             };
@@ -713,11 +698,11 @@ namespace Lumina
                     // Wound so the surface normal points +Y (Recast's slope test marks it walkable).
                     if (TriIntersectsAABB(A, C, B, Patch.BakeMin, Patch.BakeMax))
                     {
-                        Strip.push_back(A); Strip.push_back(C); Strip.push_back(B);
+                        Strip.Add(A); Strip.Add(C); Strip.Add(B);
                     }
                     if (TriIntersectsAABB(A, D, C, Patch.BakeMin, Patch.BakeMax))
                     {
-                        Strip.push_back(A); Strip.push_back(D); Strip.push_back(C);
+                        Strip.Add(A); Strip.Add(D); Strip.Add(C);
                     }
                 }
             }, 1, GatherPriority());
@@ -725,14 +710,32 @@ namespace Lumina
             size_t Total = 0;
             for (const TVector<FVector3>& Strip : Strips)
             {
-                Total += Strip.size();
+                Total += Strip.Num();
             }
-            Out.reserve(Out.size() + Total);
+            Out.Reserve(IntCastChecked<int32>(Out.Num() + Total));
             for (TVector<FVector3>& Strip : Strips)
             {
-                Out.insert(Out.end(), Strip.begin(), Strip.end());
+                Out.Append(Strip);
             }
         }
+
+        // POD shape snapshot; safe to ship to a bake worker (Mesh ptr / terrain tri-soup are read-only there).
+        struct FNavSourcePrim
+        {
+            ENavColliderType                Type  = ENavColliderType::Box;
+            FMatrix4                        World = FMatrix4(1.0f);
+            FVector3                        Shape = FVector3(0.0f);   // Box half-extent, or Radius and HalfHeight
+            TSharedPtr<FDynamicMeshRenderData> DynamicMesh;          // held so a re-commit on the game thread cannot free it under the bake
+            // World space, except under Mesh and Foliage, where it is in mesh space and placed by World.
+            TSharedPtr<TVector<FVector3>>   TriangleSoup;
+            TSharedPtr<FNavTerrainPatch>    TerrainPatch;
+            TSharedPtr<FNavAreaVolume>      AreaVolume;
+            TSharedPtr<FNavOffMeshLink>     Link;
+            // Foliage type, shared by every instance of a species in its local space and placed by World.
+            TSharedPtr<const TVector<FNavSourcePrim>> Children;
+            // A dynamic mesh collider wrapped in one hull, as its physics body is.
+            bool                            bConvex = false;
+        };
 
         bool IsAnnotation(ENavColliderType Type)
         {
@@ -745,8 +748,17 @@ namespace Lumina
             {
                 case ENavColliderType::Box:    EmitBoxGeometry(P.World, P.Shape, BakeMin, BakeMax, Acc); break;
                 case ENavColliderType::Sphere: EmitSphereGeometry(P.World, P.Shape.x, BakeMin, BakeMax, Acc); break;
-                case ENavColliderType::Mesh:   if (P.Mesh) EmitMeshGeometry(P.World, P.Mesh->GetMeshResource(), BakeMin, BakeMax, Acc, P.bCoarsestLOD); break;
-                case ENavColliderType::DynamicMesh: if (P.DynamicMesh) EmitMeshGeometry(P.World, P.DynamicMesh->Resource, BakeMin, BakeMax, Acc); break;
+                case ENavColliderType::Mesh:   if (P.TriangleSoup) EmitLocalTriangles(P.World, *P.TriangleSoup, BakeMin, BakeMax, Acc); break;
+                case ENavColliderType::DynamicMesh:
+                    if (P.DynamicMesh)
+                    {
+                        FVector3 LocalMin, LocalMax;
+                        if (const TSharedPtr<TVector<FVector3>> Soup = BuildFallbackTriangles(P.DynamicMesh->Resource, P.bConvex, LocalMin, LocalMax))
+                        {
+                            EmitLocalTriangles(P.World, *Soup, BakeMin, BakeMax, Acc);
+                        }
+                    }
+                    break;
                 case ENavColliderType::Capsule:
                 case ENavColliderType::CharacterCapsule: EmitCapsuleGeometry(P.World, P.Shape.y, P.Shape.x, BakeMin, BakeMax, Acc); break;
                 case ENavColliderType::Cylinder: EmitCylinderGeometry(P.World, P.Shape.y, P.Shape.x, BakeMin, BakeMax, Acc); break;
@@ -755,7 +767,7 @@ namespace Lumina
                     if (P.TriangleSoup)
                     {
                         const TVector<FVector3>& Tris = *P.TriangleSoup;
-                        for (size_t i = 0; i + 2 < Tris.size(); i += 3)
+                        for (int32 i = 0; i + 2 < Tris.Num(); i += 3)
                         {
                             EmitTri(Acc, BakeMin, BakeMax, Tris[i], Tris[i + 1], Tris[i + 2]);
                         }
@@ -768,12 +780,7 @@ namespace Lumina
                         {
                             if (Child.TriangleSoup)
                             {
-                                const TVector<FVector3>& Tris = *Child.TriangleSoup;
-                                for (size_t i = 0; i + 2 < Tris.size(); i += 3)
-                                {
-                                    EmitTri(Acc, BakeMin, BakeMax, FVector3(P.World * FVector4(Tris[i], 1.0f)),
-                                        FVector3(P.World * FVector4(Tris[i + 1], 1.0f)), FVector3(P.World * FVector4(Tris[i + 2], 1.0f)));
-                                }
+                                EmitLocalTriangles(P.World, *Child.TriangleSoup, BakeMin, BakeMax, Acc);
                                 continue;
                             }
                             FNavSourcePrim Placed = Child;
@@ -802,8 +809,7 @@ namespace Lumina
             }
         }
 
-        // Emission is pure per prim, so it fans out into per-chunk buffers and concatenates with the
-        // indices rebased. Serial emission was the whole front half of a world-sized bake.
+        // Emission is pure per prim, so it fans out into per-chunk buffers and concatenates with the indices rebased.
         void EmitNavSourcePrims(const FNavSourcePrim* Prims, size_t Count, const FVector3& EmitMin,
             const FVector3& EmitMax, TVector<FVector3>& OutVertices, TVector<uint32>& OutIndices, FNavBuildPool* Pool = nullptr)
         {
@@ -832,19 +838,19 @@ namespace Lumina
             size_t TotalIndices = 0;
             for (const FGatherAccumulator& Acc : Chunks)
             {
-                TotalVerts += Acc.Vertices.size();
-                TotalIndices += Acc.Indices.size();
+                TotalVerts += Acc.Vertices.Num();
+                TotalIndices += Acc.Indices.Num();
             }
-            OutVertices.reserve(OutVertices.size() + TotalVerts);
-            OutIndices.reserve(OutIndices.size() + TotalIndices);
+            OutVertices.Reserve(IntCastChecked<int32>(OutVertices.Num() + TotalVerts));
+            OutIndices.Reserve(IntCastChecked<int32>(OutIndices.Num() + TotalIndices));
 
             for (FGatherAccumulator& Acc : Chunks)
             {
-                const uint32 Base = (uint32)OutVertices.size();
-                OutVertices.insert(OutVertices.end(), Acc.Vertices.begin(), Acc.Vertices.end());
+                const uint32 Base = (uint32)OutVertices.Num();
+                OutVertices.Append(Acc.Vertices);
                 for (uint32 Index : Acc.Indices)
                 {
-                    OutIndices.push_back(Base + Index);
+                    OutIndices.Add(Base + Index);
                 }
             }
         }
@@ -854,24 +860,11 @@ namespace Lumina
         {
             if (Prim.AreaVolume)
             {
-                OutVolumes.push_back(*Prim.AreaVolume);
+                OutVolumes.Add(*Prim.AreaVolume);
             }
             else if (Prim.Link)
             {
-                OutLinks.push_back(*Prim.Link);
-            }
-        }
-
-        // Change detector and cache rebuild MUST agree byte for byte, so all four share this walk.
-        void CornersAABB(const FMatrix4& W, const FVector3* Local, int32 N, FVector3& Mn, FVector3& Mx)
-        {
-            Mn = FVector3( FLT_MAX);
-            Mx = FVector3(-FLT_MAX);
-            for (int32 i = 0; i < N; ++i)
-            {
-                const FVector3 Pt = FVector3(W * FVector4(Local[i], 1.0f));
-                Mn = Math::Min(Mn, Pt);
-                Mx = Math::Max(Mx, Pt);
+                OutLinks.Add(*Prim.Link);
             }
         }
 
@@ -881,6 +874,15 @@ namespace Lumina
             const float Sy = Math::Length(FVector3(W[1]));
             const float Sz = Math::Length(FVector3(W[2]));
             return Radius * Math::Max(Sx, Math::Max(Sy, Sz));
+        }
+
+        void CapsuleAABB(const FMatrix4& W, float Radius, float HalfHeight, FVector3& OutMin, FVector3& OutMax)
+        {
+            const FVector3 Top = FVector3(W * FVector4(0.0f,  HalfHeight, 0.0f, 1.0f));
+            const FVector3 Bot = FVector3(W * FVector4(0.0f, -HalfHeight, 0.0f, 1.0f));
+            const float R = ScaledRadius(W, Radius);
+            OutMin = Math::Min(Top, Bot) - FVector3(R);
+            OutMax = Math::Max(Top, Bot) + FVector3(R);
         }
 
         // One source per collision piece, so nav sees the same decomposed shape physics does. Emit takes the key type and sub-index.
@@ -894,20 +896,20 @@ namespace Lumina
                 Entry.Prim.World = ColliderWorld;
                 Entry.Prim.TriangleSoup = MakeShared<TVector<FVector3>>();
 
-                Entry.Prim.TriangleSoup->reserve(Asset.TriangleIndices.size());
+                Entry.Prim.TriangleSoup->Reserve(Asset.TriangleIndices.Num());
                 for (uint32 Index : Asset.TriangleIndices)
                 {
                     const FVector3 P = FVector3(ColliderWorld * FVector4(Asset.TriangleVertices[Index], 1.0f));
-                    Entry.Prim.TriangleSoup->push_back(P);
+                    Entry.Prim.TriangleSoup->Add(P);
                     Entry.AABBMin = Math::Min(Entry.AABBMin, P);
                     Entry.AABBMax = Math::Max(Entry.AABBMax, P);
                 }
 
-                Emit(ENavColliderType::TriangleSoup, 0u, std::move(Entry));
+                Emit(ENavColliderType::TriangleSoup, 0u, Move(Entry));
                 return;
             }
 
-            for (uint32 i = 0; i < (uint32)Asset.Primitives.size(); ++i)
+            for (int32 i = 0; i < Asset.Primitives.Num(); ++i)
             {
                 const SCollisionPrimitive& Primitive = Asset.Primitives[i];
 
@@ -922,11 +924,8 @@ namespace Lumina
                         Entry.Prim.Type = ENavColliderType::Box;
                         Entry.Prim.Shape = Primitive.HalfExtent;
 
-                        const FVector3 H = Primitive.HalfExtent;
-                        const FVector3 Corners[8] = {
-                            {-H.x,-H.y,-H.z}, { H.x,-H.y,-H.z}, { H.x,-H.y, H.z}, {-H.x,-H.y, H.z},
-                            {-H.x, H.y,-H.z}, { H.x, H.y,-H.z}, { H.x, H.y, H.z}, {-H.x, H.y, H.z},
-                        };
+                        FVector3 Corners[8];
+                        BuildBoxCorners(Primitive.HalfExtent, Corners);
                         CornersAABB(Entry.Prim.World, Corners, 8, Entry.AABBMin, Entry.AABBMax);
                     }
                     break;
@@ -967,11 +966,11 @@ namespace Lumina
                         Entry.Prim.Type = ENavColliderType::TriangleSoup;
                         Entry.Prim.TriangleSoup = MakeShared<TVector<FVector3>>();
 
-                        Entry.Prim.TriangleSoup->reserve(HullIndices.size());
+                        Entry.Prim.TriangleSoup->Reserve(HullIndices.Num());
                         for (uint32 Index : HullIndices)
                         {
                             const FVector3 P = FVector3(Entry.Prim.World * FVector4(HullVertices[Index], 1.0f));
-                            Entry.Prim.TriangleSoup->push_back(P);
+                            Entry.Prim.TriangleSoup->Add(P);
                             Entry.AABBMin = Math::Min(Entry.AABBMin, P);
                             Entry.AABBMax = Math::Max(Entry.AABBMax, P);
                         }
@@ -979,13 +978,13 @@ namespace Lumina
                     break;
                 }
 
-                Emit(Entry.Prim.Type, i, std::move(Entry));
+                Emit(Entry.Prim.Type, i, Move(Entry));
             }
         }
 
 
-        // Mirrors SFoliageCollisionSystem, an authored shape first and the mesh otherwise, read as triangles like a mesh collider.
-        FFoliageNavTemplate BuildFoliageNavTemplate(const SFoliageType& Type)
+        // Mirrors CFoliageCollisionSystem, an authored shape first and the mesh otherwise, read as triangles like a mesh collider.
+        FFoliageNavTemplate BuildFoliageNavTemplate(const SFoliageType& Type, FNavMeshTriangleCache& MeshTriangles)
         {
             FFoliageNavTemplate Template;
             if (!Type.bEnableCollision)
@@ -1000,23 +999,21 @@ namespace Lumina
                 {
                     Template.LocalMin = Math::Min(Template.LocalMin, Entry.AABBMin);
                     Template.LocalMax = Math::Max(Template.LocalMax, Entry.AABBMax);
-                    Children->push_back(std::move(Entry.Prim));
+                    Children->Add(Move(Entry.Prim));
                 });
-                Template.ContentId = MakeContentId(Shape, Shape->TriangleIndices.size(), Shape->Primitives.size());
+                Template.ContentId = MakeContentId(Shape, Shape->TriangleIndices.Num(), Shape->Primitives.Num());
             }
-            else if (CStaticMesh* Mesh = Type.Mesh.Get(); Mesh != nullptr && !Mesh->GetMeshResource().bSkinnedMesh)
+            else if (const FNavMeshTriangles* Fallback = MeshTriangles.Acquire(Type.Mesh.Get(), Type.bConvexCollision))
             {
-                FNavSourcePrim& Child = Children->emplace_back();
+                FNavSourcePrim& Child = Children->EmplaceGetRef();
                 Child.Type = ENavColliderType::Mesh;
-                Child.Mesh = Mesh;
-                Child.bCoarsestLOD = true;
-                const FMeshletData& MeshletData = Mesh->GetMeshResource().MeshletData;
-                Template.ContentId = MakeContentId(Mesh, MeshletData.VertexPositions.size(), MeshletData.MeshletTriangles.size());
-                Template.LocalMin = Mesh->GetAABB().Min;
-                Template.LocalMax = Mesh->GetAABB().Max;
+                Child.TriangleSoup = Fallback->Triangles;
+                Template.ContentId = MakeContentId(Type.Mesh.Get(), Fallback->GeometryVersion, Type.bConvexCollision);
+                Template.LocalMin = Fallback->LocalMin;
+                Template.LocalMax = Fallback->LocalMax;
             }
 
-            if (!Children->empty())
+            if (!Children->IsEmpty())
             {
                 Template.Children = Children;
             }
@@ -1026,22 +1023,24 @@ namespace Lumina
         uint64 FoliageNavSignature(const SFoliageComponent& Foliage)
         {
             size_t Seed = Foliage.InstancesVersion;
-            Hash::HashCombine(Seed, Foliage.Types.size());
+            Hash::HashCombine(Seed, Foliage.Types.Num());
             for (const SFoliageType& Type : Foliage.Types)
             {
                 Hash::HashCombine(Seed, (size_t)Type.bEnableCollision);
+                Hash::HashCombine(Seed, (size_t)Type.bConvexCollision);
                 const SMeshCollision* Shape = Type.GetCollision();
-                Hash::HashCombine(Seed, (size_t)(uintptr_t)Shape);
+                Hash::HashCombine(Seed, (uintptr_t)Shape);
                 if (Shape != nullptr)
                 {
-                    Hash::HashCombine(Seed, Shape->TriangleIndices.size());
-                    Hash::HashCombine(Seed, Shape->Primitives.size());
+                    Hash::HashCombine(Seed, Shape->TriangleIndices.Num());
+                    Hash::HashCombine(Seed, Shape->Primitives.Num());
                 }
                 CStaticMesh* Mesh = Type.Mesh.Get();
-                Hash::HashCombine(Seed, (size_t)(uintptr_t)Mesh);
+                Hash::HashCombine(Seed, (uintptr_t)Mesh);
                 if (Mesh != nullptr)
                 {
-                    Hash::HashCombine(Seed, Mesh->GetMeshResource().MeshletData.MeshletTriangles.size());
+                    Hash::HashCombine(Seed, Mesh->GetGeometryVersion());
+                    Hash::HashCombine(Seed, Mesh->GetMeshResource().MeshletData.MeshletTriangles.Num());
                 }
             }
             return (uint64)Seed;
@@ -1053,7 +1052,7 @@ namespace Lumina
         uint64                       Signature = 0;
         bool                         bBuilt    = false;
         bool                         bSeen     = false;
-        TVector<FFoliageNavTemplate> Templates;
+        TVector<NavMeshSystemInternal::FFoliageNavTemplate> Templates;
         // Per instance, with Min above Max where the instance has no collision to bake.
         TVector<FVector3>            Min;
         TVector<FVector3>            Max;
@@ -1065,12 +1064,13 @@ namespace Lumina
         TVector<FVector3>            DetectedMax;
     };
 
-    struct FNavFoliageCache
+    struct FNavSourceCache
     {
         THashMap<uint32, FNavFoliageEntity> Entities;
+        NavMeshSystemInternal::FNavMeshTriangleCache MeshTriangles;
     };
 
-    namespace
+    namespace NavMeshSystemInternal
     {
         bool HasFoliageBounds(const FVector3& Mn, const FVector3& Mx)
         {
@@ -1078,7 +1078,7 @@ namespace Lumina
         }
 
         // Rebuilt only when the instances or a species' collision change, so a steady scan never re-places instances.
-        FNavFoliageEntity& RefreshFoliageEntity(FNavFoliageCache& Cache, ECS::FEntity E, const SFoliageComponent& Foliage)
+        FNavFoliageEntity& RefreshFoliageEntity(FNavSourceCache& Cache, ECS::FEntity E, const SFoliageComponent& Foliage)
         {
             FNavFoliageEntity& Entry = Cache.Entities[(uint32)E];
             Entry.bSeen = true;
@@ -1091,26 +1091,26 @@ namespace Lumina
             Entry.Signature = Signature;
             Entry.bBuilt    = true;
 
-            Entry.Templates.clear();
-            Entry.Templates.reserve(Foliage.Types.size());
+            Entry.Templates.Reset();
+            Entry.Templates.Reserve(Foliage.Types.Num());
             for (const SFoliageType& Type : Foliage.Types)
             {
-                Entry.Templates.push_back(BuildFoliageNavTemplate(Type));
+                Entry.Templates.Add(BuildFoliageNavTemplate(Type, Cache.MeshTriangles));
             }
 
             constexpr uint32 MaxKeyedInstances = 1u << 24;
-            const uint32 NumInstances = (uint32)Math::Min<size_t>(Foliage.Instances.size(), MaxKeyedInstances);
-            Entry.Min.assign(NumInstances, FVector3( FLT_MAX));
-            Entry.Max.assign(NumInstances, FVector3(-FLT_MAX));
+            const uint32 NumInstances = Math::Min<uint32>(Foliage.Instances.Num(), MaxKeyedInstances);
+            Entry.Min.Init(FVector3( FLT_MAX), NumInstances);
+            Entry.Max.Init(FVector3(-FLT_MAX), NumInstances);
             for (uint32 Index = 0; Index < NumInstances; ++Index)
             {
                 const SFoliageInstance& Instance = Foliage.Instances[Index];
-                if (!Foliage.IsValidType(Instance.TypeIndex) || !Entry.Templates[(size_t)Instance.TypeIndex].Children)
+                if (!Foliage.IsValidType(Instance.TypeIndex) || !Entry.Templates[Instance.TypeIndex].Children)
                 {
                     continue;
                 }
 
-                const FFoliageNavTemplate& Template = Entry.Templates[(size_t)Instance.TypeIndex];
+                const FFoliageNavTemplate& Template = Entry.Templates[Instance.TypeIndex];
                 const FVector3 Mn = Template.LocalMin;
                 const FVector3 Mx = Template.LocalMax;
                 const FVector3 Corners[8] = {
@@ -1122,61 +1122,55 @@ namespace Lumina
             return Entry;
         }
 
-        // A null cache leaves foliage out, for the change scan that diffs it per entity instead.
-        // Every source of one type, or only Only's, so the same per-type code serves a full walk and a single entity.
-        template<typename TComponent, typename FnEmit>
-        void ForEachNavSource(const SSystemContext& Context, const ECS::FEntity* Only, FnEmit&& Emit)
+        // Visits every source of one type, or only Only's; a null cache leaves foliage out for the change scan that diffs it per entity.
+        template<typename TComponent, typename... TBeside, typename FnEmit>
+        void ForEachNavSource(CNavMeshSystem::FSourceQueries::TSource<TComponent, TBeside...>& Query, const ECS::FEntity* Only, FnEmit&& Emit)
         {
             if (Only != nullptr)
             {
-                ECS::FRegistry& Registry = Context.GetRegistry();
-                TComponent* Component = Registry.TryGet<TComponent>(*Only);
-                STransformComponent* Transform = Component != nullptr ? Registry.TryGet<STransformComponent>(*Only) : nullptr;
+                const TComponent* Component = Query.template TryGet<TComponent>(*Only);
+                const STransformComponent* Transform = Component != nullptr ? Query.template TryGet<STransformComponent>(*Only) : nullptr;
                 if (Transform != nullptr)
                 {
-                    Emit(*Only, *Component, *Transform);
+                    Emit(*Only, *Component, *Transform, Query.template TryGet<TBeside>(*Only)...);
                 }
                 return;
             }
 
-            auto View = Context.CreateView<TComponent, STransformComponent>();
-            for (ECS::FEntity E : View)
+            Query.ForEach([&](ECS::FEntity E, const TComponent& Component, const STransformComponent& Transform, const TBeside*... Beside)
             {
-                Emit(E, View.template Get<TComponent>(E), View.template Get<STransformComponent>(E));
-            }
+                Emit(E, Component, Transform, Beside...);
+            });
         }
 
         template<typename FnEmit>
-        void ForEachFoliageSource(const SSystemContext& Context, const ECS::FEntity* Only, FnEmit&& Emit)
+        void ForEachFoliageSource(CNavMeshSystem::FSourceQueries& Queries, const ECS::FEntity* Only, FnEmit&& Emit)
         {
             if (Only != nullptr)
             {
-                if (SFoliageComponent* Foliage = Context.GetRegistry().TryGet<SFoliageComponent>(*Only))
+                if (const SFoliageComponent* Foliage = Queries.Foliage.TryGet<SFoliageComponent>(*Only))
                 {
                     Emit(*Only, *Foliage);
                 }
                 return;
             }
 
-            auto View = Context.CreateView<SFoliageComponent>();
-            for (ECS::FEntity E : View)
+            Queries.Foliage.ForEach([&](ECS::FEntity E, const SFoliageComponent& Foliage)
             {
-                Emit(E, View.Get<SFoliageComponent>(E));
-            }
+                Emit(E, Foliage);
+            });
         }
 
-        void CollectNavSources(const SSystemContext& Context, const FVector3& BakeMin, const FVector3& BakeMax, TVector<FNavSourceEntry>& Out, FNavFoliageCache* FoliageCache, const ECS::FEntity* Only = nullptr)
+        void CollectNavSources(CNavMeshSystem::FSourceQueries& Queries, const FVector3& BakeMin, const FVector3& BakeMax, TVector<FNavSourceEntry>& Out, FNavSourceCache* Cache, const ECS::FEntity* Only = nullptr)
         {
-
-            // A simulated body is loose debris rather than level geometry, and baking it would rebuild tiles every time it settles.
-            auto RigidBodies = Context.GetRegistry().GetStorage<SRigidBodyComponent>();
-            auto IsSimulated = [&RigidBodies](ECS::FEntity Entity)
+            // A simulated body is loose debris rather than level geometry, and baking it would rebuild tiles every time it settles. Concave colliders never simulate.
+            auto IsSimulated = [&Queries](ECS::FEntity Entity)
             {
-                const SRigidBodyComponent* Body = RigidBodies.TryGet(Entity);
+                const SRigidBodyComponent* Body = Queries.RigidBodies.TryGet<SRigidBodyComponent>(Entity);
                 return Body != nullptr && Body->BodyType == EBodyType::Dynamic;
             };
 
-            ForEachNavSource<SBoxColliderComponent>(Context, Only, [&](ECS::FEntity E, SBoxColliderComponent& Box, STransformComponent& X)
+            ForEachNavSource<SBoxColliderComponent>(Queries.Boxes, Only, [&](ECS::FEntity E, const SBoxColliderComponent& Box, const STransformComponent& X)
             {
                 if (!Box.bAffectsNavigation || IsSimulated(E)) return;
                 FNavSourceEntry Entry;
@@ -1184,16 +1178,13 @@ namespace Lumina
                 Entry.Prim.Type = ENavColliderType::Box;
                 Entry.Prim.World = ColliderToWorld(X, Box.TranslationOffset, Box.RotationOffset);
                 Entry.Prim.Shape = Box.HalfExtent;
-                const FVector3 H = Box.HalfExtent;
-                const FVector3 Corners[8] = {
-                    {-H.x,-H.y,-H.z}, { H.x,-H.y,-H.z}, { H.x,-H.y, H.z}, {-H.x,-H.y, H.z},
-                    {-H.x, H.y,-H.z}, { H.x, H.y,-H.z}, { H.x, H.y, H.z}, {-H.x, H.y, H.z},
-                };
+                FVector3 Corners[8];
+                BuildBoxCorners(Box.HalfExtent, Corners);
                 CornersAABB(Entry.Prim.World, Corners, 8, Entry.AABBMin, Entry.AABBMax);
-                Out.push_back(std::move(Entry));
+                Out.Add(Move(Entry));
             });
 
-            ForEachNavSource<SSphereColliderComponent>(Context, Only, [&](ECS::FEntity E, SSphereColliderComponent& Sphere, STransformComponent& X)
+            ForEachNavSource<SSphereColliderComponent>(Queries.Spheres, Only, [&](ECS::FEntity E, const SSphereColliderComponent& Sphere, const STransformComponent& X)
             {
                 if (!Sphere.bAffectsNavigation || IsSimulated(E)) return;
                 FNavSourceEntry Entry;
@@ -1205,16 +1196,16 @@ namespace Lumina
                 const float R = ScaledRadius(Entry.Prim.World, Sphere.Radius);
                 Entry.AABBMin = Center - FVector3(R);
                 Entry.AABBMax = Center + FVector3(R);
-                Out.push_back(std::move(Entry));
+                Out.Add(Move(Entry));
             });
 
             // Painted instances are world space, and erasing one shifts or swaps indices, which the detector sees as a move.
-            if (FoliageCache != nullptr)
+            if (Cache != nullptr)
             {
-                ForEachFoliageSource(Context, Only, [&](ECS::FEntity E, SFoliageComponent& Foliage)
+                ForEachFoliageSource(Queries, Only, [&](ECS::FEntity E, const SFoliageComponent& Foliage)
                 {
-                    const FNavFoliageEntity& Cached = RefreshFoliageEntity(*FoliageCache, E, Foliage);
-                    for (uint32 Index = 0; Index < (uint32)Cached.Min.size(); ++Index)
+                    const FNavFoliageEntity& Cached = RefreshFoliageEntity(*Cache, E, Foliage);
+                    for (int32 Index = 0; Index < Cached.Min.Num(); ++Index)
                     {
                         const FVector3& Mn = Cached.Min[Index];
                         const FVector3& Mx = Cached.Max[Index];
@@ -1225,7 +1216,7 @@ namespace Lumina
                         }
 
                         const SFoliageInstance& Instance = Foliage.Instances[Index];
-                        const FFoliageNavTemplate& Template = Cached.Templates[(size_t)Instance.TypeIndex];
+                        const FFoliageNavTemplate& Template = Cached.Templates[Instance.TypeIndex];
                         FNavSourceEntry Entry;
                         Entry.Key = PackSourceKey(E, ENavColliderType::Foliage, Index);
                         Entry.ContentId = Template.ContentId;
@@ -1234,65 +1225,66 @@ namespace Lumina
                         Entry.Prim.Children = Template.Children;
                         Entry.AABBMin = Mn;
                         Entry.AABBMax = Mx;
-                        Out.push_back(std::move(Entry));
+                        Out.Add(Move(Entry));
                     }
                 });
             }
 
-            ForEachNavSource<SMeshColliderComponent>(Context, Only, [&](ECS::FEntity E, SMeshColliderComponent& MC, STransformComponent& X)
+            ForEachNavSource(Queries.MeshColliders, Only, [&](ECS::FEntity E, const SMeshColliderComponent& MC, const STransformComponent& X, const SStaticMeshComponent* Fallback)
             {
-                if (!MC.bAffectsNavigation || IsSimulated(E)) return;
-                const SStaticMeshComponent* Fallback = Context.GetRegistry().TryGet<SStaticMeshComponent>(E);
+                if (!MC.bAffectsNavigation) return;
                 CStaticMesh* Mesh = ResolveMeshColliderAsset(MC, Fallback);
                 if (!Mesh || Mesh->GetMeshResource().bSkinnedMesh) return;
+                if (IsSimulated(E) && !Physics::CollisionGen::IsConcaveMeshCollider(*Mesh, MC.bConvex)) return;
 
                 // The mesh's simplified collision replaces its render triangles, as it does for the physics body.
                 if (const SMeshCollision* Collision = Mesh->GetCollision())
                 {
                     const FMatrix4 ColliderWorld = ColliderToWorld(X, MC.TranslationOffset, MC.RotationOffset);
-                    const uint64 AssetContentId = MakeContentId(Collision, Collision->TriangleIndices.size(), Collision->Primitives.size());
+                    const uint64 AssetContentId = MakeContentId(Collision, Collision->TriangleIndices.Num(), Collision->Primitives.Num());
                     ForEachMeshCollisionPrim(*Collision, ColliderWorld, [&](ENavColliderType KeyType, uint32 SubIndex, FNavSourceEntry&& Entry)
                     {
                         Entry.Key = PackSourceKey(E, KeyType, SubIndex);
                         Entry.ContentId = AssetContentId;
-                        Out.push_back(std::move(Entry));
+                        Out.Add(Move(Entry));
                     });
                     return;
                 }
 
+                FNavMeshTriangleCache Uncached;
+                FNavMeshTriangleCache& MeshTriangles = Cache != nullptr ? Cache->MeshTriangles : Uncached;
+                const FNavMeshTriangles* Triangles = MeshTriangles.Acquire(Mesh, MC.bConvex);
+                if (Triangles == nullptr) return;
                 FNavSourceEntry Entry;
                 Entry.Key = PackSourceKey(E, ENavColliderType::Mesh);
                 Entry.Prim.Type = ENavColliderType::Mesh;
                 Entry.Prim.World = ColliderToWorld(X, MC.TranslationOffset, MC.RotationOffset);
-                Entry.Prim.Mesh = Mesh;
-                const FMeshletData& MeshletData = Mesh->GetMeshResource().MeshletData;
-                Entry.ContentId = MakeContentId(Mesh, MeshletData.VertexPositions.size(), MeshletData.MeshletTriangles.size());
-                const SAABB& Local = Mesh->GetAABB();
+                Entry.Prim.TriangleSoup = Triangles->Triangles;
+                Entry.ContentId = MakeContentId(Mesh, Triangles->GeometryVersion, MC.bConvex);
+                const FVector3& Mn = Triangles->LocalMin;
+                const FVector3& Mx = Triangles->LocalMax;
                 const FVector3 Corners[8] = {
-                    {Local.Min.x, Local.Min.y, Local.Min.z}, {Local.Max.x, Local.Min.y, Local.Min.z},
-                    {Local.Min.x, Local.Max.y, Local.Min.z}, {Local.Max.x, Local.Max.y, Local.Min.z},
-                    {Local.Min.x, Local.Min.y, Local.Max.z}, {Local.Max.x, Local.Min.y, Local.Max.z},
-                    {Local.Min.x, Local.Max.y, Local.Max.z}, {Local.Max.x, Local.Max.y, Local.Max.z},
+                    {Mn.x, Mn.y, Mn.z}, {Mx.x, Mn.y, Mn.z}, {Mn.x, Mx.y, Mn.z}, {Mx.x, Mx.y, Mn.z},
+                    {Mn.x, Mn.y, Mx.z}, {Mx.x, Mn.y, Mx.z}, {Mn.x, Mx.y, Mx.z}, {Mx.x, Mx.y, Mx.z},
                 };
                 CornersAABB(Entry.Prim.World, Corners, 8, Entry.AABBMin, Entry.AABBMax);
-                Out.push_back(std::move(Entry));
+                Out.Add(Move(Entry));
             });
 
             // Fingerprinted on the render-data version so a re-commit with unchanged bounds still dirties the tile.
-            ForEachNavSource<SDynamicMeshColliderComponent>(Context, Only, [&](ECS::FEntity E, SDynamicMeshColliderComponent& DMC, STransformComponent& X)
+            ForEachNavSource(Queries.DynamicMeshColliders, Only, [&](ECS::FEntity E, const SDynamicMeshColliderComponent& DMC, const STransformComponent& X, const SDynamicMeshComponent* DMFound)
             {
-                if (!DMC.bAffectsNavigation || IsSimulated(E)) return;
-                const SDynamicMeshComponent* DMFound = Context.GetRegistry().TryGet<SDynamicMeshComponent>(E);
-                if (DMFound == nullptr) return;
+                if (!DMC.bAffectsNavigation || (DMC.bConvex && IsSimulated(E)) || DMFound == nullptr) return;
                 const SDynamicMeshComponent& DM = *DMFound;
                 TSharedPtr<FDynamicMeshRenderData> MeshData = DM.LoadRenderData();
-                if (!MeshData || MeshData->Resource.MeshletData.IsEmpty()) return;
+                if (!MeshData || (MeshData->Resource.MeshletData.IsEmpty() && MeshData->Resource.Indices.IsEmpty())) return;
                 FNavSourceEntry Entry;
                 Entry.Key = PackSourceKey(E, ENavColliderType::DynamicMesh);
                 Entry.ContentId = DM.LoadRenderDataVersion();
                 Entry.Prim.Type = ENavColliderType::DynamicMesh;
                 Entry.Prim.World = X.GetWorldMatrix();
                 Entry.Prim.DynamicMesh = MeshData;
+                Entry.Prim.bConvex = DMC.bConvex;
                 const FVector3& Mn = MeshData->LocalMin;
                 const FVector3& Mx = MeshData->LocalMax;
                 const FVector3 Corners[8] = {
@@ -1300,10 +1292,10 @@ namespace Lumina
                     {Mn.x, Mn.y, Mx.z}, {Mx.x, Mn.y, Mx.z}, {Mn.x, Mx.y, Mx.z}, {Mx.x, Mx.y, Mx.z},
                 };
                 CornersAABB(Entry.Prim.World, Corners, 8, Entry.AABBMin, Entry.AABBMax);
-                Out.push_back(std::move(Entry));
+                Out.Add(Move(Entry));
             });
 
-            ForEachNavSource<SCapsuleColliderComponent>(Context, Only, [&](ECS::FEntity E, SCapsuleColliderComponent& Cap, STransformComponent& X)
+            ForEachNavSource<SCapsuleColliderComponent>(Queries.Capsules, Only, [&](ECS::FEntity E, const SCapsuleColliderComponent& Cap, const STransformComponent& X)
             {
                 if (!Cap.bAffectsNavigation) return;
                 FNavSourceEntry Entry;
@@ -1311,15 +1303,11 @@ namespace Lumina
                 Entry.Prim.Type = ENavColliderType::Capsule;
                 Entry.Prim.World = ColliderToWorld(X, Cap.TranslationOffset, Cap.RotationOffset);
                 Entry.Prim.Shape = FVector3(Cap.Radius, Cap.HalfHeight, 0.0f);
-                const FVector3 Top = FVector3(Entry.Prim.World * FVector4(0.0f,  Cap.HalfHeight, 0.0f, 1.0f));
-                const FVector3 Bot = FVector3(Entry.Prim.World * FVector4(0.0f, -Cap.HalfHeight, 0.0f, 1.0f));
-                const float R = ScaledRadius(Entry.Prim.World, Cap.Radius);
-                Entry.AABBMin = Math::Min(Top, Bot) - FVector3(R);
-                Entry.AABBMax = Math::Max(Top, Bot) + FVector3(R);
-                Out.push_back(std::move(Entry));
+                CapsuleAABB(Entry.Prim.World, Cap.Radius, Cap.HalfHeight, Entry.AABBMin, Entry.AABBMax);
+                Out.Add(Move(Entry));
             });
 
-            ForEachNavSource<SCylinderColliderComponent>(Context, Only, [&](ECS::FEntity E, SCylinderColliderComponent& Cyl, STransformComponent& X)
+            ForEachNavSource<SCylinderColliderComponent>(Queries.Cylinders, Only, [&](ECS::FEntity E, const SCylinderColliderComponent& Cyl, const STransformComponent& X)
             {
                 if (!Cyl.bAffectsNavigation || IsSimulated(E)) return;
                 FNavSourceEntry Entry;
@@ -1327,16 +1315,12 @@ namespace Lumina
                 Entry.Prim.Type = ENavColliderType::Cylinder;
                 Entry.Prim.World = ColliderToWorld(X, Cyl.TranslationOffset, Cyl.RotationOffset);
                 Entry.Prim.Shape = FVector3(Cyl.Radius, Cyl.HalfHeight, 0.0f);
-                const FVector3 Top = FVector3(Entry.Prim.World * FVector4(0.0f,  Cyl.HalfHeight, 0.0f, 1.0f));
-                const FVector3 Bot = FVector3(Entry.Prim.World * FVector4(0.0f, -Cyl.HalfHeight, 0.0f, 1.0f));
-                const float R = ScaledRadius(Entry.Prim.World, Cyl.Radius);
-                Entry.AABBMin = Math::Min(Top, Bot) - FVector3(R);
-                Entry.AABBMax = Math::Max(Top, Bot) + FVector3(R);
-                Out.push_back(std::move(Entry));
+                CapsuleAABB(Entry.Prim.World, Cyl.Radius, Cyl.HalfHeight, Entry.AABBMin, Entry.AABBMax);
+                Out.Add(Move(Entry));
             });
 
             // Character capsules are opt-in, since agents should not normally carve the navmesh.
-            ForEachNavSource<SCharacterPhysicsComponent>(Context, Only, [&](ECS::FEntity E, SCharacterPhysicsComponent& Cap, STransformComponent& X)
+            ForEachNavSource<SCharacterPhysicsComponent>(Queries.Characters, Only, [&](ECS::FEntity E, const SCharacterPhysicsComponent& Cap, const STransformComponent& X)
             {
                 if (!Cap.bAffectsNavigation) return;
                 FNavSourceEntry Entry;
@@ -1346,21 +1330,17 @@ namespace Lumina
                 CapsuleWorld[3] = CapsuleWorld * FVector4(Cap.TranslationOffset.x, Cap.TranslationOffset.y, Cap.TranslationOffset.z, 1.0f);
                 Entry.Prim.World = CapsuleWorld;
                 Entry.Prim.Shape = FVector3(Cap.Radius, Cap.HalfHeight, 0.0f);
-                const FVector3 Top = FVector3(Entry.Prim.World * FVector4(0.0f,  Cap.HalfHeight, 0.0f, 1.0f));
-                const FVector3 Bot = FVector3(Entry.Prim.World * FVector4(0.0f, -Cap.HalfHeight, 0.0f, 1.0f));
-                const float R = ScaledRadius(Entry.Prim.World, Cap.Radius);
-                Entry.AABBMin = Math::Min(Top, Bot) - FVector3(R);
-                Entry.AABBMax = Math::Max(Top, Bot) + FVector3(R);
-                Out.push_back(std::move(Entry));
+                CapsuleAABB(Entry.Prim.World, Cap.Radius, Cap.HalfHeight, Entry.AABBMin, Entry.AABBMax);
+                Out.Add(Move(Entry));
             });
 
             // A compound body is several primitives under one transform, so each child is its own source.
-            ForEachNavSource<SCompoundColliderComponent>(Context, Only, [&](ECS::FEntity E, SCompoundColliderComponent& Compound, STransformComponent& X)
+            ForEachNavSource<SCompoundColliderComponent>(Queries.Compounds, Only, [&](ECS::FEntity E, const SCompoundColliderComponent& Compound, const STransformComponent& X)
             {
                 if (!Compound.bAffectsNavigation || IsSimulated(E)) return;
 
                 const FMatrix4 BodyWorld = X.GetWorldMatrix();
-                for (uint32 i = 0; i < (uint32)Compound.Shapes.size(); ++i)
+                for (int32 i = 0; i < Compound.Shapes.Num(); ++i)
                 {
                     const SCompoundSubShape& Child = Compound.Shapes[i];
 
@@ -1390,12 +1370,7 @@ namespace Lumina
                             Entry.Key = PackSourceKey(E, bCapsule ? ENavColliderType::Capsule : ENavColliderType::Cylinder, SubIndex);
                             Entry.Prim.Type = bCapsule ? ENavColliderType::Capsule : ENavColliderType::Cylinder;
                             Entry.Prim.Shape = FVector3(Child.Radius, Child.HalfHeight, 0.0f);
-
-                            const FVector3 Top = FVector3(Entry.Prim.World * FVector4(0.0f,  Child.HalfHeight, 0.0f, 1.0f));
-                            const FVector3 Bot = FVector3(Entry.Prim.World * FVector4(0.0f, -Child.HalfHeight, 0.0f, 1.0f));
-                            const float R = ScaledRadius(Entry.Prim.World, Child.Radius);
-                            Entry.AABBMin = Math::Min(Top, Bot) - FVector3(R);
-                            Entry.AABBMax = Math::Max(Top, Bot) + FVector3(R);
+                            CapsuleAABB(Entry.Prim.World, Child.Radius, Child.HalfHeight, Entry.AABBMin, Entry.AABBMax);
                         }
                         break;
 
@@ -1405,22 +1380,19 @@ namespace Lumina
                             Entry.Prim.Type = ENavColliderType::Box;
                             Entry.Prim.Shape = Child.HalfExtent;
 
-                            const FVector3 H = Child.HalfExtent;
-                            const FVector3 Corners[8] = {
-                                {-H.x,-H.y,-H.z}, { H.x,-H.y,-H.z}, { H.x,-H.y, H.z}, {-H.x,-H.y, H.z},
-                                {-H.x, H.y,-H.z}, { H.x, H.y,-H.z}, { H.x, H.y, H.z}, {-H.x, H.y, H.z},
-                            };
+                            FVector3 Corners[8];
+                            BuildBoxCorners(Child.HalfExtent, Corners);
                             CornersAABB(Entry.Prim.World, Corners, 8, Entry.AABBMin, Entry.AABBMax);
                         }
                         break;
                     }
 
-                    Out.push_back(std::move(Entry));
+                    Out.Add(Move(Entry));
                 }
             });
 
             // Area modifiers carry no triangles; the bake stamps their footprint onto the voxelized surface.
-            ForEachNavSource<SNavModifierComponent>(Context, Only, [&](ECS::FEntity E, SNavModifierComponent& Modifier, STransformComponent& X)
+            ForEachNavSource<SNavModifierComponent>(Queries.Modifiers, Only, [&](ECS::FEntity E, const SNavModifierComponent& Modifier, const STransformComponent& X)
             {
                 if (!Modifier.bEnabled) return;
                 if (Modifier.Extents.x <= 0.0f || Modifier.Extents.y <= 0.0f || Modifier.Extents.z <= 0.0f) return;
@@ -1430,15 +1402,12 @@ namespace Lumina
                 Entry.Prim.Type = ENavColliderType::AreaVolume;
                 Entry.Prim.World = X.GetWorldMatrix() * Math::Translate(FMatrix4(1.0f), Modifier.Offset);
 
-                const FVector3 H = Modifier.Extents;
-                const FVector3 LocalCorners[8] = {
-                    {-H.x,-H.y,-H.z}, { H.x,-H.y,-H.z}, { H.x,-H.y, H.z}, {-H.x,-H.y, H.z},
-                    {-H.x, H.y,-H.z}, { H.x, H.y,-H.z}, { H.x, H.y, H.z}, {-H.x, H.y, H.z},
-                };
+                FVector3 LocalCorners[8];
+                BuildBoxCorners(Modifier.Extents, LocalCorners);
                 FVector3 WorldCorners[8];
+                TransformCorners(Entry.Prim.World, LocalCorners, WorldCorners);
                 for (int32 i = 0; i < 8; ++i)
                 {
-                    WorldCorners[i] = FVector3(Entry.Prim.World * FVector4(LocalCorners[i], 1.0f));
                     Entry.AABBMin = Math::Min(Entry.AABBMin, WorldCorners[i]);
                     Entry.AABBMax = Math::Max(Entry.AABBMax, WorldCorners[i]);
                 }
@@ -1448,12 +1417,12 @@ namespace Lumina
                 Volume->MinY = Entry.AABBMin.y;
                 Volume->MaxY = Entry.AABBMax.y;
                 Volume->Area = (uint8)Modifier.Area;
-                Entry.Prim.AreaVolume = std::move(Volume);
-                Out.push_back(std::move(Entry));
+                Entry.Prim.AreaVolume = Move(Volume);
+                Out.Add(Move(Entry));
             });
 
             // Off-mesh links are stitched in by the bake; each endpoint has to land on walkable surface.
-            ForEachNavSource<SNavLinkComponent>(Context, Only, [&](ECS::FEntity E, SNavLinkComponent& LinkComp, STransformComponent& X)
+            ForEachNavSource<SNavLinkComponent>(Queries.Links, Only, [&](ECS::FEntity E, const SNavLinkComponent& LinkComp, const STransformComponent& X)
             {
                 if (!LinkComp.bEnabled) return;
 
@@ -1474,16 +1443,15 @@ namespace Lumina
                 const FVector3 Pad(Link->Radius);
                 Entry.AABBMin = Math::Min(Link->Start, Link->End) - Pad;
                 Entry.AABBMax = Math::Max(Link->Start, Link->End) + Pad;
-                Entry.Prim.Link = std::move(Link);
-                Out.push_back(std::move(Entry));
+                Entry.Prim.Link = Move(Link);
+                Out.Add(Move(Entry));
             });
 
             // Terrain heightfield needs both the collider and the source component.
-            ForEachNavSource<STerrainColliderComponent>(Context, Only, [&](ECS::FEntity E, STerrainColliderComponent& TC, STransformComponent& X)
+            ForEachNavSource(Queries.TerrainColliders, Only, [&](ECS::FEntity E, const STerrainColliderComponent& TC, const STransformComponent& X, const STerrainComponent* Terrain)
             {
                 if (!TC.bAffectsNavigation) return;
-                const STerrainComponent* Terrain = Context.GetRegistry().TryGet<STerrainComponent>(E);
-                if (!Terrain || Terrain->Heightmap.empty()) return;
+                if (!Terrain || Terrain->Heightmap.IsEmpty()) return;
                 FNavSourceEntry Entry;
                 Entry.Key = PackSourceKey(E, ENavColliderType::Terrain);
                 Entry.ContentId = Terrain->CPUState.HeightmapVersion;
@@ -1495,17 +1463,16 @@ namespace Lumina
                     {-Half, Terrain->MaxHeight, -Half}, { Half, Terrain->MaxHeight, -Half}, { Half, Terrain->MaxHeight,  Half}, {-Half, Terrain->MaxHeight,  Half},
                 };
                 CornersAABB(Entry.Prim.World, Corners, 8, Entry.AABBMin, Entry.AABBMax);
-                Out.push_back(std::move(Entry));
+                Out.Add(Move(Entry));
             });
 
-            // Without this the caller's box only culls per triangle, after emit has already transformed
-            // geometry it is about to throw away.
-            Out.erase(Algo::RemoveIf(Out, [&BakeMin, &BakeMax](const FNavSourceEntry& Entry)
+            // Without this the caller's box only culls per triangle, after emit has already transformed geometry it is about to throw away.
+            Out.RemoveAll([&BakeMin, &BakeMax](const FNavSourceEntry& Entry)
             {
                 return Entry.AABBMin.x > BakeMax.x || Entry.AABBMax.x < BakeMin.x
                     || Entry.AABBMin.y > BakeMax.y || Entry.AABBMax.y < BakeMin.y
                     || Entry.AABBMin.z > BakeMax.z || Entry.AABBMax.z < BakeMin.z;
-            }), Out.end());
+            });
         }
 
 
@@ -1527,16 +1494,17 @@ namespace Lumina
     struct FNavSourceTracker
     {
         FNavOctree                              Octree;
-        TVector<FNavSourceEntry>                Records;
+        TVector<NavMeshSystemInternal::FNavSourceEntry> Records;
         TVector<uint32>                         RecordElement;
         TVector<uint32>                         FreeRecords;
         THashMap<uint64, uint32>                RecordOfKey;
         THashMap<ECS::FEntity, TVector<uint64>> KeysOfEntity;
-        FNavFoliageCache                        Foliage;
+        FNavSourceCache                         Cache;
 
         // Raised by component signals, which a parallel script's patch can fire off the game thread.
         FMutex                                  PendingLock;
         THashSet<ECS::FEntity>                  Pending;
+        THashSet<ECS::FEntity>                  WorkScratch;
 
         TVector<ECS::FEntity>                   MovedScratch;
         TVector<TVector<ECS::FEntity>>          PollBuckets;
@@ -1544,10 +1512,9 @@ namespace Lumina
         TVector<FPolledVersion>                 PolledTerrain;
         TVector<FPolledVersion>                 PolledDynamicMeshes;
         TVector<FPolledVersion>                 PolledFoliage;
-        TVector<FNavSourceEntry>                EntryScratch;
+        TVector<NavMeshSystemInternal::FNavSourceEntry> EntryScratch;
         TVector<ECS::FEntity>                   SweepOrder;
-        size_t                                  SweepCursor = 0;
-        uint32                                  MovedConsumer = Constants::kIndexNoneU32;
+        int32                                   SweepCursor = 0;
         bool                                    bSeeded = false;
 
         // Footprints that changed this tick, the old one and the new, which every volume turns into dirty tiles.
@@ -1559,127 +1526,134 @@ namespace Lumina
         TUniquePtr<FNavBuildPool>               BuildPool;
     };
 
-    namespace
+    namespace NavMeshSystemInternal
     {
-        FNavSourceTracker* FindSourceTracker(const SSystemContext& Context)
+        void MarkSourcePending(FNavSourceTracker& Sources, ECS::FEntity Entity)
         {
-            TUniquePtr<FNavSourceTracker>* Holder = Context.GetRegistry().Ctx().Find<TUniquePtr<FNavSourceTracker>>();
-            return Holder != nullptr ? Holder->get() : nullptr;
-        }
-
-        void MarkSourcePending(ECS::FRegistry& Registry, ECS::FEntity Entity)
-        {
-            if (TUniquePtr<FNavSourceTracker>* Holder = Registry.Ctx().Find<TUniquePtr<FNavSourceTracker>>(); Holder != nullptr && *Holder)
-            {
-                FScopeLock Lock((*Holder)->PendingLock);
-                (*Holder)->Pending.insert(Entity);
-            }
+            FScopeLock Lock(Sources.PendingLock);
+            Sources.Pending.Add(Entity);
         }
 
         template<typename TComponent>
-        void WatchSourceComponent(ECS::FRegistry& Registry)
+        void WatchSourceComponent(ECS::FRegistry& Registry, FNavSourceTracker* Sources, bool bWatch)
         {
             ECS::FComponentSignals& Signals = Registry.GetSignals<TComponent>();
-            Signals.OnConstruct.template Connect<&MarkSourcePending>();
-            Signals.OnDestroy.template Connect<&MarkSourcePending>();
-            Signals.OnUpdate.template Connect<&MarkSourcePending>();
+            for (ECS::FComponentSignal* Signal : { &Signals.OnConstruct, &Signals.OnDestroy, &Signals.OnUpdate })
+            {
+                if (bWatch)
+                {
+                    Signal->template Connect<&MarkSourcePending>(Sources);
+                }
+                else
+                {
+                    Signal->template Disconnect<&MarkSourcePending>(Sources);
+                }
+            }
         }
 
-        template<typename... TComponents>
-        void WatchSourceComponents(ECS::FRegistry& Registry)
+        void WatchSourceComponents(ECS::FRegistry& Registry, FNavSourceTracker* Sources, bool bWatch)
         {
-            (WatchSourceComponent<TComponents>(Registry), ...);
+            [&]<typename... TComponents>(ECS::TTypeList<TComponents...>)
+            {
+                (WatchSourceComponent<TComponents>(Registry, Sources, bWatch), ...);
+            }(ECS::TTypeList<SBoxColliderComponent, SSphereColliderComponent, SMeshColliderComponent, SCapsuleColliderComponent, SCylinderColliderComponent,
+                SCharacterPhysicsComponent, STerrainColliderComponent, STerrainComponent, SStaticMeshComponent, SDynamicMeshColliderComponent, SDynamicMeshComponent,
+                SCompoundColliderComponent, SNavModifierComponent, SNavLinkComponent, SFoliageComponent, SRigidBodyComponent>{});
         }
 
         void AddSourceRecord(FNavSourceTracker& Sources, FNavSourceEntry&& Entry)
         {
             uint32 Index;
-            if (!Sources.FreeRecords.empty())
+            if (!Sources.FreeRecords.IsEmpty())
             {
-                Index = Sources.FreeRecords.back();
-                Sources.FreeRecords.pop_back();
+                Index = Sources.FreeRecords.Last();
+                Sources.FreeRecords.Pop();
             }
             else
             {
-                Index = (uint32)Sources.Records.size();
-                Sources.Records.emplace_back();
-                Sources.RecordElement.push_back(FNavOctree::kNone);
+                Index = (uint32)Sources.Records.Num();
+                Sources.Records.Emplace();
+                Sources.RecordElement.Add(FNavOctree::kNone);
             }
             Sources.RecordOfKey[Entry.Key] = Index;
             Sources.RecordElement[Index] = Sources.Octree.Add(Entry.AABBMin, Entry.AABBMax, Index);
-            Sources.Records[Index] = std::move(Entry);
+            Sources.Records[Index] = Move(Entry);
         }
 
         void RemoveSourceRecord(FNavSourceTracker& Sources, uint32 Index)
         {
             Sources.Octree.Remove(Sources.RecordElement[Index]);
-            Sources.RecordOfKey.erase(Sources.Records[Index].Key);
+            Sources.RecordOfKey.Remove(Sources.Records[Index].Key);
             Sources.Records[Index] = FNavSourceEntry{};
             Sources.RecordElement[Index] = FNavOctree::kNone;
-            Sources.FreeRecords.push_back(Index);
+            Sources.FreeRecords.Add(Index);
         }
 
         void RebuildSweepOrder(FNavSourceTracker& Sources)
         {
-            Sources.SweepOrder.clear();
-            Sources.SweepOrder.reserve(Sources.KeysOfEntity.size());
+            Sources.SweepOrder.Reset();
+            Sources.SweepOrder.Reserve(Sources.KeysOfEntity.Num());
             for (const auto& [Entity, Keys] : Sources.KeysOfEntity)
             {
-                Sources.SweepOrder.push_back(Entity);
+                Sources.SweepOrder.Add(Entity);
             }
             Sources.SweepCursor = 0;
+
+            // Once a lap, so meshes unloaded since the last one stop holding their triangles.
+            Sources.Cache.MeshTriangles.ForgetFreedMeshes();
         }
 
-        void SeedSources(const SSystemContext& Context, FNavSourceTracker& Sources)
+        void SeedSources(CNavMeshSystem::FSourceQueries& Queries, FNavSourceTracker& Sources)
         {
             TVector<FNavSourceEntry> All;
-            CollectNavSources(Context, FVector3(-kUnbounded), FVector3(kUnbounded), All, &Sources.Foliage);
-            Sources.Records.reserve(All.size());
-            Sources.RecordElement.reserve(All.size());
+            CollectNavSources(Queries, FVector3(-kUnbounded), FVector3(kUnbounded), All, &Sources.Cache);
+            Sources.Records.Reserve(All.Num());
+            Sources.RecordElement.Reserve(All.Num());
             for (FNavSourceEntry& Entry : All)
             {
                 const ECS::FEntity Owner = EntityOfSourceKey(Entry.Key);
-                Sources.KeysOfEntity[Owner].push_back(Entry.Key);
-                ECS::Utils::SetMovedTransformInterest(Context.GetRegistry(), Sources.MovedConsumer, Owner, true);
-                AddSourceRecord(Sources, std::move(Entry));
+                Sources.KeysOfEntity[Owner].Add(Entry.Key);
+                Queries.Moved.Watch(Owner, true);
+                AddSourceRecord(Sources, Move(Entry));
             }
             RebuildSweepOrder(Sources);
             Sources.bSeeded = true;
         }
 
         // Diffs what the entity contributes now against what was recorded, and logs the footprint of anything that changed.
-        void RefreshSourceEntity(const SSystemContext& Context, FNavSourceTracker& Sources, ECS::FEntity Entity)
+        void RefreshSourceEntity(const SSystemContext& Context, CNavMeshSystem::FSourceQueries& Queries, FNavSourceTracker& Sources, ECS::FEntity Entity)
         {
             ++Sources.Refreshed;
             TVector<FNavSourceEntry>& Current = Sources.EntryScratch;
-            Current.clear();
-            if (Context.GetRegistry().IsValid(Entity))
+            Current.Reset();
+            const bool bValid = Context.IsValidEntity(Entity);
+            if (bValid)
             {
-                CollectNavSources(Context, FVector3(-kUnbounded), FVector3(kUnbounded), Current, &Sources.Foliage, &Entity);
+                CollectNavSources(Queries, FVector3(-kUnbounded), FVector3(kUnbounded), Current, &Sources.Cache, &Entity);
             }
-            if (!Context.GetRegistry().IsValid(Entity) || !Context.GetRegistry().HasAll<SFoliageComponent>(Entity))
+            if (!bValid || Queries.Foliage.TryGet<SFoliageComponent>(Entity) == nullptr)
             {
-                Sources.Foliage.Entities.erase((uint32)Entity);
+                Sources.Cache.Entities.Remove((uint32)Entity);
             }
 
-            auto KeysIt = Sources.KeysOfEntity.find(Entity);
-            TVector<uint64> Previous = KeysIt != Sources.KeysOfEntity.end() ? std::move(KeysIt->second) : TVector<uint64>();
+            auto KeysIt = Sources.KeysOfEntity.Find(Entity);
+            TVector<uint64> Previous = KeysIt != nullptr ? Move(*KeysIt) : TVector<uint64>();
 
             TVector<uint64> Kept;
-            Kept.reserve(Current.size());
+            Kept.Reserve(Current.Num());
             for (FNavSourceEntry& Entry : Current)
             {
-                Kept.push_back(Entry.Key);
-                auto Found = Sources.RecordOfKey.find(Entry.Key);
-                if (Found == Sources.RecordOfKey.end())
+                Kept.Add(Entry.Key);
+                auto Found = Sources.RecordOfKey.Find(Entry.Key);
+                if (Found == nullptr)
                 {
                     ++Sources.Counts[0];
-                    Sources.Changes.push_back(FNavSourceBounds{ Entry.AABBMin, Entry.AABBMax, !IsAnnotation(Entry.Prim.Type) });
-                    AddSourceRecord(Sources, std::move(Entry));
+                    Sources.Changes.Emplace(Entry.AABBMin, Entry.AABBMax, !IsAnnotation(Entry.Prim.Type));
+                    AddSourceRecord(Sources, Move(Entry));
                     continue;
                 }
 
-                FNavSourceEntry& Record = Sources.Records[Found->second];
+                FNavSourceEntry& Record = Sources.Records[(*Found)];
                 const bool bMoved = !Math::IsNearlyEqual(Record.AABBMin, Entry.AABBMin) || !Math::IsNearlyEqual(Record.AABBMax, Entry.AABBMax);
 
                 // A re-imported, swapped or sculpted mesh keeps its bounds, so the box alone misses it.
@@ -1687,81 +1661,87 @@ namespace Lumina
                 if (bMoved || bReshaped)
                 {
                     ++Sources.Counts[bMoved ? 1 : 2];
-                    Sources.Changes.push_back(FNavSourceBounds{ Record.AABBMin, Record.AABBMax, !IsAnnotation(Record.Prim.Type) });
-                    Sources.Changes.push_back(FNavSourceBounds{ Entry.AABBMin, Entry.AABBMax, !IsAnnotation(Entry.Prim.Type) });
-                    Sources.Octree.Update(Sources.RecordElement[Found->second], Entry.AABBMin, Entry.AABBMax);
+                    Sources.Changes.Emplace(Record.AABBMin, Record.AABBMax, !IsAnnotation(Record.Prim.Type));
+                    Sources.Changes.Emplace(Entry.AABBMin, Entry.AABBMax, !IsAnnotation(Entry.Prim.Type));
+                    Sources.Octree.Update(Sources.RecordElement[(*Found)], Entry.AABBMin, Entry.AABBMax);
                 }
-                Record = std::move(Entry);
+                Record = Move(Entry);
             }
 
             // A foliage entity keeps tens of thousands of keys, so the vanished ones are found with a set rather than a scan.
             THashSet<uint64> KeptSet;
-            const bool bUseSet = Kept.size() > 32;
+            const bool bUseSet = Kept.Num() > 32;
             if (bUseSet)
             {
-                KeptSet.insert(Kept.begin(), Kept.end());
+                KeptSet.Append(Kept);
             }
             for (uint64 Key : Previous)
             {
-                const bool bStillThere = bUseSet ? KeptSet.contains(Key) : Algo::Contains(Kept, Key);
-                auto Found = bStillThere ? Sources.RecordOfKey.end() : Sources.RecordOfKey.find(Key);
-                if (Found != Sources.RecordOfKey.end())
+                const bool bStillThere = bUseSet ? KeptSet.Contains(Key) : Algo::Contains(Kept, Key);
+                auto Found = bStillThere ? nullptr : Sources.RecordOfKey.Find(Key);
+                if (Found != nullptr)
                 {
                     ++Sources.Counts[3];
-                    const FNavSourceEntry& Record = Sources.Records[Found->second];
-                    Sources.Changes.push_back(FNavSourceBounds{ Record.AABBMin, Record.AABBMax, !IsAnnotation(Record.Prim.Type) });
-                    RemoveSourceRecord(Sources, Found->second);
+                    const FNavSourceEntry& Record = Sources.Records[(*Found)];
+                    Sources.Changes.Emplace(Record.AABBMin, Record.AABBMax, !IsAnnotation(Record.Prim.Type));
+                    RemoveSourceRecord(Sources, (*Found));
                 }
             }
 
-            if (Kept.empty())
+            if (Kept.IsEmpty())
             {
-                if (KeysIt != Sources.KeysOfEntity.end())
+                if (KeysIt != nullptr)
                 {
-                    Sources.KeysOfEntity.erase(KeysIt);
+                    Sources.KeysOfEntity.Remove(Entity);
                 }
-                ECS::Utils::SetMovedTransformInterest(Context.GetRegistry(), Sources.MovedConsumer, Entity, false);
+                Queries.Moved.Watch(Entity, false);
                 return;
             }
-            if (KeysIt == Sources.KeysOfEntity.end())
+            if (KeysIt == nullptr)
             {
-                Sources.SweepOrder.push_back(Entity);
+                Sources.SweepOrder.Add(Entity);
             }
-            Sources.KeysOfEntity[Entity] = std::move(Kept);
-            ECS::Utils::SetMovedTransformInterest(Context.GetRegistry(), Sources.MovedConsumer, Entity, true);
+            Sources.KeysOfEntity[Entity] = Move(Kept);
+            Queries.Moved.Watch(Entity, true);
         }
 
         // Spread over the workers since a streamed world carries tens of thousands, and only a version not seen last poll reaches IsStale.
         template<typename T, typename FnVersion, typename FnStale>
-        void QueueStaleSources(const SSystemContext& Context, FNavSourceTracker& Sources, TVector<FPolledVersion>& Polled, THashSet<ECS::FEntity>& Work,
+        void QueueStaleSources(const ECS::TQuery<ECS::Read<T>>& Pool, FNavSourceTracker& Sources, TVector<FPolledVersion>& Polled, THashSet<ECS::FEntity>& Work,
                                FnVersion&& Version, FnStale&& IsStale)
         {
-            const ECS::TComponentStorage<T> Storage = Context.GetRegistry().FindStorage<T>();
-            if (!Storage)
+            const auto View = Pool.View();
+            const TSpan<const ECS::FEntity> DenseSlots = View.GetDenseEntities();
+            if (DenseSlots.IsEmpty())
             {
-                Polled.clear();
+                Polled.Reset();
                 return;
             }
 
-            const uint32 Num = (uint32)Storage.GetDenseSize();
-            Polled.resize(Num);
+            const uint32 Num = (uint32)DenseSlots.Num();
+            Polled.SetNum(Num);
 
-            const uint32 NumBuckets = Math::Max(1u, GTaskSystem != nullptr ? GTaskSystem->GetNumTaskThreads() : 1u);
-            if ((uint32)Sources.PollBuckets.size() < NumBuckets)
+            const uint32 NumBuckets = Math::Max(1u, Jobs::IsRuntimeRunning() ? Jobs::GetNumThreadSlots() : 1u);
+            if ((uint32)Sources.PollBuckets.Num() < NumBuckets)
             {
-                Sources.PollBuckets.resize(NumBuckets);
+                Sources.PollBuckets.SetNum(NumBuckets);
             }
 
             constexpr uint32 MinSlotsToSplit = 4096;
-            Task::ParallelForOrSerial(Num, MinSlotsToSplit, [&](const Task::FParallelRange& Range)
+            Jobs::ParallelForOrSerial(Num, MinSlotsToSplit, [&](const Jobs::FParallelRange& Range)
             {
                 TVector<ECS::FEntity>& Bucket = Sources.PollBuckets[Range.Thread];
-                const ECS::FEntity* Dense = Storage.GetDenseData();
+                const ECS::FEntity* Dense = DenseSlots.GetData();
                 for (uint32 i = Range.Start; i < Range.End; ++i)
                 {
                     const ECS::FEntity E = Dense[i];
+                    if (E.IsTombstone())
+                    {
+                        continue;
+                    }
+                    const T& Component = View.template Get<ECS::Read<T>>(E);
                     uint32 Current = 0;
-                    if (E.IsTombstone() || !Version(E, Storage.GetAtDense(i), Current))
+                    if (!Version(E, Component, Current))
                     {
                         continue;
                     }
@@ -1771,9 +1751,9 @@ namespace Lumina
                     {
                         continue;
                     }
-                    if (IsStale(E, Storage.GetAtDense(i), Current))
+                    if (IsStale(E, Component, Current))
                     {
-                        Bucket.push_back(E);
+                        Bucket.Add(E);
                     }
                     Seen = FPolledVersion{ E, Current };
                 }
@@ -1781,25 +1761,24 @@ namespace Lumina
 
             for (TVector<ECS::FEntity>& Bucket : Sources.PollBuckets)
             {
-                Work.insert(Bucket.begin(), Bucket.end());
-                Bucket.clear();
+                Work.Append(Bucket);
+                Bucket.Reset();
             }
         }
 
         // Content that changes without a move or a signal, a sculpted heightmap or a re-committed dynamic mesh, polled by version.
-        void QueueVersionedSources(const SSystemContext& Context, FNavSourceTracker& Sources, THashSet<ECS::FEntity>& Work)
+        void QueueVersionedSources(CNavMeshSystem::FSourceQueries& Queries, FNavSourceTracker& Sources, THashSet<ECS::FEntity>& Work)
         {
-            const ECS::FRegistry& Registry = Context.GetRegistry();
             auto RecordedContent = [&Sources](uint64 Key, uint64 ContentId)
             {
-                auto Found = Sources.RecordOfKey.find(Key);
-                return Found == Sources.RecordOfKey.end() || Sources.Records[Found->second].ContentId != ContentId;
+                auto Found = Sources.RecordOfKey.Find(Key);
+                return Found == nullptr || Sources.Records[(*Found)].ContentId != ContentId;
             };
 
-            QueueStaleSources<STerrainColliderComponent>(Context, Sources, Sources.PolledTerrain, Work,
+            QueueStaleSources<STerrainColliderComponent>(Queries.TerrainPool, Sources, Sources.PolledTerrain, Work,
                 [&](ECS::FEntity E, const STerrainColliderComponent&, uint32& Out)
                 {
-                    const STerrainComponent* Terrain = Registry.TryGet<STerrainComponent>(E);
+                    const STerrainComponent* Terrain = Queries.Terrains.TryGet<STerrainComponent>(E);
                     Out = Terrain != nullptr ? Terrain->CPUState.HeightmapVersion : 0u;
                     return Terrain != nullptr;
                 },
@@ -1808,10 +1787,10 @@ namespace Lumina
                     return RecordedContent(PackSourceKey(E, ENavColliderType::Terrain), Current);
                 });
 
-            QueueStaleSources<SDynamicMeshColliderComponent>(Context, Sources, Sources.PolledDynamicMeshes, Work,
+            QueueStaleSources<SDynamicMeshColliderComponent>(Queries.DynamicMeshPool, Sources, Sources.PolledDynamicMeshes, Work,
                 [&](ECS::FEntity E, const SDynamicMeshColliderComponent&, uint32& Out)
                 {
-                    const SDynamicMeshComponent* Mesh = Registry.TryGet<SDynamicMeshComponent>(E);
+                    const SDynamicMeshComponent* Mesh = Queries.DynamicMeshes.TryGet<SDynamicMeshComponent>(E);
                     Out = Mesh != nullptr ? Mesh->LoadRenderDataVersion() : 0u;
                     return Mesh != nullptr;
                 },
@@ -1821,7 +1800,7 @@ namespace Lumina
                 });
 
             // Gated on the instance version, so a re-imported species shape with no instance edit waits for the sweep.
-            QueueStaleSources<SFoliageComponent>(Context, Sources, Sources.PolledFoliage, Work,
+            QueueStaleSources<SFoliageComponent>(Queries.Foliage, Sources, Sources.PolledFoliage, Work,
                 [](ECS::FEntity, const SFoliageComponent& Foliage, uint32& Out)
                 {
                     Out = Foliage.InstancesVersion;
@@ -1829,16 +1808,15 @@ namespace Lumina
                 },
                 [&](ECS::FEntity E, const SFoliageComponent& Foliage, uint32)
                 {
-                    auto Cached = Sources.Foliage.Entities.find((uint32)E);
-                    return Cached == Sources.Foliage.Entities.end() || Cached->second.Signature != FoliageNavSignature(Foliage);
+                    auto Cached = Sources.Cache.Entities.Find((uint32)E);
+                    return Cached == nullptr || Cached->Signature != FoliageNavSignature(Foliage);
                 });
         }
 
-        void UpdateSources(const SSystemContext& Context, FNavSourceTracker& Sources)
+        void UpdateSources(const SSystemContext& Context, CNavMeshSystem::FSourceQueries& Queries, FNavSourceTracker& Sources)
         {
             LUMINA_PROFILE_SCOPE();
-            ECS::FRegistry& Registry = Context.GetRegistry();
-            Sources.Changes.clear();
+            Sources.Changes.Reset();
             Sources.Refreshed = 0;
             for (int32& Count : Sources.Counts)
             {
@@ -1847,57 +1825,57 @@ namespace Lumina
 
             if (!Sources.bSeeded)
             {
-                SeedSources(Context, Sources);
+                SeedSources(Queries, Sources);
                 return;
             }
 
             // Characters and projectiles move every frame, so only entities that already contribute a source are worth a look.
-            Sources.MovedScratch.clear();
-            ECS::Utils::DrainMovedTransforms(Registry, Sources.MovedConsumer, Sources.MovedScratch);
+            Sources.MovedScratch.Reset();
+            Queries.Moved.Drain(Sources.MovedScratch);
 
-            THashSet<ECS::FEntity> Work;
+            THashSet<ECS::FEntity>& Work = Sources.WorkScratch;
+            Work.Reset();
             {
                 FScopeLock Lock(Sources.PendingLock);
-                Work = std::move(Sources.Pending);
-                Sources.Pending.clear();
+                swap(Work, Sources.Pending);
             }
             for (ECS::FEntity Moved : Sources.MovedScratch)
             {
-                if (Sources.KeysOfEntity.contains(Moved))
+                if (Sources.KeysOfEntity.Contains(Moved))
                 {
-                    Work.insert(Moved);
+                    Work.Add(Moved);
                 }
             }
 
-            QueueVersionedSources(Context, Sources, Work);
+            QueueVersionedSources(Queries, Sources, Work);
 
             // A collider written in place raises no signal, so a slice is checked each tick, counted in sources since one foliage entity carries thousands.
             int32 Remaining = Math::Max(0, NavSettings().SourceVerifyBudget);
-            while (Remaining > 0 && !Sources.SweepOrder.empty())
+            while (Remaining > 0 && !Sources.SweepOrder.IsEmpty())
             {
-                if (Sources.SweepCursor >= Sources.SweepOrder.size())
+                if (Sources.SweepCursor >= Sources.SweepOrder.Num())
                 {
                     RebuildSweepOrder(Sources);
                     // Every source may have unloaded since the last pass, which leaves nothing to sweep.
-                    if (Sources.SweepOrder.empty())
+                    if (Sources.SweepOrder.IsEmpty())
                     {
                         break;
                     }
                 }
                 const ECS::FEntity Entity = Sources.SweepOrder[Sources.SweepCursor++];
-                auto Keys = Sources.KeysOfEntity.find(Entity);
-                Remaining -= Keys != Sources.KeysOfEntity.end() ? Math::Max(1, (int32)Keys->second.size()) : 1;
-                Work.insert(Entity);
+                auto Keys = Sources.KeysOfEntity.Find(Entity);
+                Remaining -= Keys != nullptr ? Math::Max(1, Keys->Num()) : 1;
+                Work.Add(Entity);
             }
 
             for (ECS::FEntity Entity : Work)
             {
-                RefreshSourceEntity(Context, Sources, Entity);
+                RefreshSourceEntity(Context, Queries, Sources, Entity);
             }
         }
 
         // What lies under a box, read from the index, with terrain tessellated only inside it.
-        void GatherSourcePrims(const SSystemContext& Context, const FNavSourceTracker& Sources, const FVector3& Min, const FVector3& Max, float CellSize, TVector<FNavSourcePrim>& Out,
+        void GatherSourcePrims(CNavMeshSystem::FSourceQueries& Queries, const FNavSourceTracker& Sources, const FVector3& Min, const FVector3& Max, float CellSize, TVector<FNavSourcePrim>& Out,
                                bool bAnnotationsOnly = false)
         {
             Sources.Octree.Query(Min, Max, [&](uint32 Index, const FVector3&, const FVector3&)
@@ -1909,16 +1887,16 @@ namespace Lumina
                 }
                 if (Record.Prim.Type != ENavColliderType::Terrain)
                 {
-                    Out.push_back(Record.Prim);
+                    Out.Add(Record.Prim);
                     return;
                 }
 
-                const STerrainComponent* Terrain = Context.GetRegistry().TryGet<STerrainComponent>(EntityOfSourceKey(Record.Key));
-                if (Terrain == nullptr || Terrain->Heightmap.empty())
+                const STerrainComponent* Terrain = Queries.Terrains.TryGet<STerrainComponent>(EntityOfSourceKey(Record.Key));
+                if (Terrain == nullptr || Terrain->Heightmap.IsEmpty())
                 {
                     return;
                 }
-                FNavSourcePrim& Prim = Out.emplace_back(Record.Prim);
+                FNavSourcePrim& Prim = Out.EmplaceGetRef(Record.Prim);
                 Prim.TerrainPatch = CaptureTerrainPatch(*Terrain, Prim.World, Min, Max, CellSize);
             });
         }
@@ -1935,23 +1913,78 @@ namespace Lumina
         FORCEINLINE uint64 PackTileKey(int32 TX, int32 TY) { return ((uint64)(uint32)TY << 32) | (uint32)TX; }
 
         // One walk feeds geometry and annotations, so a full bake and a hot rebake see the same authored set.
-        void SnapshotBuildInput(const SSystemContext& Context, const FNavSourceTracker& Sources, SNavMeshComponent& Comp, FNavBuildInput& Out, TVector<FNavSourcePrim>& OutPrims)
+        void SnapshotBuildInput(CNavMeshSystem::FSourceQueries& Queries, const FNavSourceTracker& Sources, SNavMeshComponent& Comp, FNavBuildInput& Out, TVector<FNavSourcePrim>& OutPrims)
         {
             Out.Settings  = Comp.Settings;
             Out.BoundsMin = Comp.Center - Comp.GetWorldExtents();
             Out.BoundsMax = Comp.Center + Comp.GetWorldExtents();
 
-            GatherSourcePrims(Context, Sources, Out.BoundsMin, Out.BoundsMax, Comp.Settings.CellSize, OutPrims);
+            GatherSourcePrims(Queries, Sources, Out.BoundsMin, Out.BoundsMax, Comp.Settings.CellSize, OutPrims);
             for (const FNavSourcePrim& Prim : OutPrims)
             {
                 AppendAnnotation(Prim, Out.AreaVolumes, Out.Links);
             }
         }
 
-        void TickComponent(const SSystemContext& Context, ECS::FEntity Entity, SNavMeshComponent& Comp, FNavSourceTracker& Sources)
+        // Kicks an async bake; a no-op if one is already in flight.
+        void RequestBake(CNavMeshSystem::FSourceQueries& Queries, const FNavSourceTracker& Sources, SNavMeshComponent& Comp)
+        {
+            if (Comp.Runtime.ActiveBake)
+            {
+                LOG_WARN("NavMesh bake requested while one is already in flight. Ignoring (the in-progress bake will complete first).");
+                return;
+            }
+
+            // Catch zero/negative bounds up front; otherwise user gets a misleading "0 walkable" warning later.
+            const FVector3 Span = Comp.GetWorldExtents() * 2.0f;
+            if (Span.x <= 0.0f || Span.y <= 0.0f || Span.z <= 0.0f)
+            {
+                LOG_ERROR("NavMesh bake skipped: bounds extents must be positive on all axes (got {:.2f}, {:.2f}, {:.2f}).",
+                    Comp.Extents.x, Comp.Extents.y, Comp.Extents.z);
+                return;
+            }
+            if (Comp.Settings.CellSize <= 0.0f || Comp.Settings.CellHeight <= 0.0f || Comp.Settings.TileSizeVoxels <= 0)
+            {
+                LOG_ERROR("NavMesh bake skipped: invalid voxel settings (CellSize={:.3f}, CellHeight={:.3f}, TileSizeVoxels={}).",
+                    Comp.Settings.CellSize, Comp.Settings.CellHeight, Comp.Settings.TileSizeVoxels);
+                return;
+            }
+
+            // The snapshot reads the registry so it stays here, while emitting its triangles moves to the bake worker.
+            FNavBuildInput Input;
+            TVector<FNavSourcePrim> Prims;
+            SnapshotBuildInput(Queries, Sources, Comp, Input, Prims);
+
+            // EntityAABB cache populated at bake-completion drain (avoids tight-vs-conservative AABB mismatch storm).
+            Comp.Runtime.PendingSourceChanges.Reset();
+            Comp.Runtime.DirtyTiles.Reset();
+            Comp.Runtime.SettlingTiles.Reset();
+            Comp.Runtime.PendingRebakes.Reset();
+            Comp.Runtime.TileCache.reset();
+            Comp.Runtime.ActiveBake = NavMeshBuilder::Bake(Move(Input), [Prims = Move(Prims)](FNavBuildInput& In) mutable
+            {
+                TessellateTerrainPatches(Prims);
+                EmitNavSourcePrims(Prims.GetData(), Prims.Num(), In.BoundsMin, In.BoundsMax, In.Vertices, In.Indices);
+                if (In.Vertices.IsEmpty() || In.Indices.IsEmpty())
+                {
+                    LOG_WARN("NavMesh bake starting with no source geometry inside bounds. The result will be an empty navmesh; check that static meshes (non-character-controller) overlap the bounds volume.");
+                }
+                else
+                {
+                    LOG_INFO("NavMesh bake starting: {} verts, {} tris, bounds=({:.1f},{:.1f},{:.1f})..({:.1f},{:.1f},{:.1f}).",
+                        In.Vertices.Num(), In.Indices.Num() / 3,
+                        In.BoundsMin.x, In.BoundsMin.y, In.BoundsMin.z,
+                        In.BoundsMax.x, In.BoundsMax.y, In.BoundsMax.z);
+                }
+            });
+            Comp.Runtime.State = ENavBakeState::Building;
+        }
+
+        void TickComponent(const SSystemContext& Context, CNavMeshSystem::FSourceQueries& Queries, const FSignificanceState& SignificanceState,
+                           SNavMeshComponent& Comp, const STransformComponent* Transform, FNavSourceTracker& Sources)
         {
             // Held until the mesh can take them, so a change made while it baked or hydrated still rebakes its tiles.
-            if (Comp.bDynamicRebuild && !Sources.Changes.empty())
+            if (Comp.bDynamicRebuild && !Sources.Changes.IsEmpty())
             {
                 const FVector3 VolumeMin = Comp.Center - Comp.GetWorldExtents();
                 const FVector3 VolumeMax = Comp.Center + Comp.GetWorldExtents();
@@ -1959,15 +1992,15 @@ namespace Lumina
                 {
                     if (Change.Min.x <= VolumeMax.x && Change.Max.x >= VolumeMin.x && Change.Min.z <= VolumeMax.z && Change.Max.z >= VolumeMin.z)
                     {
-                        Comp.Runtime.PendingSourceChanges.push_back(Change);
+                        Comp.Runtime.PendingSourceChanges.Add(Change);
                     }
                 }
             }
 
             // Scale always mirrors, location only in the editor, since runtime keeps the serialized Center.
-            if (const STransformComponent* X = Context.GetRegistry().TryGet<STransformComponent>(Entity))
+            if (Transform)
             {
-                const FTransform& WT = X->GetWorldTransform();
+                const FTransform& WT = Transform->GetWorldTransform();
                 const FVector3 WS = WT.GetScale();
                 Comp.Runtime.WorldScale = FVector3(std::fabs(WS.x), std::fabs(WS.y), std::fabs(WS.z));
                 if (Context.GetWorldType() == EWorldType::Editor)
@@ -1995,7 +2028,7 @@ namespace Lumina
                 const bool bChangedThisTick =
                     !Math::IsNearlyEqual(Comp.Center, RT.AutoPrevCenter) ||
                     !Math::IsNearlyEqual(WExt, RT.AutoPrevExtents) ||
-                    std::memcmp(&Comp.Settings, &RT.AutoPrevSettings, sizeof(SNavBuildSettings)) != 0;
+                    Memory::Memcmp(&Comp.Settings, &RT.AutoPrevSettings, sizeof(SNavBuildSettings)) != 0;
                 RT.AutoPrevCenter   = Comp.Center;
                 RT.AutoPrevExtents  = WExt;
                 RT.AutoPrevSettings = Comp.Settings;
@@ -2006,13 +2039,13 @@ namespace Lumina
                 }
                 else
                 {
-                    RT.AutoSettleTimer += (float)Context.GetDeltaTime();
+                    RT.AutoSettleTimer += Context.GetDeltaTime();
 
                     const bool bDiffersFromBuilt =
                         !RT.bAutoBuiltValid ||
                         !Math::IsNearlyEqual(Comp.Center, RT.AutoBuiltCenter) ||
                         !Math::IsNearlyEqual(WExt, RT.AutoBuiltExtents) ||
-                        std::memcmp(&Comp.Settings, &RT.AutoBuiltSettings, sizeof(SNavBuildSettings)) != 0;
+                        Memory::Memcmp(&Comp.Settings, &RT.AutoBuiltSettings, sizeof(SNavBuildSettings)) != 0;
                     const bool bIdle = !RT.ActiveBake && !RT.PendingInit;
 
                     if (RT.AutoSettleTimer >= 0.25f && bDiffersFromBuilt && bIdle)
@@ -2029,7 +2062,7 @@ namespace Lumina
             if (Comp.bBakeRequested)
             {
                 Comp.bBakeRequested = false;
-                SNavMeshSystem::RequestBake(Context, Comp);
+                RequestBake(Queries, Sources, Comp);
             }
 
             // Drain finished bake; FNavMesh construction is offloaded via PendingInit.
@@ -2041,25 +2074,25 @@ namespace Lumina
                 int32 NonEmptyTiles = 0;
                 for (const SNavTileData& T : Out.Tiles)
                 {
-                    if (!T.Blob.empty()) ++NonEmptyTiles;
+                    if (!T.Blob.IsEmpty()) ++NonEmptyTiles;
                 }
 
-                Comp.Tiles           = std::move(Out.Tiles);
+                Comp.Tiles           = Move(Out.Tiles);
                 Comp.Origin          = Out.Origin;
                 Comp.TileWorldSize   = Out.TileWorldSize;
                 Comp.MaxPolysPerTile = Out.MaxPolysPerTile;
                 Comp.TilesX          = Out.TilesX;
                 Comp.TilesY          = Out.TilesY;
                 Comp.Runtime.LiveLayout = Out;
-                Comp.Runtime.LiveLayout.Tiles.clear();
+                Comp.Runtime.LiveLayout.Tiles.Reset();
                 Comp.Runtime.ActiveBake.reset();
-                Comp.Runtime.DirtyTiles.clear();
-                Comp.Runtime.SettlingTiles.clear();
+                Comp.Runtime.DirtyTiles.Reset();
+                Comp.Runtime.SettlingTiles.Reset();
 
                 if (NonEmptyTiles == 0)
                 {
                     // Fail explicitly, since leaving State=Building here read as stuck on Baking.
-                    LOG_WARN("NavMesh bake produced no walkable tiles ({} total). Check the bounds overlap source geometry, and that the volume/scale isn't so large the bake was capped.", (int32)Comp.Tiles.size());
+                    LOG_WARN("NavMesh bake produced no walkable tiles ({} total). Check the bounds overlap source geometry, and that the volume/scale isn't so large the bake was capped.", Comp.Tiles.Num());
                     Comp.Runtime.bRuntimeDirty = false;
                     RetireNavMesh(Comp.Runtime);
                     Comp.Runtime.State = ENavBakeState::Failed;
@@ -2067,7 +2100,7 @@ namespace Lumina
                 else
                 {
                     LOG_INFO("NavMesh bake complete: {}/{} tiles walkable, origin=({:.2f}, {:.2f}, {:.2f}), tileSize={:.2f}.",
-                        NonEmptyTiles, (int32)Comp.Tiles.size(), Comp.Origin.x, Comp.Origin.y, Comp.Origin.z, Comp.TileWorldSize);
+                        NonEmptyTiles, Comp.Tiles.Num(), Comp.Origin.x, Comp.Origin.y, Comp.Origin.z, Comp.TileWorldSize);
                     Comp.Runtime.bRuntimeDirty = true;
                 }
             }
@@ -2075,14 +2108,14 @@ namespace Lumina
             // Drain finished async hydration.
             if (Comp.Runtime.PendingInit && Comp.Runtime.PendingInit->bDone.load(std::memory_order_acquire))
             {
-                TUniquePtr<FNavMesh> Hydrated = std::move(Comp.Runtime.PendingInit->ResultMesh);
+                TUniquePtr<FNavMesh> Hydrated = Move(Comp.Runtime.PendingInit->ResultMesh);
                 Comp.Runtime.PendingInit.reset();
                 RetireNavMesh(Comp.Runtime);
                 if (Hydrated)
                 {
                     Hydrated->ContinueTopologyEpochFrom(Comp.Runtime.RetiredEpoch);
                 }
-                Comp.Runtime.Mesh = std::move(Hydrated);
+                Comp.Runtime.Mesh = Move(Hydrated);
                 // dtNavMesh::init or addTile can fail; without this branch state silently goes Ready.
                 if (!Comp.Runtime.Mesh || !Comp.Runtime.Mesh->IsReady())
                 {
@@ -2103,20 +2136,19 @@ namespace Lumina
                 }
             }
 
-            // The bRuntimeDirty branch is essential, or a re-bake leaves the old Mesh stuck Building.
-            // A failed hydration nulls Mesh, so without the state test it re-kicks forever.
+            // bRuntimeDirty is essential or a re-bake leaves the old Mesh stuck Building; the state test stops a failed hydration re-kicking forever.
             const bool bHydrateWanted = Comp.Runtime.bRuntimeDirty
                                      || (!Comp.Runtime.Mesh && Comp.Runtime.State != ENavBakeState::Failed);
             if (Comp.HasBakedData() && !Comp.Runtime.PendingInit && bHydrateWanted)
             {
                 // Tiles can persist with every blob empty, and Detour cannot be handed nothing.
                 const bool bAnyWalkableTile = Algo::AnyOf(Comp.Tiles,
-                    [](const SNavTileData& Tile) { return !Tile.Blob.empty(); });
+                    [](const SNavTileData& Tile) { return !Tile.Blob.IsEmpty(); });
                 if (!bAnyWalkableTile)
                 {
                     LOG_ERROR("NavMesh has {} tiles but none carry walkable geometry, so there is nothing to hydrate. "
                               "Re-bake the volume, and check it covers ground the agent radius and slope accept.",
-                        (int32)Comp.Tiles.size());
+                        Comp.Tiles.Num());
                     Comp.Runtime.bRuntimeDirty = false;
                     Comp.Runtime.State = ENavBakeState::Failed;
                     return;
@@ -2126,7 +2158,7 @@ namespace Lumina
                 Comp.Runtime.LiveLayout.TileWorldSize   = Comp.TileWorldSize;
                 Comp.Runtime.LiveLayout.TilesX          = Comp.TilesX;
                 Comp.Runtime.LiveLayout.TilesY          = Comp.TilesY;
-                Comp.Runtime.LiveLayout.MaxTiles        = (int32)Comp.Tiles.size();
+                Comp.Runtime.LiveLayout.MaxTiles        = Comp.Tiles.Num();
                 Comp.Runtime.LiveLayout.MaxPolysPerTile = Comp.MaxPolysPerTile;
 
                 auto Job = MakeShared<FNavInitJob>();
@@ -2134,10 +2166,9 @@ namespace Lumina
                 Comp.Runtime.bRuntimeDirty = false;
                 Comp.Runtime.State = ENavBakeState::Initializing;
 
-                // With streaming on the mesh starts empty and the streamer pages tiles in; otherwise it is
-                // seeded with everything, which is what the whole-navmesh-resident path always did.
+                // With streaming on the mesh starts empty and the streamer pages tiles in; otherwise it is seeded with everything.
                 const bool bStreaming = NavSettings().StreamLoadRadius > 0.0f;
-                const int32 TileCount = (int32)Comp.Tiles.size();
+                const int32 TileCount = Comp.Tiles.Num();
                 const int32 InitMaxTiles = bStreaming
                     ? Math::Min(Math::Max(1, NavSettings().ResidentTileBudget), Math::Max(1, TileCount))
                     : Math::Max(1, TileCount);
@@ -2156,23 +2187,24 @@ namespace Lumina
                 Comp.Runtime.Streamer.Reset(Comp.Origin, Comp.TileWorldSize);
 
                 const bool bLogTimings = CVarNavTimings.GetValue();
-                Task::AsyncTask(1, 1, [Job, Tiles = std::move(TilesCopy), InitOrigin, InitTileSize, InitMaxTiles, InitMaxPolys, bLogTimings](uint32, uint32, uint32) mutable
+                Jobs::Spawn(Jobs::EJobPriority::Background, [](TSharedPtr<FNavInitJob> HydrateJob, TVector<SNavTileData> Tiles, FVector3 Origin, float TileSize, int32 MaxTiles, int32 MaxPolys, bool bLog) -> Jobs::TTask<void>
                 {
-                    const int32 NumHydratedTiles = (int32)Tiles.size();
+                    const int32 NumHydratedTiles = Tiles.Num();
                     PlatformTime::FStopwatch Watch;
                     auto Mesh = MakeUnique<FNavMesh>();
-                    Mesh->Initialize(InitOrigin, InitTileSize, InitMaxTiles, InitMaxPolys, std::move(Tiles));
-                    if (bLogTimings)
+                    Mesh->Initialize(Origin, TileSize, MaxTiles, MaxPolys, Move(Tiles));
+                    if (bLog)
                     {
-                        LOG_INFO("NavTiming hydrate: {} tiles, maxTiles={}, {:.1f} ms.", NumHydratedTiles, InitMaxTiles, Watch.ElapsedMilliseconds());
+                        LOG_INFO("NavTiming hydrate: {} tiles, maxTiles={}, {:.1f} ms.", NumHydratedTiles, MaxTiles, Watch.ElapsedMilliseconds());
                     }
-                    Job->ResultMesh = std::move(Mesh);
-                    Job->bDone.store(true, std::memory_order_release);
-                }, ETaskPriority::Background);
+                    HydrateJob->ResultMesh = Move(Mesh);
+                    HydrateJob->bDone.store(true, std::memory_order_release);
+                    co_return;
+                }, Job, Move(TilesCopy), InitOrigin, InitTileSize, InitMaxTiles, InitMaxPolys, bLogTimings);
 
                 // Cache left empty, so a source loaded before a serialized bake reads as new and gets its tiles.
-                Comp.Runtime.DirtyTiles.clear();
-                Comp.Runtime.SettlingTiles.clear();
+                Comp.Runtime.DirtyTiles.Reset();
+                Comp.Runtime.SettlingTiles.Reset();
             }
 
             if (!Comp.Runtime.Mesh || !Comp.Runtime.Mesh->IsReady() || Comp.Runtime.State != ENavBakeState::Ready)
@@ -2192,12 +2224,9 @@ namespace Lumina
                 TVector<FVector3> Focus;
                 if (Stream.LoadRadius > 0.0f)
                 {
-                    if (const FSignificanceState* Significance = Significance::GetState(Context))
+                    if (SignificanceState.bHasView)
                     {
-                        if (Significance->bHasView)
-                        {
-                            Focus.push_back(Significance->ViewOrigin);
-                        }
+                        Focus.Add(SignificanceState.ViewOrigin);
                     }
                 }
 
@@ -2220,7 +2249,7 @@ namespace Lumina
             // Debug draw runs first so it emits even when later steps early-return.
             if (CVarNavDrawDebug.GetValue())
             {
-                DrawNavDebug(Context, Comp);
+                DrawNavDebug(Context, Queries, Comp);
             }
 
             // Hot-swap completed per-tile rebakes.
@@ -2254,21 +2283,22 @@ namespace Lumina
                     NewTile.X = Job->TileX;
                     NewTile.Y = Job->TileY;
                     NewTile.Blob = Job->ResultBlob;
-                    Comp.Tiles.push_back(std::move(NewTile));
+                    Comp.Tiles.Add(Move(NewTile));
                 }
+                Comp.Runtime.Streamer.Invalidate();
 
                 // Swapping in a tile the streamer never paged in would leave it resident and unevictable.
                 const bool bStreamerOwnsResidency = Comp.Runtime.bStreamedInit;
                 if (!bStreamerOwnsResidency || Comp.Runtime.Streamer.IsResident(Job->TileX, Job->TileY))
                 {
-                    Swaps.push_back(FNavMesh::FTileSwap{ Job->TileX, Job->TileY, &Job->ResultBlob });
+                    Swaps.Emplace(Job->TileX, Job->TileY, &Job->ResultBlob);
                 }
                 Job->bConsumed.store(true, std::memory_order_release);
             }
             Comp.Runtime.Mesh->RebuildTiles(Swaps);
-            if (!Swaps.empty() && CVarNavTimings.GetValue())
+            if (!Swaps.IsEmpty() && CVarNavTimings.GetValue())
             {
-                LOG_INFO("NavTiming swap: {} tiles in {:.2f} ms.", (int32)Swaps.size(), SwapWatch.ElapsedMilliseconds());
+                LOG_INFO("NavTiming swap: {} tiles in {:.2f} ms.", Swaps.Num(), SwapWatch.ElapsedMilliseconds());
             }
 
             // Swaps only merge the planner's island labels, so an exact pass runs on the build pool now and then and lands between swaps.
@@ -2280,14 +2310,11 @@ namespace Lumina
                 Sources.BuildPool->Enqueue([Mesh = Comp.Runtime.Mesh.get()] { Mesh->RelabelClusters(); });
             }
             
-            Comp.Runtime.PendingRebakes.erase(
-                Algo::RemoveIf(Comp.Runtime.PendingRebakes,
-                    [](const TSharedPtr<FNavTileRebake>& J) { return !J || J->bConsumed.load(std::memory_order_acquire); }),
-                Comp.Runtime.PendingRebakes.end());
+            Comp.Runtime.PendingRebakes.RemoveAll([](const TSharedPtr<FNavTileRebake>& J) { return !J || J->bConsumed.load(std::memory_order_acquire); });
 
             // Held between scans so a long interval still measures real elapsed time.
             Comp.Runtime.DynamicScanTimer = Comp.bDynamicRebuild
-                ? Comp.Runtime.DynamicScanTimer + (float)Context.GetDeltaTime()
+                ? Comp.Runtime.DynamicScanTimer + Context.GetDeltaTime()
                 : 0.0f;
 
             // Tiles dirtied before the setting was turned off still rebake below.
@@ -2298,11 +2325,11 @@ namespace Lumina
                 // What the previous scan dirtied has now been seen twice, so it is ready to rebake.
                 for (uint64 TileKey : Comp.Runtime.SettlingTiles)
                 {
-                    Comp.Runtime.DirtyTiles.insert(TileKey);
+                    Comp.Runtime.DirtyTiles.Add(TileKey);
                 }
-                Comp.Runtime.SettlingTiles.clear();
+                Comp.Runtime.SettlingTiles.Reset();
 
-                const int32 DirtyBefore = (int32)(Comp.Runtime.DirtyTiles.size() + Comp.Runtime.SettlingTiles.size());
+                const int32 DirtyBefore = Comp.Runtime.DirtyTiles.Num() + Comp.Runtime.SettlingTiles.Num();
                 const int32 CacheBudgetMB = NavSettings().TileCacheBudgetMB;
                 if (!Comp.Runtime.TileCache && CacheBudgetMB > 0)
                 {
@@ -2322,39 +2349,39 @@ namespace Lumina
                             }
                             // A tile already waiting rebakes from the geometry as it stands when it is kicked, so it needs no second pass.
                             const uint64 TileKey = PackTileKey(TX, TY);
-                            if (!Comp.Runtime.DirtyTiles.contains(TileKey))
+                            if (!Comp.Runtime.DirtyTiles.Contains(TileKey))
                             {
-                                Comp.Runtime.SettlingTiles.insert(TileKey);
+                                Comp.Runtime.SettlingTiles.Add(TileKey);
                             }
                         }
                     }
                 }
 
-                if (CVarNavTimings.GetValue() && !Comp.Runtime.PendingSourceChanges.empty())
+                if (CVarNavTimings.GetValue() && !Comp.Runtime.PendingSourceChanges.IsEmpty())
                 {
                     LOG_INFO("NavTiming scan [{}]: {} changed footprints, dirty {} -> {}, pending {}.",
-                        Context.GetWorldType() == EWorldType::Editor ? "editor" : "play", (int32)Comp.Runtime.PendingSourceChanges.size(),
-                        DirtyBefore, (int32)(Comp.Runtime.DirtyTiles.size() + Comp.Runtime.SettlingTiles.size()), (int32)Comp.Runtime.PendingRebakes.size());
+                        Context.GetWorldType() == EWorldType::Editor ? "editor" : "play", Comp.Runtime.PendingSourceChanges.Num(),
+                        DirtyBefore, Comp.Runtime.DirtyTiles.Num() + Comp.Runtime.SettlingTiles.Num(), Comp.Runtime.PendingRebakes.Num());
                 }
-                Comp.Runtime.PendingSourceChanges.clear();
+                Comp.Runtime.PendingSourceChanges.Reset();
             }
 
             // With scanning off nothing would promote them, so the last scan's tiles go straight through.
-            if (!Comp.bDynamicRebuild && !Comp.Runtime.SettlingTiles.empty())
+            if (!Comp.bDynamicRebuild && !Comp.Runtime.SettlingTiles.IsEmpty())
             {
                 for (uint64 TileKey : Comp.Runtime.SettlingTiles)
                 {
-                    Comp.Runtime.DirtyTiles.insert(TileKey);
+                    Comp.Runtime.DirtyTiles.Add(TileKey);
                 }
-                Comp.Runtime.SettlingTiles.clear();
+                Comp.Runtime.SettlingTiles.Reset();
             }
 
             // Batches keep starting until the cap is reached, since tiles scattered over a big world each make a small batch of their own.
             const uint32 MaxConcurrent = (uint32)Math::Max(1, NavSettings().MaxConcurrentTileRebakes);
-            while (!Comp.Runtime.DirtyTiles.empty() && Comp.Runtime.PendingRebakes.size() < MaxConcurrent)
+            while (!Comp.Runtime.DirtyTiles.IsEmpty() && static_cast<uint32>(Comp.Runtime.PendingRebakes.Num()) < MaxConcurrent)
             {
                 // Main thread only snapshots params + world matrices; tessellation runs on a worker.
-                const uint32 Capacity = MaxConcurrent - (uint32)Comp.Runtime.PendingRebakes.size();
+                const uint32 Capacity = MaxConcurrent - (uint32)Comp.Runtime.PendingRebakes.Num();
 
                 // A batch gathers the union of its tiles, so scattered tiles re-tessellate everything between.
                 TVector<uint64> Candidates(Comp.Runtime.DirtyTiles.begin(), Comp.Runtime.DirtyTiles.end());
@@ -2362,10 +2389,10 @@ namespace Lumina
                 NavTile::UnpackKey(Candidates[0], SeedX, SeedY);
 
                 // Seeded at the dirty tile nearest the view, so what the player can see rebakes first.
-                if (const FSignificanceState* Significance = Significance::GetState(Context); Significance != nullptr && Significance->bHasView)
+                if (SignificanceState.bHasView)
                 {
-                    const int32 ViewX = (int32)std::floor((Significance->ViewOrigin.x - Comp.Origin.x) / Comp.TileWorldSize);
-                    const int32 ViewY = (int32)std::floor((Significance->ViewOrigin.z - Comp.Origin.z) / Comp.TileWorldSize);
+                    const int32 ViewX = (int32)std::floor((SignificanceState.ViewOrigin.x - Comp.Origin.x) / Comp.TileWorldSize);
+                    const int32 ViewY = (int32)std::floor((SignificanceState.ViewOrigin.z - Comp.Origin.z) / Comp.TileWorldSize);
                     auto ViewDistance = [ViewX, ViewY](uint64 Key)
                     {
                         int32 X, Y;
@@ -2381,7 +2408,7 @@ namespace Lumina
                     NavTile::UnpackKey(Key, X, Y);
                     return Math::Max(Math::Abs(X - SeedX), Math::Abs(Y - SeedY));
                 };
-                size_t Take = Math::Min((size_t)Capacity, Candidates.size());
+                int32 Take = Math::Min(static_cast<int32>(Capacity), Candidates.Num());
                 Algo::PartialSort(Candidates.begin(), Candidates.begin() + Take, Candidates.end(),
                     [&SeedDistance](uint64 A, uint64 B) { return SeedDistance(A) < SeedDistance(B); });
 
@@ -2393,10 +2420,10 @@ namespace Lumina
                 }
 
                 TVector<TSharedPtr<FNavTileRebake>> BatchJobs;
-                BatchJobs.reserve(Take);
-                for (size_t i = 0; i < Take; ++i)
+                BatchJobs.Reserve(Take);
+                for (int32 i = 0; i < Take; ++i)
                 {
-                    Comp.Runtime.DirtyTiles.erase(Candidates[i]);
+                    Comp.Runtime.DirtyTiles.Remove(Candidates[i]);
 
                     auto Job = MakeShared<FNavTileRebake>();
                     NavTile::UnpackKey(Candidates[i], Job->TileX, Job->TileY);
@@ -2405,8 +2432,8 @@ namespace Lumina
                         Job->CacheGeneration = Comp.Runtime.TileCache->GetGeneration(Job->TileX, Job->TileY);
                         Job->bCachePinned = Comp.Runtime.TileCache->Pin(Job->TileX, Job->TileY, Job->CacheGeneration);
                     }
-                    BatchJobs.push_back(Job);
-                    Comp.Runtime.PendingRebakes.push_back(std::move(Job));
+                    BatchJobs.Add(Job);
+                    Comp.Runtime.PendingRebakes.Add(Move(Job));
                 }
 
                 // Terrain is pre-tessellated on this thread; the worker re-emits and bakes the dirty tiles.
@@ -2448,19 +2475,19 @@ namespace Lumina
                 // Every tile already holding its heightfield means only the areas and links move, so no geometry is gathered at all.
                 const bool bAnnotationsOnly = Algo::AllOf(BatchJobs, [](const TSharedPtr<FNavTileRebake>& Job) { return Job->bCachePinned; });
                 PlatformTime::FStopwatch GatherWatch;
-                GatherSourcePrims(Context, Sources, Snap->GatherMin, Snap->GatherMax, Comp.Settings.CellSize, Snap->Prims, bAnnotationsOnly);
+                GatherSourcePrims(Queries, Sources, Snap->GatherMin, Snap->GatherMax, Comp.Settings.CellSize, Snap->Prims, bAnnotationsOnly);
                 const bool bLogRebakeTimings = CVarNavTimings.GetValue();
                 if (bLogRebakeTimings)
                 {
                     const FVector3 GatherSpan = Snap->GatherMax - Snap->GatherMin;
                     LOG_INFO("NavTiming rebake gather: {} tiles, box {:.0f}x{:.0f}, {} prims in {:.2f} ms, {} still dirty.",
-                        (int32)BatchJobs.size(), GatherSpan.x, GatherSpan.z, (int32)Snap->Prims.size(),
-                        GatherWatch.ElapsedMilliseconds(), (int32)Comp.Runtime.DirtyTiles.size());
+                        BatchJobs.Num(), GatherSpan.x, GatherSpan.z, Snap->Prims.Num(),
+                        GatherWatch.ElapsedMilliseconds(), Comp.Runtime.DirtyTiles.Num());
                 }
 
                 // The whole batch runs on the build pool, so a tile that takes milliseconds never holds a worker the frame waits on.
                 FNavBuildPool* Pool = Sources.BuildPool.get();
-                Pool->Enqueue([Snap, Jobs = std::move(BatchJobs), bLogRebakeTimings, Pool, Cache = Comp.Runtime.TileCache]() mutable
+                Pool->Enqueue([Snap, Jobs = Move(BatchJobs), bLogRebakeTimings, Pool, Cache = Comp.Runtime.TileCache]() mutable
                 {
                     PlatformTime::FStopwatch EmitWatch;
                     FNavBuildInput Input;
@@ -2473,19 +2500,19 @@ namespace Lumina
                         AppendAnnotation(Prim, Input.AreaVolumes, Input.Links);
                     }
                     TessellateTerrainPatches(Snap->Prims, Pool);
-                    EmitNavSourcePrims(Snap->Prims.data(), Snap->Prims.size(), Snap->GatherMin, Snap->GatherMax,
+                    EmitNavSourcePrims(Snap->Prims.GetData(), Snap->Prims.Num(), Snap->GatherMin, Snap->GatherMax,
                         Input.Vertices, Input.Indices, Pool);
 
                     // One binning pass feeds every dirty tile, rather than each tile rescanning the soup.
                     TVector<FNavTileCoord> Coords;
-                    Coords.reserve(Jobs.size());
+                    Coords.Reserve(Jobs.Num());
                     for (const TSharedPtr<FNavTileRebake>& Job : Jobs)
                     {
-                        Coords.push_back(FNavTileCoord{ Job->TileX, Job->TileY, Job->CacheGeneration });
+                        Coords.Emplace(Job->TileX, Job->TileY, Job->CacheGeneration);
                     }
 
                     const double EmitMs = EmitWatch.ElapsedMilliseconds();
-                    const int32 EmittedTris = (int32)(Input.Indices.size() / 3);
+                    const int32 EmittedTris = Input.Indices.Num() / 3;
 
                     PlatformTime::FStopwatch BakeWatch;
                     TVector<SNavTileData> Baked;
@@ -2493,25 +2520,23 @@ namespace Lumina
                     if (bLogRebakeTimings)
                     {
                         LOG_INFO("NavTiming rebake work: {} tiles, emit {} tris in {:.2f} ms, bake {:.2f} ms.",
-                            (int32)Coords.size(), EmittedTris, EmitMs, BakeWatch.ElapsedMilliseconds());
+                            Coords.Num(), EmittedTris, EmitMs, BakeWatch.ElapsedMilliseconds());
                     }
 
-                    for (size_t i = 0; i < Jobs.size(); ++i)
+                    for (int32 i = 0; i < Jobs.Num(); ++i)
                     {
                         if (Jobs[i]->bCachePinned)
                         {
                             Cache->Unpin(Jobs[i]->TileX, Jobs[i]->TileY);
                         }
-                        if (i < Baked.size())
+                        if (i < Baked.Num())
                         {
-                            Jobs[i]->ResultBlob = std::move(Baked[i].Blob);
+                            Jobs[i]->ResultBlob = Move(Baked[i].Blob);
                         }
                         Jobs[i]->bDone.store(true, std::memory_order_release);
                     }
                 });
             }
-
-            (void)Entity;
         }
 
         template<typename TView>
@@ -2520,7 +2545,7 @@ namespace Lumina
             FNavMesh* Fallback = nullptr;
             for (ECS::FEntity Entity : View)
             {
-                SNavMeshComponent& Comp = View.template Get<SNavMeshComponent>(Entity);
+                const SNavMeshComponent& Comp = View.template Get<ECS::Read<SNavMeshComponent>>(Entity);
                 if (!Comp.Runtime.Mesh || !Comp.Runtime.Mesh->IsReady())
                 {
                     continue;
@@ -2534,91 +2559,91 @@ namespace Lumina
             return Agent.IsNone() ? Fallback : nullptr;
         }
 
-        FNavMesh* FirstReadyNavMesh(const SSystemContext& Context, FName Agent = FName())
+        FNavMesh* FirstReadyNavMesh(const Nav::FNavMeshQuery& NavMeshes, FName Agent = FName())
         {
-            auto View = Context.CreateView<SNavMeshComponent>();
+            auto View = NavMeshes.View();
             return FindReadyNavMesh(View, Agent);
         }
     }
 
-    namespace
+    namespace NavMeshSystemInternal
     {
         // Initializes Center from entity transform so bake volume defaults at entity location.
         void OnNavMeshConstructed(ECS::FRegistry& Reg, ECS::FEntity Entity)
         {
-            SNavMeshComponent& Nav = Reg.Get<SNavMeshComponent>(Entity);
-            if (auto* Xform = Reg.TryGet<STransformComponent>(Entity))
+            SNavMeshComponent& Nav = Reg.Get<ECS::Write<SNavMeshComponent>>(Entity);
+            if (auto* Xform = Reg.TryGet<ECS::Read<STransformComponent>>(Entity))
             {
                 Nav.Center = Xform->GetWorldTransform().GetLocation();
             }
         }
+
+        FNavMesh* FirstReadyNavMeshFromWorld(CWorld* World, FName Agent = FName())
+        {
+            if (!World) return nullptr;
+            auto View = World->View<ECS::Read<SNavMeshComponent>>();
+            return FindReadyNavMesh(View, Agent);
+        }
     }
 
-    void SNavMeshSystem::OnStartup(const SSystemContext& Context)
-    {
+    CNavMeshSystem::CNavMeshSystem() = default;
+    CNavMeshSystem::~CNavMeshSystem() = default;
 
+    void CNavMeshSystem::OnStartup(const SExclusiveContext& Context)
+    {
         LUMINA_PROFILE_SCOPE();
 
         // A sink binds by handler identity, so reconnecting the same one is a no-op.
         ECS::FRegistry& Registry = Context.GetRegistry();
-        Registry.GetSignals<SNavMeshComponent>().OnConstruct.Connect<&OnNavMeshConstructed>();
+        Registry.GetSignals<SNavMeshComponent>().OnConstruct.Connect<&NavMeshSystemInternal::OnNavMeshConstructed>();
 
-        if (FindSourceTracker(Context) == nullptr)
+        if (!Tracker)
         {
-            TUniquePtr<FNavSourceTracker>& Sources = Registry.Ctx().Emplace<TUniquePtr<FNavSourceTracker>>(MakeUnique<FNavSourceTracker>());
+            Tracker = MakeUnique<FNavSourceTracker>();
             // A few threads keep up with a world full of moving obstacles, and every extra one is a thread the frame's workers share cores with.
-            Sources->BuildPool = MakeUnique<FNavBuildPool>(Math::Clamp(Jobs::GetNumWorkers() / 8, 1u, 4u));
-            // Filtered to the entities that contribute a source, so a world of moving props never reaches the drain.
-            Sources->MovedConsumer = ECS::Utils::AddMovedTransformConsumer(Registry, true);
+            Tracker->BuildPool = MakeUnique<FNavBuildPool>(Math::Clamp(Jobs::GetNumWorkers() / 8, 1u, 4u));
+            NavMeshSystemInternal::WatchSourceComponents(Registry, Tracker.get(), true);
         }
-        WatchSourceComponents<SBoxColliderComponent, SSphereColliderComponent, SMeshColliderComponent, SCapsuleColliderComponent, SCylinderColliderComponent,
-            SCharacterPhysicsComponent, STerrainColliderComponent, STerrainComponent, SStaticMeshComponent, SDynamicMeshColliderComponent, SDynamicMeshComponent,
-            SCompoundColliderComponent, SNavModifierComponent, SNavLinkComponent, SFoliageComponent, SRigidBodyComponent>(Registry);
 
-        FNavSourceTracker& Sources = *FindSourceTracker(Context);
-        UpdateSources(Context, Sources);
+        NavMeshSystemInternal::UpdateSources(Context, SourceQueries, *Tracker);
 
-        auto View = Context.CreateView<SNavMeshComponent>();
-        for (ECS::FEntity Entity : View)
+        Volumes.ForEach([&](ECS::TMut<SNavMeshComponent> CompMut, const STransformComponent* Transform)
         {
-            TickComponent(Context, Entity, View.Get<SNavMeshComponent>(Entity), Sources);
-        }
+            SNavMeshComponent& Comp = CompMut.GetMut();
+            NavMeshSystemInternal::TickComponent(Context, SourceQueries, *SignificanceState, Comp, Transform, *Tracker);
+        });
     }
 
-    void SNavMeshSystem::OnUpdate(const SSystemContext& Context)
+    void CNavMeshSystem::OnUpdate(const SSystemContext& Context)
     {
-
-        LUMINA_PROFILE_SCOPE();
-        FNavSourceTracker* Sources = FindSourceTracker(Context);
-        if (Sources == nullptr)
+        if (!Tracker)
         {
             return;
         }
 
+        FNavSourceTracker& Sources = *Tracker;
         PlatformTime::FStopwatch SourceWatch;
-        UpdateSources(Context, *Sources);
-        if (CVarNavTimings.GetValue() && (Sources->Refreshed > 0 || !Sources->Changes.empty()))
+        NavMeshSystemInternal::UpdateSources(Context, SourceQueries, Sources);
+        if (CVarNavTimings.GetValue() && (Sources.Refreshed > 0 || !Sources.Changes.IsEmpty()))
         {
             LOG_INFO("NavTiming sources: {} tracked, {} entities refreshed in {:.2f} ms, {} new, {} moved, {} reshaped, {} removed.",
-                (int32)Sources->RecordOfKey.size(), Sources->Refreshed, SourceWatch.ElapsedMilliseconds(),
-                Sources->Counts[0], Sources->Counts[1], Sources->Counts[2], Sources->Counts[3]);
+                Sources.RecordOfKey.Num(), Sources.Refreshed, SourceWatch.ElapsedMilliseconds(),
+                Sources.Counts[0], Sources.Counts[1], Sources.Counts[2], Sources.Counts[3]);
         }
 
-        auto View = Context.CreateView<SNavMeshComponent>();
-        for (ECS::FEntity Entity : View)
+        Volumes.ForEach([&](ECS::TMut<SNavMeshComponent> CompMut, const STransformComponent* Transform)
         {
-            TickComponent(Context, Entity, View.Get<SNavMeshComponent>(Entity), *Sources);
-        }
+            SNavMeshComponent& Comp = CompMut.GetMut();
+            NavMeshSystemInternal::TickComponent(Context, SourceQueries, *SignificanceState, Comp, Transform, Sources);
+        });
     }
 
-    void SNavMeshSystem::OnTeardown(const SSystemContext& Context)
+    void CNavMeshSystem::OnTeardown(const SExclusiveContext& Context)
     {
-
         LUMINA_PROFILE_SCOPE();
-        auto View = Context.CreateView<SNavMeshComponent>();
-        for (ECS::FEntity Entity : View)
+        Volumes.ForEach([&](ECS::TMut<SNavMeshComponent> CompMut, const STransformComponent*)
         {
-            SNavMeshComponent& Comp = View.Get<SNavMeshComponent>(Entity);
+            SNavMeshComponent& Comp = CompMut.GetMut();
             if (Comp.Runtime.ActiveBake)
             {
                 Comp.Runtime.ActiveBake->bCancelRequested.store(true, std::memory_order_release);
@@ -2627,91 +2652,32 @@ namespace Lumina
             Comp.Runtime.ActiveBake.reset();
             // Worker holds its own shared_ptr; clearing here just prevents consumption.
             Comp.Runtime.PendingInit.reset();
-            Comp.Runtime.PendingRebakes.clear();
+            Comp.Runtime.PendingRebakes.Reset();
             Comp.Runtime.TileCache.reset();
-            Comp.Runtime.DirtyTiles.clear();
-            Comp.Runtime.SettlingTiles.clear();
-            Comp.Runtime.PendingSourceChanges.clear();
+            Comp.Runtime.DirtyTiles.Reset();
+            Comp.Runtime.SettlingTiles.Reset();
+            Comp.Runtime.PendingSourceChanges.Reset();
             Comp.Runtime.State = ENavBakeState::Idle;
-        }
-
-        ECS::FRegistry& Registry = Context.GetRegistry();
-        if (FNavSourceTracker* Sources = FindSourceTracker(Context))
-        {
-            ECS::Utils::RemoveMovedTransformConsumer(Registry, Sources->MovedConsumer);
-            Registry.Ctx().Erase<TUniquePtr<FNavSourceTracker>>();
-        }
-    }
-
-    void SNavMeshSystem::RequestBake(const SSystemContext& Context, SNavMeshComponent& Comp)
-    {
-        if (Comp.Runtime.ActiveBake)
-        {
-            LOG_WARN("NavMesh bake requested while one is already in flight. Ignoring (the in-progress bake will complete first).");
-            return;
-        }
-
-        // Catch zero/negative bounds up front; otherwise user gets a misleading "0 walkable" warning later.
-        const FVector3 Span = Comp.GetWorldExtents() * 2.0f;
-        if (Span.x <= 0.0f || Span.y <= 0.0f || Span.z <= 0.0f)
-        {
-            LOG_ERROR("NavMesh bake skipped: bounds extents must be positive on all axes (got {:.2f}, {:.2f}, {:.2f}).",
-                Comp.Extents.x, Comp.Extents.y, Comp.Extents.z);
-            return;
-        }
-        if (Comp.Settings.CellSize <= 0.0f || Comp.Settings.CellHeight <= 0.0f || Comp.Settings.TileSizeVoxels <= 0)
-        {
-            LOG_ERROR("NavMesh bake skipped: invalid voxel settings (CellSize={:.3f}, CellHeight={:.3f}, TileSizeVoxels={}).",
-                Comp.Settings.CellSize, Comp.Settings.CellHeight, Comp.Settings.TileSizeVoxels);
-            return;
-        }
-
-        // The snapshot reads the registry so it stays here, while emitting its triangles moves to the bake worker.
-        FNavBuildInput Input;
-        TVector<FNavSourcePrim> Prims;
-        const FNavSourceTracker* Sources = FindSourceTracker(Context);
-        if (Sources == nullptr)
-        {
-            LOG_WARN("NavMesh bake skipped: the navigation system has not started in this world.");
-            return;
-        }
-        SnapshotBuildInput(Context, *Sources, Comp, Input, Prims);
-
-        // EntityAABB cache populated at bake-completion drain (avoids tight-vs-conservative AABB mismatch storm).
-        Comp.Runtime.PendingSourceChanges.clear();
-        Comp.Runtime.DirtyTiles.clear();
-        Comp.Runtime.SettlingTiles.clear();
-        Comp.Runtime.PendingRebakes.clear();
-        Comp.Runtime.TileCache.reset();
-        Comp.Runtime.ActiveBake = NavMeshBuilder::Bake(std::move(Input), [Prims = std::move(Prims)](FNavBuildInput& In) mutable
-        {
-            TessellateTerrainPatches(Prims);
-            EmitNavSourcePrims(Prims.data(), Prims.size(), In.BoundsMin, In.BoundsMax, In.Vertices, In.Indices);
-            if (In.Vertices.empty() || In.Indices.empty())
-            {
-                LOG_WARN("NavMesh bake starting with no source geometry inside bounds. The result will be an empty navmesh; check that static meshes (non-character-controller) overlap the bounds volume.");
-            }
-            else
-            {
-                LOG_INFO("NavMesh bake starting: {} verts, {} tris, bounds=({:.1f},{:.1f},{:.1f})..({:.1f},{:.1f},{:.1f}).",
-                    (int32)In.Vertices.size(), (int32)(In.Indices.size() / 3),
-                    In.BoundsMin.x, In.BoundsMin.y, In.BoundsMin.z,
-                    In.BoundsMax.x, In.BoundsMax.y, In.BoundsMax.z);
-            }
         });
-        Comp.Runtime.State = ENavBakeState::Building;
+
+        if (Tracker)
+        {
+            ECS::FRegistry& Registry = Context.GetRegistry();
+            NavMeshSystemInternal::WatchSourceComponents(Registry, Tracker.get(), false);
+            Tracker.reset();
+        }
     }
 
     namespace Nav
     {
-        FNavMesh* GetReadyNavMesh(const SSystemContext& Context, FName Agent)
+        FNavMesh* GetReadyNavMesh(const FNavMeshQuery& NavMeshes, FName Agent)
         {
-            return FirstReadyNavMesh(Context, Agent);
+            return NavMeshSystemInternal::FirstReadyNavMesh(NavMeshes, Agent);
         }
 
-        bool FindPath(const SSystemContext& Context, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavPath& Out, FName Agent)
+        bool FindPath(const FNavMeshQuery& NavMeshes, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavPath& Out, FName Agent)
         {
-            FNavMesh* Mesh = FirstReadyNavMesh(Context, Agent);
+            FNavMesh* Mesh = NavMeshSystemInternal::FirstReadyNavMesh(NavMeshes, Agent);
             if (!Mesh)
             {
                 // Reset rather than leave a caller's reused path reading as its previous outcome.
@@ -2722,31 +2688,21 @@ namespace Lumina
             return Mesh->FindPath(Start, End, Filter, Out);
         }
 
-        bool ProjectPoint(const SSystemContext& Context, const FVector3& World, const FVector3& Extents, const FNavQueryFilter& Filter, FVector3& Out, FName Agent)
+        bool ProjectPoint(const FNavMeshQuery& NavMeshes, const FVector3& World, const FVector3& Extents, const FNavQueryFilter& Filter, FVector3& Out, FName Agent)
         {
-            FNavMesh* Mesh = FirstReadyNavMesh(Context, Agent);
+            FNavMesh* Mesh = NavMeshSystemInternal::FirstReadyNavMesh(NavMeshes, Agent);
             return Mesh && Mesh->ProjectPoint(World, Extents, Filter, Out);
         }
 
-        bool Raycast(const SSystemContext& Context, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, SNavRaycastResult& Out, FName Agent)
+        bool Raycast(const FNavMeshQuery& NavMeshes, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, SNavRaycastResult& Out, FName Agent)
         {
-            FNavMesh* Mesh = FirstReadyNavMesh(Context, Agent);
+            FNavMesh* Mesh = NavMeshSystemInternal::FirstReadyNavMesh(NavMeshes, Agent);
             return Mesh && Mesh->Raycast(Start, End, Filter, Out);
-        }
-
-        namespace
-        {
-            FNavMesh* FirstReadyNavMeshFromWorld(CWorld* World, FName Agent = FName())
-            {
-                if (!World) return nullptr;
-                auto View = World->View<SNavMeshComponent>();
-                return FindReadyNavMesh(View, Agent);
-            }
         }
 
         bool IsReady(CWorld* World, FName Agent)
         {
-            return FirstReadyNavMeshFromWorld(World, Agent) != nullptr;
+            return NavMeshSystemInternal::FirstReadyNavMeshFromWorld(World, Agent) != nullptr;
         }
 
         int32 RequestRebuild(CWorld* World)
@@ -2756,10 +2712,10 @@ namespace Lumina
                 return 0;
             }
             int32 Count = 0;
-            auto View = World->View<SNavMeshComponent>();
+            auto View = World->View<ECS::Write<SNavMeshComponent>>();
             for (ECS::FEntity E : View)
             {
-                View.Get<SNavMeshComponent>(E).bBakeRequested = true;
+                View.Get<ECS::Write<SNavMeshComponent>>(E).bBakeRequested = true;
                 ++Count;
             }
             return Count;
@@ -2772,7 +2728,7 @@ namespace Lumina
 
         bool FindPath(CWorld* World, const FVector3& Start, const FVector3& End, int32 MaxCorners, FNavPath& Out, FName Agent)
         {
-            FNavMesh* Mesh = FirstReadyNavMeshFromWorld(World, Agent);
+            FNavMesh* Mesh = NavMeshSystemInternal::FirstReadyNavMeshFromWorld(World, Agent);
             if (!Mesh)
             {
                 Out = {};
@@ -2786,14 +2742,14 @@ namespace Lumina
 
         bool ProjectPoint(CWorld* World, const FVector3& Point, const FVector3& Extents, FVector3& Out, FName Agent)
         {
-            FNavMesh* Mesh = FirstReadyNavMeshFromWorld(World, Agent);
+            FNavMesh* Mesh = NavMeshSystemInternal::FirstReadyNavMeshFromWorld(World, Agent);
             FNavQueryFilter Filter;
             return Mesh && Mesh->ProjectPoint(Point, Extents, Filter, Out);
         }
 
         bool Raycast(CWorld* World, const FVector3& Start, const FVector3& End, SNavRaycastResult& Out, FName Agent)
         {
-            FNavMesh* Mesh = FirstReadyNavMeshFromWorld(World, Agent);
+            FNavMesh* Mesh = NavMeshSystemInternal::FirstReadyNavMeshFromWorld(World, Agent);
             FNavQueryFilter Filter;
             return Mesh && Mesh->Raycast(Start, End, Filter, Out);
         }
@@ -2806,7 +2762,7 @@ namespace Lumina
 
         bool FindRandomReachablePoint(CWorld* World, const FVector3& Origin, float Radius, FVector3& Out, FName Agent)
         {
-            FNavMesh* Mesh = FirstReadyNavMeshFromWorld(World, Agent);
+            FNavMesh* Mesh = NavMeshSystemInternal::FirstReadyNavMeshFromWorld(World, Agent);
             FNavQueryFilter Filter;
             return Mesh && Mesh->FindRandomPoint(Origin, Radius, Filter, Out);
         }
@@ -2822,7 +2778,7 @@ namespace Lumina
             FNavPath Path;
             if (!FindPath(World, From, To, Path, Agent) || !Path.bValid) return -1.0f;
             float Len = 0.0f;
-            for (size_t i = 1; i < Path.Corners.size(); ++i)
+            for (int32 i = 1; i < Path.Corners.Num(); ++i)
             {
                 Len += Math::Length(Path.Corners[i] - Path.Corners[i - 1]);
             }
@@ -2831,25 +2787,25 @@ namespace Lumina
 
         void DrawPath(CWorld* World, const FNavPath& Path, const FVector4& Color, float Thickness, float Lift, float Duration)
         {
-            if (!World || !Path.bValid || Path.Corners.size() < 2) return;
+            if (!World || !Path.bValid || Path.Corners.Num() < 2) return;
 
             const FVector3 LiftV(0.0f, Lift, 0.0f);
-            for (size_t i = 1; i < Path.Corners.size(); ++i)
+            for (int32 i = 1; i < Path.Corners.Num(); ++i)
             {
                 World->GetDebugInterface()->DrawLine(Path.Corners[i - 1] + LiftV, Path.Corners[i] + LiftV, Color, Thickness, true, Duration);
             }
             // Corner spheres so kinks read at a glance; goal sphere distinguished.
             const float R = 0.12f;
-            for (size_t i = 0; i < Path.Corners.size(); ++i)
+            for (int32 i = 0; i < Path.Corners.Num(); ++i)
             {
-                const bool bGoal = (i + 1 == Path.Corners.size());
+                const bool bGoal = (i + 1 == Path.Corners.Num());
                 const FVector4 SphColor = bGoal ? FVector4(1.0f, 1.0f, 1.0f, 1.0f) : Color;
                 World->GetDebugInterface()->DrawSphere(Path.Corners[i] + LiftV, bGoal ? R * 1.6f : R, SphColor, 10, 1.0f, true, Duration);
             }
             // Partial paths are easy to misread; flag them with a red marker on the last corner.
             if (Path.bPartial)
             {
-                World->GetDebugInterface()->DrawSphere(Path.Corners.back() + LiftV, 0.25f, FVector4(1.0f, 0.2f, 0.2f, 1.0f), 12, 1.0f, true, Duration);
+                World->GetDebugInterface()->DrawSphere(Path.Corners.Last() + LiftV, 0.25f, FVector4(1.0f, 0.2f, 0.2f, 1.0f), 12, 1.0f, true, Duration);
             }
         }
 

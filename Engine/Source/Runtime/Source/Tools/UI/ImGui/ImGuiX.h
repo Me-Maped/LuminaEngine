@@ -91,17 +91,17 @@ namespace Lumina::ImGuiX
         if (Data->EventFlag == ImGuiInputTextFlags_CallbackResize)
         {
             TString* String = static_cast<TString*>(Data->UserData);
-            String->resize(static_cast<size_t>(Data->BufTextLen));
-            Data->Buf = String->data();
+            String->SetLen(static_cast<size_t>(Data->BufTextLen));
+            Data->Buf = String->GetData();
         }
         return 0;
     }
 
     // Never hand ImGui a string's max_size(); that is the type's theoretical limit, not its writable bytes.
     template <typename TString>
-    bool InputText(const char* Label, TString& String, ImGuiInputTextFlags Flags = ImGuiInputTextFlags_None)
+    bool InputText(const char* Label, TString& String, ImGuiInputTextFlags Flags = ImGuiInputTextFlags_None, const char* Hint = nullptr)
     {
-        return ImGui::InputText(Label, String.data(), String.capacity() + 1,
+        return ImGui::InputTextWithHint(Label, Hint, String.GetData(), String.GetCapacity() + 1,
             Flags | ImGuiInputTextFlags_CallbackResize, &StringInputResizeCallback<TString>, &String);
     }
 
@@ -110,7 +110,7 @@ namespace Lumina::ImGuiX
     {
         FFixedString Buffer;
         AppendFormat(Buffer, Fmt, std::forward<TArgs>(Args)...);
-        ImGui::TextUnformatted(Buffer.c_str());
+        ImGui::TextUnformatted(*Buffer);
     }
 
     // Localized format text: the format string is a translated string that only exists at runtime, so
@@ -128,7 +128,7 @@ namespace Lumina::ImGuiX
     void TextColored(const ImVec4& Color, Fmt::TFormatString<std::decay_t<TArgs>...> fmt, TArgs&&... Args)
     {
         ImGui::PushStyleColor(ImGuiCol_Text, Color);
-        ImGui::TextUnformatted(Format(fmt, std::forward<TArgs>(Args)...).c_str());
+        ImGui::TextUnformatted(*Format(fmt, std::forward<TArgs>(Args)...));
         ImGui::PopStyleColor();
     }
 
@@ -277,8 +277,8 @@ namespace Lumina::ImGuiX
     // that clears the selection; without it the combo always holds a class once one is set.
     RUNTIME_API bool ClassCombo(const char* StrId, CClass* BaseClass, CClass*& InOutClass, bool bAllowNone = true, const char* ItemIcon = nullptr);
 
-    // Same, over structs that is-a BaseStruct. BaseStruct itself is excluded, being never a concrete pick.
-    RUNTIME_API bool StructCombo(const char* StrId, CStruct* BaseStruct, CStruct*& InOutStruct, bool bAllowNone = true, const char* ItemIcon = nullptr);
+    // Same, over structs that is-a BaseStruct. BaseStruct itself is listed only with bIncludeBase.
+    RUNTIME_API bool StructCombo(const char* StrId, CStruct* BaseStruct, CStruct*& InOutStruct, bool bAllowNone = true, const char* ItemIcon = nullptr, bool bIncludeBase = false);
     
     RUNTIME_API ImTextureRef ToImTextureRef(FStringView Path);
     // Direct new-heap ResourceID (scene display targets sample the global heap). ~0u -> placeholder.

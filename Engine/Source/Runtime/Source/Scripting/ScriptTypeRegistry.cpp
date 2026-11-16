@@ -6,8 +6,10 @@
 #include "Core/Object/Class.h"
 #include "Core/Object/ScriptEnum.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
+#include "Core/Object/ObjectIteration.h"
 #include "Core/Object/ObjectUtils.h"
 #include "Core/Object/Package/Package.h"
+#include "Core/Reflection/Type/Function.h"
 #include "Containers/StringFormat.h"
 #include "Scripting/DotNet/DotNetHost.h"
 #include "Core/Object/InstancedStruct.h"
@@ -76,8 +78,7 @@ namespace Lumina
 
         void RelocateComponent(const ECS::FComponentTypeInfo& Info, void* Dest, void* Source)
         {
-            CopyConstructComponent(Info, Dest, Source);
-            DestructComponent(Info, Source);
+            StructOf(Info).RelocateStruct(Dest, Source);
         }
 
         void MigrateComponent(const ECS::FComponentTypeInfo& From, const void* FromValue, const ECS::FComponentTypeInfo& To, void* ToValue)
@@ -109,10 +110,80 @@ namespace Lumina
             Struct.Metadata = FMetaDataPair();
             for (const std::pair<FString, FString>& Pair : Desc.Meta)
             {
-                Struct.Metadata.SetValue(FName(Pair.first.c_str()), Pair.second);
+                Struct.Metadata.SetValue(FName(*Pair.first), Pair.second);
             }
             // An asset stores this rather than the object's name, which a superseded type no longer has.
             Struct.Metadata.SetValue("ScriptTypeName", Desc.TypeName.ToString());
+        }
+
+        template<typename TType, typename TRetire>
+        void RetireAbsentTypes(THashMap<FName, TStrongObjectPtr<TType>>& Types, const THashSet<FName>& Live, TRetire&& Retire)
+        {
+            TVector<FName> Removed;
+            for (const auto& [Name, Type] : Types)
+            {
+                if (!Live.Contains(Name))
+                {
+                    Removed.Add(Name);
+                }
+            }
+            for (const FName& Name : Removed)
+            {
+                Retire(Move(Types[Name]));
+                Types.Remove(Name);
+            }
+        }
+
+        // One pass over every object, since each live field typed by a superseded type keeps that type for another reload.
+        template<typename TType>
+        void RetireUnreferencedTypes(TVector<TStrongObjectPtr<TType>>& Superseded)
+        {
+            THashSet<const CField*> Unreferenced;
+            for (const TStrongObjectPtr<TType>& Type : Superseded)
+            {
+                // The registry's own entry is one strong ref, and an FInstancedStruct pinning the type is a second.
+                const CStruct* Struct = Cast<CStruct>(static_cast<CObject*>(Type.Get()));
+                if (Type->GetStrongRefCount() == 1 && ECS::FComponentTypeRegistry::Get().FindByStruct(Struct) == ECS::InvalidComponentTypeID)
+                {
+                    Unreferenced.Add(Type.Get());
+                }
+            }
+            if (Unreferenced.IsEmpty())
+            {
+                return;
+            }
+
+            // Never a match, so the walk reaches a map's value after its key instead of stopping at the first hit.
+            auto Unpin = [&](const CField* Field)
+            {
+                if (Field != nullptr)
+                {
+                    Unreferenced.Remove(Field);
+                }
+                return false;
+            };
+            auto DropReferenced = [&](TSpan<FProperty* const> Properties)
+            {
+                for (const FProperty* Property : Properties)
+                {
+                    Scripting::PropertyReferencesType(Property, Unpin);
+                }
+            };
+            ForEachObject([&](CObjectBase* Base, int32)
+            {
+                CStruct* Holder = Base != nullptr && !Base->HasAnyFlag(OF_MarkedDestroy) ? Cast<CStruct>(Base) : nullptr;
+                if (Holder == nullptr)
+                {
+                    return;
+                }
+                DropReferenced(Holder->GetOwnProperties());
+                for (const FFunction* Function : Holder->GetFunctions())
+                {
+                    DropReferenced(Function->GetParams());
+                }
+            });
+
+            Superseded.RemoveAll([&](const TStrongObjectPtr<TType>& Type) { return Unreferenced.Contains(Type.Get()); });
         }
     }
 
@@ -148,7 +219,7 @@ namespace Lumina
 
         if (Ops == nullptr)
         {
-            Ops = ComponentOps.emplace_back(MakeUnique<FComponentOps>()).Get();
+            Ops = ComponentOps.EmplaceGetRef(MakeUnique<FComponentOps>()).Get();
             Ops->TypeId = ComponentTypes.Acquire(Info);
         }
         else if (ComponentTypes.GetInfo(Ops->GetTypeID()).GetBoundStruct() != &Struct)
@@ -156,6 +227,12 @@ namespace Lumina
             ComponentTypes.Relayout(Ops->GetTypeID(), Info, &MigrateComponent);
         }
         RegisterComponentOps(&Struct, Ops);
+    }
+
+    void Scripting::RenameSupersededType(CObject& Type)
+    {
+        const FString Retired = FString("REPLACED_") + *Type.GetName();
+        Type.Rename(FName(*Retired, Type.GetInternalIndex() + 1), Type.GetPackage());
     }
 
     void FScriptStructRegistry::Supersede(TStrongObjectPtr<CScriptStruct>&& Struct)
@@ -166,20 +243,8 @@ namespace Lumina
             return;
         }
         Old->MarkSuperseded();
-        const FString Retired = FString("REPLACED_") + Old->GetName().c_str();
-        Old->Rename(FName(Retired.c_str(), ++SupersededSerial), Old->GetPackage());
-        Superseded.push_back(std::move(Struct));
-        ++Generation;
-    }
-
-    void FScriptStructRegistry::Clear()
-    {
-        for (auto& [Name, Struct] : Types)
-        {
-            Supersede(std::move(Struct));
-        }
-        Types.clear();
-        // A value of a type that never reached the registry still has to learn its type is gone.
+        Scripting::RenameSupersededType(*Old);
+        Superseded.Add(Move(Struct));
         ++Generation;
     }
 
@@ -187,6 +252,17 @@ namespace Lumina
     {
         THashSet<FName> Live;
         uint32 MintedCount = 0;
+
+        auto ApplyDefinition = [this](const FName& Name, CScriptStruct& Struct, const Scripting::FManagedTypeDefinition& Desc)
+        {
+            const FString Stable = Name.ToString();
+            DotNet::ApplyScriptableDefaults(FStringView(*Stable, Stable.Len()), Struct.GetDefaultInstance());
+            ApplyScriptMetadata(Struct, Desc);
+            if (IsComponent(Desc))
+            {
+                RegisterComponent(Name, Struct);
+            }
+        };
 
         // Definitions arrive with every struct after the structs it holds by value, so each finds its fields' types already current.
         for (const Scripting::FManagedTypeDefinition& Desc : Definitions)
@@ -197,39 +273,33 @@ namespace Lumina
             }
 
             const FName Name = Desc.TypeName;
-            Live.insert(Name);
+            Live.Add(Name);
 
             CStruct* Base = nullptr;
-            if (!Desc.NativeBaseName.empty())
+            if (!Desc.NativeBaseName.IsEmpty())
             {
-                Base = FindObject<CStruct>(FName(Desc.NativeBaseName.c_str()));
+                Base = FindObject<CStruct>(FName(*Desc.NativeBaseName));
                 if (Base == nullptr)
                 {
-                    LOG_WARN("Script struct '{}' extends '{}', which is not a reflected struct; not minted.", Name, Desc.NativeBaseName.c_str());
+                    LOG_WARN("Script struct '{}' extends '{}', which is not a reflected struct; not minted.", Name, *Desc.NativeBaseName);
                     continue;
                 }
             }
 
-            auto Existing = Types.find(Name);
-            if (Existing != Types.end())
+            auto Existing = Types.Find(Name);
+            if (Existing != nullptr)
             {
-                CScriptStruct* Current = Existing->second.Get();
+                CScriptStruct* Current = Existing->Get();
                 const EScriptTypeDirty Dirty = Scripting::DiffScriptLayout(Current->GetAppliedSchema(), Current->GetOwnProperties(), Desc.Schema);
                 if (Current->GetNativeBase() == Base && !EnumHasAnyFlags(Dirty, EScriptTypeDirty::Layout))
                 {
                     // Same layout, so every holder keeps its pointer and only the defaults and metadata are brought up to date.
-                    const FString Stable = Name.ToString();
-                    DotNet::ApplyScriptableDefaults(FStringView(Stable.c_str(), Stable.size()), Current->GetDefaultInstance());
-                    ApplyScriptMetadata(*Current, Desc);
                     Current->SetAppliedSchema(Desc.Schema);
-                    if (IsComponent(Desc))
-                    {
-                        RegisterComponent(Name, *Current);
-                    }
+                    ApplyDefinition(Name, *Current, Desc);
                     continue;
                 }
-                Supersede(std::move(Existing->second));
-                Types.erase(Existing);
+                Supersede(Move(*Existing));
+                Types.Remove(Name);
             }
 
             if (IsClaimedByNativeType(Name))
@@ -247,30 +317,13 @@ namespace Lumina
             Minted->SetAppliedSchema(Desc.Schema);
 
             // A C# struct's initializers live in its rewritten accessors, so the schema carried none of them.
-            const FString Stable = Name.ToString();
-            DotNet::ApplyScriptableDefaults(FStringView(Stable.c_str(), Stable.size()), Minted->GetDefaultInstance());
-            ApplyScriptMetadata(*Minted, Desc);
-            if (IsComponent(Desc))
-            {
-                RegisterComponent(Name, *Minted);
-            }
-            Types[Name] = std::move(Minted);
+            ApplyDefinition(Name, *Minted, Desc);
+            Types[Name] = Move(Minted);
             ++MintedCount;
         }
 
-        TVector<FName> Removed;
-        for (const auto& [Name, Struct] : Types)
-        {
-            if (Live.find(Name) == Live.end())
-            {
-                Removed.push_back(Name);
-            }
-        }
-        for (const FName& Name : Removed)
-        {
-            Supersede(std::move(Types[Name]));
-            Types.erase(Name);
-        }
+        RetireAbsentTypes(Types, Live, [this](TStrongObjectPtr<CScriptStruct>&& Struct) { Supersede(Move(Struct)); });
+        RetireUnreferencedTypes(Superseded);
 
         if (MintedCount > 0)
         {
@@ -280,8 +333,8 @@ namespace Lumina
 
     CScriptStruct* FScriptStructRegistry::Find(const FName& ScriptTypeName) const
     {
-        auto It = Types.find(ScriptTypeName);
-        return It != Types.end() ? It->second.Get() : nullptr;
+        auto It = Types.Find(ScriptTypeName);
+        return It != nullptr ? It->Get() : nullptr;
     }
 
     FScriptEnumRegistry& FScriptEnumRegistry::Get()
@@ -292,12 +345,14 @@ namespace Lumina
 
     void FScriptEnumRegistry::Refresh(TSpan<const Scripting::FManagedTypeDefinition> Definitions)
     {
+        THashSet<FName> Live;
         for (const Scripting::FManagedTypeDefinition& Desc : Definitions)
         {
             if (Desc.Kind != Scripting::EManagedTypeKind::Enum || Desc.TypeName.IsNone())
             {
                 continue;
             }
+            Live.Add(Desc.TypeName);
 
             TStrongObjectPtr<CScriptEnum>& Enum = Enums[Desc.TypeName];
             if (Enum.Get() == nullptr)
@@ -305,20 +360,20 @@ namespace Lumina
                 if (IsClaimedByNativeType(Desc.TypeName))
                 {
                     LOG_WARN("Script enum '{}' has the name of a native type; not minted.", Desc.TypeName);
-                    Enums.erase(Desc.TypeName);
+                    Enums.Remove(Desc.TypeName);
                     continue;
                 }
                 Enum = AllocateTransientType<CScriptEnum>(Desc.TypeName);
                 if (Enum.Get() == nullptr)
                 {
-                    Enums.erase(Desc.TypeName);
+                    Enums.Remove(Desc.TypeName);
                     continue;
                 }
             }
 
             // A property holds the enum itself, so members change in place and every field sees them at once.
             Enum->UnderlyingType = Desc.EnumUnderlying;
-            Enum->Names.clear();
+            Enum->Names.Reset();
             for (const Scripting::FScriptEnumEntry& Entry : Desc.EnumEntries)
             {
                 Enum->AddEnum(Entry.Name, (uint64)Entry.Value);
@@ -326,9 +381,17 @@ namespace Lumina
             Enum->Metadata = FMetaDataPair();
             for (const std::pair<FString, FString>& Pair : Desc.Meta)
             {
-                Enum->Metadata.SetValue(FName(Pair.first.c_str()), Pair.second);
+                Enum->Metadata.SetValue(FName(*Pair.first), Pair.second);
             }
         }
+
+        // Kept alive, since a field of a class not yet reinstanced may still point at a retired enum.
+        RetireAbsentTypes(Enums, Live, [this](TStrongObjectPtr<CScriptEnum>&& Enum)
+        {
+            Scripting::RenameSupersededType(*Enum);
+            Superseded.Add(Move(Enum));
+        });
+        RetireUnreferencedTypes(Superseded);
     }
 
     CStruct* ResolveStructByName(const FName& Name)
@@ -344,9 +407,9 @@ namespace Lumina
         }
         if (const FString* Stable = Struct->Metadata.TryGetMetadata("ScriptTypeName"))
         {
-            if (!Stable->empty())
+            if (!Stable->IsEmpty())
             {
-                return FName(Stable->c_str());
+                return FName(*(*Stable));
             }
         }
         return Struct->GetName();

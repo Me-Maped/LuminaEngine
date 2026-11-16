@@ -30,7 +30,6 @@ namespace Lumina
         const char* GetTitlebarIcon() const override { return LE_ICON_PACKAGE_VARIANT; }
 
         void OnInitialize() override;
-        void OnDeinitialize(const FUpdateContext& UpdateContext) override;
         void DrawHelpMenu() override;
 
     private:
@@ -46,8 +45,6 @@ namespace Lumina
             Done,
         };
 
-        // Shared between UI and worker threads via shared_ptr so the worker keeps it
-        // alive even if the tool closes mid-build.
         struct FBuildSession
         {
             std::atomic<bool>           bDone{false};
@@ -76,6 +73,7 @@ namespace Lumina
 
         FString             OutputDir;          // editable; defaults set on first draw
         int32               ConfigIndex     = 0; // 0=Shipping, 1=Development, 2=Debug
+        int32               PlatformIndex   = 0; // EPackagePlatform
         bool                bExtractScriptsLoose = false;
         bool                bServer              = false;
         TVector<FString>    ExtraFiles;
@@ -93,8 +91,8 @@ namespace Lumina
         {
             FString Name;
             FString Path;
-            size_t  Assets = 0;
-            size_t  Bytes  = 0;
+            int32   Assets = 0;
+            int64   Bytes  = 0;
         };
         TVector<FChunkSummary> LastChunks;
         TVector<FString>    LogLines;           // ring-bounded; UI thread only

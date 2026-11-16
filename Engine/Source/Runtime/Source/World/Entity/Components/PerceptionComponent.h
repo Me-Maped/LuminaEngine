@@ -7,14 +7,14 @@
 #include "Core/Object/ObjectMacros.h"
 #include "Core/Math/Math.h"
 #include "AI/Perception/PerceptionTypes.h"
-#include "GameplayTags/GameplayTag.h"
+#include "HierarchicalTags/HierarchicalTag.h"
 #include "Physics/PhysicsTypes.h"
 #include "World/Entity/Events/PerceptionEvent.h"
 #include "PerceptionComponent.generated.h"
 
 namespace Lumina
 {
-    // Gives an entity AI senses (sight, hearing, damage). SPerceptionSystem fills PerceivedTargets each tick;
+    // Gives an entity AI senses (sight, hearing, damage). CPerceptionSystem fills PerceivedTargets each tick;
     // OnTargetPerceived / OnTargetLost fire on transitions (C++ delegates + C# EntityScript callbacks).
     // Designed so a script can drive an AI with a few lines: GetClosestPerceivedTarget + GetLastKnownLocation.
     REFLECT(Component, Category = "AI")
@@ -78,7 +78,7 @@ namespace Lumina
 
         /** Only sources whose AffiliationTags match any of these are sensed. Empty = sense everyone. */
         PROPERTY(Editable, Category = "AI|Perception")
-        SGameplayTagContainer DetectableTags;
+        SHierarchicalTagContainer DetectableTags;
 
         //~ Sight
         PROPERTY(Editable, Category = "AI|Perception|Sight")

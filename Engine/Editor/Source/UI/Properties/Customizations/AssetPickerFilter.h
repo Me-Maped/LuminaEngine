@@ -1,7 +1,15 @@
 #pragma once
 
+#include "Assets/AssetRegistry/AssetData.h"
+#include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Containers/String.h"
+#include "Containers/Vector.h"
 #include "imgui.h"
+
+namespace Lumina
+{
+    class CClass;
+}
 
 namespace Lumina::AssetPickerFilter
 {
@@ -46,4 +54,29 @@ namespace Lumina::AssetPickerFilter
     /** The filter button plus its popup, drawn inline in a picker's search row. Tinted while any filter is
      *  active, so a short result list reads as "filtered" rather than as "that asset is missing". */
     void DrawFilterButton(float ButtonWidth);
+
+    // The Content Browser selection when its class is-a Class, else null.
+    NODISCARD FAssetDataPtr GetSelectedAssetOfClass(const CClass* Class);
+
+    // Disabled with Hint as its tooltip until the Content Browser selection fits, true on click.
+    bool DrawUseSelectedButton(bool bSelectionFits, const char* Hint);
+
+    // Reveals AssetPath in the Content Browser, disabled while the path is empty.
+    void DrawBrowseButton(FStringView AssetPath);
+
+    bool DrawClearButton(const char* Tooltip);
+
+    // Registry assets whose class is-a the requested class, sorted by name and rescanned only after the registry changes.
+    class EDITOR_API FAssetsOfClassCache
+    {
+    public:
+
+        const TVector<FAssetDataPtr>& Get(const CClass* Class);
+
+    private:
+
+        const CClass*             CachedClass = nullptr;
+        TVector<FAssetDataPtr>    Assets;
+        FAssetRegistryStaleLatch  StaleLatch;
+    };
 }

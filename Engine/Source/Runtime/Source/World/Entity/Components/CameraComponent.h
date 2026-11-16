@@ -3,7 +3,6 @@
 #include "World/ECS/Registry.h"
 
 #include "Containers/Vector.h"
-#include "Core/Engine/Engine.h"
 #include "Core/Object/ObjectHandleTyped.h"
 #include "Renderer/RenderLayers.h"
 #include "Renderer/ViewVolume.h"
@@ -17,7 +16,7 @@ namespace Lumina
 
     class CMaterialInterface;
 
-    // Interpolation curve for blending the active camera (SCameraSystem::SetActiveCamera);
+    // Interpolation curve for blending the active camera (CCameraSystem::SetActiveCamera);
     // EvaluateCameraBlend maps normalized [0..1] time onto [0..1].
     REFLECT()
     enum class ECameraBlendFunction : uint8
@@ -30,6 +29,10 @@ namespace Lumina
 
     /** Maps normalized blend time [0..1] through Function to an eased [0..1] alpha. */
     RUNTIME_API float EvaluateCameraBlend(ECameraBlendFunction Function, float Alpha);
+
+    // Yaw about world up, then pitch about the camera's right, stopping a degree short of vertical.
+    RUNTIME_API FQuat AddMouseLook(const FQuat& Rotation, FVector2 YawPitchDegrees);
+    RUNTIME_API FViewVolume AddMouseLook(const FViewVolume& View, FVector2 YawPitchDegrees);
 
     // Result of CCameraSubsystem::WorldToScreen. Blittable so C# receives it by value.
     REFLECT()
@@ -84,7 +87,7 @@ namespace Lumina
         }
 
         // Bake the resolved (possibly blended) view into the view volume without writing authored FOV, so
-        // direct matrix consumers (editor gizmo, CPU picking) match the rendered view. Called by SCameraSystem.
+        // direct matrix consumers (editor gizmo, CPU picking) match the rendered view. Called by CCameraSystem.
         void SetResolvedView(const FVector3& Position, const FVector3& ViewDirection, const FVector3& UpDirection, float InFOV)
         {
             ViewVolume.SetFOV(InFOV);
@@ -180,6 +183,10 @@ namespace Lumina
         /** When true, this camera activates automatically when the entity is spawned. */
         PROPERTY(Editable, Category = "Camera")
         bool bAutoActivate = false;
+
+        // Turns the rendered view by mouse motion that arrives after the update, so set it to the look code's degrees per count. Zero is off.
+        PROPERTY(Editable, Category = "Camera|Input", ClampMin = 0.0f)
+        float MouseLookDegreesPerCount = 0.0f;
 
         // Per-camera color grading + tone mapping; the render scene reads it from the active camera and
         // applies it in the composite pass. Defaults to an identity grade with AGX.

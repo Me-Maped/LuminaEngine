@@ -1,9 +1,6 @@
 ﻿#include "RuntimePCH.h"
 #include "TimerManager.h"
-#include "World/ECS/CommandBus.h"
 #include "World/ECS/Registry.h"
-
-#include <algorithm>
 
 #include "Log/Log.h"
 #include "Memory/SmartPtr.h"
@@ -18,14 +15,14 @@ namespace Lumina
     FTimerHandle FTimerManager::SetTimer(float Rate, FTimerCallback Callback, bool bLoop, float FirstDelay)
     {
         FTimerHandle Out;
-        Out.Handle = CreateTimer(Rate, bLoop, FirstDelay, ECS::NullEntity, std::move(Callback));
+        Out.Handle = CreateTimer(Rate, bLoop, FirstDelay, ECS::NullEntity, Move(Callback));
         return Out;
     }
 
     FTimerHandle FTimerManager::SetTimerForEntity(ECS::FEntity Owner, float Rate, FTimerCallback Callback, bool bLoop, float FirstDelay)
     {
         FTimerHandle Out;
-        Out.Handle = CreateTimer(Rate, bLoop, FirstDelay, Owner, std::move(Callback));
+        Out.Handle = CreateTimer(Rate, bLoop, FirstDelay, Owner, Move(Callback));
         return Out;
     }
 
@@ -37,14 +34,7 @@ namespace Lumina
             return;
         }
 
-        if (bTicking)
-        {
-            Registry.Get<FTimer>(Handle.Handle).bPendingDestroy = true;
-        }
-        else
-        {
-            Registry.Destroy(Handle.Handle);
-        }
+        Registry.Destroy(Handle.Handle);
         Handle.Invalidate();
     }
 
@@ -55,20 +45,13 @@ namespace Lumina
             return;
         }
 
-        auto View = Registry.View<FTimer>();
+        auto View = Registry.View<ECS::Write<FTimer>>();
         for (ECS::FEntity Entity : View)
         {
-            FTimer& Timer = View.Get<FTimer>(Entity);
+            FTimer& Timer = View.Get<ECS::Write<FTimer>>(Entity);
             if (Timer.Owner == Owner)
             {
-                if (bTicking)
-                {
-                    Timer.bPendingDestroy = true;
-                }
-                else
-                {
-                    Registry.Destroy(Entity);
-                }
+                Registry.Destroy(Entity);
             }
         }
     }
@@ -76,6 +59,7 @@ namespace Lumina
     void FTimerManager::Clear()
     {
         Registry.Clear();
+        DueTimers.Reset();
     }
 
     bool FTimerManager::IsTimerActive(FTimerHandle Handle) const
@@ -85,7 +69,7 @@ namespace Lumina
             return false;
         }
 
-        const FTimer& Timer = Registry.Get<FTimer>(Handle.Handle);
+        const FTimer& Timer = Registry.Get<ECS::Read<FTimer>>(Handle.Handle);
         return !Timer.bPendingDestroy;
     }
 
@@ -95,7 +79,7 @@ namespace Lumina
         {
             return false;
         }
-        return Registry.Get<FTimer>(Handle.Handle).bPaused;
+        return Registry.Get<ECS::Read<FTimer>>(Handle.Handle).bPaused;
     }
 
     float FTimerManager::GetTimerRate(FTimerHandle Handle) const
@@ -104,7 +88,7 @@ namespace Lumina
         {
             return 0.0f;
         }
-        return Registry.Get<FTimer>(Handle.Handle).Rate;
+        return Registry.Get<ECS::Read<FTimer>>(Handle.Handle).Rate;
     }
 
     float FTimerManager::GetTimerRemaining(FTimerHandle Handle) const
@@ -113,7 +97,7 @@ namespace Lumina
         {
             return 0.0f;
         }
-        return Registry.Get<FTimer>(Handle.Handle).Remaining;
+        return Registry.Get<ECS::Read<FTimer>>(Handle.Handle).Remaining;
     }
 
     float FTimerManager::GetTimerElapsed(FTimerHandle Handle) const
@@ -122,7 +106,7 @@ namespace Lumina
         {
             return 0.0f;
         }
-        const FTimer& Timer = Registry.Get<FTimer>(Handle.Handle);
+        const FTimer& Timer = Registry.Get<ECS::Read<FTimer>>(Handle.Handle);
         return Timer.Rate - Timer.Remaining;
     }
 
@@ -132,7 +116,7 @@ namespace Lumina
         {
             return;
         }
-        Registry.Get<FTimer>(Handle.Handle).bPaused = bPause;
+        Registry.Get<ECS::Write<FTimer>>(Handle.Handle).bPaused = bPause;
     }
 
     void FTimerManager::FireTimer(ECS::FEntity Entity)
@@ -142,14 +126,14 @@ namespace Lumina
             return;
         }
 
-        FTimer& Timer = Registry.Get<FTimer>(Entity);
+        FTimer& Timer = Registry.Get<ECS::Write<FTimer>>(Entity);
         if (Timer.bPaused || Timer.bPendingDestroy || Timer.Remaining > 0.0f)
         {
             return;
         }
 
         // Swap-out callbacks so re-entrant SetTimer/ClearTimer from within the callback is well-defined.
-        FTimerCallback NativeCallback = std::move(Timer.NativeCallback);
+        FTimerCallback NativeCallback = Move(Timer.NativeCallback);
         const bool     bLoop          = Timer.bLoop;
         const float    Rate           = Timer.Rate;
 
@@ -168,10 +152,10 @@ namespace Lumina
             return;
         }
 
-        FTimer& Live = Registry.Get<FTimer>(Entity);
+        FTimer& Live = Registry.Get<ECS::Write<FTimer>>(Entity);
         if (bLoop && !Live.bPendingDestroy)
         {
-            Live.NativeCallback = std::move(NativeCallback);
+            Live.NativeCallback = Move(NativeCallback);
             Live.Remaining     += Rate;
             if (Live.Remaining <= 0.0f)
             {
@@ -184,7 +168,7 @@ namespace Lumina
         }
     }
 
-    void FTimerManager::Tick(float DeltaTime, ECS::FCommandBus* Bus)
+    void FTimerManager::Tick(float DeltaTime)
     {
         LUMINA_PROFILE_SCOPE();
 
@@ -193,83 +177,30 @@ namespace Lumina
             return;
         }
 
-        static thread_local TVector<ECS::FEntity> ToTick;
-        ToTick.clear();
+        auto View = Registry.View<ECS::Write<FTimer>>();
+        for (ECS::FEntity Entity : View)
         {
-            auto View = Registry.View<FTimer>();
-            ToTick.reserve(View.Num());
-            for (ECS::FEntity Entity : View)
-            {
-                ToTick.push_back(Entity);
-            }
-        }
-
-        bTicking = true;
-
-        for (ECS::FEntity Entity : ToTick)
-        {
-            if (!Registry.IsValid(Entity))
-            {
-                continue;
-            }
-
-            FTimer& Timer = Registry.Get<FTimer>(Entity);
+            FTimer& Timer = View.Get<ECS::Write<FTimer>>(Entity);
             if (Timer.bPaused || Timer.bPendingDestroy)
             {
                 continue;
             }
 
             Timer.Remaining -= DeltaTime;
-            if (Timer.Remaining > 0.0f)
+            if (Timer.Remaining <= 0.0f)
             {
-                continue;
-            }
-
-            if (Bus != nullptr)
-            {
-                Bus->Enqueue([this, Entity]() { FireTimer(Entity); });
-                continue;
-            }
-
-            // Swap-out callbacks so re-entrant SetTimer/ClearTimer from within the callback is well-defined.
-            FTimerCallback NativeCallback = std::move(Timer.NativeCallback);
-            const bool     bLoop          = Timer.bLoop;
-            const float    Rate           = Timer.Rate;
-
-            if (!bLoop)
-            {
-                Timer.bPendingDestroy = true;
-            }
-
-            if (NativeCallback)
-            {
-                NativeCallback();
-            }
-
-            if (bLoop && Registry.IsValid(Entity))
-            {
-                FTimer& Live = Registry.Get<FTimer>(Entity);
-                if (!Live.bPendingDestroy)
-                {
-                    Live.NativeCallback = std::move(NativeCallback);
-                    Live.Remaining     += Rate;
-                    if (Live.Remaining <= 0.0f)
-                    {
-                        Live.Remaining = Rate;
-                    }
-                }
+                DueTimers.Add(Entity);
             }
         }
+    }
 
-        bTicking = false;
-
-        auto DestroyView = Registry.View<FTimer>();
-        for (ECS::FEntity Entity : DestroyView)
+    void FTimerManager::FireDue()
+    {
+        TVector<ECS::FEntity> Due = Move(DueTimers);
+        DueTimers.Reset();
+        for (ECS::FEntity Entity : Due)
         {
-            if (DestroyView.Get<FTimer>(Entity).bPendingDestroy)
-            {
-                Registry.Destroy(Entity);
-            }
+            FireTimer(Entity);
         }
     }
 
@@ -289,7 +220,7 @@ namespace Lumina
         Timer.Remaining      = (FirstDelay >= 0.0f) ? FirstDelay : Rate;
         Timer.bLoop          = bLoop;
         Timer.Owner          = Owner;
-        Timer.NativeCallback = std::move(NativeCallback);
+        Timer.NativeCallback = Move(NativeCallback);
         return Entity;
     }
 }

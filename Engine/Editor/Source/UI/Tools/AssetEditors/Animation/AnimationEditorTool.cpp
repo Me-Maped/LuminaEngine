@@ -1,4 +1,5 @@
 ﻿#include "Containers/StringFormat.h"
+#include "World/World.h"
 #include "AnimationEditorTool.h"
 #include "Localization/Localization.h"
 #include "TimelineDrawing.h"
@@ -8,7 +9,6 @@
 #include "Core/Math/Math.h"
 #include <imgui_internal.h>
 
-#include "ImGuiDrawUtils.h"
 #include "implot.h"
 #include "Animation/AnimNotify.h"
 #include "Core/Object/InstancedStruct.h"
@@ -32,7 +32,7 @@ namespace Lumina
     static const char* SequencerName            = "Sequencer";
 
     FAnimationEditorTool::FAnimationEditorTool(IEditorToolContext* Context, CObject* InAsset)
-        : FAssetEditorTool(Context, InAsset->GetName().c_str(), InAsset, NewObject<CWorld>())
+        : FAssetEditorTool(Context, *InAsset->GetName(), InAsset, NewObject<CWorld>())
     {
     }
 
@@ -72,6 +72,7 @@ namespace Lumina
     void FAnimationEditorTool::SetupWorldForTool()
     {
         FEditorTool::SetupWorldForTool();
+        World->GetRenderSettings().bDrawBillboards = false;
 
         CreateFloorPlane();
 
@@ -141,15 +142,6 @@ namespace Lumina
         {
             CreatePreviewEntity();
         }
-
-        if (World && World->GetRenderer())
-        {
-            World->GetRenderSettings().bDrawBillboards = false;
-        }
-    }
-
-    void FAnimationEditorTool::OnDeinitialize(const FUpdateContext& UpdateContext)
-    {
     }
 
     void FAnimationEditorTool::OnAssetLoadFinished()
@@ -230,11 +222,12 @@ namespace Lumina
     {
         SelectedKind  = ENotifyKind::None;
         SelectedIndex = -1;
+        SelectedTrack = -1;
     }
 
     void FAnimationEditorTool::EnsureNotifyTracks(FAnimationResource* Resource)
     {
-        if (Resource == nullptr || !Resource->NotifyTracks.empty())
+        if (Resource == nullptr || !Resource->NotifyTracks.IsEmpty())
         {
             return;
         }
@@ -253,21 +246,21 @@ namespace Lumina
                     return;
                 }
             }
-            Resource->NotifyTracks.push_back(Track);
+            Resource->NotifyTracks.Add(Track);
         };
 
         for (const FAnimationNotify& N : Resource->Notifies)        { AddUnique(N.NotifyTrack); }
         for (const FAnimationNotifyState& S : Resource->NotifyStates) { AddUnique(S.NotifyTrack); }
 
-        if (Resource->NotifyTracks.empty())
+        if (Resource->NotifyTracks.IsEmpty())
         {
-            Resource->NotifyTracks.push_back(FName("Default"));
+            Resource->NotifyTracks.Emplace("Default");
         }
     }
 
     void FAnimationEditorTool::AddNotifyAt(FAnimationResource* Resource, FName Track, float Time, bool bState)
     {
-        const int32 ColorIdx = (int32)(Resource->Notifies.size() + Resource->NotifyStates.size());
+        const int32 ColorIdx = Resource->Notifies.Num() + Resource->NotifyStates.Num();
         if (bState)
         {
             FAnimationNotifyState State;
@@ -276,10 +269,10 @@ namespace Lumina
             State.StartTime   = Time;
             State.EndTime     = Math::Min(Time + Math::Max(Resource->Duration * 0.1f, 0.1f), Resource->Duration);
             State.Color       = Timeline::PaletteColor(ColorIdx);
-            Resource->NotifyStates.push_back(State);
+            Resource->NotifyStates.Add(State);
 
             SelectedKind  = ENotifyKind::State;
-            SelectedIndex = (int)Resource->NotifyStates.size() - 1;
+            SelectedIndex = Resource->NotifyStates.Num() - 1;
         }
         else
         {
@@ -288,24 +281,24 @@ namespace Lumina
             Notify.NotifyTrack = Track;
             Notify.Time        = Time;
             Notify.Color       = Timeline::PaletteColor(ColorIdx);
-            Resource->Notifies.push_back(Notify);
+            Resource->Notifies.Add(Notify);
 
             SelectedKind  = ENotifyKind::Point;
-            SelectedIndex = (int)Resource->Notifies.size() - 1;
+            SelectedIndex = Resource->Notifies.Num() - 1;
         }
         MarkAnimationDirty();
     }
 
     void FAnimationEditorTool::DeleteSelected(FAnimationResource* Resource)
     {
-        if (SelectedKind == ENotifyKind::Point && SelectedIndex >= 0 && SelectedIndex < (int)Resource->Notifies.size())
+        if (SelectedKind == ENotifyKind::Point && SelectedIndex >= 0 && SelectedIndex < Resource->Notifies.Num())
         {
-            Resource->Notifies.erase(Resource->Notifies.begin() + SelectedIndex);
+            Resource->Notifies.RemoveAt(SelectedIndex);
             MarkAnimationDirty();
         }
-        else if (SelectedKind == ENotifyKind::State && SelectedIndex >= 0 && SelectedIndex < (int)Resource->NotifyStates.size())
+        else if (SelectedKind == ENotifyKind::State && SelectedIndex >= 0 && SelectedIndex < Resource->NotifyStates.Num())
         {
-            Resource->NotifyStates.erase(Resource->NotifyStates.begin() + SelectedIndex);
+            Resource->NotifyStates.RemoveAt(SelectedIndex);
             MarkAnimationDirty();
         }
         ClearSelection();
@@ -340,19 +333,7 @@ namespace Lumina
 
         if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_MOVE_RESIZE, "Gizmo Control")))
         {
-            const char* operations[] = { LOC("Translate"), LOC("Rotate"), LOC("Scale") };
-            static int currentOp = 0;
-
-            if (ImGui::Combo("##", &currentOp, operations, IM_ARRAYSIZE(operations)))
-            {
-                switch (currentOp)
-                {
-                case 0: GuizmoOp = ImGuizmo::TRANSLATE; break;
-                case 1: GuizmoOp = ImGuizmo::ROTATE;    break;
-                case 2: GuizmoOp = ImGuizmo::SCALE;     break;
-                }
-            }
-
+            DrawGizmoOperationCombo(GuizmoOp);
             ImGui::EndMenu();
         }
 
@@ -378,9 +359,9 @@ namespace Lumina
         ImGui::DockBuilderSplitNode(InDockspaceID, ImGuiDir_Right, 0.25f, &rightDockID, &leftDockID);
         ImGui::DockBuilderSplitNode(leftDockID, ImGuiDir_Down, 0.44f, &bottomDockID, &leftDockID);
 
-        ImGui::DockBuilderDockWindow(GetToolWindowName(ViewportWindowName).c_str(), leftDockID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(DetailsName).c_str(), rightDockID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(SequencerName).c_str(), bottomDockID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(ViewportWindowName), leftDockID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(DetailsName), rightDockID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(SequencerName), bottomDockID);
     }
 
     // Sequencer / Timeline
@@ -516,11 +497,11 @@ namespace Lumina
         // Time / frame readout, right-aligned.
         const int Frame      = (int)roundf(AnimComp->CurrentTime * (float)FrameRate);
         const int TotalFrame = (int)roundf(Duration * (float)FrameRate);
-        const FString Readout = Format(LOCF("{:.3f}s / {:.3f}s   (frame {}/{})"), AnimComp->CurrentTime, Duration, Frame, TotalFrame);
-        const float TextW = ImGui::CalcTextSize(Readout.c_str()).x;
+        const FString Readout = Format("{:.3f}s / {:.3f}s   (frame {}/{})", AnimComp->CurrentTime, Duration, Frame, TotalFrame);
+        const float TextW = ImGui::CalcTextSize(*Readout).x;
         ImGui::SameLine();
         ImGui::SetCursorPosX(Math::Max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - TextW - 16.0f));
-        ImGui::TextUnformatted(Readout.c_str());
+        ImGui::TextUnformatted(*Readout);
     }
 
     void FAnimationEditorTool::DrawNotifyTimeline(CAnimation* Animation, SSimpleAnimationComponent* AnimComp, float Duration)
@@ -533,7 +514,7 @@ namespace Lumina
         const ImVec2 CanvasPos  = ImGui::GetCursorScreenPos();
         const ImVec2 CanvasSize = ImGui::GetContentRegionAvail();
         const float  CanvasY1   = CanvasPos.y + CanvasSize.y;
-        const int    NumTracks  = (int)Resource->NotifyTracks.size();
+        const int    NumTracks  = Resource->NotifyTracks.Num();
         const float  RowHeight  = Timeline::TrackHeight;
 
         const float RulerY0     = CanvasPos.y;
@@ -616,7 +597,7 @@ namespace Lumina
         ImGui::SetCursorScreenPos(ImVec2(CanvasPos.x + 8.0f, RulerY0 + (Timeline::RulerHeight - ImGui::GetFrameHeight()) * 0.5f));
         if (ImGui::Button(LOC_ICON_ID(LE_ICON_PLUS, "Track")))
         {
-            Resource->NotifyTracks.push_back(FName(Format("Track {}", NumTracks).c_str()));
+            Resource->NotifyTracks.Emplace(*Format("Track {}", NumTracks));
             MarkAnimationDirty();
         }
         ImGuiX::TextTooltip(LOCF("Add a notify track. Right-click a track header to rename, sync or delete it."));
@@ -647,7 +628,7 @@ namespace Lumina
 
             const bool bIsSyncTrack = !Resource->SyncTrackName.IsNone() && Resource->NotifyTracks[t] == Resource->SyncTrackName;
             Timeline::DrawTrackHeader(DrawList, ImVec2(CanvasPos.x, RowY0), ImVec2(LaneX0, RowY1), TrackColor,
-                                      bIsSyncTrack ? LE_ICON_SYNC : nullptr, Resource->NotifyTracks[t].c_str(), TrackCounts[t], bRowSelected, bRowHovered);
+                                      bIsSyncTrack ? LE_ICON_SYNC : nullptr, *Resource->NotifyTracks[t], TrackCounts[t], bRowSelected, bRowHovered);
 
             ImGui::SetCursorScreenPos(ImVec2(CanvasPos.x, RowY0));
             ImGui::PushID(t);
@@ -658,18 +639,10 @@ namespace Lumina
 
             if (ImGui::BeginPopupContextItem("track_ctx"))
             {
-                static char RenameBuf[128];
-                if (ImGui::IsWindowAppearing())
-                {
-                    snprintf(RenameBuf, sizeof(RenameBuf), "%s", Resource->NotifyTracks[t].c_str());
-                }
-                ImGui::SetNextItemWidth(160);
-                if (ImGui::InputText(LOC("Name"), RenameBuf, sizeof(RenameBuf), ImGuiInputTextFlags_EnterReturnsTrue))
+                if (const FName NewName = Timeline::DrawRenameField("Name", 160, RenameBuffer, Resource->NotifyTracks[t], Resource->NotifyTracks); !NewName.IsNone())
                 {
                     // A lane owns its entries by name, so they have to be re-tagged or they orphan.
                     const FName PreviousName = Resource->NotifyTracks[t];
-                    const FName NewName = FName(RenameBuf);
-
                     Resource->NotifyTracks[t] = NewName;
                     for (FAnimationNotify& N : Resource->Notifies)
                     {
@@ -707,9 +680,9 @@ namespace Lumina
                         Resource->SyncTrackName = FName();
                     }
                     const FName Removed = Resource->NotifyTracks[t];
-                    Resource->NotifyTracks.erase(Resource->NotifyTracks.begin() + t);
-                    Resource->Notifies.erase(Algo::RemoveIf(Resource->Notifies, [&](const FAnimationNotify& N) { return N.NotifyTrack == Removed; }), Resource->Notifies.end());
-                    Resource->NotifyStates.erase(Algo::RemoveIf(Resource->NotifyStates, [&](const FAnimationNotifyState& S) { return S.NotifyTrack == Removed; }), Resource->NotifyStates.end());
+                    Resource->NotifyTracks.RemoveAt(t);
+                    Resource->Notifies.RemoveAll([&](const FAnimationNotify& N) { return N.NotifyTrack == Removed; });
+                    Resource->NotifyStates.RemoveAll([&](const FAnimationNotifyState& S) { return S.NotifyTrack == Removed; });
                     ClearSelection();
                     MarkAnimationDirty();
                     ImGui::EndPopup();
@@ -763,7 +736,7 @@ namespace Lumina
         if (bIsPlaying && AnimComp->CurrentTime != LastPlayheadTime)
         {
             const bool bWrapped = AnimComp->CurrentTime < LastPlayheadTime;
-            for (int i = 0; i < (int)Resource->Notifies.size() && i < IM_ARRAYSIZE(NotifyFlash); ++i)
+            for (int i = 0; i < Resource->Notifies.Num() && i < IM_ARRAYSIZE(NotifyFlash); ++i)
             {
                 const float Tm = Resource->Notifies[i].Time;
                 const bool bCrossed = bWrapped
@@ -778,7 +751,7 @@ namespace Lumina
         TVector<TVector<ImVec2>> RowBars(NumTracks);
 
         // Notify states (draw bars first, behind point markers)
-        for (int i = 0; i < (int)Resource->NotifyStates.size(); ++i)
+        for (int i = 0; i < Resource->NotifyStates.Num(); ++i)
         {
             FAnimationNotifyState& State = Resource->NotifyStates[i];
             const int Row = TrackRow(State.NotifyTrack);
@@ -790,9 +763,9 @@ namespace Lumina
 
             const float X0 = View.TimeToX(State.StartTime);
             const float X1 = Math::Max(View.TimeToX(State.EndTime), X0 + 4.0f);
-            const Timeline::FRangeGeometry Bar = Timeline::GetRangeGeometry(X0, X1, RowY0, RowY1, State.NotifyName.c_str());
-            RowLabels[Row].push_back(Timeline::RangeLabelSpan(Bar, X0, X1, State.NotifyName.c_str()));
-            RowBars[Row].push_back(ImVec2(X0, X1));
+            const Timeline::FRangeGeometry Bar = Timeline::GetRangeGeometry(X0, X1, RowY0, RowY1, *State.NotifyName);
+            RowLabels[Row].Add(Timeline::RangeLabelSpan(Bar, X0, X1, *State.NotifyName));
+            RowBars[Row].Add(ImVec2(X0, X1));
             const bool bOverTag = !Bar.bNameInside && Mouse.x >= Bar.Tag0.x && Mouse.x <= Bar.Tag1.x && Mouse.y >= Bar.Tag0.y && Mouse.y <= Bar.Tag1.y;
 
             const bool bOverLeft  = bLanesHovered && fabsf(Mouse.x - X0) <= 5.0f && Mouse.y >= Bar.BarY0 && Mouse.y <= Bar.BarY1;
@@ -805,7 +778,7 @@ namespace Lumina
 
             char DurationText[24];
             snprintf(DurationText, sizeof(DurationText), "%.2fs", State.EndTime - State.StartTime);
-            Timeline::DrawRange(DrawList, Bar, X0, X1, State.Color, State.NotifyName.c_str(), DurationText, bSel, bHover,
+            Timeline::DrawRange(DrawList, Bar, X0, X1, State.Color, *State.NotifyName, DurationText, bSel, bHover,
                                 bOverLeft || (bDragged && DragMode == EDragMode::ResizeStart),
                                 bOverRight || (bDragged && DragMode == EDragMode::ResizeEnd));
 
@@ -836,7 +809,7 @@ namespace Lumina
         }
 
         // Point notifies (diamonds with a name tag)
-        for (int i = 0; i < (int)Resource->Notifies.size(); ++i)
+        for (int i = 0; i < Resource->Notifies.Num(); ++i)
         {
             FAnimationNotify& Notify = Resource->Notifies[i];
             const int Row = TrackRow(Notify.NotifyTrack);
@@ -847,23 +820,23 @@ namespace Lumina
             if (RowY1 <= TrackAreaY0 || RowY0 >= CanvasY1) continue;
 
             const float X = View.TimeToX(Notify.Time);
-            const Timeline::FPointGeometry Point = Timeline::GetPointGeometry(X, RowY0, RowY1, Notify.NotifyName.c_str(), Timeline::Overlaps(RowBars[Row], X - 1.0f, X + 1.0f));
+            const Timeline::FPointGeometry Point = Timeline::GetPointGeometry(X, RowY0, RowY1, *Notify.NotifyName, Timeline::Overlaps(RowBars[Row], X - 1.0f, X + 1.0f));
             const bool bSel  = (SelectedKind == ENotifyKind::Point && SelectedIndex == i);
             const bool bShowTag = bSel || !Timeline::Overlaps(RowLabels[Row], Point.Tag0.x, Point.Tag1.x);
             if (bShowTag)
             {
-                RowLabels[Row].push_back(ImVec2(Point.Tag0.x, Point.Tag1.x));
+                RowLabels[Row].Add(ImVec2(Point.Tag0.x, Point.Tag1.x));
             }
             const bool bOver = bLanesHovered && Timeline::HitPoint(Point, X, Mouse, bShowTag);
             bItemHovered |= bOver;
 
             const float Flash = (i < IM_ARRAYSIZE(NotifyFlash)) ? NotifyFlash[i] : 0.0f;
-            Timeline::DrawPoint(DrawList, Point, X, RowY0, RowY1, Notify.Color, Notify.NotifyName.c_str(), bSel, bOver, Flash, bShowTag);
+            Timeline::DrawPoint(DrawList, Point, X, RowY0, RowY1, Notify.Color, *Notify.NotifyName, bSel, bOver, Flash, bShowTag);
 
             if (bOver && DragMode == EDragMode::None)
             {
                 ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                ImGui::SetTooltip(LOC("%s  %.3fs (frame %d)"), Notify.NotifyName.c_str(), Notify.Time, (int)roundf(Notify.Time * (float)FrameRate));
+                ImGui::SetTooltip("%s  %.3fs (frame %d)", *Notify.NotifyName, Notify.Time, (int)roundf(Notify.Time * (float)FrameRate));
             }
             if (DragMode == EDragMode::None && bOver && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             {
@@ -943,14 +916,14 @@ namespace Lumina
                     AnimComp->CurrentTime = T;
                     AnimComp->bDirty = true;
                 }
-                else if (bMoved && DragKind == ENotifyKind::Point && DragIndex >= 0 && DragIndex < (int)Resource->Notifies.size())
+                else if (bMoved && DragKind == ENotifyKind::Point && DragIndex >= 0 && DragIndex < Resource->Notifies.Num())
                 {
                     FAnimationNotify& N = Resource->Notifies[DragIndex];
                     N.Time = SnapTime(RawT - DragGrabOffset, Duration);
                     MarkAnimationDirty();
                     ImGui::SetTooltip(LOC("%.3fs (frame %d)"), N.Time, (int)roundf(N.Time * (float)FrameRate));
                 }
-                else if (bMoved && DragKind == ENotifyKind::State && DragIndex >= 0 && DragIndex < (int)Resource->NotifyStates.size())
+                else if (bMoved && DragKind == ENotifyKind::State && DragIndex >= 0 && DragIndex < Resource->NotifyStates.Num())
                 {
                     FAnimationNotifyState& S = Resource->NotifyStates[DragIndex];
                     if (DragMode == EDragMode::ResizeStart)      { S.StartTime = Math::Min(T, S.EndTime - 0.001f); }
@@ -978,11 +951,11 @@ namespace Lumina
         {
             if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_MAP_MARKER, "Move to playhead")))
             {
-                if (SelectedKind == ENotifyKind::Point && SelectedIndex >= 0 && SelectedIndex < (int)Resource->Notifies.size())
+                if (SelectedKind == ENotifyKind::Point && SelectedIndex >= 0 && SelectedIndex < Resource->Notifies.Num())
                 {
                     Resource->Notifies[SelectedIndex].Time = AnimComp->CurrentTime;
                 }
-                else if (SelectedKind == ENotifyKind::State && SelectedIndex >= 0 && SelectedIndex < (int)Resource->NotifyStates.size())
+                else if (SelectedKind == ENotifyKind::State && SelectedIndex >= 0 && SelectedIndex < Resource->NotifyStates.Num())
                 {
                     FAnimationNotifyState& S = Resource->NotifyStates[SelectedIndex];
                     const float Len = S.EndTime - S.StartTime;
@@ -1006,17 +979,16 @@ namespace Lumina
         FAnimationResource* Resource = Animation->GetAnimationResource();
         const float Duration = Math::Max(Animation->GetDuration(), 0.0001f);
 
-        char NameBuf[128];
         const float FieldWidth = Math::Max(ImGui::GetContentRegionAvail().x - 90.0f, 120.0f);
 
         auto TrackCombo = [&](FName& Track)
         {
             ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::BeginCombo(LOC_ICON(LE_ICON_PLUS, "Track"), Track.c_str()))
+            if (ImGui::BeginCombo("Track", *Track))
             {
                 for (const FName& Lane : Resource->NotifyTracks)
                 {
-                    if (ImGui::Selectable(Lane.c_str(), Lane == Track))
+                    if (ImGui::Selectable(*Lane, Lane == Track))
                     {
                         Track = Lane;
                         MarkAnimationDirty();
@@ -1026,15 +998,25 @@ namespace Lumina
             }
         };
 
-        auto NameField = [&](FName& Name, const char* StrId)
+        auto NameField = [&](FName& Name)
         {
-            snprintf(NameBuf, sizeof(NameBuf), "%s", Name.c_str());
-            ImGui::SetNextItemWidth(FieldWidth);
-            if (ImGui::InputText(StrId, NameBuf, sizeof(NameBuf)))
+            // Scoped to the notify so text typed for one is never committed onto the next selection.
+            ImGui::PushID(&Name);
+            if (ImGui::GetActiveID() != ImGui::GetID("Name"))
             {
-                Name = FName(NameBuf);
-                MarkAnimationDirty();
+                NotifyNameBuffer = Name.ToString();
             }
+            ImGui::SetNextItemWidth(FieldWidth);
+            const bool bEntered = ImGuiX::InputText("Name", NotifyNameBuffer, ImGuiInputTextFlags_EnterReturnsTrue);
+            if (bEntered || ImGui::IsItemDeactivatedAfterEdit())
+            {
+                if (const FName NewName(NotifyNameBuffer); NewName != Name)
+                {
+                    Name = NewName;
+                    MarkAnimationDirty();
+                }
+            }
+            ImGui::PopID();
         };
 
         auto ColorField = [&](FVector4& Color)
@@ -1047,14 +1029,14 @@ namespace Lumina
             }
         };
 
-        if (SelectedKind == ENotifyKind::Point && SelectedIndex >= 0 && SelectedIndex < (int)Resource->Notifies.size())
+        if (SelectedKind == ENotifyKind::Point && SelectedIndex >= 0 && SelectedIndex < Resource->Notifies.Num())
         {
             FAnimationNotify& N = Resource->Notifies[SelectedIndex];
 
             ImGui::TextDisabled(LOC_ICON(LE_ICON_BELL, "Notify"));
             ImGui::Spacing();
 
-            NameField(N.NotifyName, LOC("Name"));
+            NameField(N.NotifyName);
             TrackCombo(N.NotifyTrack);
 
             ImGui::SetNextItemWidth(FieldWidth);
@@ -1072,14 +1054,14 @@ namespace Lumina
             ImGui::Spacing();
             if (ImGui::Button(LOC_ICON_ID(LE_ICON_DELETE, "Delete"))) { DeleteSelected(Resource); }
         }
-        else if (SelectedKind == ENotifyKind::State && SelectedIndex >= 0 && SelectedIndex < (int)Resource->NotifyStates.size())
+        else if (SelectedKind == ENotifyKind::State && SelectedIndex >= 0 && SelectedIndex < Resource->NotifyStates.Num())
         {
             FAnimationNotifyState& S = Resource->NotifyStates[SelectedIndex];
 
             ImGui::TextDisabled(LOC_ICON(LE_ICON_BELL_OUTLINE, "Notify State"));
             ImGui::Spacing();
 
-            NameField(S.NotifyName, LOC("Name"));
+            NameField(S.NotifyName);
             TrackCombo(S.NotifyTrack);
 
             ImGui::SetNextItemWidth(FieldWidth);
@@ -1106,26 +1088,31 @@ namespace Lumina
         }
     }
 
+    static FName MakeUniqueCurveName(const FAnimationResource& Resource, FStringView Base)
+    {
+        return MakeUniqueName(Base, [&Resource](const FName& Name) { return Algo::Contains(Resource.Curves, Name, &FAnimationCurve::Name); }, " ");
+    }
+
     void FAnimationEditorTool::AddCurve(FAnimationResource* Resource)
     {
         FAnimationCurve Curve;
-        Curve.Name  = FName(Format("Curve {}", (int)Resource->Curves.size()).c_str());
-        Curve.Color = Timeline::PaletteColor((int32)Resource->Curves.size());
-        Resource->Curves.push_back(Curve);
+        Curve.Name  = MakeUniqueCurveName(*Resource, "Curve");
+        Curve.Color = Timeline::PaletteColor(Resource->Curves.Num());
+        Resource->Curves.Add(Curve);
 
-        SelectedCurve = (int)Resource->Curves.size() - 1;
+        SelectedCurve = Resource->Curves.Num() - 1;
         MarkAnimationDirty();
     }
 
     void FAnimationEditorTool::DeleteCurve(FAnimationResource* Resource, int32 Index)
     {
-        if (Index < 0 || Index >= (int32)Resource->Curves.size())
+        if (Index < 0 || Index >= Resource->Curves.Num())
         {
             return;
         }
 
-        Resource->Curves.erase(Resource->Curves.begin() + Index);
-        SelectedCurve = Math::Min(SelectedCurve, (int)Resource->Curves.size() - 1);
+        Resource->Curves.RemoveAt(Index);
+        SelectedCurve = Math::Min(SelectedCurve, Resource->Curves.Num() - 1);
         CurveWidget.SetCurve(nullptr);
         MarkAnimationDirty();
     }
@@ -1156,7 +1143,7 @@ namespace Lumina
         const float PlayheadTime = SnapTime(AnimComp->CurrentTime, Duration);
         const float FontSize = ImGui::GetFontSize();
 
-        if (SelectedCurve < 0 && !Resource->Curves.empty())
+        if (SelectedCurve < 0 && !Resource->Curves.IsEmpty())
         {
             SelectedCurve = 0;
         }
@@ -1171,7 +1158,7 @@ namespace Lumina
         ImDrawList* ListDrawList = ImGui::GetWindowDrawList();
         constexpr float RowHeight = 28.0f;
 
-        for (int i = 0; i < (int)Resource->Curves.size(); ++i)
+        for (int i = 0; i < Resource->Curves.Num(); ++i)
         {
             FAnimationCurve& Curve = Resource->Curves[i];
             ImGui::PushID(i);
@@ -1187,15 +1174,11 @@ namespace Lumina
             {
                 SelectedCurve = i;
 
-                static char RenameBuf[128];
-                if (ImGui::IsWindowAppearing())
+                TVector<FName> CurveNames(Resource->Curves.Num());
+                Algo::Transform(Resource->Curves, CurveNames.begin(), &FAnimationCurve::Name);
+                if (const FName NewName = Timeline::DrawRenameField("Name", 180, RenameBuffer, Curve.Name, CurveNames); !NewName.IsNone())
                 {
-                    snprintf(RenameBuf, sizeof(RenameBuf), "%s", Curve.Name.c_str());
-                }
-                ImGui::SetNextItemWidth(180);
-                if (ImGui::InputText(LOC("Name"), RenameBuf, sizeof(RenameBuf), ImGuiInputTextFlags_EnterReturnsTrue))
-                {
-                    Curve.Name = FName(RenameBuf);
+                    Curve.Name = NewName;
                     MarkAnimationDirty();
                 }
 
@@ -1210,9 +1193,9 @@ namespace Lumina
                 if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_COPY, "Duplicate")))
                 {
                     FAnimationCurve Copy = Curve;
-                    Copy.Name = FName((FString(Curve.Name.c_str()) + " Copy").c_str());
-                    Resource->Curves.push_back(Copy);
-                    SelectedCurve = (int)Resource->Curves.size() - 1;
+                    Copy.Name = MakeUniqueCurveName(*Resource, FString(*Curve.Name) + " Copy");
+                    Resource->Curves.Add(Copy);
+                    SelectedCurve = Resource->Curves.Num() - 1;
                     MarkAnimationDirty();
                     ImGui::EndPopup();
                     ImGui::PopID();
@@ -1245,7 +1228,7 @@ namespace Lumina
             ListDrawList->AddText(ImVec2(RowPos.x + RowWidth - ValueW - 6.0f, TextY), Timeline::MutedTextColor, ValueText);
 
             ListDrawList->PushClipRect(ImVec2(RowPos.x + 14.0f, RowPos.y), ImVec2(RowPos.x + RowWidth - ValueW - 12.0f, RowPos.y + RowHeight), true);
-            ListDrawList->AddText(ImVec2(RowPos.x + 14.0f, TextY), SelectedCurve == i ? Timeline::ItemTextColor : Timeline::TrackTextColor, Curve.Name.c_str());
+            ListDrawList->AddText(ImVec2(RowPos.x + 14.0f, TextY), SelectedCurve == i ? Timeline::ItemTextColor : Timeline::TrackTextColor, *Curve.Name);
             ListDrawList->PopClipRect();
 
             ImGui::PopID();
@@ -1255,11 +1238,11 @@ namespace Lumina
         ImGui::SameLine();
 
         ImGui::BeginChild("CurvePanel", ImVec2(0, 0), true);
-        if (SelectedCurve < 0 || SelectedCurve >= (int)Resource->Curves.size())
+        if (SelectedCurve < 0 || SelectedCurve >= Resource->Curves.Num())
         {
             CurveWidget.SetCurve(nullptr);
 
-            const char* Title = Resource->Curves.empty() ? "No float curves yet" : "Select a curve to edit its keys";
+            const char* Title = Resource->Curves.IsEmpty() ? "No float curves yet" : "Select a curve to edit its keys";
             const char* Body  = "Float curves are named values that play with the clip. Read one with a Get Curve node, or GetCurveValue in script.";
             const ImVec2 Avail = ImGui::GetContentRegionAvail();
             const float WrapWidth = Math::Min(Avail.x - 40.0f, 420.0f);
@@ -1275,7 +1258,7 @@ namespace Lumina
             ImGui::TextDisabled("%s", Body);
             ImGui::PopTextWrapPos();
 
-            if (Resource->Curves.empty())
+            if (Resource->Curves.IsEmpty())
             {
                 ImGui::Spacing();
                 const float ButtonWidth = ImGui::CalcTextSize(LE_ICON_PLUS " Add Curve").x + ImGui::GetStyle().FramePadding.x * 2.0f;
@@ -1297,7 +1280,7 @@ namespace Lumina
         CurveWidget.SetTimeMarker(AnimComp->CurrentTime);
         CurveWidget.SetToolbarExtension([this, Resource, CurveIndex, PlayheadTime]()
         {
-            if (CurveIndex < 0 || CurveIndex >= (int32)Resource->Curves.size())
+            if (CurveIndex < 0 || CurveIndex >= Resource->Curves.Num())
             {
                 return;
             }
@@ -1351,7 +1334,7 @@ namespace Lumina
 
         auto TrackFor = [&Compressed](int32 Bone, int32 Kind) -> const FCompressedAnimTrack*
         {
-            if (Bone < 0 || Bone >= (int32)Compressed.Bones.size())
+            if (Bone < 0 || Bone >= Compressed.Bones.Num())
             {
                 return nullptr;
             }
@@ -1366,7 +1349,7 @@ namespace Lumina
         };
 
         ImGui::BeginChild("CurveChannels", ImVec2(Timeline::HeaderWidth, 0), true);
-        for (int32 b = 0; b < (int32)Compressed.Bones.size(); ++b)
+        for (int32 b = 0; b < Compressed.Bones.Num(); ++b)
         {
             for (int32 Kind = 0; Kind < NumTrackKinds; ++Kind)
             {
@@ -1390,17 +1373,17 @@ namespace Lumina
                 const float TextY = RowPos.y + (RowHeight - ImGui::GetFontSize()) * 0.5f;
                 const FFixedString KindLabel = Track->Format == EAnimTrackFormat::Constant
                     ? FormatAs<FFixedString>("{} (const)", PathNames[Kind]) : FFixedString(PathNames[Kind]);
-                const float KindW = ImGui::CalcTextSize(KindLabel.c_str()).x;
-                ListDrawList->AddText(ImVec2(RowPos.x + RowWidth - KindW - 6.0f, TextY), Timeline::MutedTextColor, KindLabel.c_str());
+                const float KindW = ImGui::CalcTextSize(*KindLabel).x;
+                ListDrawList->AddText(ImVec2(RowPos.x + RowWidth - KindW - 6.0f, TextY), Timeline::MutedTextColor, *KindLabel);
 
-                const FFixedString Label = FormatAs<FFixedString>("{} {}", PathIcons[Kind], Compressed.Bones[b].BoneName.c_str());
+                const FFixedString Label = FormatAs<FFixedString>("{} {}", PathIcons[Kind], *Compressed.Bones[b].BoneName);
                 ListDrawList->PushClipRect(ImVec2(RowPos.x + 6.0f, RowPos.y), ImVec2(RowPos.x + RowWidth - KindW - 12.0f, RowPos.y + RowHeight), true);
-                ListDrawList->AddText(ImVec2(RowPos.x + 6.0f, TextY), SelectedChannel == Id ? Timeline::ItemTextColor : Timeline::TrackTextColor, Label.c_str());
+                ListDrawList->AddText(ImVec2(RowPos.x + 6.0f, TextY), SelectedChannel == Id ? Timeline::ItemTextColor : Timeline::TrackTextColor, *Label);
                 ListDrawList->PopClipRect();
                 ImGui::PopID();
             }
         }
-        if (Compressed.Bones.empty())
+        if (Compressed.Bones.IsEmpty())
         {
             ImGui::TextDisabled(LOC("No bone channels."));
         }
@@ -1439,14 +1422,14 @@ namespace Lumina
                 const float FrameStep = NumFrames > 1 ? Duration / (float)(NumFrames - 1) : 0.0f;
 
                 TVector<float> Times, XVals, YVals, ZVals;
-                Times.reserve(NumFrames);
-                XVals.reserve(NumFrames);
-                YVals.reserve(NumFrames);
-                ZVals.reserve(NumFrames);
+                Times.Reserve(NumFrames);
+                XVals.Reserve(NumFrames);
+                YVals.Reserve(NumFrames);
+                ZVals.Reserve(NumFrames);
 
                 for (uint32 Frame = 0; Frame < NumFrames; ++Frame)
                 {
-                    Times.push_back((float)Frame * FrameStep);
+                    Times.Add((float)Frame * FrameStep);
 
                     FVector3 Value;
                     if (SelectedTrackKind == 1)
@@ -1462,18 +1445,18 @@ namespace Lumina
                         Value = Compressed.DecodeScale(*Track, Frame, Frame, 0.0f);
                     }
 
-                    XVals.push_back(Value.x);
-                    YVals.push_back(Value.y);
-                    ZVals.push_back(Value.z);
+                    XVals.Add(Value.x);
+                    YVals.Add(Value.y);
+                    ZVals.Add(Value.z);
                 }
 
-                const char* Suffix = SelectedTrackKind == 1 ? LOC(" (deg)") : "";
-                ImPlot::PlotLine(FormatAs<FFixedString>("X{}", Suffix).c_str(),
-                                 Times.data(), XVals.data(), (int)NumFrames);
-                ImPlot::PlotLine(FormatAs<FFixedString>("Y{}", Suffix).c_str(),
-                                 Times.data(), YVals.data(), (int)NumFrames);
-                ImPlot::PlotLine(FormatAs<FFixedString>("Z{}", Suffix).c_str(),
-                                 Times.data(), ZVals.data(), (int)NumFrames);
+                const char* Suffix = SelectedTrackKind == 1 ? " (deg)" : "";
+                ImPlot::PlotLine(*FormatAs<FFixedString>("X{}", Suffix),
+                                 Times.GetData(), XVals.GetData(), (int)NumFrames);
+                ImPlot::PlotLine(*FormatAs<FFixedString>("Y{}", Suffix),
+                                 Times.GetData(), YVals.GetData(), (int)NumFrames);
+                ImPlot::PlotLine(*FormatAs<FFixedString>("Z{}", Suffix),
+                                 Times.GetData(), ZVals.GetData(), (int)NumFrames);
 
                 ImPlot::EndPlot();
             }

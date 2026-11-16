@@ -22,6 +22,8 @@ namespace Lumina
         // Owns a heap instance of whatever type was picked, so zeroed bytes are not a valid FInstancedStruct.
         RUNTIME_API void ConstructValue(void* Value) const override;
         RUNTIME_API void DestructValue(void* Value) const override;
+        RUNTIME_API void NetSerialize(FNetArchive& Ar, void* Value) override;
+        RUNTIME_API void RelocateValue(void* Dest, void* Source) const override;
         bool OwnsStorage() const override { return true; }
 
         // The base every owned instance must derive from: the T in TInstancedStruct<T>, or the type named

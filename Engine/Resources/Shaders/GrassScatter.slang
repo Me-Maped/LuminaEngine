@@ -2,7 +2,8 @@
 
 #include "Includes/SceneGlobals.slang"
 #include "Includes/TerrainCommon.slang"
-#include "Includes/WaveAtomics.slang"
+#include "Includes/AppendBuffer.slang"
+#include "Includes/Culling.slang"
 
 #define LOCAL_SIZE_X 8
 #define LOCAL_SIZE_Y 8
@@ -14,7 +15,7 @@ struct FGrassScatterPushConstants
     GPUSpan<FInstanceCullEntry> OutCullEntries;
     GPUSpan<FTransform3x4>      OutTransforms;
     GPUSpan<FInstanceStatic>    OutStatic;
-    GPUSpan<uint>               OutCursor;      // blades appended so far in this species' block
+    GPUSpan<uint>               OutCursor;      // blades wanted so far, which can run past the block's capacity
 
     FTexture2D      Heightmap;
     FTexture2D      NormalMap;
@@ -36,7 +37,7 @@ struct FGrassScatterPushConstants
     uint   Seed;
 
     uint   GridSide;            // candidates per axis
-    uint   _PadMaxInstances;
+    float  TerrainNormalDistance;
 
     // Constant for the whole species, one mesh and one material, so the CPU interns these once.
     uint   _PadInstanceSlotBase;
@@ -54,7 +55,7 @@ struct FGrassScatterPushConstants
     float  TerrainBaseY;
     uint   Resolution;          // heightmap samples per side
     float  FullDensityDistance; // blades thin past this with the square of distance; 0 keeps full density
-    uint   _Pad2;
+    float  RootDarkening;
 };
 
 FGrassScatterPushConstants* Pass() { return GetPassArgs<FGrassScatterPushConstants>(); }
@@ -117,11 +118,13 @@ void main(uint3 Tid : SV_DispatchThreadID)
 
     // Keeping (F/d)^2 of the blades holds their density on screen roughly constant, since a patch's projected area falls the same way.
     float Keep = 1.0;
+    float KeepFade = 1.0;
     if (P->FullDensityDistance > 0.0 && CameraDistance > P->FullDensityDistance)
     {
         const float Ratio = P->FullDensityDistance / CameraDistance;
         Keep = Ratio * Ratio;
-        if (Hash01(CellHash ^ 0x27D4EB2Fu) > Keep)
+        KeepFade = ThinningFade(Keep, Hash01(CellHash ^ 0x27D4EB2Fu));
+        if (KeepFade <= 0.0)
         {
             return;
         }
@@ -165,14 +168,14 @@ void main(uint3 Tid : SV_DispatchThreadID)
     // Survivors grow to cover for the thinned ones, and everything shrinks away over the last stretch so the edge never pops.
     const float Coverage = min(rsqrt(Keep), kMaxThinnedScale);
     const float EdgeFade = 1.0 - smoothstep(P->Radius * kEdgeFadeStart, P->Radius, CameraDistance);
-    const float Scale = lerp(P->ScaleMin, P->ScaleMax, Hash01(CellHash ^ 0x9E3779B9u)) * Coverage * EdgeFade;
+    const float Scale = lerp(P->ScaleMin, P->ScaleMax, Hash01(CellHash ^ 0x9E3779B9u)) * Coverage * EdgeFade * KeepFade;
     if (Scale <= 0.001)
     {
         return;
     }
 
     // Yaw about world up, then tilted toward the surface normal by AlignToNormal.
-    const float Yaw = P->bRandomYaw != 0u ? Hash01(CellHash ^ 0x85EBCA6Bu) * 6.2831853 : 0.0;
+    const float Yaw = P->bRandomYaw != 0u ? Hash01(CellHash ^ 0x85EBCA6Bu) * TWO_PI : 0.0;
     const float4 YawQuat = float4(0.0, sin(Yaw * 0.5), 0.0, cos(Yaw * 0.5));
 
     const float3 Up = float3(0.0, 1.0, 0.0);
@@ -192,11 +195,9 @@ void main(uint3 Tid : SV_DispatchThreadID)
         TiltQuat.w * YawQuat.xyz + YawQuat.w * TiltQuat.xyz + cross(TiltQuat.xyz, YawQuat.xyz),
         TiltQuat.w * YawQuat.w - dot(TiltQuat.xyz, YawQuat.xyz));
 
-    const uint Slot = WaveInterlockedAdd((P->OutCursor).At(0u), 1u);
-    if (!(P->OutCullEntries).Contains(Slot))
+    const uint Slot = AppendReserve(P->OutCursor, P->OutCullEntries, /*Base*/ 0u);
+    if (Slot == kAppendFull)
     {
-        // Over budget, so hold the cursor at capacity and nothing writes past the reserved block.
-        InterlockedMin((P->OutCursor).At(0u)[0], P->OutCullEntries.Count);
         return;
     }
 
@@ -221,7 +222,11 @@ void main(uint3 Tid : SV_DispatchThreadID)
 
     FInstanceStatic Static;
     Static.MeshletHeaderSlot       = P->MeshletHeaderSlot;
-    Static.CustomData              = (FCustomPrimitiveData)0;
+    // Per blade rather than per pixel, so one blade never shades with two normals; decoded by ApplyGrassShading.
+    const float NormalBlend = P->TerrainNormalDistance > 0.0 ? smoothstep(0.0, P->TerrainNormalDistance, CameraDistance) : 0.0;
+    const float4 Shading = float4(Normal.xz * 0.5 + 0.5, NormalBlend, saturate(P->RootDarkening));
+    const uint4  ShadingBytes = uint4(round(saturate(Shading) * 255.0));
+    Static.CustomData.Packed       = ShadingBytes.x | (ShadingBytes.y << 8) | (ShadingBytes.z << 16) | (ShadingBytes.w << 24);
     Static.MaterialIndex           = P->MaterialIndex;
     Static.EntityID                = P->EntityID;
     Static.SkinnedIndex            = kNoSkinnedIndex;

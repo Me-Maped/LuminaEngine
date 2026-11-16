@@ -1,7 +1,6 @@
-﻿#include "Localization/Localization.h"
-#include "SkeletonEditorTool.h"
+﻿#include "SkeletonEditorTool.h"
+#include "World/World.h"
 #include "World/ECS/Registry.h"
-#include "ImGuiDrawUtils.h"
 #include "Assets/AssetTypes/Mesh/Skeleton/Skeleton.h"
 #include "Assets/AssetTypes/Mesh/SkeletalMesh/SkeletalMesh.h"
 #include "Core/Math/Math.h"
@@ -16,6 +15,7 @@
 #include "Renderer/SkeletonResource.h"
 #include "Containers/Algorithm.h"
 #include "Containers/StringFormat.h"
+#include "Log/Log.h"
 
 
 namespace Lumina
@@ -28,7 +28,7 @@ namespace Lumina
 
 
     FSkeletonEditorTool::FSkeletonEditorTool(IEditorToolContext* Context, CObject* InAsset)
-        : FAssetEditorTool(Context, InAsset->GetName().c_str(), InAsset, NewObject<CWorld>())
+        : FAssetEditorTool(Context, *InAsset->GetName(), InAsset, NewObject<CWorld>())
     {
     }
 
@@ -51,41 +51,30 @@ namespace Lumina
             
             ImGui::Spacing();
 
-            ImGui::Text(LOC("Number of Bones: %i"), SkeletonResource->GetNumBones());
-            ImGui::Text(LOC("Skeleton Name: %s"), SkeletonResource->Name.ToString().c_str());
+            ImGui::Text("Number of Bones: %i", SkeletonResource->GetNumBones());
+            ImGui::Text("Skeleton Name: %s", *SkeletonResource->Name.ToString());
             
             ImGui::Spacing();
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
             ImGui::SeparatorText(LOC("Statistics"));
             ImGuiX::Font::PopFont();
             
-            int32 NumRootBones = 0;
-            int32 MaxDepth = 0;
-            int32 TotalDepth = 0;
-            
-            for (const auto& Bone : SkeletonResource->Bones)
+            FBoneDepthStatistics Stats = ComputeBoneDepthStatistics(*SkeletonResource);
+
+            ImGui::Text("Root Bones: %i", Stats.NumRootBones);
+            ImGui::Text("Maximum Hierarchy Depth: %i", Stats.MaxDepth);
+            ImGui::Text("Average Bone Depth: %.2f", Stats.AverageDepth);
+
+            if (!Stats.bConsistentHierarchy)
             {
-                if (Bone.ParentIndex == -1)
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Broken hierarchy: a bone's ParentIndex is cyclic, self-parented or out of range");
+
+                if (!bLoggedInconsistentHierarchy)
                 {
-                    NumRootBones++;
+                    LOG_WARN("Skeleton '{}' has a broken ParentIndex chain (cycle, self-parent, or out-of-range parent); depth statistics are unavailable", SkeletonResource->Name);
+                    bLoggedInconsistentHierarchy = true;
                 }
-                
-                int32 Depth = 0;
-                int32 CurrentIndex = (int32)(&Bone - SkeletonResource->Bones.data());
-                while (SkeletonResource->Bones[CurrentIndex].ParentIndex != -1)
-                {
-                    CurrentIndex = SkeletonResource->Bones[CurrentIndex].ParentIndex;
-                    Depth++;
-                }
-                MaxDepth = Math::Max(MaxDepth, Depth);
-                TotalDepth += Depth;
             }
-            
-            float AvgDepth = SkeletonResource->GetNumBones() > 0 ? (float)TotalDepth / SkeletonResource->GetNumBones() : 0.0f;
-            
-            ImGui::Text(LOC("Root Bones: %i"), NumRootBones);
-            ImGui::Text(LOC("Maximum Hierarchy Depth: %i"), MaxDepth);
-            ImGui::Text(LOC("Average Bone Depth: %.2f"), AvgDepth);
             
             ImGui::Spacing();
             PropertyTable.DrawTree();
@@ -108,7 +97,8 @@ namespace Lumina
     void FSkeletonEditorTool::SetupWorldForTool()
     {
         FEditorTool::SetupWorldForTool();
-        
+        World->GetRenderSettings().bDrawBillboards = false;
+
         CreateFloorPlane();
         
         DirectionalLightEntity = World->ConstructEntity("Directional Light");
@@ -168,12 +158,7 @@ namespace Lumina
         {
             RefreshPreviewMesh();
         }
-        
-        if (World && World->GetRenderer())
-        {
-            World->GetRenderSettings().bDrawBillboards = false;
-        }
-        
+
         CSkeleton* Skeleton = GetAsset<CSkeleton>();
         FSkeletonResource* SkeletonResource = Skeleton->GetSkeletonResource();
 
@@ -183,7 +168,7 @@ namespace Lumina
             EntityMatrix = World->GetComponent<STransformComponent>(MeshEntity).GetWorldMatrix();
         }
 
-        BoneWorldTransforms.resize(SkeletonResource->GetNumBones());
+        BoneWorldTransforms.SetNum(SkeletonResource->GetNumBones());
         for (int32 i = 0; i < SkeletonResource->GetNumBones(); ++i)
         {
             const FSkeletonResource::FBoneInfo& Bone = SkeletonResource->GetBone(i);
@@ -212,10 +197,6 @@ namespace Lumina
     void FSkeletonEditorTool::OnDeinitialize(const FUpdateContext& UpdateContext)
     {
         SocketHierarchy.CloseOpenDragTransaction();
-    }
-
-    void FSkeletonEditorTool::OnAssetLoadFinished()
-    {
     }
 
     // Sockets are edited in the property table too, so any edit can rename, move or remove a row.
@@ -259,22 +240,9 @@ namespace Lumina
     {
         FAssetEditorTool::DrawToolMenu(UpdateContext);
         
-        // Gizmo Control Dropdown
-        if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_MOVE_RESIZE, "Gizmo Control")))
+        if (ImGui::BeginMenu(LE_ICON_MOVE_RESIZE " Gizmo Control"))
         {
-            const char* operations[] = { LOC("Translate"), LOC("Rotate"), LOC("Scale") };
-            int currentOp = (GuizmoOp == ImGuizmo::ROTATE) ? 1 : (GuizmoOp == ImGuizmo::SCALE) ? 2 : 0;
-
-            if (ImGui::Combo("##", &currentOp, operations, IM_ARRAYSIZE(operations)))
-            {
-                switch (currentOp)
-                {
-                case 0: GuizmoOp = ImGuizmo::TRANSLATE; break;
-                case 1: GuizmoOp = ImGuizmo::ROTATE;    break;
-                case 2: GuizmoOp = ImGuizmo::SCALE;     break;
-                }
-            }
-
+            DrawGizmoOperationCombo(GuizmoOp);
             ImGui::EndMenu();
         }
 
@@ -293,9 +261,9 @@ namespace Lumina
         ImGui::DockBuilderSplitNode(DockspaceID, ImGuiDir_Right, 0.25f, &rightID, &centerID);
         ImGui::DockBuilderSplitNode(centerID, ImGuiDir_Left, 0.25f, &leftID, &centerID);
 
-        ImGui::DockBuilderDockWindow(GetToolWindowName(ViewportWindowName).c_str(), centerID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(SkeletonPropertiesName).c_str(), rightID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(BoneHierarchyName).c_str(), leftID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(ViewportWindowName), centerID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(SkeletonPropertiesName), rightID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(BoneHierarchyName), leftID);
     }
 
     void FSkeletonEditorTool::DrawBoneHierarchy(CWorld* DrawWorld, FSkeletonResource* SkeletonResource, const TVector<FMatrix4>& WorldTransforms, int32 BoneIndex)
@@ -321,5 +289,40 @@ namespace Lumina
         {
             DrawBoneHierarchy(DrawWorld, SkeletonResource, WorldTransforms, ChildIndex);
         }
+    }
+
+    FSkeletonEditorTool::FBoneDepthStatistics FSkeletonEditorTool::ComputeBoneDepthStatistics(const FSkeletonResource& SkeletonResource)
+    {
+        FBoneDepthStatistics Stats;
+        Stats.bConsistentHierarchy = SkeletonResource.HasConsistentHierarchy();
+
+        for (int32 BoneIndex = 0; BoneIndex < SkeletonResource.GetNumBones(); ++BoneIndex)
+        {
+            if (SkeletonResource.Bones[BoneIndex].ParentIndex == Constants::kIndexNone)
+            {
+                Stats.NumRootBones++;
+            }
+        }
+
+        if (!Stats.bConsistentHierarchy)
+        {
+            return Stats;
+        }
+
+        // Safe as a single forward pass only because HasConsistentHierarchy just proved ParentIndex < BoneIndex for every bone.
+        TVector<int32> Depths;
+        Depths.SetNum(SkeletonResource.GetNumBones());
+        int32 TotalDepth = 0;
+
+        for (int32 BoneIndex = 0; BoneIndex < SkeletonResource.GetNumBones(); ++BoneIndex)
+        {
+            const int32 ParentIndex = SkeletonResource.Bones[BoneIndex].ParentIndex;
+            Depths[BoneIndex] = ParentIndex == Constants::kIndexNone ? 0 : Depths[ParentIndex] + 1;
+            Stats.MaxDepth = Math::Max(Stats.MaxDepth, Depths[BoneIndex]);
+            TotalDepth += Depths[BoneIndex];
+        }
+
+        Stats.AverageDepth = SkeletonResource.GetNumBones() > 0 ? (float)TotalDepth / SkeletonResource.GetNumBones() : 0.0f;
+        return Stats;
     }
 }

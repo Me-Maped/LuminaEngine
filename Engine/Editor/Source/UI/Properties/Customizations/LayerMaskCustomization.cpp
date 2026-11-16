@@ -36,16 +36,16 @@ namespace Lumina
                 }
                 FFixedString Name;
                 Label(Layer, Name);
-                if (Preview.size() + Name.size() + 2 > MaxPreview)
+                if (static_cast<size_t>(Preview.Len() + Name.Len() + 2) > MaxPreview)
                 {
                     Preview += ", ...";
                     break;
                 }
-                if (!Preview.empty())
+                if (!Preview.IsEmpty())
                 {
                     Preview += ", ";
                 }
-                Preview += Name.c_str();
+                Preview += *Name;
             }
             return Preview;
         }
@@ -56,7 +56,7 @@ namespace Lumina
             bool bChanged = false;
 
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
-            if (ImGui::BeginCombo("##layers", MaskPreview(Bits, AllBits, LayerCount, Label).c_str(), ImGuiComboFlags_HeightLarge))
+            if (ImGui::BeginCombo("##layers", *MaskPreview(Bits, AllBits, LayerCount, Label), ImGuiComboFlags_HeightLarge))
             {
                 if (ImGui::Selectable(LOC_ID("Everything"), Bits == AllBits))
                 {
@@ -81,7 +81,7 @@ namespace Lumina
 
                     bool bSet = (Bits & Bit) != 0u;
                     ImGui::PushID((int)Layer);
-                    if (ImGui::Checkbox(Name.c_str(), &bSet))
+                    if (ImGui::Checkbox(*Name, &bSet))
                     {
                         Bits     = bSet ? (Bits | Bit) : (Bits & ~Bit);
                         bChanged = true;
@@ -102,7 +102,7 @@ namespace Lumina
                 AppendFormat(OutLabel, "Layer {}", Layer);
                 return false;
             }
-            OutLabel = Name.c_str();
+            OutLabel = *Name;
             return true;
         }
 
@@ -114,7 +114,7 @@ namespace Lumina
                 AppendFormat(OutLabel, "Channel {}", Layer - CollisionLayers::kFirstChannel);
                 return false;
             }
-            OutLabel = Name.c_str();
+            OutLabel = *Name;
             return true;
         }
     }

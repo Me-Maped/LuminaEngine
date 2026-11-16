@@ -130,7 +130,7 @@ TEST(AudioMixer, RendersSilenceWithNoVoices)
     ASSERT_TRUE(Mixer.Initialize(kMixRate, 2));
 
     TVector<float> Out(512, 1234.0f);
-    Mixer.RenderAudio(Out.data(), 256);
+    Mixer.RenderAudio(Out.GetData(), 256);
 
     EXPECT_FLOAT_EQ(MixerPeak(Out), 0.0f);
     EXPECT_EQ(Mixer.GetActiveVoiceCount(), 0u);
@@ -147,7 +147,7 @@ TEST(AudioMixer, PassesAMatchingRateSourceThroughUnchanged)
     ASSERT_TRUE(Mixer.StartVoice(MakeDesc(0, &Source)));
 
     TVector<float> Out(128, -1.0f);
-    Mixer.RenderAudio(Out.data(), 64);
+    Mixer.RenderAudio(Out.GetData(), 64);
 
     // A mono source is replicated to both output channels, and frame N carries the Nth source value.
     for (uint32 Frame = 0; Frame < 64; ++Frame)
@@ -168,19 +168,19 @@ TEST(AudioMixer, AppliesBusAndMasterVolume)
     ASSERT_TRUE(Mixer.StartVoice(MakeDesc(0, &Source)));
 
     TVector<float> Out(64, 0.0f);
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
     EXPECT_NEAR(Out[0], 0.5f, 1.0e-5f);
 
     Mixer.SetBusVolume(EAudioBus::SFX, 0.5f);
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
     EXPECT_NEAR(Out[0], 0.25f, 1.0e-5f);
 
     Mixer.SetBusVolume(EAudioBus::Master, 0.5f);
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
     EXPECT_NEAR(Out[0], 0.125f, 1.0e-5f);
 
     Mixer.SetBusMuted(EAudioBus::SFX, true);
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
     EXPECT_FLOAT_EQ(Out[0], 0.0f);
 }
 
@@ -196,7 +196,7 @@ TEST(AudioMixer, PansAcrossTheStereoField)
     ASSERT_TRUE(Mixer.StartVoice(Desc));
 
     TVector<float> Out(64, 0.0f);
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
 
     EXPECT_NEAR(Out[0], 0.5f, 1.0e-5f);
     EXPECT_NEAR(Out[1], 0.0f, 1.0e-5f);
@@ -204,8 +204,8 @@ TEST(AudioMixer, PansAcrossTheStereoField)
     Mixer.PostCommand(FAudioCommand::MakeFloat(EAudioCommandType::SetPan, SAudioHandle{ 1, 0 }, 1.0f));
 
     // A gain change ramps across one block, so the settled value is only there on the block after it.
-    Mixer.RenderAudio(Out.data(), 32);
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
 
     EXPECT_NEAR(Out[0], 0.0f, 1.0e-5f);
     EXPECT_NEAR(Out[1], 0.5f, 1.0e-5f);
@@ -222,7 +222,7 @@ TEST(AudioMixer, ResamplesAHalfRateSourceToTheDeviceRate)
     ASSERT_TRUE(Mixer.StartVoice(MakeDesc(0, &Source)));
 
     TVector<float> Out(64, -1.0f);
-    Mixer.RenderAudio(Out.data(), 64);
+    Mixer.RenderAudio(Out.GetData(), 64);
 
     EXPECT_NEAR(Out[0], 0.0f, 1.0e-4f);
     EXPECT_NEAR(Out[2], 0.1f, 1.0e-4f);
@@ -244,12 +244,12 @@ TEST(AudioMixer, FreesTheSlotWhenASourceRunsOut)
 
     TVector<float> Out(512, 0.0f);
 
-    Mixer.RenderAudio(Out.data(), 8);
+    Mixer.RenderAudio(Out.GetData(), 8);
     EXPECT_EQ(Mixer.GetSlotState(0), EAudioVoiceState::Playing);
 
     for (uint32 i = 0; i < 4; ++i)
     {
-        Mixer.RenderAudio(Out.data(), 64);
+        Mixer.RenderAudio(Out.GetData(), 64);
     }
 
     EXPECT_EQ(Mixer.GetSlotState(0), EAudioVoiceState::Free);
@@ -269,7 +269,7 @@ TEST(AudioMixer, AGeneratedVoiceIsNeverAutoCollected)
     TVector<float> Out(512, 0.0f);
     for (uint32 i = 0; i < 16; ++i)
     {
-        Mixer.RenderAudio(Out.data(), 256);
+        Mixer.RenderAudio(Out.GetData(), 256);
     }
 
     EXPECT_EQ(Mixer.GetSlotState(0), EAudioVoiceState::Playing);
@@ -286,16 +286,16 @@ TEST(AudioMixer, StopCommandsFreeVoices)
     ASSERT_TRUE(Mixer.StartVoice(MakeDesc(1, &Second)));
 
     TVector<float> Out(512, 0.0f);
-    Mixer.RenderAudio(Out.data(), 64);
+    Mixer.RenderAudio(Out.GetData(), 64);
     EXPECT_EQ(Mixer.GetActiveVoiceCount(), 2u);
 
     Mixer.PostCommand(FAudioCommand::MakeStop(SAudioHandle{ 1, 0 }, EAudioStopMode::Immediate, 0.0f));
-    Mixer.RenderAudio(Out.data(), 64);
+    Mixer.RenderAudio(Out.GetData(), 64);
     EXPECT_EQ(Mixer.GetSlotState(0), EAudioVoiceState::Free);
     EXPECT_EQ(Mixer.GetSlotState(1), EAudioVoiceState::Playing);
 
     Mixer.PostCommand(FAudioCommand::MakeStopAll(EAudioStopMode::Immediate, 0.0f));
-    Mixer.RenderAudio(Out.data(), 64);
+    Mixer.RenderAudio(Out.GetData(), 64);
     EXPECT_EQ(Mixer.GetSlotState(1), EAudioVoiceState::Free);
     EXPECT_EQ(Mixer.GetActiveVoiceCount(), 0u);
 }
@@ -310,15 +310,67 @@ TEST(AudioMixer, PausedVoicesHoldTheirSlotAndGoQuiet)
     ASSERT_TRUE(Mixer.StartVoice(MakeDesc(0, &Source)));
 
     TVector<float> Out(64, 0.0f);
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
     EXPECT_NEAR(Out[0], 0.5f, 1.0e-5f);
 
     Mixer.PostCommand(FAudioCommand::MakeBool(EAudioCommandType::SetPaused, SAudioHandle{ 1, 0 }, true));
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
 
     EXPECT_FLOAT_EQ(MixerPeak(Out), 0.0f);
     EXPECT_EQ(Mixer.GetSlotState(0), EAudioVoiceState::Paused);
     EXPECT_EQ(Mixer.GetActiveVoiceCount(), 1u);
+}
+
+TEST(AudioMixer, AFadeOutStopFreesAVoiceThatIsNotRendering)
+{
+    FAudioMixer Mixer;
+    ASSERT_TRUE(Mixer.Initialize(kMixRate, 2));
+
+    FMixerConstantSource Paused(1, 0.25f);
+    FMixerConstantSource Delayed(1, 0.25f);
+    FMixerConstantSource Playing(1, 0.25f);
+    FMixerVoiceDesc DelayedDesc = MakeDesc(1, &Delayed);
+    DelayedDesc.Params.StartDelaySeconds = 10.0f;
+    ASSERT_TRUE(Mixer.StartVoice(MakeDesc(0, &Paused)));
+    ASSERT_TRUE(Mixer.StartVoice(DelayedDesc));
+    ASSERT_TRUE(Mixer.StartVoice(MakeDesc(2, &Playing)));
+
+    TVector<float> Out(512, 0.0f);
+    Mixer.PostCommand(FAudioCommand::MakeBool(EAudioCommandType::SetPaused, SAudioHandle{ 1, 0 }, true));
+    Mixer.RenderAudio(Out.GetData(), 64);
+    ASSERT_EQ(Mixer.GetSlotState(0), EAudioVoiceState::Paused);
+
+    Mixer.PostCommand(FAudioCommand::MakeStop(SAudioHandle{ 1, 0 }, EAudioStopMode::AllowFadeOut, 0.5f));
+    Mixer.PostCommand(FAudioCommand::MakeStop(SAudioHandle{ 2, 1 }, EAudioStopMode::AllowFadeOut, 0.5f));
+    Mixer.PostCommand(FAudioCommand::MakeStop(SAudioHandle{ 3, 2 }, EAudioStopMode::AllowFadeOut, 0.5f));
+    Mixer.RenderAudio(Out.GetData(), 64);
+
+    EXPECT_EQ(Mixer.GetSlotState(0), EAudioVoiceState::Free);
+    EXPECT_EQ(Mixer.GetSlotState(1), EAudioVoiceState::Free);
+    EXPECT_EQ(Mixer.GetSlotState(2), EAudioVoiceState::Playing);
+}
+
+TEST(AudioMixer, ARelativeVoiceGetsNoDopplerFromListenerMotion)
+{
+    FAudioMixer Mixer;
+    ASSERT_TRUE(Mixer.Initialize(kMixRate, 1));
+    Mixer.SetVolumeSmoothing(0.0f);
+    Mixer.SetListener(0, FVector3(1000.0f, 0.0f, 0.0f), FQuat(1.0f, 0.0f, 0.0f, 0.0f), FVector3(10.0f, 0.0f, 0.0f));
+
+    FMixerTestSource Source(kMixRate, 1, 4096, 0.1f, 0.001f);
+    FMixerVoiceDesc Desc = MakeDesc(0, &Source);
+    Desc.Params.bSpatialized = true;
+    Desc.Params.Position = FVector3(1.0f, 0.0f, 0.0f);
+    Desc.Params.Attenuation.Positioning = EAudioPositioning::Relative;
+    ASSERT_TRUE(Mixer.StartVoice(Desc));
+
+    TVector<float> Out(128, 0.0f);
+    Mixer.RenderAudio(Out.GetData(), 128);
+
+    // Out[k] is Gain times (Start + k * Step * Ratio), so this ratio isolates the playback rate from the gain.
+    ASSERT_GT(Out[0], 0.0f);
+    const float Ratio = (Out[100] / Out[0] - 1.0f) * 0.1f / (100.0f * 0.001f);
+    EXPECT_NEAR(Ratio, 1.0f, 1.0e-3f);
 }
 
 TEST(AudioMixer, ReverbSendAddsAWetTail)
@@ -340,14 +392,14 @@ TEST(AudioMixer, ReverbSendAddsAWetTail)
     // Runs past the reverb pre-delay, then stops the voice so only the tail is left.
     for (uint32 i = 0; i < 16; ++i)
     {
-        Mixer.RenderAudio(Out.data(), 256);
+        Mixer.RenderAudio(Out.GetData(), 256);
     }
 
     Mixer.PostCommand(FAudioCommand::MakeStopAll(EAudioStopMode::Immediate, 0.0f));
-    Mixer.RenderAudio(Out.data(), 256);
+    Mixer.RenderAudio(Out.GetData(), 256);
     ASSERT_EQ(Mixer.GetActiveVoiceCount(), 0u);
 
-    Mixer.RenderAudio(Out.data(), 256);
+    Mixer.RenderAudio(Out.GetData(), 256);
     EXPECT_GT(MixerPeak(Out), 0.0f);
 }
 
@@ -367,7 +419,7 @@ TEST(AudioMixer, SpatializedVoicesFallOffWithDistance)
     ASSERT_TRUE(Mixer.StartVoice(Desc));
 
     TVector<float> Out(64, 0.0f);
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
     const float NearPeak = MixerPeak(Out);
     EXPECT_GT(NearPeak, 0.0f);
 
@@ -375,8 +427,8 @@ TEST(AudioMixer, SpatializedVoicesFallOffWithDistance)
         SAudioHandle{ 1, 0 }, FVector3(50.0f, 0.0f, 0.0f)));
 
     // A gain change ramps across one block, so the settled level is only there on the block after it.
-    Mixer.RenderAudio(Out.data(), 32);
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
 
     EXPECT_LT(MixerPeak(Out), NearPeak);
 }
@@ -395,9 +447,106 @@ TEST(AudioMixer, RespectsTheVoiceBudget)
     ASSERT_TRUE(Mixer.StartVoice(MakeDesc(2, &C)));
 
     TVector<float> Out(512, 0.0f);
-    Mixer.RenderAudio(Out.data(), 64);
+    Mixer.RenderAudio(Out.GetData(), 64);
 
     EXPECT_EQ(Mixer.GetActiveVoiceCount(), 2u);
+}
+
+TEST(AudioMixer, VoiceBudgetRotatesSoNoVoiceStarves)
+{
+    FAudioMixer Mixer;
+    ASSERT_TRUE(Mixer.Initialize(kMixRate, 2));
+    Mixer.SetMaxVoiceCount(2);
+
+    constexpr uint32 VoiceCount = 5;
+    TVector<FMixerTestSource> Sources;
+    for (uint32 i = 0; i < VoiceCount; ++i)
+    {
+        Sources.Emplace(kMixRate, 1, 1u << 20);
+    }
+    for (uint32 i = 0; i < VoiceCount; ++i)
+    {
+        ASSERT_TRUE(Mixer.StartVoice(MakeDesc(i, &Sources[i])));
+    }
+
+    TVector<float> Out(512, 0.0f);
+    for (uint32 Block = 0; Block < VoiceCount; ++Block)
+    {
+        Mixer.RenderAudio(Out.GetData(), 64);
+        EXPECT_EQ(Mixer.GetActiveVoiceCount(), 2u);
+    }
+
+    for (uint32 i = 0; i < VoiceCount; ++i)
+    {
+        EXPECT_GT(Sources[i].GetCursor(), 0u) << "voice " << i << " never rendered";
+    }
+}
+
+TEST(AudioMixer, PausedVoicesDoNotStarveThePlayingBudget)
+{
+    FAudioMixer Mixer;
+    ASSERT_TRUE(Mixer.Initialize(kMixRate, 2));
+    Mixer.SetVolumeSmoothing(0.0f);
+    Mixer.SetMaxVoiceCount(2);
+
+    constexpr uint32 BlockerCount = 3;
+    TVector<FMixerConstantSource> Blockers;
+    for (uint32 i = 0; i < BlockerCount; ++i)
+    {
+        Blockers.Emplace(1, 0.1f);
+    }
+    for (uint32 i = 0; i < BlockerCount; ++i)
+    {
+        ASSERT_TRUE(Mixer.StartVoice(MakeDesc(i + 1, &Blockers[i])));
+    }
+
+    FMixerConstantSource Playing(1, 0.5f);
+    ASSERT_TRUE(Mixer.StartVoice(MakeDesc(0, &Playing)));
+
+    TVector<float> Out(64, 0.0f);
+    Mixer.RenderAudio(Out.GetData(), 32);
+
+    for (uint32 i = 1; i <= BlockerCount; ++i)
+    {
+        Mixer.PostCommand(FAudioCommand::MakeBool(EAudioCommandType::SetPaused, SAudioHandle{ i + 1, i }, true));
+    }
+
+    for (uint32 Block = 0; Block < 4; ++Block)
+    {
+        Mixer.RenderAudio(Out.GetData(), 32);
+        EXPECT_NEAR(Out[0], 0.5f, 1.0e-5f) << "block " << Block;
+    }
+}
+
+TEST(AudioMixer, StartDelayedVoicesDoNotStarveThePlayingBudget)
+{
+    FAudioMixer Mixer;
+    ASSERT_TRUE(Mixer.Initialize(kMixRate, 2));
+    Mixer.SetVolumeSmoothing(0.0f);
+    Mixer.SetMaxVoiceCount(2);
+
+    constexpr uint32 BlockerCount = 3;
+    TVector<FMixerConstantSource> Blockers;
+    for (uint32 i = 0; i < BlockerCount; ++i)
+    {
+        Blockers.Emplace(1, 0.1f);
+    }
+    for (uint32 i = 0; i < BlockerCount; ++i)
+    {
+        FMixerVoiceDesc Desc = MakeDesc(i, &Blockers[i]);
+        Desc.Params.StartDelaySeconds = 10.0f;
+        ASSERT_TRUE(Mixer.StartVoice(Desc));
+    }
+
+    FMixerConstantSource Playing(1, 0.5f);
+    ASSERT_TRUE(Mixer.StartVoice(MakeDesc(BlockerCount, &Playing)));
+
+    TVector<float> Out(64, 0.0f);
+    for (uint32 Block = 0; Block < 4; ++Block)
+    {
+        Mixer.RenderAudio(Out.GetData(), 32);
+        EXPECT_NEAR(Out[0], 0.5f, 1.0e-5f) << "block " << Block;
+    }
 }
 
 TEST(AudioMixer, RenderCountAdvancesPerCallback)
@@ -408,8 +557,8 @@ TEST(AudioMixer, RenderCountAdvancesPerCallback)
     const uint64 Before = Mixer.GetRenderCount();
 
     TVector<float> Out(512, 0.0f);
-    Mixer.RenderAudio(Out.data(), 256);
-    Mixer.RenderAudio(Out.data(), 256);
+    Mixer.RenderAudio(Out.GetData(), 256);
+    Mixer.RenderAudio(Out.GetData(), 256);
 
     EXPECT_EQ(Mixer.GetRenderCount(), Before + 2);
 }
@@ -424,12 +573,12 @@ TEST(AudioMixer, FadeToRaisesAVoiceStartedSilent)
     ASSERT_TRUE(Mixer.StartVoice(MakeDesc(0, &Source, 0.0f)));
 
     TVector<float> Out(512, 0.0f);
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
     EXPECT_FLOAT_EQ(Out[0], 0.0f);
 
     Mixer.PostCommand(FAudioCommand::MakeFloat2(EAudioCommandType::FadeTo, SAudioHandle{ 1, 0 }, 1.0f, 256.0f / (float)kMixRate));
-    Mixer.RenderAudio(Out.data(), 256);
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 256);
+    Mixer.RenderAudio(Out.GetData(), 32);
     EXPECT_NEAR(Out[0], 0.5f, 1.0e-4f);
 }
 
@@ -445,8 +594,8 @@ TEST(AudioMixer, SetVolumeOverridesAFadeInFlight)
     TVector<float> Out(64, 0.0f);
     Mixer.PostCommand(FAudioCommand::MakeFloat2(EAudioCommandType::FadeTo, SAudioHandle{ 1, 0 }, 1.0f, 10.0f));
     Mixer.PostCommand(FAudioCommand::MakeFloat(EAudioCommandType::SetVolume, SAudioHandle{ 1, 0 }, 0.5f));
-    Mixer.RenderAudio(Out.data(), 32);
-    Mixer.RenderAudio(Out.data(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
+    Mixer.RenderAudio(Out.GetData(), 32);
     EXPECT_NEAR(Out[0], 0.25f, 1.0e-4f);
 }
 
@@ -460,7 +609,7 @@ TEST(AudioMixer, LimitsTheMasterBelowFullScale)
     ASSERT_TRUE(Mixer.StartVoice(MakeDesc(0, &Source, 3.0f)));
 
     TVector<float> Out(1024, 0.0f);
-    Mixer.RenderAudio(Out.data(), 512);
+    Mixer.RenderAudio(Out.GetData(), 512);
     EXPECT_LE(MixerPeak(Out), 0.8901f);
     EXPECT_GT(MixerPeak(Out), 0.8f);
 }
@@ -475,7 +624,7 @@ TEST(AudioMixer, AQueuedStartLeavesThePreviousVoicesGenerationUntilARenderPicksI
     FMixerVoiceDesc First = MakeDesc(3, &Short);
     First.Generation = 5;
     ASSERT_TRUE(Mixer.StartVoice(First));
-    Mixer.RenderAudio(Out.data(), 64);
+    Mixer.RenderAudio(Out.GetData(), 64);
     ASSERT_EQ(Mixer.GetSlotState(3), EAudioVoiceState::Free);
     ASSERT_EQ(Mixer.GetSlotGeneration(3), 5u);
 
@@ -488,7 +637,7 @@ TEST(AudioMixer, AQueuedStartLeavesThePreviousVoicesGenerationUntilARenderPicksI
     EXPECT_NE(Mixer.GetSlotGeneration(3), 7u);
     EXPECT_FALSE(Mixer.IsVoiceLive(3, 7));
 
-    Mixer.RenderAudio(Out.data(), 64);
+    Mixer.RenderAudio(Out.GetData(), 64);
     EXPECT_EQ(Mixer.GetSlotGeneration(3), 7u);
     EXPECT_TRUE(Mixer.IsVoiceLive(3, 7));
     EXPECT_FALSE(Mixer.IsVoiceLive(3, 5));
@@ -504,7 +653,7 @@ TEST(AudioMixer, AVoiceStaysLiveUntilItIsReplacedOrStopped)
     FMixerVoiceDesc Old = MakeDesc(0, &Victim);
     Old.Generation = 10;
     ASSERT_TRUE(Mixer.StartVoice(Old));
-    Mixer.RenderAudio(Out.data(), 64);
+    Mixer.RenderAudio(Out.GetData(), 64);
     EXPECT_TRUE(Mixer.IsVoiceLive(0, 10));
 
     // A takeover is queued but not yet rendered, so the old voice still reads its source.
@@ -514,12 +663,12 @@ TEST(AudioMixer, AVoiceStaysLiveUntilItIsReplacedOrStopped)
     ASSERT_TRUE(Mixer.StartVoice(New));
     EXPECT_TRUE(Mixer.IsVoiceLive(0, 10));
 
-    Mixer.RenderAudio(Out.data(), 64);
+    Mixer.RenderAudio(Out.GetData(), 64);
     EXPECT_FALSE(Mixer.IsVoiceLive(0, 10));
     EXPECT_TRUE(Mixer.IsVoiceLive(0, 11));
 
     Mixer.PostCommand(FAudioCommand::MakeStop(SAudioHandle{ 11, 0 }, EAudioStopMode::Immediate, 0.0f));
-    Mixer.RenderAudio(Out.data(), 64);
+    Mixer.RenderAudio(Out.GetData(), 64);
     EXPECT_FALSE(Mixer.IsVoiceLive(0, 11));
     EXPECT_EQ(Mixer.GetSlotGeneration(0), 11u);
 }

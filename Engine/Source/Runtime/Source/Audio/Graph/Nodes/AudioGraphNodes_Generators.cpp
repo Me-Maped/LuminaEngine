@@ -2,6 +2,7 @@
 
 #include "Audio/Graph/AudioGraphNodeBuilder.h"
 #include "Core/Math/Scalar.h"
+#include "Log/Log.h"
 #include "Memory/SmartPtr.h"
 
 namespace Lumina
@@ -44,7 +45,7 @@ namespace Lumina
             return 0.0f;
         }
 
-        /** Shared phase accumulator for the four oscillators. */
+        // Shared phase accumulator for the four oscillators.
         class FOscillatorBase : public IAudioGraphOperator
         {
         public:
@@ -55,12 +56,6 @@ namespace Lumina
                 , SyncIn(Params.TriggerIn(2))
                 , Out(Params.AudioOut(0))
             {}
-
-            void Reset() override
-            {
-                Phase = 0.0f;
-                Frequency.Reset();
-            }
 
         protected:
 
@@ -212,12 +207,6 @@ namespace Lumina
                 , Out(Params.AudioOut(0))
             {}
 
-            void Reset() override
-            {
-                Random = FAudioGraphRandom();
-                Algo::Fill(PinkState, 0.0f);
-            }
-
             void Execute(const FAudioGraphBlockContext& Context) override
             {
                 const bool bPink = *TypeIn == 1;
@@ -275,13 +264,6 @@ namespace Lumina
                 , TimeOut(Params.FloatOut(4))
             {}
 
-            void Reset() override
-            {
-                Wave     = nullptr;
-                Position = 0.0;
-                bPlaying = false;
-            }
-
             void Execute(const FAudioGraphBlockContext& Context) override
             {
                 PlayCursor.Reset();
@@ -290,6 +272,8 @@ namespace Lumina
                 const float Pitch = Math::Clamp(*PitchIn, 0.01f, 8.0f);
                 const bool  bLoop = *LoopIn != 0;
 
+                float* RESTRICT LeftSamples = OutLeft;
+                float* RESTRICT RightSamples = OutRight;
                 for (uint32 Frame = 0; Frame < Context.NumFrames; ++Frame)
                 {
                     if (PlayCursor.Consume(*PlayIn, Frame))
@@ -305,12 +289,12 @@ namespace Lumina
 
                     if (!bPlaying)
                     {
-                        OutLeft[Frame]  = 0.0f;
-                        OutRight[Frame] = 0.0f;
+                        LeftSamples[Frame]  = 0.0f;
+                        RightSamples[Frame] = 0.0f;
                         continue;
                     }
 
-                    Sample(OutLeft[Frame], OutRight[Frame]);
+                    Sample(LeftSamples[Frame], RightSamples[Frame]);
                     Position += (double)Wave->SampleRate / (double)Context.SampleRate * (double)Pitch;
 
                     if (bLoop && Position >= LoopEnd)
@@ -338,6 +322,7 @@ namespace Lumina
                 {
                     Wave     = nullptr;
                     bPlaying = false;
+                    FinishedOut->Add(Frame);
                     return;
                 }
 
@@ -367,8 +352,8 @@ namespace Lumina
                 const float  Alpha = (float)(Position - (double)Index);
 
                 const uint32 Channels = Wave->NumChannels;
-                const float* A = Wave->Samples.data() + Index * Channels;
-                const float* B = Wave->Samples.data() + Next * Channels;
+                const float* A = Wave->Samples.GetData() + Index * Channels;
+                const float* B = Wave->Samples.GetData() + Next * Channels;
 
                 OutLeftSample  = A[0] + (B[0] - A[0]) * Alpha;
                 OutRightSample = Channels > 1 ? A[1] + (B[1] - A[1]) * Alpha : OutLeftSample;
@@ -415,17 +400,14 @@ namespace Lumina
             {
                 const uint32 Listed = Params.NumInputs() > kFixedInputs ? Params.NumInputs() - kFixedInputs : 0u;
                 WaveCount = Math::Min(Listed, kMaxWaves);
+                if (Listed > kMaxWaves)
+                {
+                    LOG_WARN_ONCE("AudioGraph: RandomWave has {} wave inputs wired, dropping {} past the {} limit", Listed, Listed - kMaxWaves, kMaxWaves);
+                }
                 for (uint32 Index = 0; Index < WaveCount; ++Index)
                 {
                     Waves[Index] = Params.WaveIn(kFixedInputs + Index);
                 }
-            }
-
-            void Reset() override
-            {
-                Random  = FAudioGraphRandom();
-                bPicked = false;
-                Current = 0;
             }
 
             void Execute(const FAudioGraphBlockContext& Context) override

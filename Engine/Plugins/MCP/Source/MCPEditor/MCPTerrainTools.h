@@ -2,7 +2,7 @@
 
 #include "Containers/String.h"
 #include "Core/Object/ObjectMacros.h"
-#include "MCPPrefabTools.h"
+#include "MCPToolTypes.h"
 
 #include "MCPTerrainTools.generated.h"
 
@@ -97,6 +97,6 @@ namespace Lumina
 
     namespace MCP
     {
-        void RegisterTerrainTools(FStringView Owner);
+        MCPEDITOR_API void RegisterTerrainTools(FStringView Owner);
     }
 }

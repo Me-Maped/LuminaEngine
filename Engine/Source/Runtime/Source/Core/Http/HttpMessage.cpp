@@ -9,49 +9,26 @@ namespace Lumina::Http
     {
         constexpr FStringView GHeaderTerminator = "\r\n\r\n";
 
-        char ToLowerAscii(char Character)
-        {
-            return (Character >= 'A' && Character <= 'Z') ? static_cast<char>(Character - 'A' + 'a') : Character;
-        }
-
-        bool EqualsIgnoringCase(FStringView Left, FStringView Right)
-        {
-            if (Left.size() != Right.size())
-            {
-                return false;
-            }
-
-            for (size_t Index = 0; Index < Left.size(); ++Index)
-            {
-                if (ToLowerAscii(Left[Index]) != ToLowerAscii(Right[Index]))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
         FStringView TrimSpace(FStringView Text)
         {
-            size_t First = 0;
-            while (First < Text.size() && (Text[First] == ' ' || Text[First] == '\t'))
+            int32 First = 0;
+            while (First < Text.Len() && (Text[First] == ' ' || Text[First] == '\t'))
             {
                 ++First;
             }
 
-            size_t Last = Text.size();
+            int32 Last = Text.Len();
             while (Last > First && (Text[Last - 1] == ' ' || Text[Last - 1] == '\t'))
             {
                 --Last;
             }
 
-            return Text.substr(First, Last - First);
+            return Text.Mid(First, Last - First);
         }
 
         bool ParseNonNegative(FStringView Text, int32& OutValue)
         {
-            if (Text.empty() || Text.size() > 10)
+            if (Text.IsEmpty() || Text.Len() > 10)
             {
                 return false;
             }
@@ -99,7 +76,7 @@ namespace Lumina::Http
     {
         for (const FHeader& Header : Headers)
         {
-            if (EqualsIgnoringCase(FStringView(Header.Name), Name))
+            if (EqualsIgnoreCase(FStringView(Header.Name), Name))
             {
                 return FStringView(Header.Value);
             }
@@ -111,7 +88,7 @@ namespace Lumina::Http
     bool FRequest::WantsKeepAlive() const
     {
         const FStringView Connection = FindHeader("Connection");
-        return !EqualsIgnoringCase(Connection, "close");
+        return !EqualsIgnoreCase(Connection, FStringView("close"));
     }
 
     FResponse FResponse::Json(FString InBody)
@@ -127,9 +104,9 @@ namespace Lumina::Http
     {
         FResponse Response;
         Response.StatusCode   = Code;
-        Response.ReasonPhrase = FString(Reason.data(), Reason.size());
+        Response.ReasonPhrase = FString(Reason.GetData(), Reason.Len());
         Response.ContentType  = "text/plain; charset=utf-8";
-        Response.Body         = FString(InBody.data(), InBody.size());
+        Response.Body         = FString(InBody.GetData(), InBody.Len());
         return Response;
     }
 
@@ -137,32 +114,32 @@ namespace Lumina::Http
     {
         FResponse Response;
         Response.StatusCode   = Code;
-        Response.ReasonPhrase = FString(Reason.data(), Reason.size());
+        Response.ReasonPhrase = FString(Reason.GetData(), Reason.Len());
         return Response;
     }
 
     FString FResponse::Serialize() const
     {
-        const FString Reason = ReasonPhrase.empty() ? FString(ReasonForStatus(StatusCode)) : ReasonPhrase;
+        const FString Reason = ReasonPhrase.IsEmpty() ? FString(ReasonForStatus(StatusCode)) : ReasonPhrase;
 
         FString Text = Lumina::Format("HTTP/1.1 {} {}\r\n", StatusCode, Reason);
 
-        if (!ContentType.empty())
+        if (!ContentType.IsEmpty())
         {
-            Text.append(Lumina::Format("Content-Type: {}\r\n", ContentType));
+            Text.Append(Lumina::Format("Content-Type: {}\r\n", ContentType));
         }
 
         // Always present, so a persistent connection knows where one message stops and the next starts.
-        Text.append(Lumina::Format("Content-Length: {}\r\n", Body.size()));
-        Text.append(bKeepAlive ? "Connection: keep-alive\r\n" : "Connection: close\r\n");
+        Text.Append(Lumina::Format("Content-Length: {}\r\n", Body.Len()));
+        Text.Append(bKeepAlive ? "Connection: keep-alive\r\n" : "Connection: close\r\n");
 
         for (const FHeader& Header : ExtraHeaders)
         {
-            Text.append(Lumina::Format("{}: {}\r\n", Header.Name, Header.Value));
+            Text.Append(Lumina::Format("{}: {}\r\n", Header.Name, Header.Value));
         }
 
-        Text.append("\r\n");
-        Text.append(Body);
+        Text.Append("\r\n");
+        Text.Append(Body);
 
         return Text;
     }
@@ -171,10 +148,10 @@ namespace Lumina::Http
     {
         const FStringView View(Buffer);
 
-        const size_t HeaderEnd = View.find(GHeaderTerminator);
-        if (HeaderEnd == FStringView::npos)
+        const int32 HeaderEnd = View.Find(GHeaderTerminator);
+        if (HeaderEnd == Constants::kIndexNone)
         {
-            return static_cast<int32>(View.size()) > Limits.MaxHeaderBytes
+            return View.Len() > Limits.MaxHeaderBytes
                 ? EParseResult::Malformed
                 : EParseResult::Incomplete;
         }
@@ -184,80 +161,80 @@ namespace Lumina::Http
             return EParseResult::Malformed;
         }
 
-        FStringView Head = View.substr(0, HeaderEnd);
+        FStringView Head = View.Mid(0, HeaderEnd);
 
         // With no headers the terminator absorbs the request line's own break, leaving the line alone here.
-        const size_t RequestLineEnd = Head.find("\r\n");
-        const FStringView RequestLine = RequestLineEnd == FStringView::npos ? Head : Head.substr(0, RequestLineEnd);
+        const int32 RequestLineEnd = Head.Find("\r\n");
+        const FStringView RequestLine = RequestLineEnd == Constants::kIndexNone ? Head : Head.Mid(0, RequestLineEnd);
 
-        const size_t FirstSpace = RequestLine.find(' ');
-        if (FirstSpace == FStringView::npos)
+        const int32 FirstSpace = RequestLine.Find(' ');
+        if (FirstSpace == Constants::kIndexNone)
         {
             return EParseResult::Malformed;
         }
 
-        const size_t SecondSpace = RequestLine.find(' ', FirstSpace + 1);
-        if (SecondSpace == FStringView::npos)
+        const int32 SecondSpace = RequestLine.Find(' ', FirstSpace + 1);
+        if (SecondSpace == Constants::kIndexNone)
         {
             return EParseResult::Malformed;
         }
 
-        const FStringView Method  = RequestLine.substr(0, FirstSpace);
-        const FStringView Target  = RequestLine.substr(FirstSpace + 1, SecondSpace - FirstSpace - 1);
-        const FStringView Version = RequestLine.substr(SecondSpace + 1);
+        const FStringView Method  = RequestLine.Mid(0, FirstSpace);
+        const FStringView Target  = RequestLine.Mid(FirstSpace + 1, SecondSpace - FirstSpace - 1);
+        const FStringView Version = RequestLine.Mid(SecondSpace + 1);
 
-        if (Method.empty() || Target.empty() || Version.substr(0, 5) != "HTTP/")
+        if (Method.IsEmpty() || Target.IsEmpty() || Version.Mid(0, 5) != "HTTP/")
         {
             return EParseResult::Malformed;
         }
 
         FRequest Parsed;
-        Parsed.Method = FString(Method.data(), Method.size());
-        Parsed.Target = FString(Target.data(), Target.size());
+        Parsed.Method = FString(Method.GetData(), Method.Len());
+        Parsed.Target = FString(Target.GetData(), Target.Len());
 
-        FStringView Rest = RequestLineEnd == FStringView::npos
+        FStringView Rest = RequestLineEnd == Constants::kIndexNone
             ? FStringView()
-            : Head.substr(RequestLineEnd + 2);
+            : Head.Mid(RequestLineEnd + 2);
 
-        while (!Rest.empty())
+        while (!Rest.IsEmpty())
         {
-            const size_t LineEnd = Rest.find("\r\n");
-            const FStringView Line = Rest.substr(0, LineEnd == FStringView::npos ? Rest.size() : LineEnd);
+            const int32 LineEnd = Rest.Find("\r\n");
+            const FStringView Line = Rest.Mid(0, LineEnd == Constants::kIndexNone ? Rest.Len() : LineEnd);
 
-            const size_t Colon = Line.find(':');
-            if (Colon == FStringView::npos)
+            const int32 Colon = Line.Find(':');
+            if (Colon == Constants::kIndexNone)
             {
                 return EParseResult::Malformed;
             }
 
-            const FStringView Name  = TrimSpace(Line.substr(0, Colon));
-            const FStringView Value = TrimSpace(Line.substr(Colon + 1));
+            const FStringView Name  = TrimSpace(Line.Mid(0, Colon));
+            const FStringView Value = TrimSpace(Line.Mid(Colon + 1));
 
-            if (Name.empty())
+            if (Name.IsEmpty())
             {
                 return EParseResult::Malformed;
             }
 
-            Parsed.Headers.push_back(FHeader{ FString(Name.data(), Name.size()), FString(Value.data(), Value.size()) });
+            Parsed.Headers.Emplace(FString(Name.GetData(), Name.Len()), FString(Value.GetData(), Value.Len()));
 
-            if (LineEnd == FStringView::npos)
+            if (LineEnd == Constants::kIndexNone)
             {
                 break;
             }
 
-            Rest = Rest.substr(LineEnd + 2);
+            Rest = Rest.Mid(LineEnd + 2);
         }
 
         // Chunked bodies are refused outright rather than half handled, since no client here needs them.
         const FStringView Encoding = Parsed.FindHeader("Transfer-Encoding");
-        if (!Encoding.empty() && !EqualsIgnoringCase(Encoding, "identity"))
+        if (!Encoding.IsEmpty() && !EqualsIgnoreCase(Encoding, FStringView("identity")))
         {
             return EParseResult::Malformed;
         }
 
         int32 ContentLength = 0;
         const FStringView LengthText = Parsed.FindHeader("Content-Length");
-        if (!LengthText.empty() && !ParseNonNegative(LengthText, ContentLength))
+        if (!LengthText.IsEmpty() && !ParseNonNegative(LengthText, ContentLength))
         {
             return EParseResult::Malformed;
         }
@@ -267,17 +244,17 @@ namespace Lumina::Http
             return EParseResult::Malformed;
         }
 
-        const size_t BodyStart = HeaderEnd + GHeaderTerminator.size();
-        if (View.size() - BodyStart < static_cast<size_t>(ContentLength))
+        const int32 BodyStart = HeaderEnd + GHeaderTerminator.Len();
+        if (View.Len() - BodyStart < ContentLength)
         {
             return EParseResult::Incomplete;
         }
 
-        Parsed.Body = FString(View.data() + BodyStart, static_cast<size_t>(ContentLength));
+        Parsed.Body = FString(View.GetData() + BodyStart, ContentLength);
 
         // Whatever follows belongs to the next request on this connection and has to survive.
-        Buffer = FString(View.data() + BodyStart + ContentLength,
-                         View.size() - BodyStart - static_cast<size_t>(ContentLength));
+        Buffer = FString(View.GetData() + BodyStart + ContentLength,
+                         View.Len() - BodyStart - ContentLength);
 
         OutRequest = Move(Parsed);
         return EParseResult::Complete;

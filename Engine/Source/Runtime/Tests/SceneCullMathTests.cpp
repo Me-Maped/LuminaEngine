@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "Core/Math/Transform.h"
+#include "Renderer/ViewVolume.h"
 #include "World/Scene/RenderScene/SceneCullMath.h"
 
 #include <random>
@@ -66,16 +67,51 @@ namespace
         Transform.SetScale(FVector3(Scale(Rng), Scale(Rng), Scale(Rng)));
         return Transform.GetMatrix();
     }
+
+    FCullView MakeCameraCullView(const FVector3& Position, const FVector3& Facing)
+    {
+        FViewVolume Volume;
+        Volume.SetView(Position, Facing, FVector3(0.0f, 1.0f, 0.0f));
+        const FFrustum Frustum = FFrustum::FromViewProjection(Volume.GetViewProjectionMatrix());
+
+        FCullView View = {};
+        for (int32 Plane = 0; Plane < FFrustum::NUM; ++Plane)
+        {
+            View.FrustumPlanes[Plane] = Frustum.Planes[Plane];
+        }
+        View.ViewOriginAndFlags = FVector4(Position, 0.0f);
+        return View;
+    }
+
+    FVector3 FacingAtYaw(float Degrees)
+    {
+        const float Radians = Math::Radians(Degrees);
+        return FVector3(Math::Sin(Radians), 0.0f, -Math::Cos(Radians));
+    }
+}
+
+TEST(SceneCullMath, CameraCutCatchesARotationInPlace)
+{
+    const FVector3 Position(3.0f, 2.0f, -7.0f);
+    const FCullView Before = MakeCameraCullView(Position, FacingAtYaw(0.0f));
+
+    EXPECT_FALSE(SceneCull::IsCameraCut(Before, MakeCameraCullView(Position, FacingAtYaw(0.0f))));
+    EXPECT_FALSE(SceneCull::IsCameraCut(Before, MakeCameraCullView(Position, FacingAtYaw(30.0f))));
+    EXPECT_FALSE(SceneCull::IsCameraCut(Before, MakeCameraCullView(Position + FVector3(5.0f, 0.0f, 0.0f), FacingAtYaw(0.0f))));
+
+    EXPECT_TRUE(SceneCull::IsCameraCut(Before, MakeCameraCullView(Position, FacingAtYaw(90.0f))));
+    EXPECT_TRUE(SceneCull::IsCameraCut(Before, MakeCameraCullView(Position, FacingAtYaw(180.0f))));
+    EXPECT_TRUE(SceneCull::IsCameraCut(Before, MakeCameraCullView(Position + FVector3(0.0f, 0.0f, 20.0f), FacingAtYaw(0.0f))));
 }
 
 TEST(SceneCullMath, BlockBoundsMatchTheScalarLoopExactly)
 {
     const TVector<FInstanceCullEntry> Entries = MakeEntries(64 * 40 + 13, 7);
-    for (uint32 First = 0; First < (uint32)Entries.size(); First += 64)
+    for (int32 First = 0; First < Entries.Num(); First += 64)
     {
-        const uint32 End = Math::Min(First + 64u, (uint32)Entries.size());
-        const FInstanceBlockBounds Simd   = SceneCull::ComputeInstanceBlockBounds(Entries.data(), First, End, false);
-        const FInstanceBlockBounds Scalar = ScalarBlockBounds(Entries.data(), First, End);
+        const uint32 End = Math::Min(First + 64u, (uint32)Entries.Num());
+        const FInstanceBlockBounds Simd   = SceneCull::ComputeInstanceBlockBounds(Entries.GetData(), First, End, false);
+        const FInstanceBlockBounds Scalar = ScalarBlockBounds(Entries.GetData(), First, End);
 
         EXPECT_EQ(Simd.Min, Scalar.Min);
         EXPECT_EQ(Simd.Max, Scalar.Max);
@@ -91,7 +127,7 @@ TEST(SceneCullMath, AnEmptyBlockIsUnreachable)
     {
         Entry.DrawIDAndFlags = 0u;
     }
-    const FInstanceBlockBounds Bounds = SceneCull::ComputeInstanceBlockBounds(Entries.data(), 0, 64, false);
+    const FInstanceBlockBounds Bounds = SceneCull::ComputeInstanceBlockBounds(Entries.GetData(), 0, 64, false);
     EXPECT_LT(Bounds.Reach, 0.0f);
     EXPECT_EQ(Bounds.Min, FVector3(0.0f));
     EXPECT_EQ(Bounds.Max, FVector3(0.0f));
@@ -175,12 +211,12 @@ TEST(SceneCullMath, BlockHasDistanceFieldCasterNeedsEveryFlag)
     {
         Entry.DrawIDAndFlags = Active | Caster;
     }
-    EXPECT_FALSE(SceneCull::BlockHasDistanceFieldCaster(Entries.data(), 0u, 64u));
+    EXPECT_FALSE(SceneCull::BlockHasDistanceFieldCaster(Entries.GetData(), 0u, 64u));
 
     Entries[40].DrawIDAndFlags = Caster | Field;
-    EXPECT_FALSE(SceneCull::BlockHasDistanceFieldCaster(Entries.data(), 0u, 64u));
+    EXPECT_FALSE(SceneCull::BlockHasDistanceFieldCaster(Entries.GetData(), 0u, 64u));
 
     Entries[40].DrawIDAndFlags = Active | Caster | Field;
-    EXPECT_TRUE(SceneCull::BlockHasDistanceFieldCaster(Entries.data(), 0u, 64u));
-    EXPECT_FALSE(SceneCull::BlockHasDistanceFieldCaster(Entries.data(), 41u, 64u));
+    EXPECT_TRUE(SceneCull::BlockHasDistanceFieldCaster(Entries.GetData(), 0u, 64u));
+    EXPECT_FALSE(SceneCull::BlockHasDistanceFieldCaster(Entries.GetData(), 41u, 64u));
 }

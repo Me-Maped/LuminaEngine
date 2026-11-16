@@ -55,21 +55,6 @@ struct FMemoryHeapWire
 
 namespace
 {
-    // A two-pass string return, sizing with a null buffer then filling, returning the byte length.
-    int32 RHICopyOut(const FString& Value, char* Buffer, int32 Capacity)
-    {
-        const int32 Len = (int32)Value.size();
-        if (Buffer != nullptr && Capacity > 0)
-        {
-            const int32 N = Len < Capacity ? Len : Capacity;
-            for (int32 i = 0; i < N; ++i)
-            {
-                Buffer[i] = Value[(size_t)i];
-            }
-        }
-        return Len;
-    }
-
     FName RHIName(const char* P, int32 Len)
     {
         char Buf[256];
@@ -198,16 +183,16 @@ LUMINA_DOTNET_EXPORT(int32, RHI_HeapTextureCount)(RHI::FTextureHeapH Heap)
 {
     TVector<RHI::FHeapTextureInfo> Textures;
     RHI::GetTextureHeapTextures(Heap, Textures);
-    return (int32)Textures.size();
+    return Textures.Num();
 }
 
 LUMINA_DOTNET_EXPORT(RHI::FHeapTextureInfo, RHI_HeapTextureAt)(RHI::FTextureHeapH Heap, int32 Index)
 {
     TVector<RHI::FHeapTextureInfo> Textures;
     RHI::GetTextureHeapTextures(Heap, Textures);
-    if (Index >= 0 && Index < (int32)Textures.size())
+    if (Index >= 0 && Index < Textures.Num())
     {
-        return Textures[(size_t)Index];
+        return Textures[Index];
     }
     return RHI::FHeapTextureInfo{};
 }
@@ -237,12 +222,12 @@ LUMINA_DOTNET_EXPORT(uint64, RHI_SubmitLists)(int32 Queue,
 
 LUMINA_DOTNET_EXPORT(int32, RHI_GetDeviceName)(char* Buffer, int32 Capacity)
 {
-    return RHICopyOut(RHI::GetDeviceInfo().Name, Buffer, Capacity);
+    return DotNet::CopyOut(RHI::GetDeviceInfo().Name, Buffer, Capacity);
 }
 
 LUMINA_DOTNET_EXPORT(int32, RHI_GetDeviceAPIName)(char* Buffer, int32 Capacity)
 {
-    return RHICopyOut(RHI::GetDeviceInfo().APIName, Buffer, Capacity);
+    return DotNet::CopyOut(RHI::GetDeviceInfo().APIName, Buffer, Capacity);
 }
 
 LUMINA_DOTNET_EXPORT(uint8, RHI_GetDeviceIsDiscrete)()
@@ -261,7 +246,7 @@ LUMINA_DOTNET_EXPORT(FMemoryTotalsWire, RHI_GetMemoryTotals)()
     Out.TotalBlockBytes  = Stats.TotalBlockBytes;
     Out.TotalAllocations = Stats.TotalAllocations;
     Out.TotalBlocks      = Stats.TotalBlocks;
-    Out.HeapCount        = (uint32)Stats.Heaps.size();
+    Out.HeapCount        = (uint32)Stats.Heaps.Num();
     return Out;
 }
 
@@ -270,9 +255,9 @@ LUMINA_DOTNET_EXPORT(FMemoryHeapWire, RHI_GetMemoryHeap)(int32 HeapIndex)
     RHI::FGPUMemoryStats Stats;
     RHI::GetGPUMemoryStats(Stats);
     FMemoryHeapWire Out{};
-    if (HeapIndex >= 0 && HeapIndex < (int32)Stats.Heaps.size())
+    if (HeapIndex >= 0 && HeapIndex < Stats.Heaps.Num())
     {
-        const RHI::FGPUMemoryHeapStats& H = Stats.Heaps[(size_t)HeapIndex];
+        const RHI::FGPUMemoryHeapStats& H = Stats.Heaps[HeapIndex];
         Out.HeapIndex       = H.HeapIndex;
         Out.DeviceLocal     = H.bDeviceLocal ? 1 : 0;
         Out.HostVisible     = H.bHostVisible ? 1 : 0;

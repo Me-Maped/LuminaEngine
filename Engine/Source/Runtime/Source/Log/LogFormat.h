@@ -70,7 +70,7 @@ namespace Lumina::Logging
 
         void Append(FStringView Text)
         {
-            Append(Text.data(), static_cast<uint32>(Text.size()));
+            Append(Text.GetData(), static_cast<uint32>(Text.Len()));
         }
 
         template<uint32 N>
@@ -83,13 +83,6 @@ namespace Lumina::Logging
         {
             Reserve(1);
             Storage[Length++] = Value;
-        }
-
-        void AppendTwoDigits(uint32 Value)
-        {
-            Reserve(2);
-            std::memcpy(Storage + Length, GTwoDigits.Data + (Value % 100) * 2, 2);
-            Length += 2;
         }
 
         void AppendThreeDigits(uint32 Value)

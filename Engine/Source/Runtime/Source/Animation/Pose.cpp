@@ -11,7 +11,7 @@ namespace Lumina
 {
     uint64 FSkeletonResource::ComputeBoneLayoutHash() const
     {
-        uint64 Hash = 0xcbf29ce484222325ull ^ (uint64)Bones.size();
+        uint64 Hash = 0xcbf29ce484222325ull ^ (uint64)Bones.Num();
         for (const FBoneInfo& Bone : Bones)
         {
             Hash = (Hash ^ (uint64)Bone.Name.GetID()) * 0x100000001b3ull;
@@ -25,12 +25,12 @@ namespace Lumina
     {
         const int32 NumBones = GetNumBones();
         BoneLayoutHash = ComputeBoneLayoutHash();
-        BindLocalTranslations.resize(NumBones);
-        BindLocalRotations.resize(NumBones);
-        BindLocalScales.resize(NumBones);
-        BindGlobalMatrices.resize(NumBones);
-        BoneParents.resize(NumBones);
-        BoneInvBind.resize(NumBones);
+        BindLocalTranslations.SetNum(NumBones);
+        BindLocalRotations.SetNum(NumBones);
+        BindLocalScales.SetNum(NumBones);
+        BindGlobalMatrices.SetNum(NumBones);
+        BoneParents.SetNum(NumBones);
+        BoneInvBind.SetNum(NumBones);
 
         for (int32 i = 0; i < NumBones; ++i)
         {
@@ -41,14 +41,14 @@ namespace Lumina
         }
 
         BindStreamStride = FPose::StrideFor(NumBones);
-        BindLocalStreams.assign((SIZE_T)BindStreamStride * FPose::NumStreams, 0.0f);
+        BindLocalStreams.Init(0.0f, (SIZE_T)BindStreamStride * FPose::NumStreams);
 
-        float* RESTRICT Streams = BindLocalStreams.data();
+        float* Streams = BindLocalStreams.GetData();
         for (int32 s = 0; s < FPose::NumStreams; ++s)
         {
             // The pad past the last bone holds an identity transform so no kernel ever sees a garbage lane.
             const float Identity = (s >= FPose::StreamSx && s <= FPose::StreamSz) || s == FPose::StreamRw ? 1.0f : 0.0f;
-            float* RESTRICT Stream = Streams + (SIZE_T)s * BindStreamStride;
+            float* Stream = Streams + (SIZE_T)s * BindStreamStride;
             for (int32 i = NumBones; i < BindStreamStride; ++i)
             {
                 Stream[i] = Identity;
@@ -137,11 +137,11 @@ namespace Lumina
 
     void FPose::Swap(FPose& Other)
     {
-        std::swap(Data, Other.Data);
-        std::swap(NumBones, Other.NumBones);
-        std::swap(Stride, Other.Stride);
-        std::swap(Capacity, Other.Capacity);
-        std::swap(AdditiveSpace, Other.AdditiveSpace);
+        ElementOps::SwapElements(Data, Other.Data);
+        ElementOps::SwapElements(NumBones, Other.NumBones);
+        ElementOps::SwapElements(Stride, Other.Stride);
+        ElementOps::SwapElements(Capacity, Other.Capacity);
+        ElementOps::SwapElements(AdditiveSpace, Other.AdditiveSpace);
     }
 
     void FPose::FillIdentity(int32 First, int32 Last)
@@ -154,7 +154,7 @@ namespace Lumina
         for (int32 s = 0; s < NumStreams; ++s)
         {
             const float Identity = (s >= StreamSx && s <= StreamSz) || s == StreamRw ? 1.0f : 0.0f;
-            float* RESTRICT Ptr = Stream(s);
+            float* Ptr = Stream(s);
             for (int32 i = First; i < Last; ++i)
             {
                 Ptr[i] = Identity;
@@ -290,7 +290,7 @@ namespace Lumina
 
         static FORCEINLINE FPoseStreams BindViewOf(const FSkeletonResource* Skeleton)
         {
-            return { Skeleton->BindLocalStreams.data(), Skeleton->BindStreamStride };
+            return { Skeleton->BindLocalStreams.GetData(), Skeleton->BindStreamStride };
         }
     }
 
@@ -306,9 +306,9 @@ namespace Lumina
         }
 
         if (Skeleton->BindStreamStride == Stride &&
-            Skeleton->BindLocalStreams.size() == (SIZE_T)Stride * NumStreams)
+            static_cast<size_t>(Skeleton->BindLocalStreams.Num()) == (SIZE_T)Stride * NumStreams)
         {
-            Memory::Memcpy(Data, Skeleton->BindLocalStreams.data(), (SIZE_T)Stride * NumStreams * sizeof(float));
+            Memory::Memcpy(Data, Skeleton->BindLocalStreams.GetData(), (SIZE_T)Stride * NumStreams * sizeof(float));
             return;
         }
 
@@ -414,7 +414,7 @@ namespace Lumina
         Alpha = Math::Clamp(Alpha, 0.0f, 1.0f);
 
         const int32 NumBones = A.GetNumBones();
-        const int32 NumWeights = (int32)BoneWeights.size();
+        const int32 NumWeights = BoneWeights.Num();
         Out.SetNumBones(NumBones);
 
         if (Alpha <= 0.0f)
@@ -440,9 +440,9 @@ namespace Lumina
 
         // One alpha per bone feeds every stream directly, where the AoS layout needed an xyz splat.
         thread_local TVector<float> BoneAlphas;
-        if ((int32)BoneAlphas.size() < Lanes)
+        if (BoneAlphas.Num() < Lanes)
         {
-            BoneAlphas.resize(Lanes);
+            BoneAlphas.SetNum(Lanes);
         }
 
         for (int32 i = 0; i < Active; ++i)
@@ -457,9 +457,9 @@ namespace Lumina
 
         for (int32 s = FPose::StreamTx; s <= FPose::StreamSz; ++s)
         {
-            SIMD::LerpArrayVarAlpha(Out.Stream(s), A.Stream(s), B.Stream(s), BoneAlphas.data(), Lanes);
+            SIMD::LerpArrayVarAlpha(Out.Stream(s), A.Stream(s), B.Stream(s), BoneAlphas.GetData(), Lanes);
         }
-        SIMD::SlerpQuatStreamsVarAlpha(Out.Rotations(), A.Rotations(), B.Rotations(), BoneAlphas.data(), Lanes);
+        SIMD::SlerpQuatStreamsVarAlpha(Out.Rotations(), A.Rotations(), B.Rotations(), BoneAlphas.GetData(), Lanes);
 
         Detail::CopyPoseTail(Out, A, Active, NumBones);
         Out.AdditiveSpace = A.IsAdditive() ? A.AdditiveSpace : B.AdditiveSpace;
@@ -515,7 +515,7 @@ namespace Lumina
         const int32 Active = Detail::ResolveActiveBones(NumActiveBones, NumBones);
 
         if (Skeleton->BindStreamStride == Src.GetStride() &&
-            Skeleton->BindLocalStreams.size() == (SIZE_T)Skeleton->BindStreamStride * FPose::NumStreams)
+            static_cast<size_t>(Skeleton->BindLocalStreams.Num()) == (SIZE_T)Skeleton->BindStreamStride * FPose::NumStreams)
         {
             Detail::MakeLocalDelta(OutDelta, Src, Detail::BindViewOf(Skeleton), Active, NumBones);
             return;
@@ -559,7 +559,7 @@ namespace Lumina
     namespace Detail
     {
         // Bones[] is parents-before-children, so one linear pass resolves the whole chain.
-        static void ComputeComponentRotations(const FPose& Local, const FSkeletonResource* Skeleton, FQuat* Out, int32 Active)
+        static void ComputeComponentRotations(const FPose& Local, const FSkeletonResource* Skeleton, FQuat* RESTRICT Out, int32 Active)
         {
             for (int32 i = 0; i < Active; ++i)
             {
@@ -597,14 +597,14 @@ namespace Lumina
 
         thread_local TVector<FQuat> SrcComponent;
         thread_local TVector<FQuat> BaseComponent;
-        if ((int32)SrcComponent.size() < Active)
+        if (SrcComponent.Num() < Active)
         {
-            SrcComponent.resize(Active);
-            BaseComponent.resize(Active);
+            SrcComponent.SetNum(Active);
+            BaseComponent.SetNum(Active);
         }
 
-        Detail::ComputeComponentRotations(Src, Skeleton, SrcComponent.data(), Active);
-        Detail::ComputeComponentRotations(Base, Skeleton, BaseComponent.data(), Active);
+        Detail::ComputeComponentRotations(Src, Skeleton, SrcComponent.GetData(), Active);
+        Detail::ComputeComponentRotations(Base, Skeleton, BaseComponent.GetData(), Active);
 
         for (int32 i = 0; i < Active; ++i)
         {
@@ -718,10 +718,10 @@ namespace Lumina
 
         thread_local TVector<FQuat> BaseComponent;
         thread_local TVector<FQuat> NewComponent;
-        if ((int32)BaseComponent.size() < Active)
+        if (BaseComponent.Num() < Active)
         {
-            BaseComponent.resize(Active);
-            NewComponent.resize(Active);
+            BaseComponent.SetNum(Active);
+            NewComponent.SetNum(Active);
         }
 
         // Base rotations are consumed into BaseComponent before Out is written, so Out may alias Base.
@@ -757,17 +757,11 @@ namespace Lumina
     namespace Detail
     {
         // Uses Pose's current TRS so chained BoneTransform nodes compose correctly in component space.
-        static FMatrix4 ComputeParentGlobal(const FPose& Pose, const FSkeletonResource* Skeleton, int32 BoneIndex)
+        static FMatrix4 ComputeBoneGlobalLocal(const FPose& Pose, const FSkeletonResource* Skeleton, int32 BoneIndex)
         {
-            const int32 ParentIndex = Skeleton->GetBone(BoneIndex).ParentIndex;
-            if (ParentIndex < 0)
-            {
-                return FMatrix4(1.0f);
-            }
-
             int32 Chain[64];
             int32 ChainLen = 0;
-            int32 Cursor = ParentIndex;
+            int32 Cursor = BoneIndex;
             while (Cursor >= 0 && ChainLen < (int32)(sizeof(Chain) / sizeof(Chain[0])))
             {
                 Chain[ChainLen++] = Cursor;
@@ -781,6 +775,11 @@ namespace Lumina
                 Global = Global * Detail::ComposeLocal(Pose, b);
             }
             return Global;
+        }
+
+        static FMatrix4 ComputeParentGlobal(const FPose& Pose, const FSkeletonResource* Skeleton, int32 BoneIndex)
+        {
+            return ComputeBoneGlobalLocal(Pose, Skeleton, Skeleton->GetBone(BoneIndex).ParentIndex);
         }
     }
 
@@ -910,26 +909,6 @@ namespace Lumina
             const FVector3 Axis = Math::Cross(A, B);
             const float S = Math::Sqrt((1.0f + d) * 2.0f);
             return Math::Normalize(FQuat(S * 0.5f, Axis.x / S, Axis.y / S, Axis.z / S));
-        }
-
-        static FMatrix4 ComputeBoneGlobalLocal(const FPose& Pose, const FSkeletonResource* Skeleton, int32 BoneIndex)
-        {
-            int32 Chain[64];
-            int32 ChainLen = 0;
-            int32 Cursor = BoneIndex;
-            while (Cursor >= 0 && ChainLen < (int32)(sizeof(Chain) / sizeof(Chain[0])))
-            {
-                Chain[ChainLen++] = Cursor;
-                Cursor = Skeleton->GetBone(Cursor).ParentIndex;
-            }
-
-            FMatrix4 Global(1.0f);
-            for (int32 i = ChainLen - 1; i >= 0; --i)
-            {
-                const int32 b = Chain[i];
-                Global = Global * Detail::ComposeLocal(Pose, b);
-            }
-            return Global;
         }
     }
 
@@ -1345,15 +1324,15 @@ namespace Lumina
         }
     }
 
-    void AnimPose::ComposeLocalMatrices(const FPose& Pose, FMatrix4* OutMatrices, int32 NumMatrices)
+    void AnimPose::ComposeLocalMatrices(const FPose& Pose, FMatrix4* RESTRICT OutMatrices, int32 NumMatrices)
     {
         constexpr int32 kWidth = 8;
         const int32 NumBones = Detail::ResolveActiveBones(NumMatrices, Pose.GetNumBones());
 
-        const float* RESTRICT Tx = Pose.Tx(); const float* RESTRICT Ty = Pose.Ty(); const float* RESTRICT Tz = Pose.Tz();
-        const float* RESTRICT Sx = Pose.Sx(); const float* RESTRICT Sy = Pose.Sy(); const float* RESTRICT Sz = Pose.Sz();
-        const float* RESTRICT Rx = Pose.Rx(); const float* RESTRICT Ry = Pose.Ry(); const float* RESTRICT Rz = Pose.Rz();
-        const float* RESTRICT Rw = Pose.Rw();
+        const float* Tx = Pose.Tx(); const float* Ty = Pose.Ty(); const float* Tz = Pose.Tz();
+        const float* Sx = Pose.Sx(); const float* Sy = Pose.Sy(); const float* Sz = Pose.Sz();
+        const float* Rx = Pose.Rx(); const float* Ry = Pose.Ry(); const float* Rz = Pose.Rz();
+        const float* Rw = Pose.Rw();
 
         const __m256 One  = _mm256_set1_ps(1.0f);
         const __m256 Two  = _mm256_set1_ps(2.0f);
@@ -1402,7 +1381,7 @@ namespace Lumina
                                       int32 NumActiveBones, const int32* OutputSlot)
     {
         const int32 NumBones = Skeleton ? Skeleton->GetNumBones() : 0;
-        OutMatrices.resize(NumBones);
+        OutMatrices.SetNum(NumBones);
 
         if (NumBones == 0 || Pose.GetNumBones() != NumBones)
         {
@@ -1414,7 +1393,7 @@ namespace Lumina
 
         // Globals go to scratch so InvBind folds in during the same pass rather than a second sweep.
         thread_local TVector<FMatrix4> Globals;
-        Globals.resize(NumBones);
+        Globals.SetNum(NumBones);
 
         // Bones[] is parents-before-children, so a single linear FK pass works.
         if (!Skeleton->HasFlatBoneCache())
@@ -1429,10 +1408,12 @@ namespace Lumina
         }
         else
         {
-            ComposeLocalMatrices(Pose, Globals.data(), Active);
+            ComposeLocalMatrices(Pose, Globals.GetData(), Active);
 
-            const int32* RESTRICT    Parents = Skeleton->BoneParents.data();
-            const FMatrix4* RESTRICT InvBind = Skeleton->BoneInvBind.data();
+            const int32*    Parents = Skeleton->BoneParents.GetData();
+            const FMatrix4* InvBind = Skeleton->BoneInvBind.GetData();
+            FMatrix4*       GlobalsData = Globals.GetData();
+            FMatrix4*       OutMatricesData = OutMatrices.GetData();
 
             // Parents come first, so Globals[Parent] is already global while Globals[i] still holds the local.
             for (int32 i = 0; i < Active; ++i)
@@ -1440,9 +1421,9 @@ namespace Lumina
                 const int32 Parent = Parents[i];
                 if (Parent != Constants::kIndexNone)
                 {
-                    Globals[i] = Globals[Parent] * Globals[i];
+                    GlobalsData[i] = GlobalsData[Parent] * GlobalsData[i];
                 }
-                OutMatrices[Slot(i)] = Globals[i] * InvBind[i];
+                OutMatricesData[Slot(i)] = GlobalsData[i] * InvBind[i];
             }
         }
 
@@ -1453,7 +1434,7 @@ namespace Lumina
 
         // A bone at its bind pose under its parent skins exactly like its nearest animated ancestor, so the tail copies that matrix.
         thread_local TVector<int32> Carrier;
-        Carrier.resize(NumBones);
+        Carrier.SetNum(NumBones);
         for (int32 i = Active; i < NumBones; ++i)
         {
             const int32 Parent = Skeleton->GetBone(i).ParentIndex;

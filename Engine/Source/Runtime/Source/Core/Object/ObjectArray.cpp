@@ -21,7 +21,7 @@ namespace Lumina::Object::Internal
     FObjectHandle AllocateObject(CObjectBase* Object) { return GObjectArray.AllocateObject(Object); }
     void DeallocateObject(int32 Index) { GObjectArray.DeallocateObject(Index); }
     CObjectBase* ResolveHandle(const FObjectHandle& Handle) { return GObjectArray.ResolveHandle(Handle); }
-    void AddReinstanceRedirect(const FObjectHandle& From, const FObjectHandle& To) { GObjectArray.AddReinstanceRedirect(From, To); }
+    void AddReinstanceRedirects(const THashMap<FObjectHandle, FObjectHandle>& Redirects) { GObjectArray.AddReinstanceRedirects(Redirects); }
     FObjectHandle GetHandleByObject(const CObjectBase* Object) { return GObjectArray.GetHandleByObject(Object); }
     FObjectHandle GetHandleByIndex(int32 Index) { return GObjectArray.GetHandleByIndex(Index); }
     FCObjectEntry* GetEntry(const CObjectBase* Object) { return GObjectArray.GetEntry(Object); }
@@ -35,6 +35,7 @@ namespace Lumina::Object::Internal
     int32 GetNumAliveObjects() { return GObjectArray.GetNumAliveObjects(); }
     int32 GetMaxObjects() { return GObjectArray.GetMaxObjects(); }
     bool IsShuttingDown() { return GObjectArray.IsShuttingDown(); }
+    TVector<IObjectReferenceProvider*>& GetReferenceProviders() { return GObjectArray.GetReferenceProviders(); }
 
     void FChunkedFixedCObjectArray::Initialize(int32 InMaxElements)
     {
@@ -139,7 +140,7 @@ namespace Lumina::Object::Internal
             
         for (FSlotShard& Shard : SlotShards)
         {
-            Shard.QuarantinedIndices.reserve(QuarantineCapacity);
+            Shard.QuarantinedIndices.Reserve(QuarantineCapacity);
         }
 
         bInitialized = true;
@@ -166,24 +167,24 @@ namespace Lumina::Object::Internal
             {
                 if (Object->IsA<CField>() == bTypeObjects)
                 {
-                    Matched.emplace_back(Index, Object);
+                    Matched.Emplace(Index, Object);
                 }
             });
 
             // An OnDestroy can free something else in the list, so the slot is rechecked before each step.
             for (const TPair<int32, CObjectBase*>& Entry : Matched)
             {
-                if (GetObjectByIndex(Entry.first) == Entry.second)
+                if (GetObjectByIndex(Entry.Key) == Entry.Value)
                 {
-                    Entry.second->BeginDestroyForShutdown();
+                    Entry.Value->BeginDestroyForShutdown();
                 }
             }
 
             for (const TPair<int32, CObjectBase*>& Entry : Matched)
             {
-                if (GetObjectByIndex(Entry.first) == Entry.second)
+                if (GetObjectByIndex(Entry.Key) == Entry.Value)
                 {
-                    Entry.second->FinishDestroyForShutdown();
+                    Entry.Value->FinishDestroyForShutdown();
                 }
             }
         };
@@ -206,8 +207,8 @@ namespace Lumina::Object::Internal
         for (FSlotShard& Shard : SlotShards)
         {
             FScopeLock ShardLock(Shard.Mutex);
-            Shard.FreeIndices.clear();
-            Shard.QuarantinedIndices.clear();
+            Shard.FreeIndices.Reset();
+            Shard.QuarantinedIndices.Reset();
             Shard.QuarantineCursor = 0;
         }
         bInitialized = false;
@@ -225,15 +226,15 @@ namespace Lumina::Object::Internal
             FScopeLock Lock(Shard.Mutex);
             for (int32 Quarantined : Shard.QuarantinedIndices)
             {
-                Shard.FreeIndices.push_back(Quarantined);
+                Shard.FreeIndices.Add(Quarantined);
             }
-            Shard.QuarantinedIndices.clear();
+            Shard.QuarantinedIndices.Reset();
             Shard.QuarantineCursor = 0;
 
-            if (!Shard.FreeIndices.empty())
+            if (!Shard.FreeIndices.IsEmpty())
             {
-                const int32 Index = Shard.FreeIndices.back();
-                Shard.FreeIndices.pop_back();
+                const int32 Index = Shard.FreeIndices.Last();
+                Shard.FreeIndices.Pop();
                 return Index;
             }
         }
@@ -249,10 +250,10 @@ namespace Lumina::Object::Internal
         {
             FSlotShard& Shard = SlotShardForThisThread();
             FScopeLock Lock(Shard.Mutex);
-            if (!Shard.FreeIndices.empty())
+            if (!Shard.FreeIndices.IsEmpty())
             {
-                Index = Shard.FreeIndices.back();
-                Shard.FreeIndices.pop_back();
+                Index = Shard.FreeIndices.Last();
+                Shard.FreeIndices.Pop();
             }
         }
 
@@ -305,57 +306,64 @@ namespace Lumina::Object::Internal
         FSlotShard& Shard = SlotShardForThisThread();
         FScopeLock Lock(Shard.Mutex);
 
-        if ((int32)Shard.QuarantinedIndices.size() < QuarantineCapacity)
+        if (Shard.QuarantinedIndices.Num() < QuarantineCapacity)
         {
-            Shard.QuarantinedIndices.push_back(Index);
+            Shard.QuarantinedIndices.Add(Index);
             return;
         }
 
         // A ring, since erasing the front of the vector would memmove the whole window on every free.
-        Shard.FreeIndices.push_back(Shard.QuarantinedIndices[Shard.QuarantineCursor]);
+        Shard.FreeIndices.Add(Shard.QuarantinedIndices[Shard.QuarantineCursor]);
         Shard.QuarantinedIndices[Shard.QuarantineCursor] = Index;
         Shard.QuarantineCursor = (Shard.QuarantineCursor + 1) % QuarantineCapacity;
     }
 
-    void FCObjectArray::AddReinstanceRedirect(const FObjectHandle& From, const FObjectHandle& To)
+    void FCObjectArray::AddReinstanceRedirects(const THashMap<FObjectHandle, FObjectHandle>& Redirects)
     {
-        if (!From.IsValid() || !To.IsValid() || From == To)
-        {
-            return;
-        }
-
         TScopeLock<FRecursiveMutex> Lock(Mutex);
-        ReinstanceRedirects.insert_or_assign(From, To);
+
+        // Every entry stays one hop, and one whose target died without being reinstanced can never resolve again.
+        ReinstanceRedirects.RemoveAll([&](auto& Entry)
+        {
+            if (const FObjectHandle* Next = Redirects.Find(Entry.Value))
+            {
+                Entry.Value = *Next;
+                return false;
+            }
+            const FCObjectEntry* Item = ChunkedArray.GetItem(Entry.Value.Index);
+            return Item == nullptr || Item->GetGeneration() != Entry.Value.Generation;
+        });
+
+        for (const auto& [From, To] : Redirects)
+        {
+            if (From.IsValid() && To.IsValid() && From != To)
+            {
+                ReinstanceRedirects.Add(From, To);
+            }
+        }
     }
 
     CObjectBase* FCObjectArray::ResolveRedirect(const FObjectHandle& Handle) const
     {
-        if (ReinstanceRedirects.empty())
+        if (ReinstanceRedirects.IsEmpty())
         {
             return nullptr;
         }
 
-        // An object reinstanced twice leaves a chain, and the bound keeps a cycle from hanging the resolve.
-        FObjectHandle Current = Handle;
-        for (int32 Hops = 0; Hops < 8; ++Hops)
+        const FObjectHandle* Target = ReinstanceRedirects.Find(Handle);
+        if (Target == nullptr)
         {
-            const auto Found = ReinstanceRedirects.find(Current);
-            if (Found == ReinstanceRedirects.end())
-            {
-                return nullptr;
-            }
-
-            Current = Found->second;
-
-            const FCObjectEntry* Item = ChunkedArray.GetItem(Current.Index);
-            if (Item != nullptr && Item->GetGeneration() == Current.Generation)
-            {
-                CObjectBase* Object = Item->GetObj();
-                return (Object != nullptr && !Object->HasAnyFlag(OF_MarkedDestroy)) ? Object : nullptr;
-            }
+            return nullptr;
         }
 
-        return nullptr;
+        const FCObjectEntry* Item = ChunkedArray.GetItem(Target->Index);
+        if (Item == nullptr || Item->GetGeneration() != Target->Generation)
+        {
+            return nullptr;
+        }
+
+        CObjectBase* Object = Item->GetObj();
+        return (Object != nullptr && !Object->HasAnyFlag(OF_MarkedDestroy)) ? Object : nullptr;
     }
 
     CObjectBase* FCObjectArray::ResolveHandle(const FObjectHandle& Handle) const
@@ -421,7 +429,7 @@ namespace Lumina::Object::Internal
         LOG_ERROR("FCObjectArray::{}: reference to freed object {} whose slot {} now holds {} ('{}'). "
                   "Something outlived the object it referenced; the reference was dropped instead of applied.",
             Site, (const void*)Object, Object->GetInternalIndex(), (const void*)Occupant,
-            OccupantClass != nullptr ? OccupantClass->GetName().c_str() : "empty");
+            OccupantClass != nullptr ? *OccupantClass->GetName() : "empty");
 
         // Fatal outside Shipping, so the next one stops at the release site instead of accruing in a log.
         DEBUG_ASSERT(FScopedStaleReferenceTolerance::IsTolerated(),
@@ -466,7 +474,7 @@ namespace Lumina::Object::Internal
             LOG_ERROR("FCObjectArray::ReleaseStrongRefEntry: reference to freed object {} whose slot now holds "
                       "{} ('{}'). Dropped rather than charged to the new occupant.",
                 (const void*)Expected, (const void*)Occupant,
-                OccupantClass != nullptr ? OccupantClass->GetName().c_str() : "empty");
+                OccupantClass != nullptr ? *OccupantClass->GetName() : "empty");
             return false;
         }
 
@@ -638,7 +646,7 @@ namespace Lumina::Object::Internal
         for (FSlotShard& Shard : SlotShards)
         {
             FScopeLock Lock(Shard.Mutex);
-            Empty += (int32)Shard.FreeIndices.size() + (int32)Shard.QuarantinedIndices.size();
+            Empty += Shard.FreeIndices.Num() + Shard.QuarantinedIndices.Num();
         }
         return ChunkedArray.GetNumElements() - Empty;
     }

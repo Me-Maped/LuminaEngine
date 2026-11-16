@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 
 #include "Audio/AudioTypes.h"
+#include "Audio/Graph/AudioGraphInstance.h"
+#include "Audio/Graph/AudioGraphProgram.h"
 #include "Audio/LuminaAudioContext.h"
 #include "Audio/ProceduralAudioStream.h"
 #include "Containers/Vector.h"
 #include "Core/Threading/Thread.h"
-#include "TaskSystem/Scheduler/JobScheduler.h"
+#include "TaskSystem/Fork/ForkRuntime.h"
 
 using namespace Lumina;
 
@@ -13,27 +15,26 @@ namespace
 {
     void PushU16(TVector<uint8>& Bytes, uint16 Value)
     {
-        Bytes.push_back((uint8)(Value & 0xFF));
-        Bytes.push_back((uint8)(Value >> 8));
+        Bytes.Add((uint8)(Value & 0xFF));
+        Bytes.Add((uint8)(Value >> 8));
     }
 
     void PushU32(TVector<uint8>& Bytes, uint32 Value)
     {
-        Bytes.push_back((uint8)(Value & 0xFF));
-        Bytes.push_back((uint8)((Value >> 8) & 0xFF));
-        Bytes.push_back((uint8)((Value >> 16) & 0xFF));
-        Bytes.push_back((uint8)((Value >> 24) & 0xFF));
+        Bytes.Add((uint8)(Value & 0xFF));
+        Bytes.Add((uint8)((Value >> 8) & 0xFF));
+        Bytes.Add((uint8)((Value >> 16) & 0xFF));
+        Bytes.Add((uint8)((Value >> 24) & 0xFF));
     }
 
     void PushId(TVector<uint8>& Bytes, const char* Id)
     {
         for (uint32 i = 0; i < 4; ++i)
         {
-            Bytes.push_back((uint8)Id[i]);
+            Bytes.Add((uint8)Id[i]);
         }
     }
 
-    /** A mono 48 kHz sine as a complete wav image, so the context exercises its real decode path. */
     TSharedPtr<FAudioData> MakeSineClip(uint32 Frames)
     {
         TVector<int16> Samples(Frames);
@@ -61,12 +62,11 @@ namespace
         PushId(Bytes, "data");
         PushU32(Bytes, DataBytes);
 
-        const uint8* At = (const uint8*)Samples.data();
-        Bytes.insert(Bytes.end(), At, At + DataBytes);
+        const uint8* At = (const uint8*)Samples.GetData();
+        Bytes.Append(At, DataBytes);
         return Data;
     }
 
-    /** Drives the pump, which runs as a job, until the predicate holds or the budget runs out. */
     template <typename TPredicate>
     bool PumpUntil(FLuminaAudioContext& Context, TPredicate&& Predicate, uint32 MaxIterations = 200)
     {
@@ -87,7 +87,7 @@ namespace
 
 TEST(LuminaAudioContext, StartsSilentAndReportsItsFormat)
 {
-    if (!Jobs::IsInitialized())
+    if (!Jobs::IsRuntimeRunning())
     {
         GTEST_SKIP() << "the job system is required for the audio pump";
     }
@@ -105,7 +105,7 @@ TEST(LuminaAudioContext, StartsSilentAndReportsItsFormat)
 
 TEST(LuminaAudioContext, PlaysAClipThroughToCompletion)
 {
-    if (!Jobs::IsInitialized())
+    if (!Jobs::IsRuntimeRunning())
     {
         GTEST_SKIP() << "the job system is required for the audio pump";
     }
@@ -141,7 +141,7 @@ TEST(LuminaAudioContext, PlaysAClipThroughToCompletion)
 
 TEST(LuminaAudioContext, StopReleasesAVoiceAndItsSlot)
 {
-    if (!Jobs::IsInitialized())
+    if (!Jobs::IsRuntimeRunning())
     {
         GTEST_SKIP() << "the job system is required for the audio pump";
     }
@@ -173,7 +173,7 @@ TEST(LuminaAudioContext, StopReleasesAVoiceAndItsSlot)
 
 TEST(LuminaAudioContext, ChurnsVoicesWithoutLosingSlots)
 {
-    if (!Jobs::IsInitialized())
+    if (!Jobs::IsRuntimeRunning())
     {
         GTEST_SKIP() << "the job system is required for the audio pump";
     }
@@ -197,7 +197,7 @@ TEST(LuminaAudioContext, ChurnsVoicesWithoutLosingSlots)
             SAudioPlayParams Params;
             const SAudioHandle Handle = Context.PlayAudio(Clip, Params);
             EXPECT_TRUE(Handle.IsValid()) << "round " << Round << " voice " << i;
-            Handles.push_back(Handle);
+            Handles.Add(Handle);
         }
 
         Context.Update();
@@ -218,7 +218,7 @@ TEST(LuminaAudioContext, ChurnsVoicesWithoutLosingSlots)
 
 TEST(LuminaAudioContext, StealingPlayingVoicesKeepsSlotAccountingIntact)
 {
-    if (!Jobs::IsInitialized())
+    if (!Jobs::IsRuntimeRunning())
     {
         GTEST_SKIP() << "the job system is required for the audio pump";
     }
@@ -264,9 +264,109 @@ TEST(LuminaAudioContext, StealingPlayingVoicesKeepsSlotAccountingIntact)
         << "stolen slots leaked";
 }
 
+TEST(LuminaAudioContext, StolenSlotIsNotFreedWhenItsOldVoiceFinishesBeforeTheNewOneStarts)
+{
+    if (!Jobs::IsRuntimeRunning())
+    {
+        GTEST_SKIP() << "the job system is required for the audio pump";
+    }
+
+    FLuminaAudioContext Context;
+    Context.SetBusVolume(EAudioBus::Master, 0.0f);
+
+    if (Context.GetDeviceInfo().PeriodFrames == 0)
+    {
+        GTEST_SKIP() << "no audio endpoint available, so the mixer never runs";
+    }
+
+    // Twice the plays one pump starts, so half the steals are still queued when that pump collects finished voices.
+    constexpr uint32 Cap = 64;
+    Context.SetMaxVoiceCount(Cap);
+
+    SAudioPlayParams Background;
+    Background.Priority = 10;
+    const TSharedPtr<FAudioData> ShortClip = MakeSineClip(9600);
+    for (uint32 i = 0; i < Cap; ++i)
+    {
+        ASSERT_TRUE(Context.PlayAudio(ShortClip, Background).IsValid());
+    }
+    ASSERT_TRUE(PumpUntil(Context, [&]() { return Context.GetActiveVoiceCount() == Cap; }));
+
+    // Unpumped, so every background clip ends in the mixer while the context still counts it as playing.
+    Threading::Sleep(500);
+
+    SAudioPlayParams Urgent;
+    Urgent.bLooping = true;
+    Urgent.Priority = 200;
+    const TSharedPtr<FAudioData> LoopClip = MakeSineClip(48000);
+    for (uint32 i = 0; i < Cap; ++i)
+    {
+        ASSERT_TRUE(Context.PlayAudio(LoopClip, Urgent).IsValid()) << "steal " << i;
+    }
+
+    // Several pumps, well past the two that start every queued steal.
+    for (uint32 i = 0; i < 20; ++i)
+    {
+        Context.Update();
+        Threading::Sleep(5);
+    }
+
+    EXPECT_EQ(Context.GetActiveVoiceCount(), Cap) << "a stolen slot was released while its new voice was still queued";
+    EXPECT_FALSE(Context.PlayAudio(ShortClip, Background).IsValid()) << "a lower priority voice found a free slot under a full budget";
+
+    Context.StopAllSounds(EAudioStopMode::Immediate, 0.0f);
+    ASSERT_TRUE(PumpUntil(Context, [&]() { return Context.GetActiveVoiceCount() == 0u; }));
+}
+
+TEST(LuminaAudioContext, StolenSlotWhoseReplacementIsRejectedRetiresTheOldVoice)
+{
+    if (!Jobs::IsRuntimeRunning())
+    {
+        GTEST_SKIP() << "the job system is required for the audio pump";
+    }
+
+    FLuminaAudioContext Context;
+    Context.SetBusVolume(EAudioBus::Master, 0.0f);
+
+    if (Context.GetDeviceInfo().PeriodFrames == 0)
+    {
+        GTEST_SKIP() << "no audio endpoint available, so the mixer never runs";
+    }
+
+    constexpr uint32 Cap = 8;
+    Context.SetMaxVoiceCount(Cap);
+    const TSharedPtr<FAudioData> Clip = MakeSineClip(48000);
+
+    // Low-priority loops fill every slot, so the urgent play below has to steal one the mixer is still rendering.
+    SAudioPlayParams Background;
+    Background.bLooping = true;
+    Background.Priority = 10;
+    for (uint32 i = 0; i < Cap; ++i)
+    {
+        EXPECT_TRUE(Context.PlayAudio(Clip, Background).IsValid());
+    }
+    ASSERT_TRUE(PumpUntil(Context, [&]() { return Context.GetActiveVoiceCount() == Cap; }));
+
+    // Settles any pump job still in flight, so the urgent play below is not raced ahead of the stop that rejects it.
+    Threading::Sleep(100);
+
+    // Steals a slot, then StopAllSounds bumps the epoch before the pump ever sees the stolen play, rejecting it.
+    SAudioPlayParams Urgent;
+    Urgent.bLooping = true;
+    Urgent.Priority = 200;
+    const SAudioHandle Stolen = Context.PlayAudio(Clip, Urgent);
+    ASSERT_TRUE(Stolen.IsValid());
+
+    Context.StopAllSounds(EAudioStopMode::Immediate, 0.0f);
+
+    // A leaked slot source is collected a second time once the device thread catches up, underflowing the count.
+    ASSERT_TRUE(PumpUntil(Context, [&]() { return Context.GetActiveVoiceCount() == 0u; }))
+        << "a stolen slot's leaked source was collected twice, so the active count never reached zero";
+}
+
 TEST(LuminaAudioContext, ProceduralStreamsPlayAndAreNeverAutoCollected)
 {
-    if (!Jobs::IsInitialized())
+    if (!Jobs::IsRuntimeRunning())
     {
         GTEST_SKIP() << "the job system is required for the audio pump";
     }
@@ -279,7 +379,7 @@ TEST(LuminaAudioContext, ProceduralStreamsPlayAndAreNeverAutoCollected)
     ASSERT_TRUE(Stream->IsValid());
 
     TVector<float> Block(1024, 0.25f);
-    EXPECT_GT(Stream->Write(Block.data(), 1024), 0u);
+    EXPECT_GT(Stream->Write(Block.GetData(), 1024), 0u);
 
     SAudioPlayParams Params;
     const SAudioHandle Handle = Context.PlayProceduralStream(Stream, Params);
@@ -300,4 +400,45 @@ TEST(LuminaAudioContext, ProceduralStreamsPlayAndAreNeverAutoCollected)
     }
 
     EXPECT_EQ(Context.GetVoiceState(Handle), EAudioVoiceState::Playing);
+}
+
+TEST(LuminaAudioContext, DroppedGraphPlayForgetsItsGraphInstance)
+{
+    FLuminaAudioContext Context;
+    Context.SetBusVolume(EAudioBus::Master, 0.0f);
+
+    // Never pumped, so nothing drains the pending play queue or frees the voice slots filled below.
+    Context.SetMaxVoiceCount(FAudioMixer::MaxVoices);
+
+    const TSharedPtr<FAudioData> Clip = MakeSineClip(480000);
+    SAudioPlayParams Filler;
+    Filler.bLooping = true;
+
+    // Fills every voice slot and the pending play queue behind it, leaving no room for another play to enqueue.
+    for (uint32 i = 0; i < FAudioMixer::MaxVoices; ++i)
+    {
+        ASSERT_TRUE(Context.PlayAudio(Clip, Filler).IsValid()) << "filler voice " << i;
+    }
+
+    ASSERT_EQ(Context.GetGraphInstanceCount(), 0);
+
+    FAudioGraphProgram Program;
+    FAudioGraphNodeInstance SineNode;
+    SineNode.OperatorName = "Sine";
+    SineNode.InputSlots.Add(Program.SlotCounts.Allocate(EAudioGraphType::Float));
+    SineNode.InputSlots.Add(Program.SlotCounts.Allocate(EAudioGraphType::Audio));
+    SineNode.InputSlots.Add(Program.SlotCounts.Allocate(EAudioGraphType::Trigger));
+    SineNode.OutputSlots.Add(Program.SlotCounts.Allocate(EAudioGraphType::Audio));
+    Program.Nodes.Add(SineNode);
+
+    TSharedPtr<FAudioGraphInstance> Instance = MakeShared<FAudioGraphInstance>();
+    ASSERT_TRUE(Instance->Initialize(Program, {}, 48000, 2));
+
+    // A higher priority steals a filler slot, reaching the queue full rejection instead of failing to acquire a slot at all.
+    SAudioPlayParams Urgent;
+    Urgent.Priority = 255;
+    const SAudioHandle Handle = Context.PlayAudioGraph(Instance, Urgent);
+    EXPECT_FALSE(Handle.IsValid()) << "the pending play queue was not actually full";
+
+    EXPECT_EQ(Context.GetGraphInstanceCount(), 0) << "the dropped graph instance leaked";
 }

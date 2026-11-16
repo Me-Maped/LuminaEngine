@@ -7,7 +7,7 @@ namespace Lumina
 {
     static FString ShapeId(EParticleEmitterShape Shape)
     {
-        return FString(Format("{}", (uint32)Shape)) + "u";
+        return Format("{}", (uint32)Shape) + "u";
     }
 
     // Spawn modules
@@ -192,7 +192,7 @@ namespace Lumina
         // Update modules generate after the whole Spawn stack, so this captures the size it settled on.
         const FString BaseSize = Compiler.Attribute("BaseSize", "0.1");
         Compiler.EmitSpawn(BaseSize + " = P.Size;");
-        Compiler.EmitUpdate("P.Size = " + BaseSize + " * SampleCurveLUT(" + Compiler.ParamCurve("Curve", Curve) + ", LifeRatio);");
+        Compiler.EmitUpdate("P.Size = " + BaseSize + " * " + OverLifeExpr(Compiler, "Curve", Curve) + ";");
     }
 
     void CParticleModule_Trail::Generate(FParticleCompiler& Compiler, int32 ModuleIndex)

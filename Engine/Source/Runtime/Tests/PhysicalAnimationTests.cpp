@@ -117,16 +117,16 @@ namespace
                 Bone.ParentIndex    = Source.Parent;
                 Bone.LocalTransform = Math::Translate(FMatrix4(1.0f), Source.Position - ParentPosition);
                 Bone.InvBindMatrix  = Math::Inverse(Global);
-                Skeleton.Bones.push_back(Bone);
+                Skeleton.Bones.Add(Bone);
                 Skeleton.BoneNameToIndex[Bone.Name] = Index;
-                BindGlobals.push_back(Global);
+                BindGlobals.Add(Global);
             }
 
             Asset = NewObject<CPhysicsAsset>(nullptr, NAME_None, FGuid::New(), OF_Transient);
             AssetOwner = Asset;
             for (const FMannequinBody& Source : kMannequinBodies)
             {
-                SPhysicsBodySetup& Body = Asset->Bodies.emplace_back();
+                SPhysicsBodySetup& Body = Asset->Bodies.EmplaceGetRef();
                 Body.BoneName          = FName(Source.Bone);
                 Body.Shape             = Source.Shape;
                 Body.TranslationOffset = Source.Offset;
@@ -138,7 +138,7 @@ namespace
             }
             for (const FMannequinJoint& Source : kMannequinJoints)
             {
-                SPhysicsConstraintSetup& Joint = Asset->Constraints.emplace_back();
+                SPhysicsConstraintSetup& Joint = Asset->Constraints.EmplaceGetRef();
                 Joint.ChildBone          = FName(Source.Child);
                 Joint.ParentBone         = Skeleton.GetBone(Skeleton.GetBone(Skeleton.FindBoneIndex(Joint.ChildBone)).ParentIndex).Name;
                 Joint.TwistLimitDegrees  = Source.Twist;
@@ -373,6 +373,43 @@ TEST_F(PhysicalAnimation, WalksEveryWayWithoutFallingOrLurching)
     EXPECT_LT(MaxTilt, 25.0f);
 }
 
+// A ragdoll at rest reads back its bind pose, a bone with no body follows its parent, and a second read reuses every buffer.
+TEST_F(PhysicalAnimation, ReadRagdollPoseReturnsTheBindPoseWithoutReallocating)
+{
+    const FVector3 Hand(0.22f, 0.95f, 0.0f);
+    FSkeletonResource::FBoneInfo& HandBone = Skeleton.Bones.EmplaceGetRef();
+    HandBone.Name           = FName("hand_l");
+    HandBone.ParentIndex    = 5;
+    HandBone.LocalTransform = Math::Translate(FMatrix4(1.0f), Hand - kMannequinBones[5].Position);
+    HandBone.InvBindMatrix  = Math::Inverse(Math::Translate(FMatrix4(1.0f), Hand));
+    Skeleton.BoneNameToIndex[HandBone.Name] = Skeleton.Bones.Num() - 1;
+    BindGlobals.Add(Math::Translate(FMatrix4(1.0f), Hand));
+
+    const FVector3 At(0.0f, 2.0f, 0.0f);
+    SpawnMannequin(At, false);
+    const FMatrix4 WorldToEntity = Math::Inverse(Math::Translate(FMatrix4(1.0f), At));
+
+    TVector<FMatrix4> Pose;
+    Scene->ReadRagdollPose(*Ragdoll().Ragdoll, WorldToEntity, &Skeleton, Pose);
+    ASSERT_EQ(Pose.Num(), Skeleton.GetNumBones());
+    for (int32 Bone = 0; Bone < Pose.Num(); ++Bone)
+    {
+        for (int32 Column = 0; Column < 4; ++Column)
+        {
+            for (int32 Row = 0; Row < 4; ++Row)
+            {
+                EXPECT_NEAR(Pose[Bone][Column][Row], Column == Row ? 1.0f : 0.0f, 1e-3f) << "bone " << Bone;
+            }
+        }
+    }
+
+    const FMatrix4* PoseData = Pose.GetData();
+    const uint8* MappedData = Ragdoll().Ragdoll->PoseBoneMapped.GetData();
+    Scene->ReadRagdollPose(*Ragdoll().Ragdoll, WorldToEntity, &Skeleton, Pose);
+    EXPECT_EQ(Pose.GetData(), PoseData);
+    EXPECT_EQ(Ragdoll().Ragdoll->PoseBoneMapped.GetData(), MappedData);
+}
+
 // Standing and walking, the torso stays steady instead of buzzing, and a body left alone stands still instead of fidgeting.
 TEST_F(PhysicalAnimation, StandsAndWalksWithoutShaking)
 {
@@ -406,4 +443,34 @@ TEST_F(PhysicalAnimation, StandsAndWalksWithoutShaking)
     Simulate(1.0f);
     EXPECT_LT(ChestSpinRms(4.0f, Travel), 0.8f) << "walking chest spin, in radians a second";
     EXPECT_GT(Travel, 4.0f);
+}
+
+// A limp character scaled up comes to rest on shapes the size of its mesh, so its head lies on the floor rather than in it.
+TEST_F(PhysicalAnimation, ScaledRagdollRestsOnShapesTheSizeOfItsMesh)
+{
+    constexpr float CharacterScale = 2.3f;
+    constexpr float HeadRadius = 0.11f;
+
+    Owner = Registry->Create();
+    STransformComponent& Transform = Registry->Emplace<STransformComponent>(Owner);
+    Transform.SetLocation(FVector3(0.0f, 0.5f, 0.0f));
+    Transform.SetScale(FVector3(CharacterScale));
+    SRagdollComponent& Limp = Registry->Emplace<SRagdollComponent>(Owner);
+    Limp.State = ERagdollState::Simulated;
+
+    Physics::FRagdollDesc Desc;
+    Desc.Entity               = Owner;
+    Desc.Asset                = Asset;
+    Desc.Skeleton             = &Skeleton;
+    Desc.ComponentBoneGlobals = &BindGlobals;
+    Desc.EntityToWorld        = Transform.GetWorldMatrix();
+    TSharedPtr<FPhysicsRagdollHandle> Handle = Scene->CreateRagdoll(Desc);
+    ASSERT_TRUE(Handle);
+    Limp.Ragdoll = Handle;
+    Scene->Update(0.0);
+    ASSERT_TRUE(Scene->IsRagdollReady(*Handle));
+
+    Simulate(4.0f);
+    EXPECT_GT(Limb("head").Position.y, HeadRadius * CharacterScale * 0.75f) << "the head rests on its scaled sphere";
+    EXPECT_LT(Limb("head").Position.y, 1.0f) << "the body has fallen";
 }

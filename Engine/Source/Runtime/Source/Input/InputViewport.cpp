@@ -3,6 +3,10 @@
 
 #include "Config/GameUserSettings.h"
 #include "Config/InputSettings.h"
+#include "Config/UISettings.h"
+#include "Core/Engine/Engine.h"
+#include "Paths/Paths.h"
+#include "Containers/StringFormat.h"
 #include "Core/Diagnostics/BenchmarkRun.h"
 #include "Core/Object/ObjectCore.h"
 #include "Core/Windows/Window.h"
@@ -10,6 +14,7 @@
 #include "Input/InputActionMap.h"
 #include "Input/InputContext.h"
 #include "UI/RmlUiBridge.h"
+#include "World/Entity/Systems/SystemSingletons.h"
 #include "World/World.h"
 
 #include <RmlUi/Core/Context.h>
@@ -29,6 +34,28 @@ namespace Lumina
             case EMouseMode::Captured: CursorMode = ECursorMode::Disabled; break;
             }
             Windowing::SetCursorModeForNativeWindow(NativeWindow, CursorMode, FInputActionMap::Get().GetPlayerSettings().bRawMouseInput);
+        }
+
+        ESystemCursor ToSystemCursor(EMouseCursor Cursor)
+        {
+            switch (Cursor)
+            {
+            case EMouseCursor::None:            return ESystemCursor::Hidden;
+            case EMouseCursor::Default:         return ESystemCursor::Arrow;
+            case EMouseCursor::TextEditBeam:    return ESystemCursor::TextBeam;
+            case EMouseCursor::ResizeLeftRight: return ESystemCursor::ResizeEastWest;
+            case EMouseCursor::ResizeUpDown:    return ESystemCursor::ResizeNorthSouth;
+            case EMouseCursor::ResizeSouthEast: return ESystemCursor::ResizeNorthWestSouthEast;
+            case EMouseCursor::ResizeSouthWest: return ESystemCursor::ResizeNorthEastSouthWest;
+            case EMouseCursor::CardinalCross:   return ESystemCursor::ResizeAll;
+            case EMouseCursor::Crosshairs:      return ESystemCursor::Crosshair;
+            case EMouseCursor::Hand:            return ESystemCursor::PointingHand;
+            case EMouseCursor::GrabHand:        return ESystemCursor::PointingHand;
+            case EMouseCursor::GrabHandClosed:  return ESystemCursor::PointingHand;
+            case EMouseCursor::SlashedCircle:   return ESystemCursor::NotAllowed;
+            case EMouseCursor::EyeDropper:      return ESystemCursor::Crosshair;
+            }
+            return ESystemCursor::Arrow;
         }
 
         Rml::Input::KeyIdentifier ToRmlKey(EKey Key)
@@ -77,6 +104,22 @@ namespace Lumina
             case EKey::LeftBracket:  return K::KI_OEM_4;
             case EKey::RightBracket: return K::KI_OEM_6;
             case EKey::GraveAccent:  return K::KI_OEM_3;
+            case EKey::World1:       return K::KI_OEM_102;
+            case EKey::KPEnter:      return K::KI_NUMPADENTER;
+            case EKey::KPDecimal:    return K::KI_DECIMAL;
+            case EKey::KPAdd:        return K::KI_ADD;
+            case EKey::KPSubtract:   return K::KI_SUBTRACT;
+            case EKey::KPMultiply:   return K::KI_MULTIPLY;
+            case EKey::KPDivide:     return K::KI_DIVIDE;
+            case EKey::KPEqual:      return K::KI_OEM_NEC_EQUAL;
+            case EKey::LeftSuper:    return K::KI_LWIN;
+            case EKey::RightSuper:   return K::KI_RWIN;
+            case EKey::Menu:         return K::KI_APPS;
+            case EKey::CapsLock:     return K::KI_CAPITAL;
+            case EKey::NumLock:      return K::KI_NUMLOCK;
+            case EKey::ScrollLock:   return K::KI_SCROLL;
+            case EKey::PrintScreen:  return K::KI_SNAPSHOT;
+            case EKey::Pause:        return K::KI_PAUSE;
             default:                 return K::KI_UNKNOWN;
             }
         }
@@ -99,6 +142,7 @@ namespace Lumina
             if (Context.IsCtrlDownRaw())  Mods |= KM_CTRL;
             if (Context.IsShiftDownRaw()) Mods |= KM_SHIFT;
             if (Context.IsAltDownRaw())   Mods |= KM_ALT;
+            if (Context.IsKeyDownRaw(EKey::LeftSuper) || Context.IsKeyDownRaw(EKey::RightSuper)) Mods |= KM_META;
             return Mods;
         }
 
@@ -110,6 +154,8 @@ namespace Lumina
             if (KeyEvent.IsShiftDown()) Mods |= KM_SHIFT;
             if (KeyEvent.IsAltDown())   Mods |= KM_ALT;
             if (KeyEvent.IsSuperDown()) Mods |= KM_META;
+            // GLFW lock mods never reach us; with num lock off no char event follows, so nothing is typed.
+            if (KeyEvent.GetKeyCode() >= EKey::KP0 && KeyEvent.GetKeyCode() <= EKey::KPDecimal) Mods |= KM_NUMLOCK;
             return Mods;
         }
     }
@@ -171,16 +217,9 @@ namespace Lumina
 
     bool FInputViewport::ForwardMouseEventToRmlUi(FEvent& Event)
     {
-        if (Event.IsA<FMouseMovedEvent>())
+        if (Event.IsA<FMouseMovedEvent>() && Context->GetMouseXRaw() == LastRmlMouseX && Context->GetMouseYRaw() == LastRmlMouseY)
         {
-            const double RawX = Context->GetMouseXRaw();
-            const double RawY = Context->GetMouseYRaw();
-            if (RawX == LastRmlMouseX && RawY == LastRmlMouseY)
-            {
-                return bLastRmlMoveConsumed;
-            }
-            LastRmlMouseX = RawX;
-            LastRmlMouseY = RawY;
+            return bLastRmlMoveConsumed;
         }
 
         // Event listeners can mutate the DOM that render reads concurrently, so hold the lock throughout.
@@ -203,6 +242,8 @@ namespace Lumina
             const double Px = (RTW > 0) ? (Cx / double(RTW)) * double(Dims.x) : Cx;
             const double Py = (RTH > 0) ? (Cy / double(RTH)) * double(Dims.y) : Cy;
             bLastRmlMoveConsumed = !Ctx->ProcessMouseMove(int(Px), int(Py), Mods);
+            LastRmlMouseX = Cx;
+            LastRmlMouseY = Cy;
             return bLastRmlMoveConsumed;
         }
         if (Event.IsA<FMouseButtonPressedEvent>())
@@ -271,7 +312,7 @@ namespace Lumina
     {
         if (Viewport == nullptr) return;
         if (Algo::Contains(Viewports, Viewport)) return;
-        Viewports.push_back(Viewport);
+        Viewports.Add(Viewport);
 
         if (ActiveViewport == nullptr)
         {
@@ -283,13 +324,9 @@ namespace Lumina
     {
         if (Viewport == nullptr) return;
 
-        auto It = Algo::Find(Viewports, Viewport);
-        if (It != Viewports.end())
-        {
-            Viewports.erase(It);
-        }
+        Viewports.RemoveSingle(Viewport);
 
-        if (ActiveViewport     == Viewport) ActiveViewport     = Viewports.empty() ? nullptr : Viewports.front();
+        if (ActiveViewport     == Viewport) ActiveViewport     = Viewports.IsEmpty() ? nullptr : Viewports[0];
         if (HoveredViewport    == Viewport) HoveredViewport    = nullptr;
         if (MousePressViewport == Viewport) MousePressViewport = nullptr;
 
@@ -458,7 +495,7 @@ namespace Lumina
     bool FInputViewportRegistry::BeginRebind(FName Action, int32 BindingIndex)
     {
         const SInputAction* Found = FInputActionMap::Get().FindAction(Action);
-        if (Found == nullptr || BindingIndex < 0 || BindingIndex >= int32(Found->Bindings.size())
+        if (Found == nullptr || BindingIndex < 0 || BindingIndex >= Found->Bindings.Num()
             || Found->Bindings[BindingIndex].Source != EInputAxisSource::Key)
         {
             return false;
@@ -487,7 +524,7 @@ namespace Lumina
         FInputActionMap& Map = FInputActionMap::Get();
         const SInputAction* Action = Map.FindAction(RebindAction);
         const EKey PressedKey = RawInput->GetFirstPressedKey();
-        if (Action == nullptr || RebindIndex >= int32(Action->Bindings.size()) || PressedKey == EKey::Escape)
+        if (Action == nullptr || RebindIndex >= Action->Bindings.Num() || PressedKey == EKey::Escape)
         {
             CancelRebind();
             return;
@@ -537,6 +574,9 @@ namespace Lumina
         }
 
         Map.UpdateContext(*RawInput, (float)DeltaSeconds);
+
+        // Hover moves without any event the registry sees, so the cursor image follows it once a frame.
+        ApplyActiveCursor();
     }
 
     void FInputViewportRegistry::EndFrame()
@@ -547,6 +587,40 @@ namespace Lumina
         }
 
         RawInput->EndFrame();
+        LateLookWorld = nullptr;
+    }
+
+    bool FInputViewportRegistry::PumpLateMouseLook()
+    {
+        LateLookWorld = nullptr;
+
+        FWindow* Window = Windowing::TryGetPrimaryWindowHandle();
+        const CWorld* World = ActiveViewport != nullptr ? ActiveViewport->GetWorld() : nullptr;
+        const FResolvedSceneView* View = World != nullptr ? World->GetResolvedView() : nullptr;
+        if (Window == nullptr || View == nullptr || View->MouseLookDegreesPerCount <= 0.0f || !IsActiveCursorCaptured())
+        {
+            return false;
+        }
+
+        // Only the primary window holds its events, so a viewport in a window of its own keeps the update's view.
+        const void* NativeWindow = ActiveViewport->GetNativeWindowHandle();
+        if (NativeWindow != nullptr && NativeWindow != Window->GetWindow())
+        {
+            return false;
+        }
+
+        Window->PumpLateMessages();
+        LateLookWorld = World;
+        return true;
+    }
+
+    FVector2 FInputViewportRegistry::GetLateMouseLook(const CWorld* World) const
+    {
+        if (World == nullptr || World != LateLookWorld)
+        {
+            return FVector2(0.0f);
+        }
+        return Windowing::GetPrimaryWindowHandle()->GetLateMouseDelta() * World->GetResolvedView()->MouseLookDegreesPerCount;
     }
 
     void FInputViewportRegistry::OnWindowFocusLost()
@@ -579,6 +653,11 @@ namespace Lumina
         }
 
         RawInput->OnEvent(Event);
+        if (Event.IsA<FMouseMovedEvent>())
+        {
+            LastMouseWindowX = static_cast<int32>(Event.As<FMouseMovedEvent>().GetX());
+            LastMouseWindowY = static_cast<int32>(Event.As<FMouseMovedEvent>().GetY());
+        }
 
         FInputViewport* Target = bIsKeyEvent ? ActiveViewport : ResolveMouseTarget(Event);
         return Target != nullptr && Target->RouteEvent(Event);
@@ -627,6 +706,7 @@ namespace Lumina
         {
             ApplyCursorModeToWindow(ActiveWindow, GetActiveEffectiveMouseMode());
         }
+        ApplyActiveCursor();
     }
 
     EMouseMode FInputViewportRegistry::GetActiveEffectiveMouseMode() const
@@ -665,5 +745,92 @@ namespace Lumina
         }
         Target->GetContext().SetMouseMode(Mode);
         ApplyActiveCursorMode();
+    }
+
+    void FInputViewportRegistry::SetMouseCursor(EMouseCursor Cursor, const CWorld* CallerWorld)
+    {
+        FInputViewport* Target = FindViewportForWorld(CallerWorld);
+        if (Target == nullptr)
+        {
+            Target = ActiveViewport;
+        }
+        if (Target == nullptr)
+        {
+            return;
+        }
+        Target->GetContext().SetMouseCursor(Cursor);
+        ApplyActiveCursor();
+    }
+
+    const FInputViewport* FInputViewportRegistry::GetGameCursorViewport() const
+    {
+        // Over the editor or a dev overlay, or with the cursor hidden or captured, the window keeps the editor's or the system's own.
+        if (ActiveViewport == nullptr || bDevOverlayCapturing || !IsGameOwningInput())
+        {
+            return nullptr;
+        }
+
+        // The editor reports no hover while the game holds input, so the last mouse position decides it then.
+        const bool bPointerOver = HoveredViewport == ActiveViewport
+            || (HoveredViewport == nullptr && ActiveViewport->ContainsWindowPoint(LastMouseWindowX, LastMouseWindowY));
+        if (!bPointerOver)
+        {
+            return nullptr;
+        }
+        return GetActiveEffectiveMouseMode() == EMouseMode::Normal ? ActiveViewport : nullptr;
+    }
+
+    void* FInputViewportRegistry::ResolveCursor(EMouseCursor Cursor)
+    {
+        const CUISettings* Settings = GetDefault<CUISettings>();
+        if (const SHardwareCursor* Hardware = Settings != nullptr ? Settings->FindHardwareCursor(Cursor) : nullptr)
+        {
+            const FString Key = Format("{}#{},{}", Hardware->Image, Hardware->Hotspot.x, Hardware->Hotspot.y);
+            void** Cached = HardwareCursorImages.Find(Key);
+            if (Cached == nullptr)
+            {
+                const bool bProjectRelative = Hardware->Image[0] != '/' && Global::GEngine != nullptr;
+                const FFixedString Path = bProjectRelative ? Paths::Combine(Global::GEngine->GetProjectPath(), Hardware->Image) : FFixedString(*Hardware->Image, Hardware->Image.Len());
+                HardwareCursorImages.Emplace(Key, Windowing::CreateCursorFromImage(Path, Hardware->Hotspot));
+                Cached = HardwareCursorImages.Find(Key);
+            }
+            if (Cached != nullptr && *Cached != nullptr)
+            {
+                return *Cached;
+            }
+        }
+
+        const int32 Index = static_cast<int32>(Cursor);
+        if (SystemCursors[Index] == nullptr)
+        {
+            SystemCursors[Index] = Windowing::CreateSystemCursor(ToSystemCursor(Cursor));
+        }
+        return SystemCursors[Index];
+    }
+
+    void FInputViewportRegistry::ApplyActiveCursor()
+    {
+        // Without a window there is no platform cursor to make, as in a headless run or a test.
+        if (Windowing::TryGetPrimaryWindowHandle() == nullptr)
+        {
+            return;
+        }
+
+        const FInputViewport* Owner = GetGameCursorViewport();
+        void* const Window = Owner != nullptr ? Owner->GetNativeWindowHandle() : nullptr;
+        if (bGameCursorApplied && (Owner == nullptr || Window != AppliedCursorWindow))
+        {
+            Windowing::SetCursorForNativeWindow(AppliedCursorWindow, nullptr);
+            bGameCursorApplied = false;
+        }
+        if (Owner == nullptr)
+        {
+            return;
+        }
+
+        // Set every frame rather than on change, since the editor's own UI may swap the cursor in the frame before it stands back.
+        Windowing::SetCursorForNativeWindow(Window, ResolveCursor(Owner->GetContext().GetMouseCursor()));
+        AppliedCursorWindow = Window;
+        bGameCursorApplied = true;
     }
 }

@@ -22,7 +22,7 @@ namespace Lumina
 
     static void EnablePacketCompression(ENetHost* Host)
     {
-        if (Host == nullptr || !CVarCompression.GetValue() || GCommandLine->Has("netnocompress"))
+        if (Host == nullptr || !CVarCompression.GetValue() || Global::GCommandLine->Has("netnocompress"))
         {
             return;
         }
@@ -30,16 +30,6 @@ namespace Lumina
         {
             LOG_WARN("Network: failed to install ENet range-coder compression");
         }
-    }
-
-    // Cheap xorshift for drop decisions; deterministic seed is fine for a debug tool.
-    static float SimRand01()
-    {
-        static uint32 State = 0x9E3779B9u;
-        State ^= State << 13;
-        State ^= State >> 17;
-        State ^= State << 5;
-        return static_cast<float>(State & 0xFFFFFFu) / static_cast<float>(0x1000000);
     }
 
     static enet_uint32 ToPacketFlags(ESendMode Mode)
@@ -63,12 +53,57 @@ namespace Lumina
         }
     }
 
+    bool FNetSimQueue::Submit(uint32 Peer, uint8 Channel, ESendMode Mode, const void* Data, SIZE_T Size, uint32 NowMs, int32 LatencyMs, float LossPct)
+    {
+        // ENet retransmits a dropped reliable packet, so for reliable only the added latency is observable.
+        if (LossPct > 0.0f && Mode != ESendMode::Reliable && Rng.NextFloat() * 100.0f < LossPct)
+        {
+            return true;
+        }
+
+        if (LatencyMs <= 0 && Delayed.IsEmpty())
+        {
+            return false;
+        }
+
+        // Never release before a packet queued earlier, even after the latency was lowered.
+        uint32 ReleaseTime = NowMs + static_cast<uint32>(Math::Max(LatencyMs, 0));
+        if (!Delayed.IsEmpty())
+        {
+            ReleaseTime = Math::Max(ReleaseTime, Delayed.Last().ReleaseTime);
+        }
+
+        FPacket& P = Delayed.EmplaceGetRef();
+        P.Peer        = Peer;
+        P.Channel     = Channel;
+        P.Mode        = Mode;
+        P.ReleaseTime = ReleaseTime;
+        P.Data.Append(static_cast<const uint8*>(Data), static_cast<const uint8*>(Data) + Size);
+        return true;
+    }
+
+    // Submit keeps ReleaseTime non-decreasing, so a due prefix is safe to flush and erase.
+    void FNetSimQueue::Flush(uint32 NowMs, TFunctionRef<void(const FPacket&)> Send)
+    {
+        int32 Count = 0;
+        while (Count < Delayed.Num() && Delayed[Count].ReleaseTime <= NowMs)
+        {
+            Send(Delayed[Count]);
+            ++Count;
+        }
+        if (Count > 0)
+        {
+            Delayed.RemoveAt(0, Count);
+        }
+    }
+
     struct FENetTransport::FImpl
     {
         ENetHost*                      Host       = nullptr;
         bool                           bIsServer  = false;
         uint32                         NextHandle = 1;
         THashMap<uint32, ENetPeer*>    Peers;
+        FNetSimQueue                   Sim;
 
         uint32 AllocHandle()
         {
@@ -82,20 +117,9 @@ namespace Lumina
 
         ENetPeer* FindPeer(FConnectionHandle Handle) const
         {
-            auto It = Peers.find(Handle.Value);
-            return It != Peers.end() ? It->second : nullptr;
+            auto It = Peers.Find(Handle.Value);
+            return It != nullptr ? (*It) : nullptr;
         }
-
-        // A peer of 0 means broadcast, resolved at flush time since the peer may have gone away.
-        struct FDelayedPacket
-        {
-            uint32         Peer = 0;
-            uint8          Channel = 0;
-            ESendMode      Mode = ESendMode::Reliable;
-            uint32         ReleaseTime = 0; // enet_time_get() ms
-            TVector<uint8> Data;
-        };
-        TVector<FDelayedPacket> Delayed;
 
         void SendImmediate(uint32 PeerHandle, uint8 Channel, ESendMode Mode, const void* Data, SIZE_T Size)
         {
@@ -116,54 +140,18 @@ namespace Lumina
             }
         }
 
-        // Returns true when the packet was consumed here, and false to send it immediately.
-        bool ApplySim(uint32 PeerHandle, uint8 Channel, ESendMode Mode, const void* Data, SIZE_T Size)
-        {
-            const int32 LatencyMs = CVarSimLatencyMs.GetValue();
-            const float LossPct   = CVarSimPacketLossPct.GetValue();
-            if (LatencyMs <= 0 && LossPct <= 0.0f)
-            {
-                return false; // simulation off -> fast path
-            }
-
-            // ENet retransmits a dropped reliable packet, so for reliable only the added latency is observable.
-            if (LossPct > 0.0f && Mode != ESendMode::Reliable && SimRand01() * 100.0f < LossPct)
-            {
-                return true; // dropped
-            }
-
-            if (LatencyMs > 0)
-            {
-                FDelayedPacket& P = Delayed.emplace_back();
-                P.Peer        = PeerHandle;
-                P.Channel     = Channel;
-                P.Mode        = Mode;
-                P.ReleaseTime = enet_time_get() + static_cast<uint32>(LatencyMs);
-                P.Data.assign(static_cast<const uint8*>(Data), static_cast<const uint8*>(Data) + Size);
-                return true; // queued
-            }
-            return false; // loss didn't drop it and no latency -> send now
-        }
-
-        // Constant latency keeps the queue ordered, so a due prefix is safe to flush and erase.
+        // A broadcast peer is resolved at flush time, and a peer that went away meanwhile is skipped.
         void FlushDelayed()
         {
-            if (Delayed.empty())
+            Sim.Flush(enet_time_get(), [this](const FNetSimQueue::FPacket& P)
             {
-                return;
-            }
-            const uint32 Now = enet_time_get();
-            SIZE_T Count = 0;
-            while (Count < Delayed.size() && Delayed[Count].ReleaseTime <= Now)
-            {
-                FDelayedPacket& P = Delayed[Count];
-                SendImmediate(P.Peer, P.Channel, P.Mode, P.Data.data(), static_cast<SIZE_T>(P.Data.size()));
-                ++Count;
-            }
-            if (Count > 0)
-            {
-                Delayed.erase(Delayed.begin(), Delayed.begin() + Count);
-            }
+                SendImmediate(P.Peer, P.Channel, P.Mode, P.Data.GetData(), static_cast<SIZE_T>(P.Data.Num()));
+            });
+        }
+
+        bool ApplySim(uint32 PeerHandle, uint8 Channel, ESendMode Mode, const void* Data, SIZE_T Size)
+        {
+            return Sim.Submit(PeerHandle, Channel, Mode, Data, Size, enet_time_get(), CVarSimLatencyMs.GetValue(), CVarSimPacketLossPct.GetValue());
         }
     };
 
@@ -184,7 +172,7 @@ namespace Lumina
                     enet_peer_disconnect_now(Peer, 0);
                 }
             }
-            if (!Impl->Peers.empty())
+            if (!Impl->Peers.IsEmpty())
             {
                 enet_host_flush(Impl->Host);
             }
@@ -240,9 +228,9 @@ namespace Lumina
         Impl->bIsServer = false;
 
         ENetAddress Address{};
-        if (enet_address_set_host(&Address, Params.Address.Host.c_str()) != 0)
+        if (enet_address_set_host(&Address, *Params.Address.Host) != 0)
         {
-            LOG_ERROR("FENetTransport::ConnectToServer: could not resolve host '{}'", Params.Address.Host.c_str());
+            LOG_ERROR("FENetTransport::ConnectToServer: could not resolve host '{}'", *Params.Address.Host);
             enet_host_destroy(Impl->Host);
             Impl->Host = nullptr;
             return FConnectionHandle::Invalid();
@@ -282,7 +270,7 @@ namespace Lumina
             enet_peer_disconnect_now(Peer, Reason);
             // disconnect_now emits no event; drop the mapping here.
             Peer->data = nullptr;
-            Impl->Peers.erase(Connection.Value);
+            Impl->Peers.Remove(Connection.Value);
         }
         else
         {
@@ -359,7 +347,7 @@ namespace Lumina
                         Id = static_cast<uint32>(reinterpret_cast<uintptr_t>(Event.peer->data));
                     }
 
-                    FNetworkEvent& Out = OutEvents.emplace_back();
+                    FNetworkEvent& Out = OutEvents.EmplaceGetRef();
                     Out.Type       = ENetworkEventType::Connected;
                     Out.Connection = FConnectionHandle{ Id };
                 }
@@ -369,11 +357,11 @@ namespace Lumina
                 {
                     const uint32 Id = static_cast<uint32>(reinterpret_cast<uintptr_t>(Event.peer->data));
 
-                    FNetworkEvent& Out = OutEvents.emplace_back();
+                    FNetworkEvent& Out = OutEvents.EmplaceGetRef();
                     Out.Type       = ENetworkEventType::Data;
                     Out.Connection = FConnectionHandle{ Id };
                     Out.Channel    = Event.channelID;
-                    Out.Data.assign(Event.packet->data, Event.packet->data + Event.packet->dataLength);
+                    Out.Data.Append(Event.packet->data, Event.packet->data + Event.packet->dataLength);
 
                     enet_packet_destroy(Event.packet);
                 }
@@ -383,11 +371,11 @@ namespace Lumina
                 {
                     const uint32 Id = static_cast<uint32>(reinterpret_cast<uintptr_t>(Event.peer->data));
 
-                    FNetworkEvent& Out = OutEvents.emplace_back();
+                    FNetworkEvent& Out = OutEvents.EmplaceGetRef();
                     Out.Type       = ENetworkEventType::Disconnected;
                     Out.Connection = FConnectionHandle{ Id };
 
-                    Impl->Peers.erase(Id);
+                    Impl->Peers.Remove(Id);
                     Event.peer->data = nullptr;
                 }
                 break;
@@ -431,14 +419,14 @@ namespace Lumina
 
     void FENetTransport::GetConnectionStats(TVector<FConnectionStats>& OutStats) const
     {
-        OutStats.clear();
+        OutStats.Reset();
         for (const auto& [Id, Peer] : Impl->Peers)
         {
             if (Peer == nullptr)
             {
                 continue;
             }
-            FConnectionStats& S = OutStats.emplace_back();
+            FConnectionStats& S = OutStats.EmplaceGetRef();
             S.ConnectionId    = Id;
             S.State           = ToConnectionState(Peer->state);
             S.RoundTripTimeMs = Peer->roundTripTime;

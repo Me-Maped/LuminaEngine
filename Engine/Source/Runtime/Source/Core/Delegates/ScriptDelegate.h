@@ -79,22 +79,23 @@ namespace Lumina
         // Every broadcast open on this delegate, so destroying the owner can flag all of them at once.
         struct FBroadcastFrame
         {
-            FBroadcastFrame*   Previous = nullptr;
-            TVector<FListener> PendingDestroy;
-            bool               bAlive   = true;
+            FBroadcastFrame*     Previous = nullptr;
+            FScriptDelegateBase* Relocated = nullptr;
+            TVector<FListener>   PendingDestroy;
+            bool                 bAlive   = true;
         };
 
         RUNTIME_API uint64 AddListener(FThunk Thunk, void* Context, void (*Destroy)(void*));
         RUNTIME_API bool   RemoveListener(uint64 Id);
 
         // Fans out to every listener; Payload points at the blittable arg, or nullptr for no payload.
-        RUNTIME_API void BroadcastAll(const void* Payload);
+        RUNTIME_API bool BroadcastAll(const void* Payload);
 
         RUNTIME_API static uint64 GenerateId();
 
     private:
 
-        void RetireAt(size_t Index);
+        void RetireAt(int32 Index);
         void Compact();
         void EndOpenBroadcasts();
         FBroadcastFrame* OutermostBroadcast() const;
@@ -251,22 +252,25 @@ namespace Lumina
 
         bool Remove(FDelegateHandle Handle) { return RemoveListener(Handle.ID); }
 
-        void Broadcast(const TArgs&... Args)
+        // False when a listener destroyed or moved this delegate, so the caller must not touch its owner again.
+        bool Broadcast(const TArgs&... Args)
         {
             if (!IsBound())
             {
-                return;
+                return true;
             }
 
             const FPack Pack{ Args... };
-            BroadcastAll(&Pack);
+            return BroadcastAll(&Pack);
         }
 
         /** Broadcasts then drops every listener, for a one-shot event such as engine startup. */
         void BroadcastAndClear(const TArgs&... Args)
         {
-            Broadcast(Args...);
-            RemoveAll();
+            if (Broadcast(Args...))
+            {
+                RemoveAll();
+            }
         }
 
     private:

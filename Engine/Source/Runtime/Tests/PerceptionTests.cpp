@@ -25,7 +25,7 @@ namespace
     struct FSightWorld
     {
         CWorld*            World  = nullptr;
-        SPerceptionSystem* System = nullptr;
+        CPerceptionSystem* System = nullptr;
 
         // Released before the harness stops the task system, which the world's physics scene still runs on.
         TStrongObjectPtr<CWorld> WorldOwner;
@@ -60,14 +60,15 @@ namespace
             R.Emplace<STransformComponent>(Target);
             R.Emplace<SAIStimuliSourceComponent>(Target).SightTargetOffset = FVector3(0.0f);
 
-            System = NewObject<SPerceptionSystem>(nullptr, NAME_None, FGuid::New(), OF_Transient);
+            System = NewObject<CPerceptionSystem>(nullptr, NAME_None, FGuid::New(), OF_Transient);
             System->SetOwningWorld(World);
-            System->OnStartup(FWorldTestAccess::SystemContext(*World));
+            System->ConfigureSystem();
+            System->OnStartup(SExclusiveContext(FWorldTestAccess::SystemContext(*World)));
         }
 
         ~FSightWorld()
         {
-            System->OnTeardown(FWorldTestAccess::SystemContext(*World));
+            System->OnTeardown(SExclusiveContext(FWorldTestAccess::SystemContext(*World)));
             System->SetOwningWorld(nullptr);
             WorldOwner.Reset();
         }

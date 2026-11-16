@@ -1,6 +1,7 @@
 ﻿#include "CodeWorkspaceTool.h"
 
 #include <imgui_internal.h>
+#include "Asset/AssetOps.h"
 #include "Config/Config.h"
 #include "Core/Delegates/CoreDelegates.h"
 #include "FileSystem/FileSystem.h"
@@ -12,6 +13,7 @@
 #include "Tools/UI/ImGui/EditorColors.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiFonts.h"
+#include "Tools/UI/ImGui/ImGuiX.h"
 #include "UI/CodeEditor/CodeEditorPreferences.h"
 #include "UI/CodeEditor/Languages/PlainTextLanguage.h"
 #include "UI/CodeEditor/Languages/RmlLanguage.h"
@@ -46,7 +48,7 @@ namespace Lumina
 
         bool EndsWithIgnoreCase(FStringView Text, FStringView Suffix)
         {
-            return Text.size() >= Suffix.size() && CodeText::StartsWithIgnoreCase(Text.substr(Text.size() - Suffix.size()), Suffix);
+            return Text.Len() >= Suffix.Len() && CodeText::StartsWithIgnoreCase(Text.Mid(Text.Len() - Suffix.Len()), Suffix);
         }
 
         bool HasAnyExtension(FStringView Path, TSpan<const FStringView> Extensions)
@@ -63,11 +65,11 @@ namespace Lumina
 
         bool SamePath(FStringView A, FStringView B)
         {
-            if (A.size() != B.size())
+            if (A.Len() != B.Len())
             {
                 return false;
             }
-            for (size_t Index = 0; Index < A.size(); ++Index)
+            for (int32 Index = 0; Index < A.Len(); ++Index)
             {
                 const char Left = A[Index] == '\\' ? '/' : CodeText::ToLower(A[Index]);
                 const char Right = B[Index] == '\\' ? '/' : CodeText::ToLower(B[Index]);
@@ -82,14 +84,14 @@ namespace Lumina
         // A subsequence match scored higher for runs and for letters that start a word or a path segment.
         int32 FuzzyScore(FStringView Query, FStringView Text)
         {
-            if (Query.empty())
+            if (Query.IsEmpty())
             {
                 return 1;
             }
             int32 Score = 0;
             int32 Run = 0;
-            size_t Matched = 0;
-            for (size_t Index = 0; Index < Text.size() && Matched < Query.size(); ++Index)
+            int32 Matched = 0;
+            for (int32 Index = 0; Index < Text.Len() && Matched < Query.Len(); ++Index)
             {
                 if (CodeText::ToLower(Text[Index]) != CodeText::ToLower(Query[Matched]))
                 {
@@ -101,7 +103,7 @@ namespace Lumina
                 Score += 1 + ++Run + (bBoundary ? 6 : 0);
                 ++Matched;
             }
-            return Matched == Query.size() ? Score : 0;
+            return Matched == Query.Len() ? Score : 0;
         }
 
         const char* FileIcon(FStringView Path)
@@ -148,21 +150,21 @@ namespace Lumina
         // Build output and tool folders, such as obj, bin and .idea, hold copies and caches rather than sources.
         bool IsInOutputFolder(FStringView Relative)
         {
-            for (size_t Slash = Relative.find_first_of("/\\"); Slash != FStringView::npos; Slash = Relative.find_first_of("/\\"))
+            for (int32 Slash = Relative.FindFirstOf("/\\"); Slash != Constants::kIndexNone; Slash = Relative.FindFirstOf("/\\"))
             {
-                const FStringView Folder = Relative.substr(0, Slash);
-                if (Folder.starts_with('.') || SamePath(Folder, "obj") || SamePath(Folder, "bin"))
+                const FStringView Folder = Relative.Mid(0, Slash);
+                if (Folder.StartsWith('.') || SamePath(Folder, "obj") || SamePath(Folder, "bin"))
                 {
                     return true;
                 }
-                Relative = Relative.substr(Slash + 1);
+                Relative = Relative.Mid(Slash + 1);
             }
             return false;
         }
 
         bool IsIdentifier(FStringView Text)
         {
-            if (Text.empty() || CodeText::IsDigit(Text[0]))
+            if (Text.IsEmpty() || CodeText::IsDigit(Text[0]))
             {
                 return false;
             }
@@ -179,8 +181,8 @@ namespace Lumina
         FString Trimmed(FStringView Line)
         {
             const int32 Indent = CodeText::LeadingWhitespace(Line);
-            FStringView Rest = Line.substr((size_t)Indent);
-            return FString(Rest.substr(0, Math::Min(Rest.size(), (size_t)MaxPreview)));
+            FStringView Rest = Line.Mid((size_t)Indent);
+            return FString(Rest.Mid(0, Math::Min(Rest.Len(), MaxPreview)));
         }
 
         // The innermost declaration whose body covers Line, which names where the caret is.
@@ -218,7 +220,7 @@ namespace Lumina
                 }
                 Value = Value * 10 + (C - '0');
             }
-            return Text.empty() ? -1 : Value;
+            return Text.IsEmpty() ? -1 : Value;
         }
 
         // Brings a docked panel to the front of its tab bar without taking keyboard focus from the code.
@@ -266,10 +268,10 @@ namespace Lumina
             }
             X += ImGui::CalcTextSize(LE_ICON_CIRCLE_MEDIUM " ").x;
 
-            const int32 Size = (int32)Preview.size();
+            const int32 Size = Preview.Len();
             const int32 Start = Math::Clamp(MatchColumn, 0, Size);
             const int32 End = MatchColumn < 0 ? Start : Math::Clamp(MatchColumn + MatchLength, Start, Size);
-            const char* Base = Preview.data();
+            const char* Base = Preview.GetData();
             Draw->AddText(ImVec2(X, Min.y), Text, Base, Base + Start);
             X += ImGui::CalcTextSize(Base, Base + Start).x;
             if (End > Start)
@@ -302,7 +304,7 @@ namespace Lumina
         {
             if (VFS::IsDirectory(VirtualPath))
             {
-                Roots.push_back({ Label, FString(VirtualPath), FString(VFS::ResolvePath(VirtualPath).c_str()) });
+                Roots.Emplace(Label, FString(VirtualPath), FString(*VFS::ResolvePath(VirtualPath)));
             }
         };
         AddRoot("Scripts", "/Game/Scripts");
@@ -341,7 +343,7 @@ namespace Lumina
         {
             Watcher->Stop();
         }
-        Watchers.clear();
+        Watchers.Reset();
     }
 
     void FCodeWorkspaceTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const
@@ -355,11 +357,11 @@ namespace Lumina
         ImGui::DockBuilderSplitNode(InDockspaceID, ImGuiDir_Left, 0.18f, &Left, &Rest);
         ImGui::DockBuilderSplitNode(Rest, ImGuiDir_Right, 0.2f, &Right, &Center);
         ImGui::DockBuilderSplitNode(Center, ImGuiDir_Down, 0.27f, &Bottom, &Center);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(ExplorerWindow).c_str(), Left);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(EditorWindow).c_str(), Center);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(OutlineWindow).c_str(), Right);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(ProblemsWindow).c_str(), Bottom);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(SearchWindow).c_str(), Bottom);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(ExplorerWindow), Left);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(EditorWindow), Center);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(OutlineWindow), Right);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(ProblemsWindow), Bottom);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(SearchWindow), Bottom);
     }
 
     bool FCodeWorkspaceTool::IsUnsavedDocument()
@@ -381,20 +383,20 @@ namespace Lumina
 
     FCodeWorkspaceTool::FDocument* FCodeWorkspaceTool::ActiveDocument()
     {
-        return ActiveIndex >= 0 && ActiveIndex < (int32)Documents.size() ? Documents[ActiveIndex].get() : nullptr;
+        return ActiveIndex >= 0 && ActiveIndex < Documents.Num() ? Documents[ActiveIndex].get() : nullptr;
     }
 
     FCodeWorkspaceTool::FDocument* FCodeWorkspaceTool::CreateDocument(FStringView VirtualPath)
     {
         if (!VFS::Exists(VirtualPath))
         {
-            ImGuiX::Notifications::NotifyError("'{}' does not exist.", FString(VirtualPath).c_str());
+            ImGuiX::Notifications::NotifyError("'{}' does not exist.", *FString(VirtualPath));
             return nullptr;
         }
         TUniquePtr<FDocument> Created = MakeUnique<FDocument>();
         FDocument& Document = *Created;
         Document.VirtualPath = VirtualPath;
-        Document.DiskPath = VFS::ResolvePath(VirtualPath).c_str();
+        Document.DiskPath = *VFS::ResolvePath(VirtualPath);
         Document.Name = VFS::FileName(VirtualPath);
 
         if (EndsWithIgnoreCase(VirtualPath, ".cs"))
@@ -452,7 +454,7 @@ namespace Lumina
         {
             Document.CSharp->Warm(Document.Editor.GetDocument());
         }
-        Documents.push_back(Move(Created));
+        Documents.Add(Move(Created));
         return Raw;
     }
 
@@ -471,7 +473,7 @@ namespace Lumina
                 return;
             }
         }
-        for (int32 Index = 0; Index < (int32)Documents.size(); ++Index)
+        for (int32 Index = 0; Index < Documents.Num(); ++Index)
         {
             if (Documents[Index].get() == Document)
             {
@@ -484,7 +486,7 @@ namespace Lumina
             Document->Editor.SetCursor(Reveal, true);
         }
         Document->Editor.Focus();
-        ImGui::SetWindowFocus(GetToolWindowName(EditorWindow).c_str());
+        ImGui::SetWindowFocus(*GetToolWindowName(EditorWindow));
         RememberSession();
     }
 
@@ -493,10 +495,10 @@ namespace Lumina
         FString Text;
         if (!VFS::ReadFile(Text, Document.VirtualPath.View()))
         {
-            ImGuiX::Notifications::NotifyError("Could not read '{}'.", Document.VirtualPath.c_str());
+            ImGuiX::Notifications::NotifyError("Could not read '{}'.", *Document.VirtualPath);
             return;
         }
-        Text.erase(Algo::Remove(Text.begin(), Text.end(), '\r'), Text.end());
+        Text.ReplaceInline("\r", "");
         Document.SavedText = Text;
         Document.bDirty = false;
         if (Text != Document.Editor.GetText())
@@ -517,7 +519,7 @@ namespace Lumina
         const FString Text = Document.Editor.GetText();
         if (!VFS::WriteFile(Document.VirtualPath.View(), Text.View()))
         {
-            ImGuiX::Notifications::NotifyError("Failed to save '{}'.", Document.VirtualPath.c_str());
+            ImGuiX::Notifications::NotifyError("Failed to save '{}'.", *Document.VirtualPath);
             return false;
         }
         Document.SavedText = Text;
@@ -537,7 +539,7 @@ namespace Lumina
         {
             if (SaveDocument(*Document))
             {
-                ImGuiX::Notifications::NotifyInfo("Saved '{}'.", Document->Name.c_str());
+                ImGuiX::Notifications::NotifyInfo("Saved '{}'.", *Document->Name);
             }
         }
     }
@@ -566,7 +568,7 @@ namespace Lumina
 
     void FCodeWorkspaceTool::RequestClose(int32 Index)
     {
-        if (Index < 0 || Index >= (int32)Documents.size())
+        if (Index < 0 || Index >= Documents.Num())
         {
             return;
         }
@@ -579,16 +581,16 @@ namespace Lumina
 
     void FCodeWorkspaceTool::CloseDocument(int32 Index)
     {
-        if (Index < 0 || Index >= (int32)Documents.size())
+        if (Index < 0 || Index >= Documents.Num())
         {
             return;
         }
-        Documents.erase(Documents.begin() + Index);
-        if (ActiveIndex >= (int32)Documents.size() || ActiveIndex > Index)
+        Documents.RemoveAt(Index);
+        if (ActiveIndex >= Documents.Num() || ActiveIndex > Index)
         {
             ActiveIndex = Math::Max(-1, ActiveIndex - 1);
         }
-        ActiveIndex = Documents.empty() ? -1 : Math::Clamp(ActiveIndex, 0, (int32)Documents.size() - 1);
+        ActiveIndex = Documents.IsEmpty() ? -1 : Math::Clamp(ActiveIndex, 0, Documents.Num() - 1);
         SelectRequest = ActiveIndex;
         RememberSession();
     }
@@ -600,13 +602,13 @@ namespace Lumina
         {
             return;
         }
-        Settings->CodeFiles.clear();
+        Settings->CodeFiles.Reset();
         for (const TUniquePtr<FDocument>& Document : Documents)
         {
-            Settings->CodeFiles.push_back(Document->VirtualPath);
+            Settings->CodeFiles.Add(Document->VirtualPath);
         }
-        Settings->ActiveCodeFile = ActiveIndex >= 0 && ActiveIndex < (int32)Documents.size() ? Documents[ActiveIndex]->VirtualPath : FString();
-        GConfig->SaveSettings(CEditorSessionSettings::StaticClass());
+        Settings->ActiveCodeFile = ActiveIndex >= 0 && ActiveIndex < Documents.Num() ? Documents[ActiveIndex]->VirtualPath : FString();
+        Global::GConfig->SaveSettings(CEditorSessionSettings::StaticClass());
     }
 
     void FCodeWorkspaceTool::RestoreSession()
@@ -625,7 +627,7 @@ namespace Lumina
                 CreateDocument(File.View());
             }
         }
-        for (int32 Index = 0; Index < (int32)Documents.size(); ++Index)
+        for (int32 Index = 0; Index < Documents.Num(); ++Index)
         {
             if (SamePath(Documents[Index]->VirtualPath.View(), Active.View()) || ActiveIndex < 0)
             {
@@ -647,7 +649,7 @@ namespace Lumina
         {
             FScopeLock Lock(ChangedMutex);
             Changed = Move(ChangedPaths);
-            ChangedPaths.clear();
+            ChangedPaths.Reset();
         }
         for (const FString& Path : Changed)
         {
@@ -662,14 +664,14 @@ namespace Lumina
                 {
                     continue;
                 }
-                OnDisk.erase(Algo::Remove(OnDisk.begin(), OnDisk.end(), '\r'), OnDisk.end());
+                OnDisk.ReplaceInline("\r", "");
                 if (OnDisk == Document->SavedText)
                 {
                     continue;
                 }
                 if (Document->bDirty)
                 {
-                    ImGuiX::Notifications::NotifyWarning("'{}' changed on disk while it has unsaved edits here; keeping the edits.", Document->Name.c_str());
+                    ImGuiX::Notifications::NotifyWarning("'{}' changed on disk while it has unsaved edits here; keeping the edits.", *Document->Name);
                 }
                 else
                 {
@@ -739,8 +741,8 @@ namespace Lumina
 
     void FCodeWorkspaceTool::RebuildIndex()
     {
-        Files.clear();
-        for (int32 RootIndex = 0; RootIndex < (int32)Roots.size(); ++RootIndex)
+        Files.Reset();
+        for (int32 RootIndex = 0; RootIndex < Roots.Num(); ++RootIndex)
         {
             const FRoot& Root = Roots[RootIndex];
             VFS::RecursiveDirectoryIterator(Root.VirtualPath.View(), [&](const VFS::FFileInfo& Info)
@@ -749,14 +751,14 @@ namespace Lumina
                 {
                     return;
                 }
-                const FString Relative = Info.VirtualPath.substr(Math::Min(Root.VirtualPath.size() + 1, Info.VirtualPath.size()));
+                const FString Relative = Info.VirtualPath.Mid(Math::Min(Root.VirtualPath.Len() + 1, Info.VirtualPath.Len()));
                 if (IsInOutputFolder(Relative.View()))
                 {
                     return;
                 }
-                FFileEntry& Entry = Files.emplace_back();
+                FFileEntry& Entry = Files.EmplaceGetRef();
                 Entry.VirtualPath = Info.VirtualPath;
-                Entry.DiskPath = VFS::ResolvePath(Info.VirtualPath.View()).c_str();
+                Entry.DiskPath = *VFS::ResolvePath(Info.VirtualPath.View());
                 Entry.Name = Info.Name;
                 Entry.Relative = Relative;
                 Entry.Root = RootIndex;
@@ -768,24 +770,24 @@ namespace Lumina
             {
                 return A.Root < B.Root;
             }
-            return _stricmp(A.Relative.c_str(), B.Relative.c_str()) < 0;
+            return _stricmp(*A.Relative, *B.Relative) < 0;
         });
 
-        TreeNodes.clear();
-        RootNodes.clear();
+        TreeNodes.Reset();
+        RootNodes.Reset();
         for (const FRoot& Root : Roots)
         {
-            RootNodes.push_back((int32)TreeNodes.size());
-            TreeNodes.push_back({ Root.Label, -1, {} });
+            RootNodes.Add(TreeNodes.Num());
+            TreeNodes.Add({ Root.Label, -1, {} });
         }
-        for (int32 FileIndex = 0; FileIndex < (int32)Files.size(); ++FileIndex)
+        for (int32 FileIndex = 0; FileIndex < Files.Num(); ++FileIndex)
         {
             const FFileEntry& Entry = Files[FileIndex];
             int32 Node = RootNodes[Entry.Root];
             FStringView Rest = Entry.Relative.View();
-            for (size_t Slash = Rest.find('/'); Slash != FStringView::npos; Slash = Rest.find('/'))
+            for (int32 Slash = Rest.Find('/'); Slash != Constants::kIndexNone; Slash = Rest.Find('/'))
             {
-                const FStringView Folder = Rest.substr(0, Slash);
+                const FStringView Folder = Rest.Mid(0, Slash);
                 int32 Child = -1;
                 for (int32 Candidate : TreeNodes[Node].Children)
                 {
@@ -797,16 +799,16 @@ namespace Lumina
                 }
                 if (Child < 0)
                 {
-                    Child = (int32)TreeNodes.size();
-                    TreeNodes.push_back({ FString(Folder), -1, {} });
-                    TreeNodes[Node].Children.push_back(Child);
+                    Child = TreeNodes.Num();
+                    TreeNodes.Add({ FString(Folder), -1, {} });
+                    TreeNodes[Node].Children.Add(Child);
                 }
                 Node = Child;
-                Rest = Rest.substr(Slash + 1);
+                Rest = Rest.Mid(Slash + 1);
             }
-            const int32 Leaf = (int32)TreeNodes.size();
-            TreeNodes.push_back({ Entry.Name, FileIndex, {} });
-            TreeNodes[Node].Children.push_back(Leaf);
+            const int32 Leaf = TreeNodes.Num();
+            TreeNodes.Add({ Entry.Name, FileIndex, {} });
+            TreeNodes[Node].Children.Add(Leaf);
         }
         for (FTreeNode& Node : TreeNodes)
         {
@@ -814,11 +816,11 @@ namespace Lumina
             {
                 const bool bFolderA = TreeNodes[A].File < 0;
                 const bool bFolderB = TreeNodes[B].File < 0;
-                return bFolderA != bFolderB ? bFolderA : _stricmp(TreeNodes[A].Name.c_str(), TreeNodes[B].Name.c_str()) < 0;
+                return bFolderA != bFolderB ? bFolderA : _stricmp(*TreeNodes[A].Name, *TreeNodes[B].Name) < 0;
             });
         }
 
-        const auto Script = Algo::FindIf(Files, [](const FFileEntry& Entry) { return EndsWithIgnoreCase(Entry.Name.View(), ".cs") && Entry.VirtualPath.View().starts_with("/Game/"); });
+        const auto Script = Algo::FindIf(Files, [](const FFileEntry& Entry) { return EndsWithIgnoreCase(Entry.Name.View(), ".cs") && Entry.VirtualPath.View().StartsWith("/Game/"); });
         WorkspaceLanguage.SetFilePath(Script != Files.end() ? Script->DiskPath.View() : FStringView());
     }
 
@@ -826,17 +828,17 @@ namespace Lumina
     {
         for (const FRoot& Root : Roots)
         {
-            TUniquePtr<FDirectoryWatcher>& Watcher = Watchers.emplace_back(MakeUnique<FDirectoryWatcher>());
-            Watcher->Watch(FFixedString(Root.DiskPath.c_str()), [this, RootLength = Root.DiskPath.size()](const FFileEvent& Event)
+            TUniquePtr<FDirectoryWatcher>& Watcher = Watchers.EmplaceGetRef(MakeUnique<FDirectoryWatcher>());
+            Watcher->Watch(FFixedString(*Root.DiskPath), [this, RootLength = Root.DiskPath.Len()](const FFileEvent& Event)
             {
-                const FStringView Relative = Event.Path.View().substr(Math::Min(RootLength + 1, Event.Path.size()));
+                const FStringView Relative = Event.Path.View().Mid(Math::Min(RootLength + 1, Event.Path.Len()));
                 if (IsInOutputFolder(Relative))
                 {
                     return;
                 }
                 // Asset saves under Content are frequent and never change the text files listed here.
                 const bool bText = HasAnyExtension(Event.Path.View(), TextExtensions);
-                const bool bFolder = VFS::Extension(Event.Path.View()).empty();
+                const bool bFolder = VFS::Extension(Event.Path.View()).IsEmpty();
                 if (!bText && !bFolder)
                 {
                     return;
@@ -850,7 +852,7 @@ namespace Lumina
                     return;
                 }
                 FScopeLock Lock(ChangedMutex);
-                ChangedPaths.push_back(Event.Path);
+                ChangedPaths.Add(Event.Path);
             }, true);
         }
     }
@@ -865,7 +867,7 @@ namespace Lumina
             }
         }
         const FFixedString Resolved = VFS::ResolveToVirtualPath(DiskPath);
-        return FString(Resolved.c_str());
+        return FString(*Resolved);
     }
 
     void FCodeWorkspaceTool::PushHistory()
@@ -876,16 +878,16 @@ namespace Lumina
             return;
         }
         const FLocation Here{ Active->VirtualPath, Active->Editor.GetCursor() };
-        if (!BackHistory.empty() && SamePath(BackHistory.back().VirtualPath.View(), Here.VirtualPath.View()) && BackHistory.back().Position.Line == Here.Position.Line)
+        if (!BackHistory.IsEmpty() && SamePath(BackHistory.Last().VirtualPath.View(), Here.VirtualPath.View()) && BackHistory.Last().Position.Line == Here.Position.Line)
         {
             return;
         }
-        BackHistory.push_back(Here);
-        if ((int32)BackHistory.size() > MaxHistory)
+        BackHistory.Add(Here);
+        if (BackHistory.Num() > MaxHistory)
         {
-            BackHistory.erase(BackHistory.begin());
+            BackHistory.RemoveAt(0);
         }
-        ForwardHistory.clear();
+        ForwardHistory.Reset();
     }
 
     void FCodeWorkspaceTool::Navigate(const FLocation& Location, bool bRecordHistory)
@@ -895,40 +897,40 @@ namespace Lumina
 
     void FCodeWorkspaceTool::GoBack()
     {
-        if (BackHistory.empty())
+        if (BackHistory.IsEmpty())
         {
             return;
         }
         if (FDocument* Active = ActiveDocument())
         {
-            ForwardHistory.push_back({ Active->VirtualPath, Active->Editor.GetCursor() });
+            ForwardHistory.Emplace(Active->VirtualPath, Active->Editor.GetCursor());
         }
-        const FLocation Target = BackHistory.back();
-        BackHistory.pop_back();
+        const FLocation Target = BackHistory.Last();
+        BackHistory.Pop();
         Navigate(Target, false);
     }
 
     void FCodeWorkspaceTool::GoForward()
     {
-        if (ForwardHistory.empty())
+        if (ForwardHistory.IsEmpty())
         {
             return;
         }
         if (FDocument* Active = ActiveDocument())
         {
-            BackHistory.push_back({ Active->VirtualPath, Active->Editor.GetCursor() });
+            BackHistory.Emplace(Active->VirtualPath, Active->Editor.GetCursor());
         }
-        const FLocation Target = ForwardHistory.back();
-        ForwardHistory.pop_back();
+        const FLocation Target = ForwardHistory.Last();
+        ForwardHistory.Pop();
         Navigate(Target, false);
     }
 
     void FCodeWorkspaceTool::OpenDiskLocation(FStringView DiskPath, FCodeRange Range)
     {
         const FString Target = VirtualPathOfDisk(DiskPath);
-        if (Target.empty())
+        if (Target.IsEmpty())
         {
-            ImGuiX::Notifications::NotifyWarning("'{}' is outside the project's folders.", FString(DiskPath).c_str());
+            ImGuiX::Notifications::NotifyWarning("'{}' is outside the project's folders.", *FString(DiskPath));
             return;
         }
         OpenRange(Target.View(), Range);
@@ -967,7 +969,7 @@ namespace Lumina
                 return Document->CSharp;
             }
         }
-        return WorkspaceLanguage.GetFilePath().empty() ? nullptr : &WorkspaceLanguage;
+        return WorkspaceLanguage.GetFilePath().IsEmpty() ? nullptr : &WorkspaceLanguage;
     }
 
     void FCodeWorkspaceTool::FindReferences(FDocument& Document, FCodePosition Position)
@@ -986,18 +988,18 @@ namespace Lumina
         }
         const FCodeRange Word = CodeLanguageUtil::WordRangeAt(Document.Editor.GetDocument(), *Document.Language, Position);
         const FString Name = Document.Editor.GetDocument().GetRangeText(Word);
-        Results.clear();
+        Results.Reset();
         for (const FCSharpScriptLanguage::FReference& Reference : References)
         {
-            const size_t At = Reference.Preview.find(Name.c_str());
-            Results.push_back({ VirtualPathOfDisk(Reference.Path.View()), Reference.Path, Reference.Range, Reference.Preview, Reference.bDeclaration, At == FString::npos ? -1 : (int32)At, (int32)Name.size() });
+            const int32 At = Reference.Preview.Find(*Name);
+            Results.Emplace(VirtualPathOfDisk(Reference.Path.View()), Reference.Path, Reference.Range, Reference.Preview, Reference.bDeclaration, At == Constants::kIndexNone ? -1 : (int32)At, Name.Len());
         }
         Algo::Sort(Results, [](const FSearchHit& A, const FSearchHit& B)
         {
-            const int32 Order = _stricmp(A.VirtualPath.c_str(), B.VirtualPath.c_str());
+            const int32 Order = _stricmp(*A.VirtualPath, *B.VirtualPath);
             return Order != 0 ? Order < 0 : A.Range.Start < B.Range.Start;
         });
-        ResultsTitle = Results.empty() ? Lumina::Format("No references to '{}'", Name) : Lumina::Format("{} references to '{}'", Results.size(), Name);
+        ResultsTitle = Results.IsEmpty() ? Lumina::Format("No references to '{}'", Name) : Lumina::Format("{} references to '{}'", Results.Num(), Name);
         bShowingReferences = true;
         bRevealSearch = true;
     }
@@ -1016,31 +1018,30 @@ namespace Lumina
             ImGuiX::Notifications::NotifyInfo("Still reading the scripts, try again in a moment.");
             return;
         }
-        if (References.empty())
+        if (References.IsEmpty())
         {
             ImGuiX::Notifications::NotifyInfo("Nothing here to rename.");
             return;
         }
-        RenameTargets.clear();
+        RenameTargets.Reset();
         for (const FCSharpScriptLanguage::FReference& Reference : References)
         {
-            RenameTargets.push_back({ VirtualPathOfDisk(Reference.Path.View()), Reference.Path, Reference.Range, Reference.Preview, Reference.bDeclaration });
+            RenameTargets.Emplace(VirtualPathOfDisk(Reference.Path.View()), Reference.Path, Reference.Range, Reference.Preview, Reference.bDeclaration);
         }
-        const FCSharpScriptLanguage::FReference& First = References.front();
+        const FCSharpScriptLanguage::FReference& First = References[0];
         const FCodeRange Word = CodeLanguageUtil::WordRangeAt(Document.Editor.GetDocument(), *Document.Language, Position);
         RenameFrom = Document.Editor.GetDocument().GetRangeText(Word);
-        if (RenameFrom.empty())
+        if (RenameFrom.IsEmpty())
         {
             RenameFrom = First.Preview;
         }
-        Memory::Memzero(RenameBuffer, sizeof(RenameBuffer));
-        std::snprintf(RenameBuffer, sizeof(RenameBuffer), "%s", RenameFrom.c_str());
+        RenameTo = RenameFrom;
         bRenameAppearing = true;
     }
 
     void FCodeWorkspaceTool::ApplyRename()
     {
-        const FStringView NewName(RenameBuffer);
+        const FStringView NewName = RenameTo.View();
         if (!IsIdentifier(NewName) || NewName == RenameFrom.View())
         {
             return;
@@ -1048,12 +1049,12 @@ namespace Lumina
         THashMap<FString, TVector<FCodeTextEdit>> ByFile;
         for (const FSearchHit& Target : RenameTargets)
         {
-            ByFile[Target.DiskPath].push_back({ FString(), Target.Range, FString(NewName) });
+            ByFile[Target.DiskPath].Emplace(FString(), Target.Range, FString(NewName));
         }
         int32 Places = 0;
         for (auto& [DiskPath, Edits] : ByFile)
         {
-            Places += (int32)Edits.size();
+            Places += Edits.Num();
             const FString Virtual = VirtualPathOfDisk(DiskPath.View());
             if (FDocument* Open = FindDocument(Virtual.View()))
             {
@@ -1064,8 +1065,8 @@ namespace Lumina
                 ApplyEditsToFile(DiskPath.View(), Move(Edits));
             }
         }
-        ImGuiX::Notifications::NotifySuccess("Renamed '{}' to '{}' in {} places across {} files.", RenameFrom.c_str(), FString(NewName).c_str(), Places, ByFile.size());
-        RenameTargets.clear();
+        ImGuiX::Notifications::NotifySuccess("Renamed '{}' to '{}' in {} places across {} files.", *RenameFrom, *FString(NewName), Places, ByFile.Num());
+        RenameTargets.Reset();
         SyncScripts();
         ProblemsDueAt = ImGui::GetTime() + ProblemsAfterSaveSeconds;
     }
@@ -1074,13 +1075,13 @@ namespace Lumina
     {
         const FString Virtual = VirtualPathOfDisk(DiskPath);
         FString Text;
-        if (Virtual.empty() || !VFS::ReadFile(Text, Virtual.View()))
+        if (Virtual.IsEmpty() || !VFS::ReadFile(Text, Virtual.View()))
         {
-            ImGuiX::Notifications::NotifyError("Could not edit '{}'.", FString(DiskPath).c_str());
+            ImGuiX::Notifications::NotifyError("Could not edit '{}'.", *FString(DiskPath));
             return;
         }
-        const bool bCarriageReturns = Text.find('\r') != FString::npos;
-        Text.erase(Algo::Remove(Text.begin(), Text.end(), '\r'), Text.end());
+        const bool bCarriageReturns = Text.Find('\r') != Constants::kIndexNone;
+        Text.ReplaceInline("\r", "");
         FCodeDocument Document;
         Document.SetText(Text.View());
         Algo::Sort(Edits, [](const FCodeTextEdit& A, const FCodeTextEdit& B) { return B.Range.Start < A.Range.Start; });
@@ -1093,14 +1094,14 @@ namespace Lumina
         if (bCarriageReturns)
         {
             FString WithReturns;
-            WithReturns.reserve(Result.size() + Result.size() / 32);
+            WithReturns.Reserve(Result.Len() + Result.Len() / 32);
             for (const char C : Result)
             {
                 if (C == '\n')
                 {
-                    WithReturns.push_back('\r');
+                    WithReturns.AppendChar('\r');
                 }
-                WithReturns.push_back(C);
+                WithReturns.AppendChar(C);
             }
             Result = Move(WithReturns);
         }
@@ -1127,45 +1128,45 @@ namespace Lumina
             return;
         }
         ProblemsDueAt = 0.0;
-        ScriptProblems.clear();
+        ScriptProblems.Reset();
         for (FCSharpScriptLanguage::FProjectDiagnostic& Problem : Found)
         {
-            ScriptProblems.push_back({ VirtualPathOfDisk(Problem.Path.View()), Move(Problem.Diagnostic) });
+            ScriptProblems.Emplace(VirtualPathOfDisk(Problem.Path.View()), Move(Problem.Diagnostic));
         }
     }
 
     void FCodeWorkspaceTool::RunSearch()
     {
-        Results.clear();
+        Results.Reset();
         bShowingReferences = false;
         const FStringView Query(SearchQuery);
-        if (Query.empty())
+        if (Query.IsEmpty())
         {
-            ResultsTitle.clear();
+            ResultsTitle.Reset();
             return;
         }
 
         TVector<FString> Includes;
-        for (FStringView Rest(SearchInclude); !Rest.empty();)
+        for (FStringView Rest(SearchInclude); !Rest.IsEmpty();)
         {
-            const size_t Comma = Rest.find_first_of(", ");
-            FStringView Part = Rest.substr(0, Comma);
-            while (!Part.empty() && Part.front() == '*')
+            const int32 Comma = Rest.FindFirstOf(", ");
+            FStringView Part = Comma == Constants::kIndexNone ? Rest : Rest.Left(Comma);
+            while (!Part.IsEmpty() && Part[0] == '*')
             {
-                Part.remove_prefix(1);
+                Part.RemovePrefix(1);
             }
-            if (!Part.empty())
+            if (!Part.IsEmpty())
             {
-                Includes.emplace_back(Part);
+                Includes.Emplace(Part);
             }
-            Rest = Comma == FStringView::npos ? FStringView() : Rest.substr(Comma + 1);
+            Rest = Comma == Constants::kIndexNone ? FStringView() : Rest.Mid(Comma + 1);
         }
 
         auto IsWord = [](char C) { return CodeText::IsAlpha(C) || CodeText::IsDigit(C) || C == '_'; };
         int32 FileCount = 0;
         for (const FFileEntry& Entry : Files)
         {
-            if (!Includes.empty() && !Algo::AnyOf(Includes.begin(), Includes.end(), [&](const FString& Include) { return CodeText::FindIgnoreCase(Entry.Relative.View(), Include.View(), 0) >= 0; }))
+            if (!Includes.IsEmpty() && !Algo::AnyOf(Includes.begin(), Includes.end(), [&](const FString& Include) { return CodeText::FindIgnoreCase(Entry.Relative.View(), Include.View(), 0) >= 0; }))
             {
                 continue;
             }
@@ -1180,23 +1181,23 @@ namespace Lumina
             }
             bool bAny = false;
             int32 Line = 0;
-            size_t LineStart = 0;
-            while (LineStart <= Text.size() && (int32)Results.size() < MaxSearchResults)
+            int32 LineStart = 0;
+            while (LineStart <= Text.Len() && Results.Num() < MaxSearchResults)
             {
-                size_t LineEnd = Text.find('\n', LineStart);
-                LineEnd = LineEnd == FString::npos ? Text.size() : LineEnd;
-                FStringView LineText(Text.data() + LineStart, LineEnd - LineStart);
-                if (!LineText.empty() && LineText.back() == '\r')
+                int32 LineEnd = Text.Find('\n', LineStart);
+                LineEnd = LineEnd == Constants::kIndexNone ? Text.Len() : LineEnd;
+                FStringView LineText(Text.GetData() + LineStart, LineEnd - LineStart);
+                if (!LineText.IsEmpty() && LineText.Last() == '\r')
                 {
-                    LineText.remove_suffix(1);
+                    LineText.RemoveSuffix(1);
                 }
                 for (int32 From = 0;;)
                 {
                     int32 Found;
                     if (bSearchCase)
                     {
-                        const size_t At = LineText.find(Query, (size_t)From);
-                        Found = At == FStringView::npos ? -1 : (int32)At;
+                        const int32 At = LineText.Find(Query, (size_t)From);
+                        Found = At == Constants::kIndexNone ? -1 : (int32)At;
                     }
                     else
                     {
@@ -1206,14 +1207,14 @@ namespace Lumina
                     {
                         break;
                     }
-                    const int32 End = Found + (int32)Query.size();
+                    const int32 End = Found + Query.Len();
                     From = End;
-                    if (bSearchWord && ((Found > 0 && IsWord(LineText[Found - 1])) || (End < (int32)LineText.size() && IsWord(LineText[End]))))
+                    if (bSearchWord && ((Found > 0 && IsWord(LineText[Found - 1])) || (End < LineText.Len() && IsWord(LineText[End]))))
                     {
                         continue;
                     }
                     const int32 Indent = CodeText::LeadingWhitespace(LineText);
-                    Results.push_back({ Entry.VirtualPath, Entry.DiskPath, { { Line, Found }, { Line, End } }, Trimmed(LineText), false, Found - Indent, End - Found });
+                    Results.Add({ Entry.VirtualPath, Entry.DiskPath, { { Line, Found }, { Line, End } }, Trimmed(LineText), false, Found - Indent, End - Found });
                     bAny = true;
                 }
                 ++Line;
@@ -1221,7 +1222,7 @@ namespace Lumina
             }
             FileCount += bAny ? 1 : 0;
         }
-        ResultsTitle = Lumina::Format("{} results in {} files{}", Results.size(), FileCount, (int32)Results.size() >= MaxSearchResults ? ", stopped at the limit" : "");
+        ResultsTitle = Lumina::Format("{} results in {} files{}", Results.Num(), FileCount, Results.Num() >= MaxSearchResults ? ", stopped at the limit" : "");
     }
 
     void FCodeWorkspaceTool::ReplaceAllInFiles()
@@ -1229,22 +1230,22 @@ namespace Lumina
         THashMap<FString, TVector<FCodeTextEdit>> ByFile;
         for (const FSearchHit& Hit : Results)
         {
-            ByFile[Hit.VirtualPath].push_back({ FString(), Hit.Range, FString(SearchReplace) });
+            ByFile[Hit.VirtualPath].Emplace(FString(), Hit.Range, FString(SearchReplace));
         }
         int32 Count = 0;
         for (auto& [VirtualPath, Edits] : ByFile)
         {
-            Count += (int32)Edits.size();
+            Count += Edits.Num();
             if (FDocument* Open = FindDocument(VirtualPath.View()))
             {
                 Open->Editor.ApplyEdits(Edits);
             }
             else
             {
-                ApplyEditsToFile(FString(VFS::ResolvePath(VirtualPath.View()).c_str()).View(), Move(Edits));
+                ApplyEditsToFile(FString(*VFS::ResolvePath(VirtualPath.View())).View(), Move(Edits));
             }
         }
-        ImGuiX::Notifications::NotifySuccess("Replaced {} matches in {} files.", Count, ByFile.size());
+        ImGuiX::Notifications::NotifySuccess("Replaced {} matches in {} files.", Count, ByFile.Num());
         RunSearch();
     }
 
@@ -1274,13 +1275,13 @@ namespace Lumina
             if (FDocument* Active = ActiveDocument(); Active != nullptr && Active->Editor.HasSelection())
             {
                 const FString Selected = Active->Editor.GetSelectedText();
-                if (Selected.find('\n') == FString::npos)
+                if (Selected.Find('\n') == Constants::kIndexNone)
                 {
-                    std::snprintf(SearchQuery, sizeof(SearchQuery), "%s", Selected.c_str());
+                    std::snprintf(SearchQuery, sizeof(SearchQuery), "%s", *Selected);
                 }
             }
             bFocusSearch = true;
-            ImGui::SetWindowFocus(GetToolWindowName(SearchWindow).c_str());
+            ImGui::SetWindowFocus(*GetToolWindowName(SearchWindow));
         }
         else if (Pressed(Keys.SaveAll))
         {
@@ -1290,9 +1291,9 @@ namespace Lumina
         {
             RequestClose(ActiveIndex);
         }
-        else if (const int32 Step = Pressed(Keys.NextFile) ? 1 : Pressed(Keys.PreviousFile) ? -1 : 0; Step != 0 && !Documents.empty())
+        else if (const int32 Step = Pressed(Keys.NextFile) ? 1 : Pressed(Keys.PreviousFile) ? -1 : 0; Step != 0 && !Documents.IsEmpty())
         {
-            const int32 Count = (int32)Documents.size();
+            const int32 Count = Documents.Num();
             SelectRequest = ((ActiveIndex + Step) % Count + Count) % Count;
         }
         else if (Pressed(Keys.NavigateBack))
@@ -1331,9 +1332,9 @@ namespace Lumina
         Picker = Kind;
         bPickerAppearing = true;
         Memory::Memzero(PickerQuery, sizeof(PickerQuery));
-        PickerQueryUsed.clear();
+        PickerQueryUsed.Reset();
         PickerSelected = 0;
-        PickerSymbols.clear();
+        PickerSymbols.Reset();
     }
 
     void FCodeWorkspaceTool::DrawExplorer()
@@ -1351,13 +1352,13 @@ namespace Lumina
 
         ImGui::BeginChild("##files");
         const FStringView Filter(ExplorerFilter);
-        if (Roots.empty())
+        if (Roots.IsEmpty())
         {
             ImGui::TextDisabled(LOC("This project has no script, content or shader folders."));
         }
-        else if (Filter.empty())
+        else if (Filter.IsEmpty())
         {
-            for (int32 RootIndex = 0; RootIndex < (int32)RootNodes.size(); ++RootIndex)
+            for (int32 RootIndex = 0; RootIndex < RootNodes.Num(); ++RootIndex)
             {
                 DrawTree(RootNodes[RootIndex], Roots[RootIndex].VirtualPath);
             }
@@ -1370,22 +1371,22 @@ namespace Lumina
                 const int32 Score = Math::Max(FuzzyScore(Filter, Entry.Name.View()) * 2, FuzzyScore(Filter, Entry.Relative.View()));
                 if (Score > 0)
                 {
-                    Matches.push_back({ Score, FileIcon(Entry.Name.View()), Entry.Name, Roots[Entry.Root].Label + "/" + Entry.Relative, Entry.VirtualPath });
+                    Matches.Emplace(Score, FileIcon(Entry.Name.View()), Entry.Name, Roots[Entry.Root].Label + "/" + Entry.Relative, Entry.VirtualPath);
                 }
             }
             Algo::StableSort(Matches, [](const FPickerRow& A, const FPickerRow& B) { return A.Score > B.Score; });
-            for (int32 Index = 0; Index < Math::Min((int32)Matches.size(), MaxPickerRows); ++Index)
+            for (int32 Index = 0; Index < Math::Min(Matches.Num(), MaxPickerRows); ++Index)
             {
                 const FPickerRow& Match = Matches[Index];
                 ImGui::PushID(Index);
-                if (ImGui::Selectable(Lumina::Format("{} {}", Match.Icon, Match.Label).c_str()))
+                if (ImGui::Selectable(*Lumina::Format("{} {}", Match.Icon, Match.Label)))
                 {
                     OpenDocument(Match.VirtualPath.View());
                 }
-                ImGui::SetItemTooltip("%s", Match.Detail.c_str());
+                ImGui::SetItemTooltip("%s", *Match.Detail);
                 ImGui::PopID();
             }
-            if (Matches.empty())
+            if (Matches.IsEmpty())
             {
                 ImGui::TextDisabled(LOC("No file matches."));
             }
@@ -1404,7 +1405,7 @@ namespace Lumina
             const FDocument* Open = FindDocument(Entry.VirtualPath.View());
             const bool bActive = Active != nullptr && Active == Open;
             const ImGuiTreeNodeFlags Flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_SpanAvailWidth | (bActive ? ImGuiTreeNodeFlags_Selected : 0);
-            ImGui::TreeNodeEx(Entry.Name.c_str(), Flags, "%s %s%s", FileIcon(Entry.Name.View()), Entry.Name.c_str(), Open != nullptr && Open->bDirty ? " *" : "");
+            ImGui::TreeNodeEx(*Entry.Name, Flags, "%s %s%s", FileIcon(Entry.Name.View()), *Entry.Name, Open != nullptr && Open->bDirty ? " *" : "");
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
             {
                 OpenDocument(Entry.VirtualPath.View());
@@ -1417,15 +1418,15 @@ namespace Lumina
                 }
                 if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_COPY, "Copy Path")))
                 {
-                    ImGui::SetClipboardText(Entry.VirtualPath.c_str());
+                    ImGui::SetClipboardText(*Entry.VirtualPath);
                 }
                 if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_OPEN_IN_NEW, "Open Externally")))
                 {
-                    Platform::LaunchURL(UTF8_TO_TCHAR(Entry.DiskPath.c_str()));
+                    Platform::LaunchURL(UTF8_TO_TCHAR(*Entry.DiskPath));
                 }
                 if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_FOLDER_OPEN, "Show in Folder")))
                 {
-                    Platform::LaunchURL(UTF8_TO_TCHAR(FString(VFS::Parent(Entry.DiskPath.View(), true)).c_str()));
+                    Platform::LaunchURL(UTF8_TO_TCHAR(*FString(VFS::Parent(Entry.DiskPath.View(), true))));
                 }
                 ImGui::EndPopup();
             }
@@ -1434,7 +1435,7 @@ namespace Lumina
 
         const bool bRoot = Algo::Contains(RootNodes, NodeIndex);
         const ImGuiTreeNodeFlags Flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick | ImGuiTreeNodeFlags_SpanAvailWidth | (bRoot ? ImGuiTreeNodeFlags_DefaultOpen : 0);
-        const bool bOpen = ImGui::TreeNodeEx(Node.Name.c_str(), Flags, "%s %s", bRoot ? LE_ICON_FOLDER : LE_ICON_FOLDER_OUTLINE, Node.Name.c_str());
+        const bool bOpen = ImGui::TreeNodeEx(*Node.Name, Flags, "%s %s", bRoot ? LE_ICON_FOLDER : LE_ICON_FOLDER_OUTLINE, *Node.Name);
         if (ImGui::BeginPopupContextItem())
         {
             if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_FILE_PLUS_OUTLINE, "New File...")))
@@ -1445,11 +1446,11 @@ namespace Lumina
             }
             if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_COPY, "Copy Path")))
             {
-                ImGui::SetClipboardText(Folder.c_str());
+                ImGui::SetClipboardText(*Folder);
             }
             if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_FOLDER_OPEN, "Show in Folder")))
             {
-                Platform::LaunchURL(UTF8_TO_TCHAR(VFS::ResolvePath(Folder.View()).c_str()));
+                Platform::LaunchURL(UTF8_TO_TCHAR(*VFS::ResolvePath(Folder.View())));
             }
             ImGui::EndPopup();
         }
@@ -1478,7 +1479,7 @@ namespace Lumina
         const bool bAppearing = bNewFileAppearing;
         bNewFileAppearing = false;
 
-        ImGui::TextColored(EditorColors::SectionHeader(), LOC("New file in %s"), NewFileFolder.c_str());
+        ImGui::TextColored(EditorColors::SectionHeader(), "New file in %s", *NewFileFolder);
         if (bAppearing)
         {
             ImGui::SetKeyboardFocusHere();
@@ -1487,10 +1488,20 @@ namespace Lumina
         const bool bSubmit = ImGui::InputTextWithHint("##name", LOC("Name.cs"), NewFileBuffer, sizeof(NewFileBuffer), ImGuiInputTextFlags_EnterReturnsTrue);
         const FStringView Name(NewFileBuffer);
         const FString Path = NewFileFolder + "/" + FString(Name);
+        const FStringView Stem = VFS::FileName(Path.View(), true);
+        FString Reason;
+        if (AssetOps::IsValidLeafName(Name, &Reason) && Stem.IsEmpty())
+        {
+            Reason = "A file needs a name before its extension.";
+        }
         const bool bKnown = HasAnyExtension(Name, TextExtensions);
-        const bool bExists = !Name.empty() && VFS::Exists(Path.View());
-        const bool bValid = bKnown && !bExists && Name.find_first_of("/\\:*?\"<>|") == FStringView::npos;
-        if (!Name.empty() && !bKnown)
+        const bool bExists = Reason.IsEmpty() && bKnown && VFS::Exists(Path.View());
+        const bool bValid = Reason.IsEmpty() && bKnown && !bExists;
+        if (!Name.IsEmpty() && !Reason.IsEmpty())
+        {
+            ImGui::TextColored(EditorColors::Danger(), "%s", *Reason);
+        }
+        else if (!Name.IsEmpty() && !bKnown)
         {
             ImGui::TextColored(EditorColors::Warning(), LOC("Use a text extension such as .cs, .slang, .rml or .json."));
         }
@@ -1503,7 +1514,7 @@ namespace Lumina
         if (ImGui::Button(LOC_ICON_ID(LE_ICON_FILE_PLUS_OUTLINE, "Create")) || (bSubmit && bValid))
         {
             const bool bScript = EndsWithIgnoreCase(Name, ".cs");
-            const FString Source = bScript ? CSharpScript::NewScriptSource(VFS::FileName(Name, true)) : FString();
+            const FString Source = bScript ? CSharpScript::NewScriptSource(Stem) : FString();
             if (VFS::WriteFile(Path.View(), Source.View()))
             {
                 ImGui::CloseCurrentPopup();
@@ -1511,12 +1522,12 @@ namespace Lumina
                 OpenDocument(Path.View());
                 if (bScript)
                 {
-                    DotNet::NotifyScriptSourceChanged(FString(VFS::ResolvePath(Path.View()).c_str()).View());
+                    DotNet::NotifyScriptSourceChanged(FString(*VFS::ResolvePath(Path.View())).View());
                 }
             }
             else
             {
-                ImGuiX::Notifications::NotifyError("Could not create '{}'.", Path.c_str());
+                ImGuiX::Notifications::NotifyError("Could not create '{}'.", *Path);
             }
         }
         ImGui::EndDisabled();
@@ -1549,14 +1560,14 @@ namespace Lumina
         auto Hint = [](const char* Text, const SShortcut& Shortcut)
         {
             const FString Label = Shortcut.GetLabel();
-            return Label.empty() ? Lumina::Format("{}.", Text) : Lumina::Format("{} ({}).", Text, Label);
+            return Label.IsEmpty() ? Lumina::Format("{}.", Text) : Lumina::Format("{} ({}).", Text, Label);
         };
 
-        if (ToolbarButton(LE_ICON_ARROW_LEFT, !BackHistory.empty(), Hint("Back", Keys.NavigateBack).c_str()))
+        if (ToolbarButton(LE_ICON_ARROW_LEFT, !BackHistory.IsEmpty(), *Hint("Back", Keys.NavigateBack)))
         {
             GoBack();
         }
-        if (ToolbarButton(LE_ICON_ARROW_RIGHT, !ForwardHistory.empty(), Hint("Forward", Keys.NavigateForward).c_str()))
+        if (ToolbarButton(LE_ICON_ARROW_RIGHT, !ForwardHistory.IsEmpty(), *Hint("Forward", Keys.NavigateForward)))
         {
             GoForward();
         }
@@ -1565,26 +1576,26 @@ namespace Lumina
         {
             OnSave();
         }
-        if (ToolbarButton(LE_ICON_CONTENT_SAVE_ALL " Save All", IsUnsavedDocument(), Hint("Save every changed file", Keys.SaveAll).c_str()))
+        if (ToolbarButton(LE_ICON_CONTENT_SAVE_ALL " Save All", IsUnsavedDocument(), *Hint("Save every changed file", Keys.SaveAll)))
         {
             SaveAll();
         }
         Divider();
-        if (ToolbarButton(LE_ICON_FILE_FIND_OUTLINE " Go to File", !Files.empty(), Lumina::Format("{} {}", Hint("Open a file by name", Keys.GoToFile), Hint("Go to a line", Keys.GoToLine)).c_str()))
+        if (ToolbarButton(LE_ICON_FILE_FIND_OUTLINE " Go to File", !Files.IsEmpty(), *Lumina::Format("{} {}", Hint("Open a file by name", Keys.GoToFile), Hint("Go to a line", Keys.GoToLine))))
         {
             OpenPicker(EPicker::Files);
         }
-        if (ToolbarButton(LE_ICON_FUNCTION " Go to Symbol", true, Lumina::Format("{} {}", Hint("Find a type or member in the scripts", Keys.GoToSymbol), Hint("Find one in this file", Keys.GoToSymbolInFile)).c_str()))
+        if (ToolbarButton(LE_ICON_FUNCTION " Go to Symbol", true, *Lumina::Format("{} {}", Hint("Find a type or member in the scripts", Keys.GoToSymbol), Hint("Find one in this file", Keys.GoToSymbolInFile))))
         {
             OpenPicker(EPicker::WorkspaceSymbols);
         }
-        if (ToolbarButton(LE_ICON_MAGNIFY " Find in Files", true, Hint("Search every file in the project", Keys.FindInFiles).c_str()))
+        if (ToolbarButton(LE_ICON_MAGNIFY " Find in Files", true, *Hint("Search every file in the project", Keys.FindInFiles)))
         {
             bFocusSearch = true;
-            ImGui::SetWindowFocus(GetToolWindowName(SearchWindow).c_str());
+            ImGui::SetWindowFocus(*GetToolWindowName(SearchWindow));
         }
         Divider();
-        if (ToolbarButton(LE_ICON_FORMAT_ALIGN_LEFT " Format", Active != nullptr, Hint("Re-indent this file", Keys.FormatDocument).c_str()))
+        if (ToolbarButton(LE_ICON_FORMAT_ALIGN_LEFT " Format", Active != nullptr, *Hint("Re-indent this file", Keys.FormatDocument)))
         {
             Active->Editor.FormatDocument();
         }
@@ -1592,13 +1603,13 @@ namespace Lumina
         {
             ImGui::OpenPopup("##CodeView");
         }
-        if (ToolbarButton(LE_ICON_REFRESH " Reload Scripts", true, Hint("Recompile and reload every script now", Keys.ReloadScripts).c_str()))
+        if (ToolbarButton(LE_ICON_REFRESH " Reload Scripts", true, *Hint("Recompile and reload every script now", Keys.ReloadScripts)))
         {
             DotNet::RequestScriptReload();
         }
         if (ToolbarButton(LE_ICON_OPEN_IN_NEW, Active != nullptr, "Open this file in the application the system uses for it."))
         {
-            Platform::LaunchURL(UTF8_TO_TCHAR(Active->DiskPath.c_str()));
+            Platform::LaunchURL(UTF8_TO_TCHAR(*Active->DiskPath));
         }
         ImGui::NewLine();
 
@@ -1614,7 +1625,7 @@ namespace Lumina
         DrawToolbar();
         ImGui::Separator();
 
-        if (Documents.empty())
+        if (Documents.IsEmpty())
         {
             const CCodeEditorShortcuts& Keys = *GetDefault<CCodeEditorShortcuts>();
             const TPair<const SShortcut*, const char*> Hints[] =
@@ -1631,7 +1642,7 @@ namespace Lumina
             {
                 if (Shortcut->Primary.IsValid())
                 {
-                    ImGui::TextColored(EditorColors::SectionHeader(), "%-20s", Shortcut->GetLabel().c_str());
+                    ImGui::TextColored(EditorColors::SectionHeader(), "%-20s", *Shortcut->GetLabel());
                     ImGui::SameLine();
                     ImGui::TextUnformatted(Text);
                 }
@@ -1640,7 +1651,7 @@ namespace Lumina
         else if (ImGui::BeginTabBar("##CodeTabs", ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_TabListPopupButton))
         {
             int32 CloseOthersOf = -1;
-            for (int32 Index = 0; Index < (int32)Documents.size(); ++Index)
+            for (int32 Index = 0; Index < Documents.Num(); ++Index)
             {
                 FDocument& Document = *Documents[Index];
                 ImGuiTabItemFlags Flags = Document.bDirty ? ImGuiTabItemFlags_UnsavedDocument : ImGuiTabItemFlags_None;
@@ -1650,11 +1661,11 @@ namespace Lumina
                 }
                 const FString Label = Lumina::Format("{} {}###{}", FileIcon(Document.Name.View()), Document.Name, Document.VirtualPath);
                 bool bOpen = true;
-                const bool bSelected = ImGui::BeginTabItem(Label.c_str(), &bOpen, Flags);
-                ImGui::SetItemTooltip("%s", Document.VirtualPath.c_str());
+                const bool bSelected = ImGui::BeginTabItem(*Label, &bOpen, Flags);
+                ImGui::SetItemTooltip("%s", *Document.VirtualPath);
                 if (ImGui::BeginPopupContextItem())
                 {
-                    if (ImGui::MenuItem(LOC_ID("Close"), GetDefault<CCodeEditorShortcuts>()->CloseFile.GetLabel().c_str()))
+                    if (ImGui::MenuItem("Close", *GetDefault<CCodeEditorShortcuts>()->CloseFile.GetLabel()))
                     {
                         RequestClose(Index);
                     }
@@ -1664,11 +1675,11 @@ namespace Lumina
                     }
                     if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CONTENT_COPY, "Copy Path")))
                     {
-                        ImGui::SetClipboardText(Document.VirtualPath.c_str());
+                        ImGui::SetClipboardText(*Document.VirtualPath);
                     }
                     if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_OPEN_IN_NEW, "Open Externally")))
                     {
-                        Platform::LaunchURL(UTF8_TO_TCHAR(Document.DiskPath.c_str()));
+                        Platform::LaunchURL(UTF8_TO_TCHAR(*Document.DiskPath));
                     }
                     ImGui::EndPopup();
                 }
@@ -1695,14 +1706,14 @@ namespace Lumina
             if (CloseOthersOf >= 0)
             {
                 const FDocument* Keep = Documents[CloseOthersOf].get();
-                for (int32 Index = (int32)Documents.size() - 1; Index >= 0; --Index)
+                for (int32 Index = Documents.Num() - 1; Index >= 0; --Index)
                 {
                     if (Documents[Index].get() != Keep && !Documents[Index]->bDirty)
                     {
                         CloseDocument(Index);
                     }
                 }
-                for (int32 Index = 0; Index < (int32)Documents.size(); ++Index)
+                for (int32 Index = 0; Index < Documents.Num(); ++Index)
                 {
                     ActiveIndex = Documents[Index].get() == Keep ? Index : ActiveIndex;
                 }
@@ -1715,7 +1726,7 @@ namespace Lumina
         {
             const ImVec2 Avail = ImGui::GetContentRegionAvail();
             const float StatusHeight = ImGui::GetFrameHeightWithSpacing();
-            ImGui::PushID(Active->VirtualPath.c_str());
+            ImGui::PushID(*Active->VirtualPath);
             Active->Editor.Render("##code", ImVec2(Avail.x, Math::Max(32.0f, Avail.y - StatusHeight)));
             ImGui::PopID();
             DrawStatusBar(*Active);
@@ -1724,12 +1735,12 @@ namespace Lumina
         if (bRevealProblems)
         {
             bRevealProblems = false;
-            RevealDockedWindow(GetToolWindowName(ProblemsWindow).c_str());
+            RevealDockedWindow(*GetToolWindowName(ProblemsWindow));
         }
         if (bRevealSearch)
         {
             bRevealSearch = false;
-            RevealDockedWindow(GetToolWindowName(SearchWindow).c_str());
+            RevealDockedWindow(*GetToolWindowName(SearchWindow));
         }
         DrawPicker();
         DrawRenamePopup();
@@ -1742,11 +1753,11 @@ namespace Lumina
         const int32 Column = CodeText::VisualColumn(Document.Editor.GetDocument().GetLineView(Cursor.Line), Cursor.Column, Document.Editor.GetSettings().TabSize);
         constexpr float Gap = 16.0f;
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(EditorColors::TextDim(), "%s", Document.VirtualPath.c_str());
+        ImGui::TextColored(EditorColors::TextDim(), "%s", *Document.VirtualPath);
         if (const FCodeSymbolInfo* Symbol = EnclosingSymbol(Document.Outline, Cursor.Line))
         {
             ImGui::SameLine(0.0f, Gap * 0.5f);
-            ImGui::TextColored(EditorColors::TextDim(), "%s %s%s%s", SymbolIcon(Symbol->Kind), Symbol->Container.c_str(), Symbol->Container.empty() ? "" : ".", Symbol->Name.c_str());
+            ImGui::TextColored(EditorColors::TextDim(), "%s %s%s%s", SymbolIcon(Symbol->Kind), *Symbol->Container, Symbol->Container.IsEmpty() ? "" : ".", *Symbol->Name);
         }
         ImGui::SameLine(0.0f, Gap);
         ImGui::TextColored(EditorColors::TextDim(), LOC("Ln %d, Col %d"), Cursor.Line + 1, Column + 1);
@@ -1754,7 +1765,7 @@ namespace Lumina
         ImGui::TextColored(EditorColors::TextDim(), LOC("%d lines"), Document.Editor.GetLineCount());
         ImGui::SameLine(0.0f, Gap);
         const FStringView LanguageName = Document.Language->GetName();
-        ImGui::TextColored(Document.CSharp != nullptr ? EditorColors::Success() : EditorColors::TextDim(), "%.*s", (int)LanguageName.size(), LanguageName.data());
+        ImGui::TextColored(Document.CSharp != nullptr ? EditorColors::Success() : EditorColors::TextDim(), "%.*s", LanguageName.Len(), LanguageName.GetData());
         if (ReloadsAtSave >= 0)
         {
             ImGui::SameLine(0.0f, Gap);
@@ -1778,7 +1789,7 @@ namespace Lumina
         }
         ImGui::PushStyleColor(ImGuiCol_Text, Errors > 0 ? EditorColors::Danger() : EditorColors::Warning());
         const FString Label = Lumina::Format(LE_ICON_ALERT_CIRCLE_OUTLINE " {} errors, {} warnings", Errors, Warnings);
-        if (ImGui::SmallButton(Label.c_str()) && First != nullptr)
+        if (ImGui::SmallButton(*Label) && First != nullptr)
         {
             Document.Editor.Select(First->Range);
             Document.Editor.Focus();
@@ -1786,7 +1797,7 @@ namespace Lumina
         ImGui::PopStyleColor();
         if (First != nullptr)
         {
-            ImGui::SetItemTooltip("%s", First->Message.c_str());
+            ImGui::SetItemTooltip("%s", *First->Message);
         }
     }
 
@@ -1809,7 +1820,7 @@ namespace Lumina
             {
                 if (Diagnostic.Severity != ECodeSeverity::Info)
                 {
-                    Rows.push_back({ &Document->VirtualPath, &Diagnostic });
+                    Rows.Emplace(&Document->VirtualPath, &Diagnostic);
                 }
             }
         }
@@ -1818,7 +1829,7 @@ namespace Lumina
             const FDocument* Open = FindDocument(Problem.VirtualPath.View());
             if (Open == nullptr || !Open->bDirty)
             {
-                Rows.push_back({ &Problem.VirtualPath, &Problem.Diagnostic });
+                Rows.Emplace(&Problem.VirtualPath, &Problem.Diagnostic);
             }
         }
         Algo::StableSort(Rows, [](const FRow& A, const FRow& B)
@@ -1827,7 +1838,7 @@ namespace Lumina
             {
                 return A.Diagnostic->Severity < B.Diagnostic->Severity;
             }
-            const int32 Order = _stricmp(A.VirtualPath->c_str(), B.VirtualPath->c_str());
+            const int32 Order = _stricmp(*(*A.VirtualPath), *(*B.VirtualPath));
             return Order != 0 ? Order < 0 : A.Diagnostic->Range.Start < B.Diagnostic->Range.Start;
         });
 
@@ -1839,7 +1850,7 @@ namespace Lumina
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(Errors > 0 ? EditorColors::Danger() : EditorColors::TextDim(), LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "%d errors"), Errors);
         ImGui::SameLine(0.0f, 16.0f);
-        ImGui::TextColored(EditorColors::TextDim(), LOC_ICON(LE_ICON_ALERT_OUTLINE, "%d warnings"), (int32)Rows.size() - Errors);
+        ImGui::TextColored(EditorColors::TextDim(), LE_ICON_ALERT_OUTLINE " %d warnings", Rows.Num() - Errors);
         ImGui::SameLine(0.0f, 16.0f);
         if (ImGui::SmallButton(LOC_ICON_ID(LE_ICON_REFRESH, "Check Scripts")))
         {
@@ -1864,7 +1875,7 @@ namespace Lumina
         ImGui::TableHeadersRow();
         int32 Clicked = -1;
         ImGuiListClipper Clipper;
-        Clipper.Begin((int)Rows.size());
+        Clipper.Begin(Rows.Num());
         while (Clipper.Step())
         {
             for (int32 Index = Clipper.DisplayStart; Index < Clipper.DisplayEnd; ++Index)
@@ -1879,14 +1890,14 @@ namespace Lumina
                 ImGui::TextUnformatted(bError ? LE_ICON_ALERT_CIRCLE_OUTLINE : LE_ICON_ALERT_OUTLINE);
                 ImGui::PopStyleColor();
                 ImGui::SameLine();
-                if (ImGui::Selectable(Row.Diagnostic->Message.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
+                if (ImGui::Selectable(*Row.Diagnostic->Message, false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
                 {
                     Clicked = Index;
                 }
-                ImGui::SetItemTooltip("%s", Row.Diagnostic->Message.c_str());
+                ImGui::SetItemTooltip("%s", *Row.Diagnostic->Message);
                 ImGui::PopID();
                 ImGui::TableNextColumn();
-                ImGui::TextColored(EditorColors::TextDim(), "%.*s", (int)FileName.size(), FileName.data());
+                ImGui::TextColored(EditorColors::TextDim(), "%.*s", FileName.Len(), FileName.GetData());
                 ImGui::TableNextColumn();
                 ImGui::TextColored(EditorColors::TextDim(), "%d", Row.Diagnostic->Range.Start.Line + 1);
             }
@@ -1928,8 +1939,8 @@ namespace Lumina
         ImGui::SetNextItemWidth(FieldWidth);
         ImGui::InputTextWithHint("##replace", LOC_ICON(LE_ICON_SWAP_HORIZONTAL, "Replace with"), SearchReplace, sizeof(SearchReplace));
         ImGui::SameLine();
-        ImGui::BeginDisabled(Results.empty() || bShowingReferences);
-        if (ImGui::Button(LOC_ID("All"), ImVec2(ToggleWidth * 2.0f + Style.ItemSpacing.x, 0.0f)))
+        ImGui::BeginDisabled(Results.IsEmpty() || bShowingReferences);
+        if (ImGui::Button("All", ImVec2(ToggleWidth * 2.0f + Style.ItemSpacing.x, 0.0f)))
         {
             bConfirmReplace = true;
         }
@@ -1946,7 +1957,7 @@ namespace Lumina
 
         if (bConfirmReplace)
         {
-            ImGui::TextColored(EditorColors::Warning(), LOC("Replace %d matches with '%s'?"), (int32)Results.size(), SearchReplace);
+            ImGui::TextColored(EditorColors::Warning(), "Replace %d matches with '%s'?", Results.Num(), SearchReplace);
             ImGui::SameLine();
             if (ImGui::SmallButton(LOC_ID("Replace")))
             {
@@ -1961,23 +1972,23 @@ namespace Lumina
         }
 
         ImGui::Separator();
-        if (!ResultsTitle.empty())
+        if (!ResultsTitle.IsEmpty())
         {
-            ImGui::TextColored(EditorColors::TextDim(), "%s", ResultsTitle.c_str());
+            ImGui::TextColored(EditorColors::TextDim(), "%s", *ResultsTitle);
         }
         ImGui::BeginChild("##results");
         int32 Clicked = -1;
-        for (int32 Index = 0; Index < (int32)Results.size();)
+        for (int32 Index = 0; Index < Results.Num();)
         {
             const FString& Path = Results[Index].VirtualPath;
             int32 End = Index;
-            while (End < (int32)Results.size() && Results[End].VirtualPath == Path)
+            while (End < Results.Num() && Results[End].VirtualPath == Path)
             {
                 ++End;
             }
             const FStringView FileName = VFS::FileName(Path.View());
-            const bool bOpen = ImGui::TreeNodeEx(Path.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth, "%s %.*s  (%d)", FileIcon(FileName), (int)FileName.size(), FileName.data(), End - Index);
-            ImGui::SetItemTooltip("%s", Path.c_str());
+            const bool bOpen = ImGui::TreeNodeEx(*Path, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth, "%s %.*s  (%d)", FileIcon(FileName), FileName.Len(), FileName.GetData(), End - Index);
+            ImGui::SetItemTooltip("%s", *Path);
             if (bOpen)
             {
                 for (int32 HitIndex = Index; HitIndex < End; ++HitIndex)
@@ -1997,7 +2008,7 @@ namespace Lumina
         if (Clicked >= 0)
         {
             const FSearchHit Hit = Results[Clicked];
-            const FString Target = Hit.VirtualPath.empty() ? VirtualPathOfDisk(Hit.DiskPath.View()) : Hit.VirtualPath;
+            const FString Target = Hit.VirtualPath.IsEmpty() ? VirtualPathOfDisk(Hit.DiskPath.View()) : Hit.VirtualPath;
             OpenRange(Target.View(), Hit.Range);
         }
     }
@@ -2014,33 +2025,33 @@ namespace Lumina
         ImGui::InputTextWithHint("##filter", LOC_ICON(LE_ICON_MAGNIFY, "Filter symbols"), OutlineFilter, sizeof(OutlineFilter));
         ImGui::Separator();
         ImGui::BeginChild("##symbols");
-        if (Active->Outline.empty())
+        if (Active->Outline.IsEmpty())
         {
             ImGui::TextDisabled(LOC("No symbols in this file."));
         }
         const FStringView Filter(OutlineFilter);
         const FCodeSymbolInfo* Current = EnclosingSymbol(Active->Outline, Active->Editor.GetCursor().Line);
-        for (int32 Index = 0; Index < (int32)Active->Outline.size(); ++Index)
+        for (int32 Index = 0; Index < Active->Outline.Num(); ++Index)
         {
             const FCodeSymbolInfo& Symbol = Active->Outline[Index];
-            if (!Filter.empty() && FuzzyScore(Filter, Symbol.Name.View()) == 0)
+            if (!Filter.IsEmpty() && FuzzyScore(Filter, Symbol.Name.View()) == 0)
             {
                 continue;
             }
-            if (Filter.empty())
+            if (Filter.IsEmpty())
             {
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (float)Symbol.Depth * ImGui::GetStyle().IndentSpacing);
             }
             ImGui::PushID(Index);
-            if (ImGui::Selectable(Lumina::Format("{} {}", SymbolIcon(Symbol.Kind), Symbol.Name).c_str(), &Symbol == Current))
+            if (ImGui::Selectable(*Lumina::Format("{} {}", SymbolIcon(Symbol.Kind), Symbol.Name), &Symbol == Current))
             {
                 PushHistory();
                 Active->Editor.SetCursor(Symbol.Position, true);
                 Active->Editor.Focus();
             }
-            if (!Symbol.Detail.empty())
+            if (!Symbol.Detail.IsEmpty())
             {
-                ImGui::SetItemTooltip("%s", Symbol.Detail.c_str());
+                ImGui::SetItemTooltip("%s", *Symbol.Detail);
             }
             ImGui::PopID();
         }
@@ -2092,14 +2103,14 @@ namespace Lumina
 
         const FStringView Query(PickerQuery);
         TVector<FPickerRow> Rows;
-        const bool bLineQuery = Picker == EPicker::Line || (Picker == EPicker::Files && !Query.empty() && Query[0] == ':');
-        const int32 LineTarget = Picker == EPicker::Line ? ParseLineNumber(Query) : (bLineQuery ? ParseLineNumber(Query.substr(1)) : -1);
+        const bool bLineQuery = Picker == EPicker::Line || (Picker == EPicker::Files && !Query.IsEmpty() && Query[0] == ':');
+        const int32 LineTarget = Picker == EPicker::Line ? ParseLineNumber(Query) : (bLineQuery ? ParseLineNumber(Query.Mid(1)) : -1);
         if (bLineQuery)
         {
             if (LineTarget > 0 && Active != nullptr)
             {
                 const int32 Line = Math::Min(LineTarget, Active->Editor.GetLineCount());
-                Rows.push_back({ 1, LE_ICON_FORMAT_LIST_NUMBERED, Lumina::Format("Go to line {}", Line), Active->Name, Active->VirtualPath, { Line - 1, 0 } });
+                Rows.Add({ 1, LE_ICON_FORMAT_LIST_NUMBERED, Lumina::Format("Go to line {}", Line), Active->Name, Active->VirtualPath, { Line - 1, 0 } });
             }
         }
         else if (Picker == EPicker::Files)
@@ -2109,8 +2120,8 @@ namespace Lumina
                 int32 Score = Math::Max(FuzzyScore(Query, Entry.Name.View()) * 2, FuzzyScore(Query, Entry.Relative.View()));
                 if (Score > 0)
                 {
-                    Score += Query.empty() && FindDocument(Entry.VirtualPath.View()) != nullptr ? 1000 : 0;
-                    Rows.push_back({ Score, FileIcon(Entry.Name.View()), Entry.Name, Roots[Entry.Root].Label + "/" + Entry.Relative, Entry.VirtualPath });
+                    Score += Query.IsEmpty() && FindDocument(Entry.VirtualPath.View()) != nullptr ? 1000 : 0;
+                    Rows.Emplace(Score, FileIcon(Entry.Name.View()), Entry.Name, Roots[Entry.Root].Label + "/" + Entry.Relative, Entry.VirtualPath);
                 }
             }
         }
@@ -2121,14 +2132,14 @@ namespace Lumina
                 const int32 Score = FuzzyScore(Query, Symbol.Name.View());
                 if (Score > 0)
                 {
-                    Rows.push_back({ Score, SymbolIcon(Symbol.Kind), Symbol.Name, Symbol.Container, Active->VirtualPath, Symbol.Position });
+                    Rows.Emplace(Score, SymbolIcon(Symbol.Kind), Symbol.Name, Symbol.Container, Active->VirtualPath, Symbol.Position);
                 }
             }
         }
         else if (Picker == EPicker::WorkspaceSymbols)
         {
             FCSharpScriptLanguage* Script = AnyScriptLanguage();
-            if (Script != nullptr && !Query.empty() && Query != PickerQueryUsed.View())
+            if (Script != nullptr && !Query.IsEmpty() && Query != PickerQueryUsed.View())
             {
                 SyncScripts();
                 TVector<FCodeSymbolInfo> Found;
@@ -2141,28 +2152,28 @@ namespace Lumina
             for (const FCodeSymbolInfo& Symbol : PickerSymbols)
             {
                 const FString Target = VirtualPathOfDisk(Symbol.Path.View());
-                if (!Target.empty())
+                if (!Target.IsEmpty())
                 {
-                    const FString Where = Lumina::Format("{}{}{}", Symbol.Container, Symbol.Container.empty() ? "" : "  ", VFS::FileName(Target.View()));
-                    Rows.push_back({ Math::Max(1, FuzzyScore(Query, Symbol.Name.View())), SymbolIcon(Symbol.Kind), Symbol.Name, Where, Target, Symbol.Position });
+                    const FString Where = Lumina::Format("{}{}{}", Symbol.Container, Symbol.Container.IsEmpty() ? "" : "  ", VFS::FileName(Target.View()));
+                    Rows.Emplace(Math::Max(1, FuzzyScore(Query, Symbol.Name.View())), SymbolIcon(Symbol.Kind), Symbol.Name, Where, Target, Symbol.Position);
                 }
             }
             if (Script == nullptr)
             {
                 ImGui::TextDisabled(LOC("This project has no C# scripts."));
             }
-            else if (Query.empty())
+            else if (Query.IsEmpty())
             {
                 ImGui::TextDisabled(LOC("Type part of a name."));
             }
         }
         Algo::StableSort(Rows, [](const FPickerRow& A, const FPickerRow& B) { return A.Score > B.Score; });
-        if ((int32)Rows.size() > MaxPickerRows)
+        if (Rows.Num() > MaxPickerRows)
         {
-            Rows.resize(MaxPickerRows);
+            Rows.SetNum(MaxPickerRows);
         }
 
-        const int32 Count = (int32)Rows.size();
+        const int32 Count = Rows.Num();
         bool bMoved = false;
         if (Count > 0 && GetDefault<CCodeEditorShortcuts>()->MoveDown.IsPressed(0, ImGuiInputFlags_RouteAlways | ImGuiInputFlags_Repeat))
         {
@@ -2183,7 +2194,7 @@ namespace Lumina
         {
             const FPickerRow& Row = Rows[Index];
             ImGui::PushID(Index);
-            if (ImGui::Selectable(Lumina::Format("{} {}", Row.Icon, Row.Label).c_str(), Index == PickerSelected))
+            if (ImGui::Selectable(*Lumina::Format("{} {}", Row.Icon, Row.Label), Index == PickerSelected))
             {
                 Chosen = Index;
             }
@@ -2191,14 +2202,14 @@ namespace Lumina
             {
                 ImGui::SetScrollHereY();
             }
-            if (!Row.Detail.empty())
+            if (!Row.Detail.IsEmpty())
             {
                 ImGui::SameLine();
-                ImGui::TextColored(EditorColors::TextDim(), "%s", Row.Detail.c_str());
+                ImGui::TextColored(EditorColors::TextDim(), "%s", *Row.Detail);
             }
             ImGui::PopID();
         }
-        if (Count == 0 && !Query.empty())
+        if (Count == 0 && !Query.IsEmpty())
         {
             ImGui::TextDisabled(LOC("Nothing matches."));
         }
@@ -2237,19 +2248,19 @@ namespace Lumina
             return;
         }
         int32 FileCount = 0;
-        for (int32 Index = 0; Index < (int32)RenameTargets.size(); ++Index)
+        for (int32 Index = 0; Index < RenameTargets.Num(); ++Index)
         {
             FileCount += Index == 0 || RenameTargets[Index].DiskPath != RenameTargets[Index - 1].DiskPath ? 1 : 0;
         }
-        ImGui::TextColored(EditorColors::SectionHeader(), LOC("Rename '%s'"), RenameFrom.c_str());
-        ImGui::TextColored(EditorColors::TextDim(), LOC("%d places in %d files. Open files keep the change unsaved."), (int32)RenameTargets.size(), FileCount);
+        ImGui::TextColored(EditorColors::SectionHeader(), "Rename '%s'", *RenameFrom);
+        ImGui::TextColored(EditorColors::TextDim(), "%d places in %d files. Open files keep the change unsaved.", RenameTargets.Num(), FileCount);
         if (bAppearing)
         {
             ImGui::SetKeyboardFocusHere();
         }
         ImGui::SetNextItemWidth(360.0f);
-        const bool bSubmit = ImGui::InputText("##name", RenameBuffer, sizeof(RenameBuffer), ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
-        const bool bValid = IsIdentifier(RenameBuffer);
+        const bool bSubmit = ImGuiX::InputText("##name", RenameTo, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+        const bool bValid = IsIdentifier(RenameTo.View());
         if (!bValid)
         {
             ImGui::TextColored(EditorColors::Danger(), LOC("Not a valid name."));
@@ -2276,7 +2287,7 @@ namespace Lumina
         {
             return;
         }
-        if (PendingClose >= (int32)Documents.size())
+        if (PendingClose >= Documents.Num())
         {
             PendingClose = -1;
             return;
@@ -2301,7 +2312,7 @@ namespace Lumina
             return;
         }
         FDocument& Document = *Documents[PendingClose];
-        ImGui::TextColored(EditorColors::Warning(), LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "'%s' has unsaved changes."), Document.Name.c_str());
+        ImGui::TextColored(EditorColors::Warning(), LE_ICON_ALERT_CIRCLE_OUTLINE " '%s' has unsaved changes.", *Document.Name);
         bool bClose = false;
         if (ImGui::Button(LOC_ICON_ID(LE_ICON_CONTENT_SAVE, "Save")))
         {

@@ -2,6 +2,7 @@
 #include "Core/Http/HttpServer.h"
 
 #include "Log/Log.h"
+#include "Platform/Time/PlatformTime.h"
 
 namespace Lumina::Http
 {
@@ -10,6 +11,7 @@ namespace Lumina::Http
         constexpr int32 GAcceptTimeoutMs   = 25;
         constexpr int32 GReceiveChunkBytes = 8 * 1024;
         constexpr int32 GIdleSleepMs       = 2;
+        constexpr int32 GSendTimeoutMs     = 5000;
     }
 
     FServer::~FServer()
@@ -65,7 +67,7 @@ namespace Lumina::Http
         Worker.Join();
 
         Listener.reset();
-        Clients.clear();
+        Clients.Reset();
 
         bRunning.store(false, std::memory_order_release);
         BoundPort = 0;
@@ -73,10 +75,12 @@ namespace Lumina::Http
 
     bool FServer::SendAll(Platform::ISocketConnection& Connection, FStringView Text)
     {
-        const uint8* Bytes = reinterpret_cast<const uint8*>(Text.data());
+        const uint8* Bytes = reinterpret_cast<const uint8*>(Text.GetData());
 
         int32 Sent = 0;
-        const int32 Total = static_cast<int32>(Text.size());
+        const int32 Total = Text.Len();
+
+        PlatformTime::FStopwatch StallTimer;
 
         while (Sent < Total)
         {
@@ -86,6 +90,11 @@ namespace Lumina::Http
             if (Result == Platform::ESocketResult::WouldBlock)
             {
                 // The kernel buffer filled, so yield rather than spinning on a socket that cannot take more.
+                if (StallTimer.ElapsedMilliseconds() >= GSendTimeoutMs)
+                {
+                    return false;
+                }
+
                 Threading::Sleep(GIdleSleepMs);
                 continue;
             }
@@ -94,6 +103,8 @@ namespace Lumina::Http
             {
                 return false;
             }
+
+            StallTimer.Restart();
         }
 
         return true;
@@ -123,9 +134,9 @@ namespace Lumina::Http
                 return false;
             }
 
-            Client.Pending.append(reinterpret_cast<const char*>(Chunk), static_cast<size_t>(Read));
+            Client.Pending.Append(reinterpret_cast<const char*>(Chunk), static_cast<size_t>(Read));
 
-            if (static_cast<int32>(Client.Pending.size()) > Limits.MaxHeaderBytes + Limits.MaxBodyBytes)
+            if (Client.Pending.Len() > Limits.MaxHeaderBytes + Limits.MaxBodyBytes)
             {
                 return false;
             }
@@ -188,33 +199,33 @@ namespace Lumina::Http
             {
                 FClient Client;
                 Client.Connection = Move(Accepted);
-                Clients.push_back(Move(Client));
+                Clients.Add(Move(Client));
             }
 
             bool bServicedAnything = false;
 
-            for (size_t Index = Clients.size(); Index > 0; --Index)
+            for (int32 Index = Clients.Num(); Index > 0; --Index)
             {
                 FClient& Client = Clients[Index - 1];
 
-                const size_t Before = Client.Pending.size();
+                const int32 Before = Client.Pending.Len();
 
                 if (!ServiceClient(Client))
                 {
-                    Clients.erase(Clients.begin() + static_cast<int32>(Index - 1));
+                    Clients.RemoveAt(Index - 1);
                     continue;
                 }
 
-                bServicedAnything = bServicedAnything || Client.Pending.size() != Before;
+                bServicedAnything = bServicedAnything || Client.Pending.Len() != Before;
             }
 
             // Accept already blocked for its timeout, so only an idle spin with clients attached needs a rest.
-            if (!Clients.empty() && !bServicedAnything)
+            if (!Clients.IsEmpty() && !bServicedAnything)
             {
                 Stop.WaitForStop(GIdleSleepMs);
             }
         }
 
-        Clients.clear();
+        Clients.Reset();
     }
 }

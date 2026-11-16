@@ -4,7 +4,7 @@
 #include "Box3DRagdollHandle.h"
 #include "Box3DUtils.h"
 #include "World/Entity/Components/PhysicsComponent.h"
-#include "TaskSystem/Scheduler/JobScheduler.h"
+#include "TaskSystem/Fork/ForkRuntime.h"
 #include "World/World.h"
 
 namespace Lumina::Physics
@@ -24,7 +24,7 @@ namespace Lumina::Physics
     SPhysicsBodyTarget FBox3DPhysicsScene::MakeBodyTarget(uint32 Handle) const
     {
         SPhysicsBodyTarget Target;
-        if (Handle < BodyHandles.size() && b3Body_IsValid(BodyHandles[Handle]))
+        if (Handle < static_cast<uint32>(BodyHandles.Num()) && b3Body_IsValid(BodyHandles[Handle]))
         {
             Target.Scene = SceneIdentity;
             Target.Slot = Handle;
@@ -35,7 +35,7 @@ namespace Lumina::Physics
 
     b3BodyId FBox3DPhysicsScene::ResolveTarget(const SPhysicsBodyTarget& Target) const
     {
-        if (Target.Scene != SceneIdentity || Target.Slot >= BodyHandles.size()
+        if (Target.Scene != SceneIdentity || Target.Slot >= static_cast<uint32>(BodyHandles.Num())
             || BodyGenerations[Target.Slot] != Target.Generation)
         {
             return b3_nullBodyId;
@@ -77,11 +77,7 @@ namespace Lumina::Physics
                           && Math::Abs(InCommand.Parameters.w) <= FLT_MAX;
         if (!bFinite)
         {
-            static TAtomic<bool> bWarned{ false };
-            if (!bWarned.exchange(true, std::memory_order_relaxed))
-            {
-                LOG_WARN("Dropped a physics body command with a NaN or infinite value for entity {}", InCommand.Entity.Value);
-            }
+            LOG_WARN_ONCE("Dropped a physics body command with a NaN or infinite value for entity {}", InCommand.Entity.Value);
             return;
         }
 
@@ -92,35 +88,35 @@ namespace Lumina::Physics
             Command.Revision = Record != nullptr ? Record->Revision : 0;
         }
 
-        const uint32 Slot = Jobs::GetWorkerIndex();
-        if (Slot < (uint32)ThreadBodyCommands.size())
+        const uint32 Slot = Jobs::GetThreadSlot();
+        if (Slot < (uint32)ThreadBodyCommands.Num())
         {
-            ThreadBodyCommands[Slot].push_back(Command);
+            ThreadBodyCommands[Slot].Add(Command);
             return;
         }
         FScopeLock Lock(BodyCommandMutex);
-        OverflowBodyCommands.push_back(Command);
+        OverflowBodyCommands.Add(Command);
     }
 
     void FBox3DPhysicsScene::ApplyBodyCommands()
     {
-        BodyCommandScratch.clear();
+        BodyCommandScratch.Reset();
         // Swapped out first, since a command such as buoyancy can queue more while it applies.
         const auto Drain = [this](TVector<FBodyCommand>& Commands)
         {
-            DrainBodyCommands.clear();
-            DrainBodyCommands.swap(Commands);
+            DrainBodyCommands.Reset();
+            swap(DrainBodyCommands, Commands);
             for (const FBodyCommand& Command : DrainBodyCommands)
             {
                 if (ApplyBodyCommand(Command) == EBodyCommandResult::Waiting)
                 {
-                    BodyCommandScratch.push_back(Command);
+                    BodyCommandScratch.Add(Command);
                 }
             }
-            if (Commands.empty())
+            if (Commands.IsEmpty())
             {
-                DrainBodyCommands.clear();
-                Commands.swap(DrainBodyCommands);
+                DrainBodyCommands.Reset();
+                swap(Commands, DrainBodyCommands);
             }
         };
 
@@ -134,7 +130,7 @@ namespace Lumina::Physics
             FScopeLock Lock(BodyCommandMutex);
             Drain(OverflowBodyCommands);
         }
-        WaitingBodyCommands.swap(BodyCommandScratch);
+        swap(WaitingBodyCommands, BodyCommandScratch);
     }
 
     FBox3DPhysicsScene::EBodyCommandResult FBox3DPhysicsScene::ApplyBodyCommand(const FBodyCommand& Command)
@@ -217,6 +213,14 @@ namespace Lumina::Physics
             {
                 const EBodyType Type = static_cast<EBodyType>(static_cast<uint8>(Command.Parameters.x));
                 b3Body_SetType(Body, Box3DUtils::ToBox3DBodyType(Type));
+
+                FBodyShapes Shapes;
+                GatherShapes(Body, Shapes);
+                for (b3ShapeId Shape : Shapes)
+                {
+                    b3Shape_EnableSensorEvents(Shape, b3Shape_IsSensor(Shape) || Type != EBodyType::Static);
+                }
+
                 if (auto* Component = World->GetEntityRegistry().TryGet<SRigidBodyComponent>(Command.Entity))
                 {
                     Component->BodyType = Type;

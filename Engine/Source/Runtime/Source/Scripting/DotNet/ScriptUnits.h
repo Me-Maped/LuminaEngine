@@ -1,7 +1,5 @@
 #pragma once
 
-#include <string>
-
 #include "Containers/String.h"
 #include "Containers/Vector.h"
 #include "Scripting/DotNet/ScriptReferences.h"
@@ -28,9 +26,6 @@ namespace Lumina::DotNet
         TVector<FString> References;      // absolute paths to third-party assemblies, packages and declared DLLs
         FScriptReferenceSet Declared;     // kept so the generated project can name the packages rather than their DLLs
     };
-
-    FString Join(FStringView Left, FStringView Right);
-    FString ParentOf(FStringView Path);
 
     // A path the OS accepts, with native separators.
     FString NativePath(FStringView Path);

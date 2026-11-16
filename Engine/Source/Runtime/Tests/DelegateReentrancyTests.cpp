@@ -127,6 +127,100 @@ TEST(DelegateReentrancy, AHandlerThatDestroysItsOwnerKeepsItsCapturesUntilTheBro
     EXPECT_EQ(Owner, nullptr);
 }
 
+TEST(DelegateReentrancy, AHandlerThatRelocatesItsOwnerThenRemovesItselfKeepsItsCaptures)
+{
+    FOwner* Owner = Memory::New<FOwner>();
+    FOwner* Moved = nullptr;
+    bool bFreed = false;
+    bool bFreedWhileRunning = true;
+    FDelegateHandle Handle;
+
+    Handle = Owner->Event.AddLambda([&Owner, &Moved, &Handle, &bFreed, &bFreedWhileRunning, Flag = FFreedFlag(&bFreed)](const int32&)
+    {
+        Moved = Memory::New<FOwner>(std::move(*Owner));
+        Memory::Delete(Owner);
+        Owner = nullptr;
+        Moved->Event.Remove(Handle);
+        bFreedWhileRunning = bFreed;
+    });
+
+    Owner->Event.Broadcast(4);
+
+    EXPECT_FALSE(bFreedWhileRunning) << "the relocated delegate freed the handler that was still running";
+    EXPECT_TRUE(bFreed) << "the removed callable must be freed once the broadcast unwinds";
+    ASSERT_NE(Moved, nullptr);
+    EXPECT_FALSE(Moved->Event.IsBound());
+    Memory::Delete(Moved);
+}
+
+TEST(DelegateReentrancy, BroadcastAndClearLeavesADestroyedDelegateAlone)
+{
+    FOwner* Owner = Memory::New<FOwner>();
+    int32 Calls = 0;
+
+    Owner->Event.AddLambda([&](const int32&)
+    {
+        ++Calls;
+        Memory::Delete(Owner);
+        Owner = nullptr;
+    });
+
+    Owner->Event.BroadcastAndClear(5);
+
+    EXPECT_EQ(Calls, 1);
+    EXPECT_EQ(Owner, nullptr);
+}
+
+TEST(DelegateReentrancy, BroadcastAndClearDropsEveryListener)
+{
+    TScriptDelegate<int32> Event;
+    int32 Calls = 0;
+    Event.AddLambda([&](const int32&) { ++Calls; });
+
+    Event.BroadcastAndClear(5);
+
+    EXPECT_EQ(Calls, 1);
+    EXPECT_FALSE(Event.IsBound());
+}
+
+// The slot is reused at once, the way a sparse set moves a neighbor into a destroyed component's memory.
+TEST(DelegateReentrancy, MulticastBroadcastAndClearLeavesTheSlotsNextOccupantAlone)
+{
+    using FEvent = TMulticastDelegate<void, int32>;
+    alignas(FEvent) uint8 Slot[sizeof(FEvent)];
+    FEvent* Event = new (Slot) FEvent();
+    int32 NeighborCalls = 0;
+
+    (void)Event->AddLambda([&](int32)
+    {
+        Event->~FEvent();
+        Event = new (Slot) FEvent();
+        (void)Event->AddLambda([&](int32) { ++NeighborCalls; });
+    });
+
+    Event->BroadcastAndClear(1);
+    EXPECT_EQ(Event->GetCount(), 1) << "the neighbor's listener was cleared by the destroyed delegate's BroadcastAndClear";
+
+    EXPECT_TRUE(Event->Broadcast(2));
+    EXPECT_EQ(NeighborCalls, 1);
+    Event->~FEvent();
+}
+
+TEST(DelegateReentrancy, MulticastBroadcastReportsADestroyedDelegate)
+{
+    using FEvent = TMulticastDelegate<void, int32>;
+    FEvent* Event = Memory::New<FEvent>();
+
+    (void)Event->AddLambda([&](int32)
+    {
+        Memory::Delete(Event);
+        Event = nullptr;
+    });
+
+    EXPECT_FALSE(Event->Broadcast(1));
+    EXPECT_EQ(Event, nullptr);
+}
+
 // Only the first of several listeners destroys the owner; the rest must simply not run.
 TEST(DelegateReentrancy, DestroyingMidFanOutStopsTheRemainingListeners)
 {

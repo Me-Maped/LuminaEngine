@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Core/Object/Object.h"
-#include "Memory/RefCounted.h"
 #include "Memory/SmartPtr.h"
 #include "Renderer/RenderResource.h"
 #include "Renderer/TextureData.h"
@@ -220,7 +219,7 @@ namespace Lumina
 
 
         FTextureResource& GetTextureResource() const { return *TextureResource.get(); }
-        uint8 GetNumMips() const { return TextureResource.get() ? (uint8)TextureResource->Mips.size() : 0u; }
+        uint8 GetNumMips() const { return TextureResource.get() ? (uint8)TextureResource->Mips.Num() : 0u; }
 
         /** (Re)build the GPU image to hold mips [InFirstMip, NumMips) and upload them. The bindless slot is
          *  preserved, so materials that already baked this texture's ResourceID keep sampling it -- they
@@ -289,6 +288,8 @@ namespace Lumina
         uint32 GetResidentFirstMip() const { return TextureResource ? TextureResource->ResidentFirstMip : 0u; }
 
         bool IsStreamable() const { return TextureResource && TextureResource->IsStreamable(); }
+
+        bool IsResidencyBlocked() const { return bResidencyBlocked; }
 
         bool IsSRGB() const { return ColorSpace == ETextureColorSpace::SRGB; }
 

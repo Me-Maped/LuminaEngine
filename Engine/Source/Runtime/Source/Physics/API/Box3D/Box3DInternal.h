@@ -10,6 +10,7 @@
 #include "Box3DUtils.h"
 #include "Core/Math/Math.h"
 #include "Renderer/MeshData.h"
+#include "World/Entity/Components/PhysicsComponent.h"
 #include "Lumina.h"
 
 namespace Lumina::Physics
@@ -49,6 +50,20 @@ namespace Lumina::Physics
     FORCEINLINE ECS::FEntity EntityOfShape(b3ShapeId Shape)
     {
         return b3Shape_IsValid(Shape) ? EntityOfBody(b3Shape_GetBody(Shape)) : ECS::NullEntity;
+    }
+
+    // Inline for the common single-shape body, spilling only for a large compound.
+    using FBodyShapes = TInlineVector<b3ShapeId, 8>;
+
+    inline bool GatherShapes(b3BodyId Body, FBodyShapes& Out)
+    {
+        if (!b3Body_IsValid(Body))
+        {
+            return false;
+        }
+        Out.SetNum(b3Body_GetShapeCount(Body));
+        Out.SetNum(b3Body_GetShapes(Body, Out.GetData(), Out.Num()));
+        return !Out.IsEmpty();
     }
 
     FORCEINLINE FPendingShape MakeSphereShape(const FVector3& Center, float Radius)
@@ -169,9 +184,23 @@ namespace Lumina::Physics
         return EMoverSeatResult::Seated;
     }
 
-    void WarnTaperedCapsuleOnce();
+    using FColliderTypes = ECS::TTypeList<SSphereColliderComponent, SBoxColliderComponent, SCapsuleColliderComponent, SCylinderColliderComponent,
+        STaperedCapsuleColliderComponent, STaperedCylinderColliderComponent, SPlaneColliderComponent, SCompoundColliderComponent,
+        SMeshColliderComponent, STerrainColliderComponent, SDynamicMeshColliderComponent>;
 
-    // Flattens a mesh resource's LOD-0 meshlets into positions, and triangles when the caller needs them.
+    template<typename TFunc>
+    void ForEachColliderType(TFunc&& Func)
+    {
+        [&]<typename... TColliders>(ECS::TTypeList<TColliders...>) { (Func.template operator()<TColliders>(), ...); }(FColliderTypes{});
+    }
+
+    // A dynamic mesh may keep only its committed triangles, which collision falls back to when the meshlets are gone.
+    inline bool HasCollisionGeometry(const FMeshResource& Resource)
+    {
+        return !Resource.MeshletData.IsEmpty() || (!Resource.Positions.IsEmpty() && !Resource.Indices.IsEmpty());
+    }
+
+    // Flattens a mesh resource's LOD-0 meshlets, or else its kept triangles, into positions and triangles when the caller needs them.
     bool GatherMeshResourceGeometry(const FMeshResource& Resource, const FVector3& Scale,
                                     TVector<b3Vec3>& OutPositions, TVector<int32>* OutIndices);
 }

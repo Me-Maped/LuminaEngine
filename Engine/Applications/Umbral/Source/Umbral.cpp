@@ -69,7 +69,7 @@ namespace
         {
             Sound.Post(Request);
         }
-        Pending.clear();
+        Pending.Reset();
 
         const FRunState& Run = Game.GetRun();
         Sound.SetMusic(true, MusicIntensityFor(Run, Game.IsPaused()), int32(Run.Elapsed / 45.0f));
@@ -131,17 +131,17 @@ int main(int ArgC, char** ArgV)
     Memory::Initialize();
 
     FApplicationGlobalState GlobalState("Umbral Main");
-    Task::Initialize();
+    Jobs::Initialize();
 
     FCommandLine ParsedCommandLine { ArgC, ArgV };
-    GCommandLine = &ParsedCommandLine;
+    Global::GCommandLine = &ParsedCommandLine;
 
     FWindow Window(FWindowSpecs{ .Title = "Umbral", .Extent = { 1600, 900 } });
 
     RHI::CreateDevice(RHI::FDeviceDesc{ .bValidation = !ParsedCommandLine.Has("novalidation") });
 
     FSpirVShaderCompiler ShaderCompiler;
-    GShaderCompiler = &ShaderCompiler;
+    Global::GShaderCompiler = &ShaderCompiler;
 
     RHI::FSwapchainTarget Target;
     Target.Initialize(RHI::CreateSurface(Window.GetWindow()), Window.GetExtent());
@@ -173,11 +173,11 @@ int main(int ArgC, char** ArgV)
     Renderer.Shutdown();
     Target.Shutdown();
 
-    GShaderCompiler = nullptr;
+    Global::GShaderCompiler = nullptr;
     RHI::FreeDevice();
 
-    Task::Shutdown();
-    GCommandLine = nullptr;
+    Jobs::Shutdown();
+    Global::GCommandLine = nullptr;
 
     return bReady ? 0 : 1;
 }

@@ -1,9 +1,14 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <thread>
+
 #include "Containers/HashTable.h"
+#include "Core/Threading/Thread.h"
 #include "TaskSystem/TaskSystem.h"
 #include "World/ECS/CommandBus.h"
 #include "World/ECS/Registry.h"
+#include "World/World.h"
 
 using namespace Lumina;
 
@@ -20,6 +25,11 @@ namespace
     {
         ++*static_cast<int32*>(Payload);
     }
+
+    void RecordEntity(void* Payload, ECS::FRegistry&, ECS::FEntity Entity)
+    {
+        static_cast<TVector<ECS::FEntity>*>(Payload)->Add(Entity);
+    }
 }
 
 TEST(CommandBus, ReservedEntityBecomesLiveAtFlush)
@@ -33,7 +43,7 @@ TEST(CommandBus, ReservedEntityBecomesLiveAtFlush)
     const ECS::FEntity Entity = Bus.Create();
     Bus.Emplace<FBusValue>(Entity, FBusValue{ 7 });
     EXPECT_FALSE(Registry.IsValid(Entity));
-    EXPECT_EQ(Registry.NumEntities(), 0u);
+    EXPECT_EQ(Registry.NumEntities(), 0);
 
     Bus.Flush();
 
@@ -55,7 +65,7 @@ TEST(CommandBus, ImmediateCreateNeverReusesAnOutstandingReservation)
     Bus.Flush();
     EXPECT_TRUE(Registry.IsValid(Reserved));
     EXPECT_TRUE(Registry.IsValid(Immediate));
-    EXPECT_EQ(Registry.NumEntities(), 2u);
+    EXPECT_EQ(Registry.NumEntities(), 2);
 }
 
 TEST(CommandBus, ReservationReusesAFreedSlotWithANewVersion)
@@ -116,6 +126,36 @@ TEST(CommandBus, PatchAndRemoveSkipEntitiesThatLostTheComponent)
     EXPECT_TRUE(Registry.IsValid(Entity));
 }
 
+TEST(CommandBus, RemoveTakesSeveralComponentsAtOnce)
+{
+    ECS::FRegistry Registry;
+    const ECS::FEntity Both = Registry.Create();
+    Registry.Emplace<FBusValue>(Both, FBusValue{ 1 });
+    Registry.Emplace<FBusTag>(Both);
+    const ECS::FEntity OnlyTag = Registry.Create();
+    Registry.Emplace<FBusTag>(OnlyTag);
+    const ECS::FEntity Neither = Registry.Create();
+
+    EXPECT_TRUE((Registry.Remove<FBusValue, FBusTag>(Both)));
+    EXPECT_FALSE((Registry.HasAny<FBusValue, FBusTag>(Both)));
+    EXPECT_TRUE((Registry.Remove<FBusValue, FBusTag>(OnlyTag)));
+    EXPECT_FALSE((Registry.HasAny<FBusTag>(OnlyTag)));
+    EXPECT_FALSE((Registry.Remove<FBusValue, FBusTag>(Neither)));
+
+    ECS::FCommandBus Bus(Registry);
+    Registry.Emplace<FBusValue>(Both, FBusValue{ 2 });
+    Registry.Emplace<FBusTag>(Both);
+    Bus.Remove<FBusValue, FBusTag>(Both);
+    EXPECT_TRUE((Registry.HasAll<FBusValue, FBusTag>(Both)));
+    EXPECT_TRUE(Bus.HasPending());
+    Bus.Flush();
+    EXPECT_FALSE((Registry.HasAny<FBusValue, FBusTag>(Both)));
+    EXPECT_TRUE(Registry.IsValid(Both));
+
+    void (CWorld::*RemoveBoth)(ECS::FEntity) = &CWorld::RemoveComponent<FBusValue, FBusTag>;
+    EXPECT_NE(RemoveBoth, nullptr);
+}
+
 TEST(CommandBus, CommandsRecordedWhileFlushingRunInTheSameFlush)
 {
     ECS::FRegistry Registry;
@@ -148,7 +188,7 @@ TEST(CommandBus, DiscardReturnsReservationsAndDropsCommands)
     }
 
     EXPECT_EQ(Ran, 0);
-    EXPECT_EQ(Registry.NumEntities(), 0u);
+    EXPECT_EQ(Registry.NumEntities(), 0);
 
     const ECS::FEntity Next = Registry.Create();
     EXPECT_EQ(Next.GetIndex(), Reserved.GetIndex());
@@ -162,7 +202,7 @@ TEST(CommandBus, ManyThreadsRecordCreatesAndComponentsTogether)
     constexpr uint32 Count = 20000;
     TVector<ECS::FEntity> Entities(Count);
 
-    Task::ParallelFor(Count, [&](uint32 Index)
+    Jobs::ParallelFor(Count, [&](uint32 Index)
     {
         const ECS::FEntity Entity = Bus.Create();
         Entities[Index] = Entity;
@@ -178,24 +218,80 @@ TEST(CommandBus, ManyThreadsRecordCreatesAndComponentsTogether)
         const ECS::FEntity Entity = Entities[Index];
         ASSERT_TRUE(Registry.IsValid(Entity));
         EXPECT_EQ(Registry.Get<FBusValue>(Entity).Value, static_cast<int32>(Index));
-        Indices.insert(Entity.GetIndex());
+        Indices.Add(Entity.GetIndex());
     }
-    EXPECT_EQ(Indices.size(), static_cast<size_t>(Count));
+    EXPECT_EQ(Indices.Num(), Count);
+}
+
+TEST(CommandBus, RecordOrderBeatsWhichThreadRecorded)
+{
+    ECS::FRegistry Registry;
+    ECS::FCommandBus Bus(Registry);
+
+    constexpr uint32 Count = 256;
+    TVector<ECS::FEntity> Doomed(Count);
+    for (ECS::FEntity& Entity : Doomed)
+    {
+        Entity = Registry.Create();
+    }
+
+    TVector<uint32> Ran;
+    TVector<ECS::FEntity> Created(Count);
+    TVector<ECS::FEntity> CreatedOrder;
+    TVector<ECS::FEntity> DestroyedOrder;
+    Registry.OnEntityCreated().Connect(&RecordEntity, &CreatedOrder);
+    Registry.OnEntityDestroyed().Connect(&RecordEntity, &DestroyedOrder);
+
+    // Recorded in reverse, so record order and thread scheduling both disagree with the expected result.
+    Jobs::ParallelFor(Count, [&](uint32 Item)
+    {
+        const uint32 Order = Count - 1 - Item;
+        const ECS::FCommandBus::FDeferScope Scope(true, Order);
+        Created[Order] = Bus.Create();
+        Bus.Enqueue([&Ran, Order]() { Ran.Add(Order); });
+        Bus.Destroy(Doomed[Order]);
+    }, 1);
+
+    Bus.Flush();
+
+    ASSERT_EQ(Ran.Num(), Count);
+    ASSERT_EQ(CreatedOrder.Num(), Count);
+    ASSERT_EQ(DestroyedOrder.Num(), Count);
+    for (uint32 Index = 0; Index < Count; ++Index)
+    {
+        EXPECT_EQ(Ran[Index], Index);
+        EXPECT_EQ(CreatedOrder[Index], Created[Index]);
+        EXPECT_EQ(DestroyedOrder[Index], Doomed[Index]);
+    }
 }
 
 TEST(CommandBus, WorkerThreadsAlwaysDefer)
 {
+    std::atomic<uint32> WorkerItems{ 0 };
     std::atomic<uint32> Deferring{ 0 };
-    Task::ParallelFor(64, [&](uint32)
+    Jobs::ParallelFor(64, [&](uint32)
     {
+        // The caller could otherwise drain every item itself, so it holds here until a worker has run one.
+        if (Threading::IsMainThread())
+        {
+            const auto Deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (WorkerItems.load(std::memory_order_acquire) == 0 && std::chrono::steady_clock::now() < Deadline)
+            {
+                std::this_thread::yield();
+            }
+            return;
+        }
+
+        WorkerItems.fetch_add(1, std::memory_order_release);
         if (ECS::FCommandBus::ShouldDefer())
         {
             Deferring.fetch_add(1, std::memory_order_relaxed);
         }
     }, 1);
 
-    // The calling thread may run some items itself, so only the worker share is guaranteed.
-    EXPECT_GT(Deferring.load(), 0u);
+    ASSERT_GT(WorkerItems.load(), 0u);
+    EXPECT_EQ(Deferring.load(), WorkerItems.load());
+    EXPECT_FALSE(ECS::FCommandBus::ShouldDefer());
     {
         const ECS::FCommandBus::FDeferScope Scope(true);
         EXPECT_TRUE(ECS::FCommandBus::ShouldDefer());

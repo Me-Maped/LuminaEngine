@@ -5,6 +5,8 @@
 #include "Audio/Graph/AudioGraphProgram.h"
 #include "Containers/Vector.h"
 #include "Core/Math/Scalar.h"
+#include "Log/Log.h"
+#include "LogCountTestHelpers.h"
 
 using namespace Lumina;
 
@@ -26,7 +28,7 @@ namespace
             Init.FloatValue = FloatValue;
             Init.IntValue   = IntValue;
             Init.BoolValue  = BoolValue;
-            Program.SlotInits.push_back(Init);
+            Program.SlotInits.Add(Init);
             return Init.Slot;
         }
 
@@ -34,8 +36,8 @@ namespace
         {
             FAudioGraphNodeInstance Node;
             Node.OperatorName = OperatorName;
-            Program.Nodes.push_back(Move(Node));
-            return Program.Nodes.back();
+            Program.Nodes.Add(Move(Node));
+            return Program.Nodes.Last();
         }
 
         /** Fills a node's pins from the operator's signature, one fresh slot each. */
@@ -52,12 +54,12 @@ namespace
 
             for (EAudioGraphType Type : Class->Signature.Inputs)
             {
-                Node.InputSlots.push_back(Literal(Type, 0.0f));
+                Node.InputSlots.Add(Literal(Type, 0.0f));
             }
 
             for (EAudioGraphType Type : Class->Signature.Outputs)
             {
-                Node.OutputSlots.push_back(Slot(Type));
+                Node.OutputSlots.Add(Slot(Type));
             }
 
             return Node;
@@ -67,10 +69,10 @@ namespace
         FAudioGraphNodeInstance& AddSine(float Frequency)
         {
             FAudioGraphNodeInstance& Node = AddNode("Sine");
-            Node.InputSlots.push_back(Literal(EAudioGraphType::Float, Frequency));
-            Node.InputSlots.push_back(Slot(EAudioGraphType::Audio));
-            Node.InputSlots.push_back(Slot(EAudioGraphType::Trigger));
-            Node.OutputSlots.push_back(Slot(EAudioGraphType::Audio));
+            Node.InputSlots.Add(Literal(EAudioGraphType::Float, Frequency));
+            Node.InputSlots.Add(Slot(EAudioGraphType::Audio));
+            Node.InputSlots.Add(Slot(EAudioGraphType::Trigger));
+            Node.OutputSlots.Add(Slot(EAudioGraphType::Audio));
             return Node;
         }
     };
@@ -91,7 +93,7 @@ TEST(AudioGraph, BuiltinNodesAreRegistered)
 {
     const FAudioGraphNodeRegistry& Registry = FAudioGraphNodeRegistry::Get();
 
-    EXPECT_GT(Registry.GetAll().size(), 20u);
+    EXPECT_GT(Registry.GetAll().Num(), 20);
     EXPECT_NE(Registry.Find(FName("Sine")), nullptr);
     EXPECT_NE(Registry.Find(FName("Gain")), nullptr);
     EXPECT_NE(Registry.Find(FName("ADSR")), nullptr);
@@ -105,13 +107,13 @@ TEST(AudioGraph, EveryNodeRendersABlock)
     for (const FAudioGraphNodeClass& Class : FAudioGraphNodeRegistry::Get().GetAll())
     {
         FProgramBuilder Builder;
-        Builder.AddNodeWithDefaults(Class.Name.c_str());
+        Builder.AddNodeWithDefaults(*Class.Name);
 
         FAudioGraphInstance Instance;
-        ASSERT_TRUE(Instance.Initialize(Builder.Program, {}, kTestSampleRate, 2)) << Class.Name.c_str();
+        ASSERT_TRUE(Instance.Initialize(Builder.Program, {}, kTestSampleRate, 2)) << *Class.Name;
 
         TVector<float> Output((size_t)kAudioGraphBlockFrames * 2, 0.0f);
-        Instance.Render(Output.data(), kAudioGraphBlockFrames);
+        Instance.Render(Output.GetData(), kAudioGraphBlockFrames);
     }
 }
 
@@ -130,11 +132,11 @@ TEST(AudioGraph, SineReachesTheOutput)
     ASSERT_TRUE(Instance.Initialize(Builder.Program, {}, kTestSampleRate, 2));
 
     TVector<float> Output((size_t)kAudioGraphBlockFrames * 2, 0.0f);
-    Instance.Render(Output.data(), kAudioGraphBlockFrames);
+    Instance.Render(Output.GetData(), kAudioGraphBlockFrames);
 
     EXPECT_GT(PeakOf(Output), 0.9f);
 
-    for (size_t Frame = 0; Frame < kAudioGraphBlockFrames; ++Frame)
+    for (int32 Frame = 0, Limit = Lumina::IntCastChecked<Lumina::int32>(kAudioGraphBlockFrames); Frame < Limit; ++Frame)
     {
         ASSERT_FLOAT_EQ(Output[Frame * 2], Output[Frame * 2 + 1]);
     }
@@ -159,7 +161,7 @@ TEST(AudioGraph, RenderIsIndependentOfRequestSize)
         for (uint32 Written = 0; Written < TotalFrames; Written += ChunkFrames)
         {
             const uint32 Frames = Math::Min(ChunkFrames, TotalFrames - Written);
-            Instance.Render(Output.data() + (size_t)Written * 2, Frames);
+            Instance.Render(Output.GetData() + (size_t)Written * 2, Frames);
         }
 
         return Output;
@@ -168,8 +170,8 @@ TEST(AudioGraph, RenderIsIndependentOfRequestSize)
     const TVector<float> WholeBlocks = RenderWith(kAudioGraphBlockFrames);
     const TVector<float> Fragments   = RenderWith(37);
 
-    ASSERT_EQ(WholeBlocks.size(), Fragments.size());
-    for (size_t Index = 0; Index < WholeBlocks.size(); ++Index)
+    ASSERT_EQ(WholeBlocks.Num(), Fragments.Num());
+    for (int32 Index = 0; Index < WholeBlocks.Num(); ++Index)
     {
         ASSERT_NEAR(WholeBlocks[Index], Fragments[Index], 1.0e-5f) << "at sample " << Index;
     }
@@ -188,9 +190,9 @@ TEST(AudioGraph, FloatParameterDrivesGain)
     const uint16 GainSlot = Builder.Literal(EAudioGraphType::Float, 1.0f);
 
     FAudioGraphNodeInstance& Gain = Builder.AddNode("Gain");
-    Gain.InputSlots.push_back(Sine.OutputSlots[0]);
-    Gain.InputSlots.push_back(GainSlot);
-    Gain.OutputSlots.push_back(Builder.Slot(EAudioGraphType::Audio));
+    Gain.InputSlots.Add(Sine.OutputSlots[0]);
+    Gain.InputSlots.Add(GainSlot);
+    Gain.OutputSlots.Add(Builder.Slot(EAudioGraphType::Audio));
 
     Builder.Program.OutputLeftSlot  = Gain.OutputSlots[0];
     Builder.Program.OutputRightSlot = Gain.OutputSlots[0];
@@ -200,13 +202,13 @@ TEST(AudioGraph, FloatParameterDrivesGain)
     Decl.Type         = EAudioGraphType::Float;
     Decl.Slot         = GainSlot;
     Decl.DefaultFloat = 1.0f;
-    Builder.Program.Inputs.push_back(Decl);
+    Builder.Program.Inputs.Add(Decl);
 
     FAudioGraphInstance Instance;
     ASSERT_TRUE(Instance.Initialize(Builder.Program, {}, kTestSampleRate, 2));
 
     TVector<float> Loud((size_t)kAudioGraphBlockFrames * 2, 0.0f);
-    Instance.Render(Loud.data(), kAudioGraphBlockFrames);
+    Instance.Render(Loud.GetData(), kAudioGraphBlockFrames);
     EXPECT_GT(PeakOf(Loud), 0.9f);
 
     EXPECT_TRUE(Instance.SetFloatParameter(FName("Volume"), 0.0f));
@@ -214,10 +216,10 @@ TEST(AudioGraph, FloatParameterDrivesGain)
 
     // The first block after the write still ramps down from the old gain, so measure the one after it.
     TVector<float> Ramp((size_t)kAudioGraphBlockFrames * 2, 0.0f);
-    Instance.Render(Ramp.data(), kAudioGraphBlockFrames);
+    Instance.Render(Ramp.GetData(), kAudioGraphBlockFrames);
 
     TVector<float> Silent((size_t)kAudioGraphBlockFrames * 2, 0.0f);
-    Instance.Render(Silent.data(), kAudioGraphBlockFrames);
+    Instance.Render(Silent.GetData(), kAudioGraphBlockFrames);
     EXPECT_LT(PeakOf(Silent), 1.0e-6f);
 }
 
@@ -232,15 +234,15 @@ TEST(AudioGraph, OnPlayFiresOnTheFirstBlock)
     OnPlay.Name = FName(kAudioGraphOnPlayInput);
     OnPlay.Type = EAudioGraphType::Trigger;
     OnPlay.Slot = OnPlaySlot;
-    Builder.Program.Inputs.push_back(OnPlay);
+    Builder.Program.Inputs.Add(OnPlay);
 
     FAudioGraphNodeInstance& Envelope = Builder.AddNode("AttackDecay");
-    Envelope.InputSlots.push_back(OnPlaySlot);
-    Envelope.InputSlots.push_back(Builder.Literal(EAudioGraphType::Float, 0.001f));
-    Envelope.InputSlots.push_back(Builder.Literal(EAudioGraphType::Float, 1.0f));
-    Envelope.InputSlots.push_back(Builder.Literal(EAudioGraphType::Float, 1.0f));
-    Envelope.OutputSlots.push_back(Builder.Slot(EAudioGraphType::Audio));
-    Envelope.OutputSlots.push_back(Builder.Slot(EAudioGraphType::Trigger));
+    Envelope.InputSlots.Add(OnPlaySlot);
+    Envelope.InputSlots.Add(Builder.Literal(EAudioGraphType::Float, 0.001f));
+    Envelope.InputSlots.Add(Builder.Literal(EAudioGraphType::Float, 1.0f));
+    Envelope.InputSlots.Add(Builder.Literal(EAudioGraphType::Float, 1.0f));
+    Envelope.OutputSlots.Add(Builder.Slot(EAudioGraphType::Audio));
+    Envelope.OutputSlots.Add(Builder.Slot(EAudioGraphType::Trigger));
 
     Builder.Program.OutputLeftSlot  = Envelope.OutputSlots[0];
     Builder.Program.OutputRightSlot = Envelope.OutputSlots[0];
@@ -249,7 +251,7 @@ TEST(AudioGraph, OnPlayFiresOnTheFirstBlock)
     ASSERT_TRUE(Instance.Initialize(Builder.Program, {}, kTestSampleRate, 2));
 
     TVector<float> Output((size_t)kAudioGraphBlockFrames * 2, 0.0f);
-    Instance.Render(Output.data(), kAudioGraphBlockFrames);
+    Instance.Render(Output.GetData(), kAudioGraphBlockFrames);
 
     EXPECT_GT(PeakOf(Output), 0.0f);
 }
@@ -265,15 +267,15 @@ TEST(AudioGraph, FinishedTriggerRetiresTheVoice)
     OnPlay.Name = FName(kAudioGraphOnPlayInput);
     OnPlay.Type = EAudioGraphType::Trigger;
     OnPlay.Slot = OnPlaySlot;
-    Builder.Program.Inputs.push_back(OnPlay);
+    Builder.Program.Inputs.Add(OnPlay);
 
     FAudioGraphNodeInstance& Envelope = Builder.AddNode("AttackDecay");
-    Envelope.InputSlots.push_back(OnPlaySlot);
-    Envelope.InputSlots.push_back(Builder.Literal(EAudioGraphType::Float, 0.0001f));
-    Envelope.InputSlots.push_back(Builder.Literal(EAudioGraphType::Float, 0.0001f));
-    Envelope.InputSlots.push_back(Builder.Literal(EAudioGraphType::Float, 1.0f));
-    Envelope.OutputSlots.push_back(Builder.Slot(EAudioGraphType::Audio));
-    Envelope.OutputSlots.push_back(Builder.Slot(EAudioGraphType::Trigger));
+    Envelope.InputSlots.Add(OnPlaySlot);
+    Envelope.InputSlots.Add(Builder.Literal(EAudioGraphType::Float, 0.0001f));
+    Envelope.InputSlots.Add(Builder.Literal(EAudioGraphType::Float, 0.0001f));
+    Envelope.InputSlots.Add(Builder.Literal(EAudioGraphType::Float, 1.0f));
+    Envelope.OutputSlots.Add(Builder.Slot(EAudioGraphType::Audio));
+    Envelope.OutputSlots.Add(Builder.Slot(EAudioGraphType::Trigger));
 
     Builder.Program.OutputLeftSlot  = Envelope.OutputSlots[0];
     Builder.Program.OutputRightSlot = Envelope.OutputSlots[0];
@@ -286,7 +288,7 @@ TEST(AudioGraph, FinishedTriggerRetiresTheVoice)
     TVector<float> Output((size_t)kAudioGraphBlockFrames * 2, 0.0f);
     for (uint32 Block = 0; Block < 8 && !Instance.IsFinished(); ++Block)
     {
-        Instance.Render(Output.data(), kAudioGraphBlockFrames);
+        Instance.Render(Output.GetData(), kAudioGraphBlockFrames);
     }
 
     EXPECT_TRUE(Instance.IsFinished());
@@ -303,32 +305,32 @@ TEST(AudioGraph, TriggerOutputsAreCounted)
     OnPlay.Name = FName(kAudioGraphOnPlayInput);
     OnPlay.Type = EAudioGraphType::Trigger;
     OnPlay.Slot = OnPlaySlot;
-    Builder.Program.Inputs.push_back(OnPlay);
+    Builder.Program.Inputs.Add(OnPlay);
 
     // Repeats every 64 frames, so one 256 frame block carries several fires.
     FAudioGraphNodeInstance& Repeat = Builder.AddNode("TriggerRepeat");
-    Repeat.InputSlots.push_back(OnPlaySlot);
-    Repeat.InputSlots.push_back(Builder.Slot(EAudioGraphType::Trigger));
-    Repeat.InputSlots.push_back(Builder.Literal(EAudioGraphType::Float, 64.0f / (float)kTestSampleRate));
-    Repeat.OutputSlots.push_back(Builder.Slot(EAudioGraphType::Trigger));
+    Repeat.InputSlots.Add(OnPlaySlot);
+    Repeat.InputSlots.Add(Builder.Slot(EAudioGraphType::Trigger));
+    Repeat.InputSlots.Add(Builder.Literal(EAudioGraphType::Float, 64.0f / (float)kTestSampleRate));
+    Repeat.OutputSlots.Add(Builder.Slot(EAudioGraphType::Trigger));
 
     FAudioGraphParameterDecl Beat;
     Beat.Name = "OnBeat";
     Beat.Type = EAudioGraphType::Trigger;
     Beat.Slot = Repeat.OutputSlots[0];
-    Builder.Program.Outputs.push_back(Beat);
+    Builder.Program.Outputs.Add(Beat);
 
     FAudioGraphInstance Instance;
     ASSERT_TRUE(Instance.Initialize(Builder.Program, {}, kTestSampleRate, 2));
     EXPECT_EQ(Instance.GetTriggerOutputCount(FName("OnBeat")), 0u);
 
     TVector<float> Output((size_t)kAudioGraphBlockFrames * 2, 0.0f);
-    Instance.Render(Output.data(), kAudioGraphBlockFrames);
+    Instance.Render(Output.GetData(), kAudioGraphBlockFrames);
 
     const uint32 AfterFirstBlock = Instance.GetTriggerOutputCount(FName("OnBeat"));
     EXPECT_GE(AfterFirstBlock, 4u);
 
-    Instance.Render(Output.data(), kAudioGraphBlockFrames);
+    Instance.Render(Output.GetData(), kAudioGraphBlockFrames);
     EXPECT_GT(Instance.GetTriggerOutputCount(FName("OnBeat")), AfterFirstBlock);
 
     // A name that is not a trigger output reads zero rather than another output's count.
@@ -360,9 +362,9 @@ TEST(AudioGraph, UnboundPinsReadSilence)
     FAudioGraphNodeInstance& Sine = Builder.AddSine(440.0f);
 
     FAudioGraphNodeInstance& Gain = Builder.AddNode("Gain");
-    Gain.InputSlots.push_back(kAudioGraphInvalidSlot);
-    Gain.InputSlots.push_back(Builder.Literal(EAudioGraphType::Float, 1.0f));
-    Gain.OutputSlots.push_back(Builder.Slot(EAudioGraphType::Audio));
+    Gain.InputSlots.Add(kAudioGraphInvalidSlot);
+    Gain.InputSlots.Add(Builder.Literal(EAudioGraphType::Float, 1.0f));
+    Gain.OutputSlots.Add(Builder.Slot(EAudioGraphType::Audio));
 
     Builder.Program.OutputLeftSlot  = Gain.OutputSlots[0];
     Builder.Program.OutputRightSlot = Gain.OutputSlots[0];
@@ -371,7 +373,7 @@ TEST(AudioGraph, UnboundPinsReadSilence)
     ASSERT_TRUE(Instance.Initialize(Builder.Program, {}, kTestSampleRate, 2));
 
     TVector<float> Output((size_t)kAudioGraphBlockFrames * 2, 0.0f);
-    Instance.Render(Output.data(), kAudioGraphBlockFrames);
+    Instance.Render(Output.GetData(), kAudioGraphBlockFrames);
 
     EXPECT_EQ(PeakOf(Output), 0.0f);
     EXPECT_NE(Sine.OutputSlots[0], kAudioGraphInvalidSlot);
@@ -388,7 +390,7 @@ namespace
         Wave->NumFrames   = Frames;
         for (uint32 Frame = 0; Frame < Frames; ++Frame)
         {
-            Wave->Samples.push_back((float)Frame * 0.01f);
+            Wave->Samples.Add((float)Frame * 0.01f);
         }
         return Wave;
     }
@@ -399,7 +401,7 @@ namespace
         Decl.Name = FName(Name);
         Decl.Type = Type;
         Decl.Slot = Builder.Slot(Type);
-        Builder.Program.Inputs.push_back(Decl);
+        Builder.Program.Inputs.Add(Decl);
         return Decl.Slot;
     }
 
@@ -409,7 +411,7 @@ namespace
         Decl.Name = FName(Name);
         Decl.Type = Type;
         Decl.Slot = Slot;
-        Builder.Program.Outputs.push_back(Decl);
+        Builder.Program.Outputs.Add(Decl);
     }
 
     uint16 WaveLiteral(FProgramBuilder& Builder, int32 WaveIndex)
@@ -418,7 +420,7 @@ namespace
         Init.Type      = EAudioGraphType::Wave;
         Init.Slot      = Builder.Slot(EAudioGraphType::Wave);
         Init.WaveIndex = WaveIndex;
-        Builder.Program.SlotInits.push_back(Init);
+        Builder.Program.SlotInits.Add(Init);
         return Init.Slot;
     }
 
@@ -432,8 +434,8 @@ namespace
 
     TVector<float> RenderFrames(FAudioGraphInstance& Instance, uint32 Frames)
     {
-        TVector<float> Output((size_t)Frames * 2, 0.0f);
-        Instance.Render(Output.data(), Frames);
+        TVector<float> Output(Lumina::IntCastChecked<Lumina::int32>(static_cast<int64>(Frames) * 2), 0.0f);
+        Instance.Render(Output.GetData(), Frames);
         return Output;
     }
 }
@@ -461,7 +463,7 @@ TEST(AudioGraph, WavePlayerLoopsItsRegion)
     Builder.Program.OutputLeftSlot  = Player.OutputSlots[0];
     Builder.Program.OutputRightSlot = Player.OutputSlots[1];
     AddGraphOutput(Builder, "Looped", EAudioGraphType::Trigger, Player.OutputSlots[3]);
-    Builder.Program.Nodes.push_back(Player);
+    Builder.Program.Nodes.Add(Player);
 
     FAudioGraphInstance Instance;
     ASSERT_TRUE(Instance.Initialize(Builder.Program, { MakeRampWave(100, kExactRate) }, kExactRate, 2));
@@ -479,6 +481,31 @@ TEST(AudioGraph, WavePlayerLoopsItsRegion)
     EXPECT_EQ(Instance.GetTriggerOutputCount(FName("Looped")), 8u);
 }
 
+// A Wave Player started with no wave bound must still raise Finished, or the voice never retires.
+TEST(AudioGraph, WavePlayerWithNoWaveStillFinishes)
+{
+    FProgramBuilder Builder;
+    const uint16 OnPlay = AddGraphInput(Builder, kAudioGraphOnPlayInput, EAudioGraphType::Trigger);
+
+    FAudioGraphNodeInstance Player;
+    Player.OperatorName = "WavePlayer";
+    Player.InputSlots = {
+        WaveLiteral(Builder, 0), OnPlay, Builder.Slot(EAudioGraphType::Trigger),
+        Builder.Literal(EAudioGraphType::Bool, 0.0f), Builder.Literal(EAudioGraphType::Float, 1.0f),
+        Builder.Literal(EAudioGraphType::Float, 0.0f) };
+    Player.OutputSlots = { Builder.Slot(EAudioGraphType::Audio), Builder.Slot(EAudioGraphType::Audio), Builder.Slot(EAudioGraphType::Trigger) };
+    Builder.Program.OutputLeftSlot = Player.OutputSlots[0];
+    Builder.Program.FinishedSlot   = Player.OutputSlots[2];
+    Builder.Program.Nodes.Add(Player);
+
+    FAudioGraphInstance Instance;
+    ASSERT_TRUE(Instance.Initialize(Builder.Program, {}, kTestSampleRate, 2));
+    EXPECT_FALSE(Instance.IsFinished());
+
+    RenderFrames(Instance, kAudioGraphBlockFrames);
+    EXPECT_TRUE(Instance.IsFinished());
+}
+
 // A graph saved before the Wave Player gained its loop pins still builds and plays, reading zero for the new ones.
 TEST(AudioGraph, ProgramFromBeforeAppendedPinsStillPlays)
 {
@@ -493,7 +520,7 @@ TEST(AudioGraph, ProgramFromBeforeAppendedPinsStillPlays)
         Builder.Literal(EAudioGraphType::Float, 0.0f) };
     Player.OutputSlots = { Builder.Slot(EAudioGraphType::Audio), Builder.Slot(EAudioGraphType::Audio), Builder.Slot(EAudioGraphType::Trigger) };
     Builder.Program.OutputLeftSlot = Player.OutputSlots[0];
-    Builder.Program.Nodes.push_back(Player);
+    Builder.Program.Nodes.Add(Player);
 
     FAudioGraphInstance Instance;
     ASSERT_TRUE(Instance.Initialize(Builder.Program, { MakeRampWave(400) }, kTestSampleRate, 2));
@@ -521,8 +548,8 @@ TEST(AudioGraph, RandomWavePicksByMode)
         ToFloat.OutputSlots  = { Builder.Slot(EAudioGraphType::Float) };
         AddGraphOutput(Builder, "Picked", EAudioGraphType::Float, ToFloat.OutputSlots[0]);
 
-        Builder.Program.Nodes.push_back(Picker);
-        Builder.Program.Nodes.push_back(ToFloat);
+        Builder.Program.Nodes.Add(Picker);
+        Builder.Program.Nodes.Add(ToFloat);
 
         const TSharedPtr<FAudioGraphWaveResource> Wave = MakeRampWave(16);
         FAudioGraphInstance Instance;
@@ -548,6 +575,52 @@ TEST(AudioGraph, RandomWavePicksByMode)
     }
 }
 
+// Random Wave caps at 64 waves and warns about the rest instead of silently dropping them.
+TEST(AudioGraph, RandomWavePastTheSixtyFourthIsDroppedWithAWarning)
+{
+    constexpr int32 kWiredWaves = 70;
+
+    FProgramBuilder Builder;
+    const uint16 Next = AddGraphInput(Builder, "Next", EAudioGraphType::Trigger);
+
+    FAudioGraphNodeInstance Picker;
+    Picker.OperatorName = "RandomWave";
+    Picker.InputSlots = {
+        Next, Builder.Literal(EAudioGraphType::Int32, 0.0f, (int32)EAudioPickMode::Sequential), Builder.Literal(EAudioGraphType::Int32, 0.0f),
+        Builder.Literal(EAudioGraphType::Int32, 0.0f, 7) };
+    for (int32 Index = 0; Index < kWiredWaves; ++Index)
+    {
+        Picker.InputSlots.Add(WaveLiteral(Builder, 0));
+    }
+    Picker.OutputSlots = { Builder.Slot(EAudioGraphType::Wave), Builder.Slot(EAudioGraphType::Int32) };
+
+    FAudioGraphNodeInstance ToFloat;
+    ToFloat.OperatorName = "IntToFloat";
+    ToFloat.InputSlots   = { Picker.OutputSlots[1] };
+    ToFloat.OutputSlots  = { Builder.Slot(EAudioGraphType::Float) };
+    AddGraphOutput(Builder, "Picked", EAudioGraphType::Float, ToFloat.OutputSlots[0]);
+
+    Builder.Program.Nodes.Add(Picker);
+    Builder.Program.Nodes.Add(ToFloat);
+
+    const TSharedPtr<FAudioGraphWaveResource> Wave = MakeRampWave(16);
+    FAudioGraphInstance Instance;
+    ASSERT_TRUE(Instance.Initialize(Builder.Program, { Wave }, kTestSampleRate, 2));
+
+    RenderFrames(Instance, kAudioGraphBlockFrames);
+    EXPECT_EQ(CountLoggedMessages(ELogLevel::Warn, "RandomWave has 70 wave inputs wired, dropping 6 past the 64 limit"), 1);
+
+    for (int32 Step = 0; Step < kWiredWaves; ++Step)
+    {
+        ASSERT_TRUE(Instance.TriggerParameter(FName("Next")));
+        RenderFrames(Instance, kAudioGraphBlockFrames);
+
+        const float Picked = Instance.GetFloatOutput(FName("Picked"));
+        ASSERT_GE(Picked, 0.0f);
+        ASSERT_LT(Picked, 64.0f) << "the clamp must never pick past the fixed Waves[64] array";
+    }
+}
+
 // Trigger Select in sequence over three outputs deals the triggers out evenly and leaves the fourth alone.
 TEST(AudioGraph, TriggerSelectDealsInTurn)
 {
@@ -560,9 +633,9 @@ TEST(AudioGraph, TriggerSelectDealsInTurn)
         Builder.Literal(EAudioGraphType::Int32, 0.0f), Builder.Literal(EAudioGraphType::Int32, 0.0f, 3), Builder.Literal(EAudioGraphType::Int32, 0.0f, 1) };
     for (uint32 Index = 0; Index < 4; ++Index)
     {
-        Select.OutputSlots.push_back(Builder.Slot(EAudioGraphType::Trigger));
+        Select.OutputSlots.Add(Builder.Slot(EAudioGraphType::Trigger));
     }
-    Select.OutputSlots.push_back(Builder.Slot(EAudioGraphType::Int32));
+    Select.OutputSlots.Add(Builder.Slot(EAudioGraphType::Int32));
 
     const char* OutputNames[] = { "Out0", "Out1", "Out2", "Out3" };
     for (uint32 Index = 0; Index < 4; ++Index)
@@ -582,6 +655,55 @@ TEST(AudioGraph, TriggerSelectDealsInTurn)
     EXPECT_EQ(Instance.GetTriggerOutputCount(FName("Out1")), 2u);
     EXPECT_EQ(Instance.GetTriggerOutputCount(FName("Out2")), 2u);
     EXPECT_EQ(Instance.GetTriggerOutputCount(FName("Out3")), 0u);
+}
+
+// A fire past the 16 in-flight delay budget is dropped with a warning, while the ones that did fit still arrive.
+TEST(AudioGraph, TriggerDelayPastTheSixteenthIsDroppedWithAWarning)
+{
+    FProgramBuilder Builder;
+    const uint16 Fire = AddGraphInput(Builder, "Fire", EAudioGraphType::Trigger);
+
+    // Long enough that none of the first sixteen can drain before the budget fills.
+    constexpr float kDelayFrames = 6000.0f;
+
+    FAudioGraphNodeInstance& Delay = Builder.AddNode("TriggerDelay");
+    Delay.InputSlots = { Fire, Builder.Literal(EAudioGraphType::Float, kDelayFrames / (float)kTestSampleRate) };
+    Delay.OutputSlots.Add(Builder.Slot(EAudioGraphType::Trigger));
+    AddGraphOutput(Builder, "Delayed", EAudioGraphType::Trigger, Delay.OutputSlots[0]);
+
+    FAudioGraphInstance Instance;
+    ASSERT_TRUE(Instance.Initialize(Builder.Program, {}, kTestSampleRate, 2));
+
+    constexpr int32 kFireCount = 20;
+    Logging::ClearLogQueue();
+    for (int32 Index = 0; Index < kFireCount; ++Index)
+    {
+        ASSERT_TRUE(Instance.TriggerParameter(FName("Fire")));
+        RenderFrames(Instance, kAudioGraphBlockFrames);
+    }
+
+    Logging::Flush();
+
+    bool bWarned = false;
+    Logging::FLogQueue& Log = Logging::GetConsoleLogQueue();
+    for (int32 Index = 0; Index < Log.Num(); ++Index)
+    {
+        if (Log[Index].Message.Contains("TriggerDelay"))
+        {
+            bWarned = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(bWarned) << "firing past the 16 in-flight delay budget must log a warning";
+    EXPECT_EQ(Instance.GetTriggerOutputCount(FName("Delayed")), 0u);
+
+    // Keep rendering until every delay that did fit has had time to drain.
+    for (int32 Index = 0; Index < 30; ++Index)
+    {
+        RenderFrames(Instance, kAudioGraphBlockFrames);
+    }
+
+    EXPECT_EQ(Instance.GetTriggerOutputCount(FName("Delayed")), 16u);
 }
 
 // A full scale sine twenty decibels over a twenty to one threshold comes out near minus nineteen decibels.

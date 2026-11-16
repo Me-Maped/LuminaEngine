@@ -3,14 +3,22 @@
 #include "Core/CommandLine/CommandLine.h"
 #include "Core/Console/ConsoleVariable.h"
 #include "Core/Delegates/CoreDelegates.h"
+#include "Core/Engine/Engine.h"
 #include "Core/Module/ModuleManager.h"
 #include "Log/Log.h"
+#include "LuminaEditor.h"
+#include "MCPHubEditorTool.h"
+#include "Tools/UI/ImGui/ImGuiModule.h"
+#include "UI/EditorUI.h"
 
 using namespace Lumina;
 
 IMPLEMENT_MODULE(FMCPEditorModule, "MCPEditor");
 
-namespace
+// ImGui is a StaticLib, so without this the DLL gets its own null context and faults.
+LUMINA_MODULE_IMGUI();
+
+namespace MCPEditorModuleInternal
 {
     FMCPEditorModule* GModule = nullptr;
 
@@ -26,11 +34,33 @@ namespace
         "Whether the Model Context Protocol endpoint opens as soon as the plugin loads.");
 }
 
+using namespace MCPEditorModuleInternal;
+
 namespace Lumina
 {
     MCP::FServer* FMCPEditorModule::GetServer()
     {
         return GModule != nullptr ? &GModule->Server : nullptr;
+    }
+
+    MCP::FPackageToolsState* FMCPEditorModule::GetPackageTools()
+    {
+        return GModule != nullptr ? &GModule->PackageTools : nullptr;
+    }
+
+    MCP::FProfilerToolsState* FMCPEditorModule::GetProfilerTools()
+    {
+        return GModule != nullptr ? &GModule->ProfilerTools : nullptr;
+    }
+
+    MCP::FEditorInputState* FMCPEditorModule::GetEditorInput()
+    {
+        return GModule != nullptr ? &GModule->EditorInput : nullptr;
+    }
+
+    MCP::FLookDevFixtureState* FMCPEditorModule::GetLookDevFixture()
+    {
+        return GModule != nullptr ? &GModule->LookDevFixture : nullptr;
     }
 
     void FMCPEditorModule::StartupModule()
@@ -40,8 +70,14 @@ namespace Lumina
         // A request still in flight when shutdown tears down reflection would serialize its reply through freed types.
         ShutdownStartedHandle = FCoreDelegates::OnEngineShutdownStarted.AddLambda([this]() { Server.Stop(); });
 
+        // The editor tears its tools down before plugins unload, so the drawer never outlives this DLL.
+        if (FEditorUI* EditorUI = Global::GEditorEngine != nullptr ? static_cast<FEditorUI*>(Global::GEditorEngine->GetDevelopmentToolsUI()) : nullptr)
+        {
+            EditorUI->CreateDrawerTool<FMCPHubEditorTool>(LE_ICON_ROBOT, "MCP", 0, EditorUI, &Server);
+        }
+
         // A single dash clusters into character flags, so the switch has to be the double dash form.
-        const bool bSwitched = GCommandLine != nullptr && GCommandLine->Has("mcp");
+        const bool bSwitched = Global::GCommandLine != nullptr && Global::GCommandLine->Has("mcp");
 
         if (!bSwitched && !GMCPAutoStart.GetValue())
         {
@@ -50,9 +86,9 @@ namespace Lumina
         }
 
         int32 Port = GMCPPort.GetValue();
-        if (GCommandLine != nullptr)
+        if (Global::GCommandLine != nullptr)
         {
-            if (const TOptional<int> Override = GCommandLine->GetInt("mcpport"))
+            if (const TOptional<int> Override = Global::GCommandLine->GetInt("mcpport"))
             {
                 Port = *Override;
             }
@@ -75,6 +111,8 @@ namespace Lumina
         // The transport owns a thread that calls back into this DLL, so it has to stop before unload.
         FCoreDelegates::OnEngineShutdownStarted.Remove(ShutdownStartedHandle);
         Server.Stop();
+        PackageTools.Shutdown();
+        ProfilerTools.Shutdown();
 
         GModule = nullptr;
     }

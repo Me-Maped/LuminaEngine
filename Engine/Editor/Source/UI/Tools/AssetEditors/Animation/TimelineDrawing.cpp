@@ -4,6 +4,9 @@
 #include <cstdio>
 #include <imgui_internal.h>
 
+#include "Containers/Algorithm.h"
+#include "Tools/UI/ImGui/ImGuiX.h"
+
 namespace Lumina::Timeline
 {
     namespace
@@ -43,7 +46,7 @@ namespace Lumina::Timeline
 
     FVector4 PaletteColor(int32 Index)
     {
-        constexpr int32 Count = (int32)IM_ARRAYSIZE(Palette);
+        constexpr int32 Count = IM_ARRAYSIZE(Palette);
         return Palette[((Index % Count) + Count) % Count];
     }
 
@@ -184,6 +187,34 @@ namespace Lumina::Timeline
         DrawList->PushClipRect(ImVec2(TextX, Min.y), ImVec2(NameLimit, Max.y), true);
         DrawList->AddText(ImVec2(TextX, TextY), bSelected ? ItemTextColor : TrackTextColor, Name);
         DrawList->PopClipRect();
+    }
+
+    FName DrawRenameField(const char* Label, float Width, FString& Buffer, FName Current, TSpan<const FName> Taken)
+    {
+        if (ImGui::IsWindowAppearing())
+        {
+            Buffer = Current.ToString();
+        }
+        ImGui::SetNextItemWidth(Width);
+        const bool bEntered = ImGuiX::InputText(Label, Buffer, ImGuiInputTextFlags_EnterReturnsTrue);
+
+        const FStringView Typed = Buffer.View();
+        if (Typed.IsEmpty())
+        {
+            ImGui::TextDisabled("A name is required");
+            return FName();
+        }
+        // FName compares case-insensitively, so a case-only difference names the same lane.
+        if (EqualsIgnoreCase(Typed, FStringView(*Current)))
+        {
+            return FName();
+        }
+        if (Algo::AnyOf(Taken, [&](const FName& Name) { return EqualsIgnoreCase(Typed, FStringView(*Name)); }))
+        {
+            ImGui::TextDisabled("Another track already uses this name");
+            return FName();
+        }
+        return bEntered ? FName(Typed) : FName();
     }
 
     FPointGeometry GetPointGeometry(float X, float RowY0, float RowY1, const char* Name, bool bPinnedToBar)

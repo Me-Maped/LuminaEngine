@@ -17,7 +17,6 @@ namespace Lumina
         const char* GetTitlebarIcon() const override { return LE_ICON_TUNE; }
 
         void OnInitialize() override;
-        void OnDeinitialize(const FUpdateContext& UpdateContext) override;
         void DrawHelpMenu() override;
 
     private:
@@ -28,9 +27,6 @@ namespace Lumina
 
         bool PassesFilter(FStringView Name, FStringView Hint) const;
 
-        char SearchBuffer[256] = {};
         FString SearchFilter;
-
-        THashMap<FString, FString> StringEditBuffers;
     };
 }

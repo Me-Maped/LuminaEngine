@@ -7,6 +7,7 @@
 
 #include "ContainerAllocator.h"
 #include "ContainerTraits.h"
+#include "ElementOps.h"
 #include "Memory/Construct.h"
 #include "Invoke.h"
 #include "Lumina.h"
@@ -22,7 +23,7 @@ namespace Lumina::Algo
         }
     };
 
-    /** Projection that leaves the element alone, so a call with no projection costs nothing. */
+    // Projection that leaves the element alone, so a call with no projection costs nothing.
     struct FIdentity
     {
         template <typename T>
@@ -34,7 +35,7 @@ namespace Lumina::Algo
 
     namespace Private
     {
-        /** Excludes iterators, which is what keeps two-argument calls off the iterator-pair overloads. */
+        // Excludes iterators, which is what keeps two-argument calls off the iterator-pair overloads.
         template <typename T>
         concept Range = requires(T& Container)
         {
@@ -42,7 +43,7 @@ namespace Lumina::Algo
             std::end(Container);
         };
 
-        /** Free begin and end so a C array of static table entries is a range like any container. */
+        // Free begin and end so a C array of static table entries is a range like any container.
         template <typename TRange>
         NODISCARD constexpr decltype(auto) Begin(TRange&& Range)
         {
@@ -55,21 +56,21 @@ namespace Lumina::Algo
             return std::end(Range);
         }
 
-        /** Routes through Invoke so &FThing::Field and &FThing::Method work wherever a callable does. */
+        // Routes through Invoke so &FThing::Field and &FThing::Method work wherever a callable does.
         template <typename TProj, typename TElem>
         NODISCARD constexpr decltype(auto) Project(TProj& Proj, TElem&& Elem)
         {
             return Containers::Invoke(Proj, static_cast<TElem&&>(Elem));
         }
 
-        /** Wraps a projection into the unary predicate the iterator overloads already take. */
+        // Wraps a projection into the unary predicate the iterator overloads already take.
         template <typename TProj, typename T>
         NODISCARD constexpr auto EqualsBy(TProj& Proj, const T& Value)
         {
             return [&Proj, &Value](auto&& Elem) -> bool { return Project(Proj, Elem) == Value; };
         }
 
-        /** Wraps a caller's predicate so a member pointer is accepted in its place. */
+        // Wraps a caller's predicate so a member pointer is accepted in its place.
         template <typename TPred>
         NODISCARD constexpr auto AsPredicate(TPred& Pred)
         {
@@ -82,9 +83,22 @@ namespace Lumina::Algo
         template <typename TIt>
         using TDiff = typename std::iterator_traits<TIt>::difference_type;
 
+        // Elements that are trivially relocatable but not trivially copyable relocate their bytes, rather than move three times.
         template <typename TIt>
-        constexpr void IterSwap(TIt Left, TIt Right)
+        inline constexpr bool bRelocateInPlace = std::contiguous_iterator<TIt>
+            && TIsTriviallyRelocatable_V<TValue<TIt>> && !std::is_trivially_copyable_v<TValue<TIt>>;
+
+        template <typename TIt>
+        FORCEINLINE constexpr void IterSwap(TIt Left, TIt Right)
         {
+            if constexpr (bRelocateInPlace<TIt>)
+            {
+                if !consteval
+                {
+                    ElementOps::SwapElements(*Left, *Right);
+                    return;
+                }
+            }
             TValue<TIt> Temp = std::move(*Left);
             *Left = std::move(*Right);
             *Right = std::move(Temp);
@@ -308,7 +322,7 @@ namespace Lumina::Algo
         }
     }
 
-    /** Rotates so Middle becomes the first element; returns where the old first element ended up. */
+    // Rotates so Middle becomes the first element; returns where the old first element ended up.
     template <typename TIt>
     constexpr TIt Rotate(TIt First, TIt Middle, TIt Last)
     {
@@ -328,7 +342,7 @@ namespace Lumina::Algo
         return First + (Last - Middle);
     }
 
-    /** Shifts every element that is not Value forward; returns the new logical end. */
+    // Shifts every element that is not Value forward; returns the new logical end.
     template <typename TIt, typename T>
     constexpr TIt Remove(TIt First, TIt Last, const T& Value)
     {
@@ -371,7 +385,7 @@ namespace Lumina::Algo
         return Out;
     }
 
-    /** Collapses runs of adjacent equal elements; returns the new logical end. */
+    // Collapses runs of adjacent equal elements; returns the new logical end.
     template <typename TIt, typename TEqual>
     constexpr TIt Unique(TIt First, TIt Last, TEqual AreEqual)
     {
@@ -438,9 +452,21 @@ namespace Lumina::Algo
         return Best;
     }
 
+    // On a random-access range the step is a select rather than a branch, so a lookup never mispredicts.
     template <typename TIt, typename T, typename TPred = FLess>
     NODISCARD constexpr TIt LowerBound(TIt First, TIt Last, const T& Value, TPred Pred = {})
     {
+        if constexpr (std::random_access_iterator<TIt>)
+        {
+            for (Private::TDiff<TIt> Length = Last - First; Length > 0;)
+            {
+                const Private::TDiff<TIt> Half = Length / 2;
+                First += Pred(First[Half], Value) ? Length - Half : 0;
+                Length = Half;
+            }
+            return First;
+        }
+
         Private::TDiff<TIt> Remaining = Last - First;
         while (Remaining > 0)
         {
@@ -463,6 +489,17 @@ namespace Lumina::Algo
     template <typename TIt, typename T, typename TPred = FLess>
     NODISCARD constexpr TIt UpperBound(TIt First, TIt Last, const T& Value, TPred Pred = {})
     {
+        if constexpr (std::random_access_iterator<TIt>)
+        {
+            for (Private::TDiff<TIt> Length = Last - First; Length > 0;)
+            {
+                const Private::TDiff<TIt> Half = Length / 2;
+                First += Pred(Value, First[Half]) ? 0 : Length - Half;
+                Length = Half;
+            }
+            return First;
+        }
+
         Private::TDiff<TIt> Remaining = Last - First;
         while (Remaining > 0)
         {
@@ -512,6 +549,44 @@ namespace Lumina::Algo
     {
         inline constexpr int64 kInsertionSortThreshold = 24;
 
+        // Moves *It back before It - 1; guarded, so a comparator that is no strict weak order, such as NaN keys, stays in bounds.
+        template <typename TIt, typename TPred>
+        FORCEINLINE constexpr void InsertBackward(TIt First, TIt It, TPred& Pred)
+        {
+            using FValue = TValue<TIt>;
+            if constexpr (bRelocateInPlace<TIt>)
+            {
+                if !consteval
+                {
+                    alignas(FValue) unsigned char Staged[sizeof(FValue)];
+                    FValue* Element = std::to_address(It);
+                    std::memcpy(Staged, static_cast<void*>(Element), sizeof(FValue));
+                    const FValue& Key = *std::launder(reinterpret_cast<const FValue*>(Staged));
+
+                    TIt Hole = It - 1;
+                    while (Hole != First && Pred(Key, *(Hole - 1)))
+                    {
+                        --Hole;
+                    }
+
+                    FValue* Target = std::to_address(Hole);
+                    std::memmove(static_cast<void*>(Target + 1), static_cast<const void*>(Target), static_cast<size_t>(Element - Target) * sizeof(FValue));
+                    std::memcpy(static_cast<void*>(Target), Staged, sizeof(FValue));
+                    return;
+                }
+            }
+
+            FValue Key = std::move(*It);
+            TIt Hole = It;
+            do
+            {
+                *Hole = std::move(*(Hole - 1));
+                --Hole;
+            }
+            while (Hole != First && Pred(Key, *(Hole - 1)));
+            *Hole = std::move(Key);
+        }
+
         template <typename TIt, typename TPred>
         constexpr void InsertionSort(TIt First, TIt Last, TPred& Pred)
         {
@@ -522,17 +597,13 @@ namespace Lumina::Algo
 
             for (TIt It = First + 1; It != Last; ++It)
             {
-                TValue<TIt> Key = std::move(*It);
-                TIt Hole = It;
-                while (Hole != First && Pred(Key, *(Hole - 1)))
+                if (Pred(*It, *(It - 1)))
                 {
-                    *Hole = std::move(*(Hole - 1));
-                    --Hole;
+                    InsertBackward(First, It, Pred);
                 }
-
-                *Hole = std::move(Key);
             }
         }
+
 
         template <typename TIt, typename TPred>
         constexpr void SiftDown(TIt First, TDiff<TIt> Root, TDiff<TIt> Count, TPred& Pred)
@@ -692,7 +763,7 @@ namespace Lumina::Algo
         }
     }
 
-    /** Introsort: quicksort on a median of three, heapsort past the depth limit, insertion sort at the end. */
+    // Introsort, which runs quicksort on a median of three, heapsort past the depth limit and insertion sort at the end.
     template <typename TIt, typename TPred = FLess>
     constexpr void Sort(TIt First, TIt Last, TPred Pred = {})
     {
@@ -743,7 +814,7 @@ namespace Lumina::Algo
         Private::SiftDown(First, 0, Count - 1, Pred);
     }
 
-    /** Bottom-up merge sort through one heap buffer; keeps equal elements in their original order. */
+    // Bottom-up merge sort through one heap buffer, skipped for sorted input; keeps equal elements in their original order.
     template <typename TIt, typename TPred = FLess>
     void StableSort(TIt First, TIt Last, TPred Pred = {})
     {
@@ -751,7 +822,7 @@ namespace Lumina::Algo
         using FDiff = Private::TDiff<TIt>;
 
         const FDiff Count = Last - First;
-        if (Count < 2)
+        if (Count < 2 || IsSorted(First, Last, Pred))
         {
             return;
         }
@@ -812,7 +883,7 @@ namespace Lumina::Algo
         FHeapAllocator::Deallocate(Buffer, sizeof(FValue) * static_cast<size_t>(Count), alignof(FValue));
     }
 
-    /** Leaves the element that belongs at Nth in place, everything smaller before it and larger after. */
+    // Leaves the element that belongs at Nth in place, everything smaller before it and larger after.
     template <typename TIt, typename TPred = FLess>
     constexpr void NthElement(TIt First, TIt Nth, TIt Last, TPred Pred = {})
     {
@@ -843,7 +914,7 @@ namespace Lumina::Algo
         Sort(First, Middle, Pred);
     }
 
-    /** Moves everything Pred accepts to the front, keeping relative order on both sides. */
+    // Moves everything Pred accepts to the front, keeping relative order on both sides.
     template <typename TIt, typename TPred>
     TIt StablePartition(TIt First, TIt Last, TPred Pred)
     {
@@ -889,7 +960,7 @@ namespace Lumina::Algo
         return First + (Count - Rejected);
     }
 
-    /** Range overloads, each taking a member pointer wherever it takes a predicate or projection. */
+    // Range overloads, each taking a member pointer wherever it takes a predicate or projection.
 
     template <Private::Range TRange, typename T, typename TProj = FIdentity>
     NODISCARD constexpr auto Find(TRange&& Range, const T& Value, TProj Proj = {})
@@ -1107,7 +1178,7 @@ namespace Lumina::Algo
         return First1 == Last1 && First2 == Last2;
     }
 
-    /** Position of the first element whose projection equals Value, or Constants::kIndexNone. */
+    // Position of the first element whose projection equals Value, or Constants::kIndexNone.
     template <Private::Range TRange, typename T, typename TProj = FIdentity>
     NODISCARD constexpr int32 IndexOf(TRange&& Range, const T& Value, TProj Proj = {})
     {
@@ -1125,7 +1196,7 @@ namespace Lumina::Algo
         return Constants::kIndexNone;
     }
 
-    /** Position of the first element satisfying Pred, or Constants::kIndexNone. */
+    // Position of the first element satisfying Pred, or Constants::kIndexNone.
     template <Private::Range TRange, typename TPred>
     NODISCARD constexpr int32 IndexOfIf(TRange&& Range, TPred Pred)
     {
@@ -1143,7 +1214,7 @@ namespace Lumina::Algo
         return Constants::kIndexNone;
     }
 
-    /** Left fold over the projected elements, seeded with Init. */
+    // Left fold over the projected elements, seeded with Init.
     template <typename TIt, typename T, typename TProj = FIdentity>
     NODISCARD constexpr T Accumulate(TIt First, TIt Last, T Init, TProj Proj = {})
     {
@@ -1161,7 +1232,7 @@ namespace Lumina::Algo
         return Accumulate(Private::Begin(Range), Private::End(Range), std::move(Init), Proj);
     }
 
-    /** Sum of the projected elements, from a value-initialized accumulator. */
+    // Sum of the projected elements, from a value-initialized accumulator.
     template <Private::Range TRange, typename TProj = FIdentity>
     NODISCARD constexpr auto Sum(TRange&& Range, TProj Proj = {})
     {

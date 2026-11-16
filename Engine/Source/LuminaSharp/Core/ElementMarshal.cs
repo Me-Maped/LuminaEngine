@@ -6,22 +6,22 @@ using Lumina;
 
 namespace LuminaSharp;
 
-/// <summary>How a container element is carried between native storage and C#.</summary>
+// How a container element moves between native storage and C#.
 internal enum EElementKind
 {
-    /// <summary>The managed value IS the native bytes. Read and written in place; the fast path.</summary>
+    // The managed value is the native bytes, read and written in place.
     Blittable,
 
-    /// <summary>A native <c>FString</c>. Read by decoding in place, written through native assignment.</summary>
+    // Decoded in place, written through native assignment.
     String,
 
     // A reference-counted object slot, read as a raw pointer and written through the native assignment.
     ObjectRef,
 
-    /// <summary>An opaque reflected struct. Read as a wrapper viewing the slot, written by native struct copy.</summary>
+    // Read as a wrapper viewing the slot, written by native struct copy.
     StructView,
 
-    /// <summary>An asset reference. Stored natively as one FSoftObjectPath, so the path is the whole value.</summary>
+    // Stored natively as one FSoftObjectPath, so the path is the whole value.
     SoftRef,
 
     // Native writes any nonzero byte, so the read normalizes rather than reinterpreting the slot.
@@ -141,10 +141,10 @@ internal static class ElementKind<T>
         return Expression.Lambda<Func<nint, nint, T>>(Expression.New(Ctor, Instance, Ops), Instance, Ops).Compile();
     }
 
-    /// <summary>Builds the slot view once per T, from the same (IntPtr) ctor Wrapper uses.</summary>
+    // Built once per T from the same IntPtr constructor Wrapper uses.
     public static readonly Func<nint, T>? MakeView = BuildView();
 
-    /// <summary>The reflected struct name StructAssign resolves; empty for every other kind.</summary>
+    // The reflected struct name StructAssign resolves, empty for every other kind.
     public static readonly string NativeName = Kind == EElementKind.StructView ? NativeTypeName.Of<T>() : string.Empty;
 
     public static readonly Func<string, T>? MakeSoftReference = BindSoftReference<Func<string, T>>(nameof(SoftObjectReferenceMarshal.Read));
@@ -193,10 +193,9 @@ internal static class ElementKind<T>
     }
 }
 
-/// <summary>Reads and writes one element at a native address, according to its <see cref="ElementKind{T}"/>.</summary>
+// Reads and writes one element at a native address according to its ElementKind.
 public static unsafe class ElementMarshal
 {
-    /// <summary>The element at <paramref name="Address"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static T Read<T>(nint Address)
     {
@@ -209,8 +208,11 @@ public static unsafe class ElementMarshal
                 return Unsafe.As<FString, T>(ref Value);
             }
             case EElementKind.ObjectRef:
-                // A TStrongObjectPtr is one pointer like the native slot, so only its write differs.
-                return Unsafe.ReadUnaligned<T>((void*)Address);
+            {
+                // Through the native Get, which answers null for an object the slot still names after it was destroyed.
+                IntPtr Live = Native.GetObjectPtr(Address);
+                return Unsafe.As<IntPtr, T>(ref Live);
+            }
 
             case EElementKind.StructView:
             case EElementKind.SlotView:
@@ -366,6 +368,36 @@ public static unsafe class ElementMarshal
             default:
                 Unsafe.WriteUnaligned((void*)Address, Value);
                 break;
+        }
+    }
+
+    internal static T Detach<T>(T Value)
+    {
+        if (ElementKind<T>.Kind == EElementKind.String)
+        {
+            FString Text = Unsafe.As<T, FString>(ref Value);
+            if (Text.IsBound)
+            {
+                FString Owned = new FString(Text.ToString());
+                return Unsafe.As<FString, T>(ref Owned);
+            }
+        }
+        return Value;
+    }
+
+    internal static nint BoundAddress<T>(T Value)
+    {
+        switch (ElementKind<T>.Kind)
+        {
+            case EElementKind.String:
+                return Unsafe.As<T, FString>(ref Value).Address;
+            case EElementKind.StructView:
+            {
+                NativeRef View = Unsafe.As<T, NativeRef>(ref Value);
+                return View.IsNull ? 0 : View.Address;
+            }
+            default:
+                return 0;
         }
     }
 

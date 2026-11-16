@@ -47,39 +47,12 @@ namespace Lumina::Physics
         Registry.GetSignals<SCharacterPhysicsComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnCharacterComponentUpdated>(this);
         Registry.GetSignals<SCharacterMovementComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnCharacterComponentUpdated>(this);
 
-        Registry.GetSignals<SSphereColliderComponent>().OnConstruct.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SSphereColliderComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SSphereColliderComponent>().OnDestroy.Connect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SBoxColliderComponent>().OnConstruct.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SBoxColliderComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SBoxColliderComponent>().OnDestroy.Connect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SCapsuleColliderComponent>().OnConstruct.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SCapsuleColliderComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SCapsuleColliderComponent>().OnDestroy.Connect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SCylinderColliderComponent>().OnConstruct.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SCylinderColliderComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SCylinderColliderComponent>().OnDestroy.Connect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<STaperedCapsuleColliderComponent>().OnConstruct.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<STaperedCapsuleColliderComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<STaperedCapsuleColliderComponent>().OnDestroy.Connect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<STaperedCylinderColliderComponent>().OnConstruct.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<STaperedCylinderColliderComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<STaperedCylinderColliderComponent>().OnDestroy.Connect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SPlaneColliderComponent>().OnConstruct.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SPlaneColliderComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SPlaneColliderComponent>().OnDestroy.Connect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SCompoundColliderComponent>().OnConstruct.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SCompoundColliderComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SCompoundColliderComponent>().OnDestroy.Connect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SMeshColliderComponent>().OnConstruct.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SMeshColliderComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SMeshColliderComponent>().OnDestroy.Connect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<STerrainColliderComponent>().OnConstruct.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<STerrainColliderComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<STerrainColliderComponent>().OnDestroy.Connect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SDynamicMeshColliderComponent>().OnConstruct.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SDynamicMeshColliderComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SDynamicMeshColliderComponent>().OnDestroy.Connect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
+        ForEachColliderType([&]<typename TCollider>()
+        {
+            Registry.GetSignals<TCollider>().OnConstruct.template Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
+            Registry.GetSignals<TCollider>().OnUpdate.template Connect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
+            Registry.GetSignals<TCollider>().OnDestroy.template Connect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
+        });
 
         Registry.GetSignals<SRigidBodyComponent>().OnUpdate.Connect<&FBox3DPhysicsScene::OnRigidBodyComponentUpdated>(this);
         Registry.GetSignals<SRigidBodyComponent>().OnConstruct.Connect<&FBox3DPhysicsScene::OnRigidBodyComponentConstructed>(this);
@@ -91,7 +64,7 @@ namespace Lumina::Physics
         Registry.View<SPhysicsConstraintComponent>().ForEach([&](ECS::FEntity E, SPhysicsConstraintComponent& C)
         {
             C.ConstraintID = 0;
-            PendingConstraintCreations.push_back(E);
+            PendingConstraintCreations.Add(E);
         });
     }
 
@@ -104,39 +77,12 @@ namespace Lumina::Physics
         Registry.GetSignals<SCharacterPhysicsComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnCharacterComponentUpdated>(this);
         Registry.GetSignals<SCharacterMovementComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnCharacterComponentUpdated>(this);
 
-        Registry.GetSignals<SSphereColliderComponent>().OnConstruct.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SSphereColliderComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SSphereColliderComponent>().OnDestroy.Disconnect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SBoxColliderComponent>().OnConstruct.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SBoxColliderComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SBoxColliderComponent>().OnDestroy.Disconnect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SCapsuleColliderComponent>().OnConstruct.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SCapsuleColliderComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SCapsuleColliderComponent>().OnDestroy.Disconnect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SCylinderColliderComponent>().OnConstruct.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SCylinderColliderComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SCylinderColliderComponent>().OnDestroy.Disconnect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<STaperedCapsuleColliderComponent>().OnConstruct.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<STaperedCapsuleColliderComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<STaperedCapsuleColliderComponent>().OnDestroy.Disconnect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<STaperedCylinderColliderComponent>().OnConstruct.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<STaperedCylinderColliderComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<STaperedCylinderColliderComponent>().OnDestroy.Disconnect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SPlaneColliderComponent>().OnConstruct.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SPlaneColliderComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SPlaneColliderComponent>().OnDestroy.Disconnect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SCompoundColliderComponent>().OnConstruct.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SCompoundColliderComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SCompoundColliderComponent>().OnDestroy.Disconnect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SMeshColliderComponent>().OnConstruct.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SMeshColliderComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SMeshColliderComponent>().OnDestroy.Disconnect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<STerrainColliderComponent>().OnConstruct.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<STerrainColliderComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<STerrainColliderComponent>().OnDestroy.Disconnect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
-        Registry.GetSignals<SDynamicMeshColliderComponent>().OnConstruct.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SDynamicMeshColliderComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
-        Registry.GetSignals<SDynamicMeshColliderComponent>().OnDestroy.Disconnect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
+        ForEachColliderType([&]<typename TCollider>()
+        {
+            Registry.GetSignals<TCollider>().OnConstruct.template Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
+            Registry.GetSignals<TCollider>().OnUpdate.template Disconnect<&FBox3DPhysicsScene::OnColliderComponentAdded>(this);
+            Registry.GetSignals<TCollider>().OnDestroy.template Disconnect<&FBox3DPhysicsScene::OnColliderComponentRemoved>(this);
+        });
 
         Registry.GetSignals<SRigidBodyComponent>().OnUpdate.Disconnect<&FBox3DPhysicsScene::OnRigidBodyComponentUpdated>(this);
         Registry.GetSignals<SRigidBodyComponent>().OnConstruct.Disconnect<&FBox3DPhysicsScene::OnRigidBodyComponentConstructed>(this);
@@ -156,22 +102,23 @@ namespace Lumina::Physics
             OnCharacterComponentDestroyed(Registry, EntityID);
         });
 
-        PendingStaticGroups.clear();
-        PendingRagdolls.clear();
+        PendingStaticGroups.Reset();
+        PendingRagdolls.Reset();
         for (const FOwnedRagdoll& Ragdoll : OwnedRagdolls) { Ragdoll.Handle->bPendingDestroy = true; }
         DestroyAllConstraints();
         SynchronizeBodies();
         for (TVector<FBodyCommand>& Commands : ThreadBodyCommands)
         {
-            Commands.clear();
+            Commands.Reset();
         }
-        OverflowBodyCommands.clear();
-        WaitingBodyCommands.clear();
-        BodyCommandScratch.clear();
-        PendingRigidBodies.clear();
-        PendingCharacters.clear();
-        PendingConstraintCreations.clear();
+        OverflowBodyCommands.Reset();
+        WaitingBodyCommands.Reset();
+        BodyCommandScratch.Reset();
+        PendingRigidBodies.Reset();
+        PendingCharacters.Reset();
+        PendingConstraintCreations.Reset();
         DestroyAllStaticBodyGroups();
+        DestroyAllCreatedBodies();
     }
 
     void FBox3DPhysicsScene::ApplyDirtyTransforms(float FixedDt, uint32 RemainingSteps, bool bFirstStep)
@@ -185,12 +132,12 @@ namespace Lumina::Physics
 
         if (bFirstStep)
         {
-        for (uint32 Handle : AuthoredKinematicHandles)
-        {
-            BodyAuthoredKinematic[Handle] = 0;
-        }
-        PreviousAuthoredKinematicHandles.swap(AuthoredKinematicHandles);
-        AuthoredKinematicHandles.clear();
+            for (uint32 Handle : AuthoredKinematicHandles)
+            {
+                BodyAuthoredKinematic[Handle] = 0;
+            }
+            swap(PreviousAuthoredKinematicHandles, AuthoredKinematicHandles);
+            AuthoredKinematicHandles.Reset();
         }
 
         // Spread over every step this update runs, so a second step does not carry the body past its target.
@@ -210,11 +157,7 @@ namespace Lumina::Physics
             const FQuat TargetRotation = BodyPose.GetRotation();
             if (!Box3DUtils::IsSafePose(TargetLocation, TargetRotation))
             {
-                static TAtomic<bool> bWarned{ false };
-                if (!bWarned.exchange(true, std::memory_order_relaxed))
-                {
-                    LOG_WARN("Entity {} was moved to a NaN, infinite or out of range transform, which its rigid body ignores", Entity.Value);
-                }
+                LOG_WARN_ONCE("Entity {} was moved to a NaN, infinite or out of range transform, which its rigid body ignores", Entity.Value);
                 continue;
             }
             const b3Vec3 Position = Box3DUtils::ToB3Vec3(TargetLocation);
@@ -282,25 +225,24 @@ namespace Lumina::Physics
         // The drive velocity outlives its target, so a body nobody placed again would keep drifting.
         if (bFirstStep)
         {
-        for (uint32 Handle : PreviousAuthoredKinematicHandles)
-        {
-            const b3BodyId BodyId = ResolveBody(Handle);
-            if (BodyAuthoredKinematic[Handle] == 0 && b3Body_IsValid(BodyId) && b3Body_GetType(BodyId) == b3_kinematicBody)
+            for (uint32 Handle : PreviousAuthoredKinematicHandles)
             {
-                b3Body_SetLinearVelocity(BodyId, b3Vec3{ 0.0f, 0.0f, 0.0f });
-                b3Body_SetAngularVelocity(BodyId, b3Vec3{ 0.0f, 0.0f, 0.0f });
+                const b3BodyId BodyId = ResolveBody(Handle);
+                if (BodyAuthoredKinematic[Handle] == 0 && b3Body_IsValid(BodyId) && b3Body_GetType(BodyId) == b3_kinematicBody)
+                {
+                    b3Body_SetLinearVelocity(BodyId, b3Vec3{ 0.0f, 0.0f, 0.0f });
+                    b3Body_SetAngularVelocity(BodyId, b3Vec3{ 0.0f, 0.0f, 0.0f });
+                }
             }
         }
 
-        }
-
         // Carried forward with the payload intact, since a blanket clear lost a spawn-then-SetLocation.
-        RetryBodyUpdates.clear();
+        RetryBodyUpdates.Reset();
         for (auto [Entity, BodyComponent, Update] : BodySyncView.Each())
         {
             if (FindEntityBody(Entity) == InvalidBodyHandle)
             {
-                RetryBodyUpdates.push_back({ Entity, Update });
+                RetryBodyUpdates.Emplace(Entity, Update);
             }
         }
 
@@ -317,23 +259,23 @@ namespace Lumina::Physics
 
     void FBox3DPhysicsScene::MarkAuthoredKinematic(uint32 Handle)
     {
-        if (Handle >= BodyAuthoredKinematic.size())
+        if (Handle >= static_cast<uint32>(BodyAuthoredKinematic.Num()))
         {
-            BodyAuthoredKinematic.resize(Handle + 1, 0);
+            BodyAuthoredKinematic.SetNum(Handle + 1, 0);
         }
 
         if (BodyAuthoredKinematic[Handle] == 0)
         {
             BodyAuthoredKinematic[Handle] = 1;
-            AuthoredKinematicHandles.push_back(Handle);
+            AuthoredKinematicHandles.Add(Handle);
         }
     }
 
     uint32 FBox3DPhysicsScene::StageInterpSlot(uint32 BodyHandle, const FVector3& Position, const FQuat& Rotation)
     {
-        if (BodyHandle >= BodyStagingSlot.size())
+        if (BodyHandle >= static_cast<uint32>(BodyStagingSlot.Num()))
         {
-            BodyStagingSlot.resize(BodyHandle + 1, InvalidBodyHandle);
+            BodyStagingSlot.SetNum(BodyHandle + 1, InvalidBodyHandle);
         }
 
         uint32 Slot = BodyStagingSlot[BodyHandle];
@@ -342,9 +284,9 @@ namespace Lumina::Physics
             return Slot;
         }
 
-        Slot = (uint32)InterpStaging.Entities.size();
+        Slot = (uint32)InterpStaging.Entities.Num();
         BodyStagingSlot[BodyHandle] = Slot;
-        StagedBodyHandles.push_back(BodyHandle);
+        StagedBodyHandles.Add(BodyHandle);
 
         InterpStaging.PushBack();
         InterpStaging.Flags[Slot] = EInterpFlag::Interpolate;
@@ -369,8 +311,6 @@ namespace Lumina::Physics
 
         DropCharacterInterpSlots();
 
-        ECS::FRegistry& Registry = World->GetEntityRegistry();
-        auto RigidStorage = Registry.GetStorage<SRigidBodyComponent>();
         const float KillHeight = World->GetDefaultWorldSettings().WorldKillHeight;
 
         for (int32 i = 0; i < Events.moveCount; ++i)
@@ -380,12 +320,8 @@ namespace Lumina::Physics
             // The event carries the user data, so resolving the entity costs no body lookup.
             const ECS::FEntity Entity = UnpackEntity(Event.userData);
             const uint32 Handle = UnpackHandle(Event.userData);
-            if (!RigidStorage.Contains(Entity))
-            {
-                continue;
-            }
 
-            // One lookup per event, since every field below lives on this record.
+            // One lookup per event, since every field below lives on this record, which exists only while the rigid body component does.
             FBodyRecord* Found = RigidBodies.Find(Entity);
             if (Found == nullptr || Found->Handle != Handle)
             {
@@ -396,22 +332,22 @@ namespace Lumina::Physics
             const FVector3 NewPosition = Box3DUtils::FromB3Vec3(Event.transform.p);
             const FQuat NewRotation = Box3DUtils::FromB3Quat(Event.transform.q);
 
-            if (Handle < BodyAwake.size())
+            if (Handle < static_cast<uint32>(BodyAwake.Num()))
             {
                 if (BodyAwake[Handle] == 0)
                 {
                     BodyAwake[Handle] = 1;
-                    ActivationDrainScratch.push_back({ Entity, true });
+                    ActivationDrainScratch.Emplace(Entity, true);
                 }
                 if (Event.fellAsleep)
                 {
                     BodyAwake[Handle] = 0;
-                    ActivationDrainScratch.push_back({ Entity, false });
+                    ActivationDrainScratch.Emplace(Entity, false);
                 }
             }
 
             // Gameplay already put its transform where it should draw, and the step only chased that placement.
-            if (Handle < BodyAuthoredKinematic.size() && BodyAuthoredKinematic[Handle] != 0)
+            if (Handle < static_cast<uint32>(BodyAuthoredKinematic.Num()) && BodyAuthoredKinematic[Handle] != 0)
             {
                 Record.LastBodyPosition = NewPosition;
                 Record.LastBodyRotation = NewRotation;
@@ -444,16 +380,60 @@ namespace Lumina::Physics
 
     void FBox3DPhysicsScene::ResetInterpStaging()
     {
+        // Only a blend leaves a body short of its simulated pose, so a body staged at rest already shows it.
+        SettleCandidates.Reset();
+        for (int32 Slot = 0; Slot < StagedBodyHandles.Num(); ++Slot)
+        {
+            if (InterpStaging.Flags[Slot] == EInterpFlag::Interpolate && (InterpStaging.PrevPos[Slot] != InterpStaging.CurrPos[Slot]
+                || InterpStaging.PrevQx[Slot] != InterpStaging.CurrQx[Slot] || InterpStaging.PrevQy[Slot] != InterpStaging.CurrQy[Slot]
+                || InterpStaging.PrevQz[Slot] != InterpStaging.CurrQz[Slot] || InterpStaging.PrevQw[Slot] != InterpStaging.CurrQw[Slot]))
+            {
+                SettleCandidates.Add(StagedBodyHandles[Slot]);
+            }
+        }
+
         for (uint32 Handle : StagedBodyHandles)
         {
-            if (Handle < BodyStagingSlot.size())
+            if (Handle < static_cast<uint32>(BodyStagingSlot.Num()))
             {
                 BodyStagingSlot[Handle] = InvalidBodyHandle;
             }
         }
-        StagedBodyHandles.clear();
+        StagedBodyHandles.Reset();
+        InterpCarrierSlots.Reset();
         InterpStaging.Clear();
         bInterpCharacterTail = false;
+    }
+
+    // A body shown at a blend that got no move event since (asleep, or put to sleep by hand) is staged at rest on its simulated pose.
+    void FBox3DPhysicsScene::StageSettledBodies()
+    {
+        DropCharacterInterpSlots();
+        for (uint32 Handle : SettleCandidates)
+        {
+            if (Handle < static_cast<uint32>(BodyStagingSlot.Num()) && BodyStagingSlot[Handle] != InvalidBodyHandle)
+            {
+                continue;
+            }
+
+            // Gameplay owns where an authored kinematic body draws.
+            if (Handle < static_cast<uint32>(BodyAuthoredKinematic.Num()) && BodyAuthoredKinematic[Handle] != 0)
+            {
+                continue;
+            }
+
+            // The record holds the pose the body was last simulated or teleported to, so a teleport is never undone.
+            const ECS::FEntity Entity = EntityOfBody(ResolveBody(Handle));
+            const FBodyRecord* Record = RigidBodies.Find(Entity);
+            if (Record == nullptr || Record->Handle != Handle)
+            {
+                continue;
+            }
+
+            const uint32 Slot = StageInterpSlot(Handle, Record->LastBodyPosition, Record->LastBodyRotation);
+            InterpStaging.Entities[Slot] = Entity;
+        }
+        SettleCandidates.Reset();
     }
 
     void FBox3DPhysicsScene::DropCharacterInterpSlots()
@@ -520,7 +500,8 @@ namespace Lumina::Physics
         const float KillHeight = World->GetDefaultWorldSettings().WorldKillHeight;
 
         DropCharacterInterpSlots();
-        InterpBodySlots = (uint32)InterpStaging.Entities.size();
+        InterpCarrierSlots.Reset();
+        InterpBodySlots = (uint32)InterpStaging.Entities.Num();
         bInterpCharacterTail = true;
 
         // Characters are driven by the mover rather than the solver, so they never raise move events.
@@ -588,7 +569,7 @@ namespace Lumina::Physics
         };
         if (NumCharacters > InterpParallelThreshold)
         {
-            Task::ParallelFor(NumCharacters, StageCharacter);
+            Jobs::ParallelFor(NumCharacters, StageCharacter);
         }
         else
         {
@@ -598,7 +579,7 @@ namespace Lumina::Physics
             }
         }
 
-        const uint32 Total = (uint32)InterpStaging.Entities.size();
+        const uint32 Total = (uint32)InterpStaging.Entities.Num();
         if (Total == 0)
         {
             return;
@@ -606,9 +587,9 @@ namespace Lumina::Physics
 
         InterpStaging.EnsureLerpCapacity();
 
-        SIMD::LerpArray(reinterpret_cast<float*>(InterpStaging.LerpPos.data()),
-                        reinterpret_cast<const float*>(InterpStaging.PrevPos.data()),
-                        reinterpret_cast<const float*>(InterpStaging.CurrPos.data()),
+        SIMD::LerpArray(reinterpret_cast<float*>(InterpStaging.LerpPos.GetData()),
+                        reinterpret_cast<const float*>(InterpStaging.PrevPos.GetData()),
+                        reinterpret_cast<const float*>(InterpStaging.CurrPos.GetData()),
                         int(Total) * 3, Alpha);
 
         Algo::Copy(InterpStaging.CurrQx, InterpStaging.LerpQx.begin());
@@ -616,21 +597,21 @@ namespace Lumina::Physics
         Algo::Copy(InterpStaging.CurrQz, InterpStaging.LerpQz.begin());
         Algo::Copy(InterpStaging.CurrQw, InterpStaging.LerpQw.begin());
 
-        NlerpQuatsSoA(InterpStaging.LerpQx.data(), InterpStaging.LerpQy.data(),
-                      InterpStaging.LerpQz.data(), InterpStaging.LerpQw.data(),
-                      InterpStaging.PrevQx.data(), InterpStaging.PrevQy.data(),
-                      InterpStaging.PrevQz.data(), InterpStaging.PrevQw.data(),
+        NlerpQuatsSoA(InterpStaging.LerpQx.GetData(), InterpStaging.LerpQy.GetData(),
+                      InterpStaging.LerpQz.GetData(), InterpStaging.LerpQw.GetData(),
+                      InterpStaging.PrevQx.GetData(), InterpStaging.PrevQy.GetData(),
+                      InterpStaging.PrevQz.GetData(), InterpStaging.PrevQw.GetData(),
                       Total, Alpha);
     }
 
     // Writes the blend into the transform itself, so cameras, attachments and scripts see one pose and the body keeps the simulated one.
-    void FBox3DPhysicsScene::ApplyInterpolatedTransforms()
+    void FBox3DPhysicsScene::ApplyInterpolatedTransforms(bool bCarriersOnly)
     {
         LUMINA_PROFILE_SCOPE();
 
         ECS::FRegistry& Registry = World->GetEntityRegistry();
 
-        const uint32 Count = (uint32)InterpStaging.Entities.size();
+        const uint32 Count = (uint32)InterpStaging.Entities.Num();
         if (Count == 0)
         {
             return;
@@ -641,68 +622,13 @@ namespace Lumina::Physics
         ECS::Utils::FlushDirtyPhysicsBodies(Registry);
 
         const auto PendingTeleport = Registry.GetStorage<FNeedsPhysicsBodyUpdate>();
-
-        InterpApplied.clear();
-        InterpAppliedParented.clear();
-
-        enum : uint8 { kInterpSkip = 0, kInterpFlat = 1, kInterpParented = 2, kInterpKill = 3 };
-        InterpCategory.resize(Count);
-        std::atomic<uint32> KillCount{0};
-
-        // Reads only, so it fans out; a kill is structural and is handled serially below.
-        const auto Classify = [&](uint32 i)
-        {
-            const EInterpFlag Flag = InterpStaging.Flags[i];
-            const ECS::FEntity Entity = InterpStaging.Entities[i];
-            uint8 Category = kInterpSkip;
-            if (Flag != EInterpFlag::Skip && Registry.IsValid(Entity))
-            {
-                if (Flag == EInterpFlag::BelowKill)
-                {
-                    Category = kInterpKill;
-                    KillCount.fetch_add(1, std::memory_order_relaxed);
-                }
-                // An authored move outranks the body pose until the teleport reaches the body.
-                else if (TransformStorage.Contains(Entity) && !PendingTeleport.Contains(Entity))
-                {
-                    Category = TransformStorage.Get(Entity).bIsFlat ? kInterpFlat : kInterpParented;
-                }
-            }
-            InterpCategory[i] = Category;
-        };
-        if (Count > InterpParallelThreshold)
-        {
-            Task::ParallelFor(Count, Classify);
-        }
-        else
-        {
-            for (uint32 i = 0; i < Count; ++i)
-            {
-                Classify(i);
-            }
-        }
-
-        // A destroy can take later entries with it, so a frame with a kill walks the list serially as before.
-        const bool bAnyKill = KillCount.load(std::memory_order_relaxed) != 0;
-        if (bAnyKill)
-        {
-            for (uint32 i = 0; i < Count; ++i)
-            {
-                const ECS::FEntity Entity = InterpStaging.Entities[i];
-                if (InterpCategory[i] == kInterpSkip || !Registry.IsValid(Entity))
-                {
-                    continue;
-                }
-                if (InterpCategory[i] == kInterpKill)
-                {
-                    Registry.Destroy(Entity);
-                    continue;
-                }
-                (InterpCategory[i] == kInterpFlat ? InterpApplied : InterpAppliedParented).push_back(i);
-            }
-        }
-
         const ECS::FHierarchy& Hierarchy = Registry.GetHierarchy();
+
+        // An authored move outranks the body pose until the teleport reaches the body.
+        const auto IsWritable = [&](ECS::FEntity Entity)
+        {
+            return Registry.IsValid(Entity) && TransformStorage.Contains(Entity) && !PendingTeleport.Contains(Entity);
+        };
 
         // The body pose is world space, so a parented entity takes it relative to where its parent now is.
         auto WritePose = [&](uint32 i)
@@ -713,10 +639,11 @@ namespace Lumina::Physics
             const FQuat Previous(InterpStaging.PrevQw[i], InterpStaging.PrevQx[i], InterpStaging.PrevQy[i], InterpStaging.PrevQz[i]);
             const FQuat Current(InterpStaging.CurrQw[i], InterpStaging.CurrQx[i], InterpStaging.CurrQy[i], InterpStaging.CurrQz[i]);
             const bool bResting = InterpStaging.PrevPos[i] == InterpStaging.CurrPos[i] && Previous == Current;
+            const bool bSimulated = bResting || bCarriersOnly;
 
-            FVector3 Location = bResting ? InterpStaging.CurrPos[i] : InterpStaging.LerpPos[i];
-            FQuat    Rotation = bResting ? Current
-                                         : FQuat(InterpStaging.LerpQw[i], InterpStaging.LerpQx[i], InterpStaging.LerpQy[i], InterpStaging.LerpQz[i]);
+            FVector3 Location = bSimulated ? InterpStaging.CurrPos[i] : InterpStaging.LerpPos[i];
+            FQuat    Rotation = bSimulated ? Current
+                                           : FQuat(InterpStaging.LerpQw[i], InterpStaging.LerpQx[i], InterpStaging.LerpQy[i], InterpStaging.LerpQz[i]);
 
             const ECS::FEntity Parent = Transform.bIsFlat ? ECS::NullEntity : Hierarchy.GetParent(Entity);
             if (!Parent.IsNull() && Registry.IsValid(Parent))
@@ -735,45 +662,98 @@ namespace Lumina::Physics
             Transform.SetFromPhysics(Location, Rotation);
         };
 
-        if (bAnyKill)
+        // Reports whether the entity carries a rider, which the pre-step pass then moves to the carrier's simulated pose.
+        auto BodyStorage = Registry.GetStorage<SRigidBodyComponent>();
+        auto WriteWithRiders = [&](uint32 i)
         {
-            for (uint32 i : InterpApplied)
+            WritePose(i);
+
+            // A static or kinematic body under a simulated one rides along, while a simulated descendant keeps its own motion.
+            bool bCarries = false;
+            Hierarchy.ForEachDescendant(InterpStaging.Entities[i], [&](ECS::FEntity Descendant)
             {
-                WritePose(i);
+                if (BodyStorage.Contains(Descendant) && BodyStorage.Get(Descendant).BodyType != EBodyType::Dynamic)
+                {
+                    Registry.EmplaceOrReplace<FNeedsPhysicsBodyUpdate>(Descendant);
+                    bCarries = true;
+                }
+            });
+            return bCarries;
+        };
+
+        if (bCarriersOnly)
+        {
+            for (uint32 i : InterpCarrierSlots)
+            {
+                if (IsWritable(InterpStaging.Entities[i]))
+                {
+                    WriteWithRiders(i);
+                }
             }
+            return;
         }
-        else if (Count > InterpParallelThreshold)
+
+        enum : uint8 { kInterpSkip = 0, kInterpParented = 1, kInterpKill = 2 };
+        InterpCategory.SetNum(Count);
+        std::atomic<uint32> KillCount{0};
+
+        // A flat entity is nobody's parent, so its pose is written as it is sorted, while a kill is structural and waits for the serial pass.
+        const auto WriteFlat = [&](uint32 i)
         {
-            Task::ParallelFor(Count, [&](uint32 i)
+            const EInterpFlag Flag = InterpStaging.Flags[i];
+            const ECS::FEntity Entity = InterpStaging.Entities[i];
+            uint8 Category = kInterpSkip;
+            if (Flag == EInterpFlag::BelowKill && Registry.IsValid(Entity))
             {
-                if (InterpCategory[i] == kInterpFlat)
+                Category = kInterpKill;
+                KillCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            else if (Flag != EInterpFlag::Skip && IsWritable(Entity))
+            {
+                if (TransformStorage.Get(Entity).bIsFlat)
                 {
                     WritePose(i);
                 }
-            });
+                else
+                {
+                    Category = kInterpParented;
+                }
+            }
+            InterpCategory[i] = Category;
+        };
+        if (Count > InterpParallelThreshold)
+        {
+            Jobs::ParallelFor(Count, WriteFlat);
         }
         else
         {
             for (uint32 i = 0; i < Count; ++i)
             {
-                if (InterpCategory[i] == kInterpFlat)
+                WriteFlat(i);
+            }
+        }
+
+        if (KillCount.load(std::memory_order_relaxed) != 0)
+        {
+            for (uint32 i = 0; i < Count; ++i)
+            {
+                if (InterpCategory[i] == kInterpKill && Registry.IsValid(InterpStaging.Entities[i]))
                 {
-                    WritePose(i);
+                    Registry.Destroy(InterpStaging.Entities[i]);
                 }
             }
         }
 
-        if (!bAnyKill)
+        InterpAppliedParented.Reset();
+        InterpCarrierSlots.Reset();
+        for (uint32 i = 0; i < Count; ++i)
         {
-            for (uint32 i = 0; i < Count; ++i)
+            if (InterpCategory[i] == kInterpParented)
             {
-                if (InterpCategory[i] == kInterpParented)
-                {
-                    InterpAppliedParented.push_back(i);
-                }
+                InterpAppliedParented.Add(i);
             }
         }
-        if (InterpAppliedParented.empty())
+        if (InterpAppliedParented.IsEmpty())
         {
             return;
         }
@@ -785,24 +765,13 @@ namespace Lumina::Physics
             return Hierarchy.GetSlot(InterpStaging.Entities[A]) < Hierarchy.GetSlot(InterpStaging.Entities[B]);
         });
 
-        auto BodyStorage = Registry.GetStorage<SRigidBodyComponent>();
+        // A destroy above can take a parented entry with it.
         for (uint32 i : InterpAppliedParented)
         {
-            const ECS::FEntity Entity = InterpStaging.Entities[i];
-            if (!Registry.IsValid(Entity))
+            if (Registry.IsValid(InterpStaging.Entities[i]) && WriteWithRiders(i))
             {
-                continue;
+                InterpCarrierSlots.Add(i);
             }
-            WritePose(i);
-
-            // A static or kinematic body under a simulated one rides along, while a simulated descendant keeps its own motion.
-            Hierarchy.ForEachDescendant(Entity, [&](ECS::FEntity Descendant)
-            {
-                if (BodyStorage.Contains(Descendant) && BodyStorage.Get(Descendant).BodyType != EBodyType::Dynamic)
-                {
-                    Registry.EmplaceOrReplace<FNeedsPhysicsBodyUpdate>(Descendant);
-                }
-            });
         }
     }
 
@@ -810,7 +779,7 @@ namespace Lumina::Physics
     {
         LUMINA_PROFILE_SCOPE();
 
-        RebuildStaleDynamicMeshBodies(World->GetEntityRegistry());
+        RebuildStaleMeshBodies(World->GetEntityRegistry());
         SynchronizeBodies();
 
         const Lumina::SDefaultWorldSettings& WorldSettings = World->GetDefaultWorldSettings();
@@ -830,31 +799,35 @@ namespace Lumina::Physics
             ? Math::Min((uint32)WorldSettings.MaxPhysicsSteps, (uint32)(Accumulator / FixedTimestep))
             : 0;
 
+        ContactDrainScratch.Reset();
+        ActivationDrainScratch.Reset();
+
         // Move events only come from a step, so a frame without one blends the last step's bodies again at its own alpha.
         if (CollisionSteps > 0)
         {
-            // Fixed scripts start from the simulated pose, and a body that stops moving rests where it was simulated.
-            BuildInterpolatedTransforms(1.0f);
-            ApplyInterpolatedTransforms();
+            // Fixed scripts and a ragdoll following its entity read every pose, otherwise only riders follow their carrier's simulated one.
+            if ((PreStepCallback && PreStepReadsTransforms()) || !OwnedRagdolls.IsEmpty())
+            {
+                BuildInterpolatedTransforms(1.0f);
+                ApplyInterpolatedTransforms(false);
+            }
+            else
+            {
+                ApplyInterpolatedTransforms(true);
+            }
             ResetInterpStaging();
-        }
-        ContactDrainScratch.clear();
-        ActivationDrainScratch.clear();
-
-        if (CollisionSteps > 0)
-        {
 
             for (uint32 Step = 0; Step < CollisionSteps; ++Step)
             {
+                // Later steps read the pose the previous one produced, and after the reset only a full pass knows the carriers.
+                if (Step > 0)
+                {
+                    BuildInterpolatedTransforms(1.0f);
+                    ApplyInterpolatedTransforms(false);
+                }
+
                 if (PreStepCallback)
                 {
-                    // Later steps read the pose the previous one produced, so it is written through at alpha 1.
-                    if (Step > 0)
-                    {
-                        BuildInterpolatedTransforms(1.0f);
-                        ApplyInterpolatedTransforms();
-                    }
-
                     PreStepCallback(FixedTimestep);
                 }
 
@@ -878,13 +851,14 @@ namespace Lumina::Physics
                 if (CharacterStepHook) { CharacterStepHook(FixedTimestep, true); }
             }
 
+            StageSettledBodies();
             MonitorBreakableConstraints(FixedTimestep);
 
             Accumulator -= (float)CollisionSteps * FixedTimestep;
         }
 
-        LUMINA_PROFILE_VALUE("Physics/AwakeBodies", (int64)b3World_GetAwakeBodyCount(WorldId));
-        LUMINA_PROFILE_VALUE("Physics/AwakeContacts", (int64)b3World_GetCounters(WorldId).awakeContactCount);
+        LUMINA_PROFILE_VALUE("Physics/AwakeBodies", b3World_GetAwakeBodyCount(WorldId));
+        LUMINA_PROFILE_VALUE("Physics/AwakeContacts", b3World_GetCounters(WorldId).awakeContactCount);
 
         if (IsDebugDrawEnabled() || FBox3DPhysicsContext::IsDebugDrawForced())
         {
@@ -903,7 +877,7 @@ namespace Lumina::Physics
         LUMINA_PROFILE_SCOPE();
 
         // Written before contact callbacks so scripts read fresh transforms.
-        ApplyInterpolatedTransforms();
+        ApplyInterpolatedTransforms(false);
         PoseVehicleWheels();
         DispatchContactEvents();
         DispatchActivationEvents();

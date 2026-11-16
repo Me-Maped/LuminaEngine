@@ -9,7 +9,6 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <malloc.h>
-#include <sched.h>
 #include <spawn.h>
 #include <sys/file.h>
 #include <sys/wait.h>
@@ -18,6 +17,7 @@
 
 #include "Containers/Vector.h"
 #include "Containers/String.h"
+#include "Core/Module/ModuleManager.h"
 #include "Log/Log.h"
 #include "Paths/Paths.h"
 #include "Platform/Process/PlatformProcess.h"
@@ -32,8 +32,6 @@ namespace Lumina::Platform
 {
     namespace
     {
-        TVector<FString> GDLLSearchPaths;
-
         FString ReadWholeFile(const char* Path)
         {
             FString Contents;
@@ -50,26 +48,12 @@ namespace Lumina::Platform
 
             while ((Read = ::read(Descriptor, Buffer, sizeof(Buffer))) > 0)
             {
-                Contents.append(Buffer, static_cast<size_t>(Read));
+                Contents.Append(Buffer, IntCastChecked<int32>(Read));
             }
 
             ::close(Descriptor);
 
             return Contents;
-        }
-
-        FString ReadSysfsValue(const char* Path)
-        {
-            FString Value = ReadWholeFile(Path);
-
-            const size_t Newline = Value.find('\n');
-
-            if (Newline != FString::npos)
-            {
-                Value.resize(Newline);
-            }
-
-            return Value;
         }
 
         TVector<FString> TokenizeArguments(const TCHAR* Params)
@@ -89,7 +73,7 @@ namespace Lumina::Platform
             {
                 if (*Cursor == '\\')
                 {
-                    size_t Count = 0;
+                    int32 Count = 0;
 
                     while (Cursor[Count] == '\\')
                     {
@@ -98,11 +82,11 @@ namespace Lumina::Platform
 
                     if (Cursor[Count] == '"')
                     {
-                        Current.append(Count / 2, '\\');
+                        Current.AppendChars('\\', Count / 2);
 
                         if (Count % 2 == 1)
                         {
-                            Current.push_back('"');
+                            Current.AppendChar('"');
                             Cursor += Count;
                         }
                         else
@@ -115,7 +99,7 @@ namespace Lumina::Platform
                     }
                     else
                     {
-                        Current.append(Count, '\\');
+                        Current.AppendChars('\\', Count);
                         Cursor += Count - 1;
                         bHasToken = true;
                     }
@@ -134,21 +118,21 @@ namespace Lumina::Platform
                 {
                     if (bHasToken)
                     {
-                        Arguments.push_back(Current);
-                        Current.clear();
+                        Arguments.Add(Current);
+                        Current.Reset();
                         bHasToken = false;
                     }
 
                     continue;
                 }
 
-                Current.push_back(*Cursor);
+                Current.AppendChar(*Cursor);
                 bHasToken = true;
             }
 
             if (bHasToken)
             {
-                Arguments.push_back(Current);
+                Arguments.Add(Current);
             }
 
             return Arguments;
@@ -156,24 +140,24 @@ namespace Lumina::Platform
 
         TVector<char*> BuildArgv(const FString& Program, const TVector<FString>& Arguments, TVector<FString>& Storage)
         {
-            Storage.clear();
-            Storage.reserve(Arguments.size() + 1);
-            Storage.push_back(Program);
+            Storage.Reset();
+            Storage.Reserve(Arguments.Num() + 1);
+            Storage.Add(Program);
 
             for (const FString& Argument : Arguments)
             {
-                Storage.push_back(Argument);
+                Storage.Add(Argument);
             }
 
             TVector<char*> Argv;
-            Argv.reserve(Storage.size() + 1);
+            Argv.Reserve(Storage.Num() + 1);
 
             for (FString& Entry : Storage)
             {
-                Argv.push_back(Entry.data());
+                Argv.Add(Entry.GetData());
             }
 
-            Argv.push_back(nullptr);
+            Argv.Add(nullptr);
 
             return Argv;
         }
@@ -193,24 +177,24 @@ namespace Lumina::Platform
             }
 
             FString Remaining(PathValue);
-            size_t Start = 0;
+            int32 Start = 0;
 
-            while (Start <= Remaining.size())
+            while (Start <= Remaining.Len())
             {
-                size_t Separator = Remaining.find(':', Start);
+                int32 Separator = Remaining.Find(':', Start);
 
-                if (Separator == FString::npos)
+                if (Separator == Constants::kIndexNone)
                 {
-                    Separator = Remaining.size();
+                    Separator = Remaining.Len();
                 }
 
                 if (Separator > Start)
                 {
-                    FString Candidate(Remaining.data() + Start, Separator - Start);
+                    FString Candidate(Remaining.GetData() + Start, Separator - Start);
                     Candidate += '/';
                     Candidate += Program;
 
-                    if (::access(Candidate.c_str(), X_OK) == 0)
+                    if (::access(*Candidate, X_OK) == 0)
                     {
                         return Candidate;
                     }
@@ -240,7 +224,7 @@ namespace Lumina::Platform
 
                 if (::fork() == 0)
                 {
-                    ::execv(Argv[0], Argv.data());
+                    ::execv(Argv[0], Argv.GetData());
                     ::_exit(127);
                 }
 
@@ -261,8 +245,11 @@ namespace Lumina::Platform
             const TVector<FString>& Arguments,
             const TCHAR* WorkingDirectory,
             const TFunction<void(FStringView)>* LineCallback,
-            uint32 TimeoutMilliseconds = 0)
+            uint32 TimeoutMilliseconds = 0,
+            const FThreadStop* Stop = nullptr)
         {
+            const bool bCanKill = TimeoutMilliseconds > 0 || Stop != nullptr;
+
             int Pipe[2] = { -1, -1 };
 
             if (LineCallback != nullptr && ::pipe2(Pipe, O_CLOEXEC) != 0)
@@ -289,10 +276,20 @@ namespace Lumina::Platform
             TVector<FString> Storage;
             TVector<char*> Argv = BuildArgv(Program, Arguments, Storage);
 
+            // Its own process group, so a kill reaches everything a script started.
+            posix_spawnattr_t Attributes;
+            posix_spawnattr_init(&Attributes);
+            if (bCanKill)
+            {
+                posix_spawnattr_setflags(&Attributes, POSIX_SPAWN_SETPGROUP);
+                posix_spawnattr_setpgroup(&Attributes, 0);
+            }
+
             pid_t Child = -1;
-            const int SpawnResult = ::posix_spawn(&Child, Program.c_str(), &Actions, nullptr, Argv.data(), environ);
+            const int SpawnResult = ::posix_spawn(&Child, *Program, &Actions, &Attributes, Argv.GetData(), environ);
 
             posix_spawn_file_actions_destroy(&Actions);
+            posix_spawnattr_destroy(&Attributes);
 
             if (SpawnResult != 0)
             {
@@ -310,14 +307,22 @@ namespace Lumina::Platform
             // Killing a stuck child closes its end of the pipe, which is what lets the blocking read below return.
             std::atomic<bool> bTimedOut = false;
             FThread Watchdog;
-            if (TimeoutMilliseconds > 0)
+            if (bCanKill)
             {
-                Watchdog = FThread([Child, TimeoutMilliseconds, &bTimedOut](const FThreadStop& Reaped)
+                Watchdog = FThread([Child, TimeoutMilliseconds, Stop, &bTimedOut](const FThreadStop& Reaped)
                 {
-                    if (!Reaped.WaitForStop(TimeoutMilliseconds))
+                    constexpr uint32 StopPollMilliseconds = 50;
+                    uint32 Waited = 0;
+                    while (!Reaped.WaitForStop(StopPollMilliseconds))
                     {
-                        bTimedOut = true;
-                        ::kill(Child, SIGKILL);
+                        Waited += StopPollMilliseconds;
+                        const bool bExpired = TimeoutMilliseconds > 0 && Waited >= TimeoutMilliseconds;
+                        if (bExpired || (Stop != nullptr && Stop->ShouldStop()))
+                        {
+                            bTimedOut = bExpired;
+                            ::kill(-Child, SIGKILL);
+                            return;
+                        }
                     }
                 });
             }
@@ -343,30 +348,30 @@ namespace Lumina::Platform
                         break;
                     }
 
-                    Pending.append(Buffer, static_cast<size_t>(Read));
+                    Pending.Append(Buffer, IntCastChecked<int32>(Read));
 
-                    size_t LineStart = 0;
-                    size_t Newline;
+                    int32 LineStart = 0;
+                    int32 Newline;
 
-                    while ((Newline = Pending.find('\n', LineStart)) != FString::npos)
+                    while ((Newline = Pending.Find('\n', LineStart)) != Constants::kIndexNone)
                     {
-                        size_t LineEnd = Newline;
+                        int32 LineEnd = Newline;
 
                         if (LineEnd > LineStart && Pending[LineEnd - 1] == '\r')
                         {
                             --LineEnd;
                         }
 
-                        (*LineCallback)(FStringView(Pending.data() + LineStart, LineEnd - LineStart));
+                        (*LineCallback)(FStringView(Pending.GetData() + LineStart, LineEnd - LineStart));
                         LineStart = Newline + 1;
                     }
 
-                    Pending.erase(0, LineStart);
+                    Pending.RemoveAt(0, LineStart);
                 }
 
-                if (!Pending.empty())
+                if (!Pending.IsEmpty())
                 {
-                    (*LineCallback)(FStringView(Pending.data(), Pending.size()));
+                    (*LineCallback)(FStringView(Pending.GetData(), Pending.Len()));
                 }
 
                 ::close(Pipe[0]);
@@ -403,7 +408,7 @@ namespace Lumina::Platform
         {
             const FString Resolved = FindOnPath(Program);
 
-            if (Resolved.empty())
+            if (Resolved.IsEmpty())
             {
                 return false;
             }
@@ -420,7 +425,7 @@ namespace Lumina::Platform
             return nullptr;
         }
 
-        return LoadLibraryWithSearchPaths(FString(Filename), GDLLSearchPaths);
+        return LoadLibraryWithSearchPaths(FString(Filename), FModuleManager::Get().GetDLLSearchPaths());
     }
 
     bool FreeDLLHandle(void* DLLHandle)
@@ -428,22 +433,9 @@ namespace Lumina::Platform
         return DLLHandle != nullptr && ::dlclose(DLLHandle) == 0;
     }
 
-    void* GetDLLExport(void* DLLHandle, const char* ProcName)
-    {
-        return DLLHandle != nullptr ? ::dlsym(DLLHandle, ProcName) : nullptr;
-    }
-
     void AddDLLDirectory(const FString& Directory)
     {
-        for (const FString& Existing : GDLLSearchPaths)
-        {
-            if (Existing == Directory)
-            {
-                return;
-            }
-        }
-
-        GDLLSearchPaths.push_back(Directory);
+        FModuleManager::Get().AddDLLSearchPath(Directory);
     }
 
     void PushDLLDirectory(const TCHAR* Directory)
@@ -453,26 +445,18 @@ namespace Lumina::Platform
             return;
         }
 
-        GDLLSearchPaths.push_back(FString(Directory));
+        FModuleManager::Get().AddDLLSearchPath(FString(Directory));
         LOG_INFO("Pushing DLL Search Path: {0}", Directory);
-    }
-
-    void PopDLLDirectory()
-    {
-        if (!GDLLSearchPaths.empty())
-        {
-            GDLLSearchPaths.pop_back();
-        }
     }
 
     void* LoadLibraryWithSearchPaths(const FString& Filename, const TVector<FString>& SearchPaths)
     {
-        if (void* Existing = ::dlopen(Filename.c_str(), RTLD_NOLOAD | RTLD_LAZY))
+        if (void* Existing = ::dlopen(*Filename, RTLD_NOLOAD | RTLD_LAZY))
         {
             return Existing;
         }
 
-        if (void* Handle = ::dlopen(Filename.c_str(), RTLD_LAZY | RTLD_LOCAL))
+        if (void* Handle = ::dlopen(*Filename, RTLD_LAZY | RTLD_LOCAL))
         {
             return Handle;
         }
@@ -489,13 +473,13 @@ namespace Lumina::Platform
                 continue;
             }
 
-            if (void* Handle = ::dlopen(FullPath.c_str(), RTLD_LAZY | RTLD_LOCAL))
+            if (void* Handle = ::dlopen(*FullPath, RTLD_LAZY | RTLD_LOCAL))
             {
                 return Handle;
             }
 
             const char* Error = ::dlerror();
-            LOG_WARN("dlopen failed for '{0}': {1}", FullPath.c_str(), Error != nullptr ? Error : "unknown");
+            LOG_WARN("dlopen failed for '{0}': {1}", *FullPath, Error != nullptr ? Error : "unknown");
         }
 
         LOG_ERROR("dlopen failed for '{0}': {1}", Filename, FirstError);
@@ -506,13 +490,6 @@ namespace Lumina::Platform
     FVoidFuncPtr LumGetProcAddress(void* Handle, const char* Procedure)
     {
         return reinterpret_cast<FVoidFuncPtr>(::dlsym(Handle, Procedure));
-    }
-
-
-    uint32 GetCurrentCoreNumber()
-    {
-        const int Core = ::sched_getcpu();
-        return Core < 0 ? 0u : static_cast<uint32>(Core);
     }
 
     FString GetRuntimeModulePath()
@@ -535,7 +512,7 @@ namespace Lumina::Platform
             return FString();
         }
 
-        return FString(Buffer, static_cast<size_t>(Length));
+        return FString(Buffer, IntCastChecked<int32>(Length));
     }
 
     const TCHAR* BaseDir()
@@ -583,96 +560,23 @@ namespace Lumina::Platform
     }
 
 
-    const FCpuTopology& GetCpuTopology()
-    {
-        static FCpuTopology Topology = []
-        {
-            FCpuTopology T;
-
-            for (ECpuCoreType& Type : T.CoreTypes)
-            {
-                Type = ECpuCoreType::Unknown;
-            }
-
-            const long Online = ::sysconf(_SC_NPROCESSORS_ONLN);
-            T.NumLogicalCores = Online > 0 ? static_cast<uint32>(Online) : 1u;
-
-            uint64 Capacities[256] = {};
-            uint64 MaxCapacity = 0;
-            bool bHaveCapacities = false;
-
-            const uint32 Count = T.NumLogicalCores < 256 ? T.NumLogicalCores : 256;
-
-            for (uint32 Index = 0; Index < Count; ++Index)
-            {
-                char Path[128];
-                ::snprintf(Path, sizeof(Path), "/sys/devices/system/cpu/cpu%u/cpu_capacity", Index);
-
-                const FString Value = ReadSysfsValue(Path);
-
-                if (Value.empty())
-                {
-                    continue;
-                }
-
-                Capacities[Index] = ::strtoull(Value.c_str(), nullptr, 10);
-                bHaveCapacities = bHaveCapacities || Capacities[Index] > 0;
-                MaxCapacity = Capacities[Index] > MaxCapacity ? Capacities[Index] : MaxCapacity;
-            }
-
-            if (!bHaveCapacities || MaxCapacity == 0)
-            {
-                for (uint32 Index = 0; Index < Count; ++Index)
-                {
-                    T.CoreTypes[Index] = ECpuCoreType::Performance;
-                }
-
-                T.NumPerformance = T.NumLogicalCores;
-                T.bHybrid = false;
-
-                return T;
-            }
-
-            for (uint32 Index = 0; Index < Count; ++Index)
-            {
-                if (Capacities[Index] >= MaxCapacity)
-                {
-                    T.CoreTypes[Index] = ECpuCoreType::Performance;
-                    ++T.NumPerformance;
-                }
-                else
-                {
-                    T.CoreTypes[Index] = ECpuCoreType::Efficiency;
-                    ++T.NumEfficiency;
-                }
-            }
-
-            T.bHybrid = T.NumEfficiency > 0;
-
-            return T;
-        }();
-
-        return Topology;
-    }
-
-
     FString GetEnvVariable(FStringView Variable)
     {
         const FString Name(Variable);
-        const char* Value = ::getenv(Name.c_str());
+        const char* Value = ::getenv(*Name);
         return Value ? FString(Value) : FString();
     }
 
     bool SetEnvVariable(const FString& Name, const FString& Value)
     {
-        if (Name.empty() || Name.find('=') != FString::npos)
+        if (Name.IsEmpty() || Name.Find('=') != Constants::kIndexNone)
         {
             LOG_WARN("Refusing to set environment variable with invalid name '{}'", Name);
             return false;
         }
 
         // Windows cannot store an empty variable, so removing on empty keeps the platforms observably equal.
-        const int Result = Value.empty() ? ::unsetenv(Name.c_str()) : ::setenv(Name.c_str(), Value.c_str(), 1);
+        const int Result = Value.IsEmpty() ? ::unsetenv(*Name) : ::setenv(*Name, *Value, 1);
         if (Result == 0)
         {
             LOG_TRACE("Environment variable {} set to {}", Name, Value);
@@ -706,7 +610,7 @@ namespace Lumina::Platform
         TVector<char*> Argv = BuildArgv(FString(Executable), Arguments, Storage);
 
         pid_t Child = -1;
-        const int SpawnResult = ::posix_spawn(&Child, Executable, &Actions, nullptr, Argv.data(), environ);
+        const int SpawnResult = ::posix_spawn(&Child, Executable, &Actions, nullptr, Argv.GetData(), environ);
         posix_spawn_file_actions_destroy(&Actions);
 
         if (SpawnResult == 0)
@@ -761,7 +665,7 @@ namespace Lumina::Platform
     {
         OutOwnerId = 0;
 
-        const int Descriptor = ::open(Path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+        const int Descriptor = ::open(*Path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
         if (Descriptor < 0)
         {
             LOG_WARN("Could not create the instance lock '{}' ({}), so it is not enforced.", Path, strerror(errno));
@@ -779,7 +683,7 @@ namespace Lumina::Platform
         }
 
         char Buffer[16] = {};
-        const int Length = snprintf(Buffer, sizeof(Buffer), "%d", (int)::getpid());
+        const int Length = snprintf(Buffer, sizeof(Buffer), "%d", ::getpid());
         (void)::ftruncate(Descriptor, 0);
         (void)::pwrite(Descriptor, Buffer, (size_t)Length, 0);
 
@@ -825,7 +729,7 @@ namespace Lumina::Platform
         TVector<char*> Argv = BuildArgv(FString(URL), Arguments, Storage);
 
         pid_t Child = -1;
-        const int Result = ::posix_spawn(&Child, URL, nullptr, nullptr, Argv.data(), environ);
+        const int Result = ::posix_spawn(&Child, URL, nullptr, nullptr, Argv.GetData(), environ);
 
         return Result == 0 ? 0 : Result;
     }
@@ -858,14 +762,15 @@ namespace Lumina::Platform
         const TCHAR* Params,
         const TCHAR* WorkingDirectory,
         const TFunction<void(FStringView)>& LineCallback,
-        uint32 TimeoutMilliseconds)
+        uint32 TimeoutMilliseconds,
+        const FThreadStop* Stop)
     {
         if (Executable == nullptr)
         {
             return -1;
         }
 
-        return SpawnAndWait(FString(Executable), TokenizeArguments(Params), WorkingDirectory, &LineCallback, TimeoutMilliseconds);
+        return SpawnAndWait(FString(Executable), TokenizeArguments(Params), WorkingDirectory, &LineCallback, TimeoutMilliseconds, Stop);
     }
 
 
@@ -873,7 +778,7 @@ namespace Lumina::Platform
     {
         const FString Statm = ReadWholeFile("/proc/self/statm");
 
-        if (Statm.empty())
+        if (Statm.IsEmpty())
         {
             return 0;
         }
@@ -881,7 +786,7 @@ namespace Lumina::Platform
         unsigned long long Total = 0;
         unsigned long long Resident = 0;
 
-        if (::sscanf(Statm.c_str(), "%llu %llu", &Total, &Resident) != 2)
+        if (::sscanf(*Statm, "%llu %llu", &Total, &Resident) != 2)
         {
             return 0;
         }
@@ -900,7 +805,7 @@ namespace Lumina::Platform
 
         const FString Smaps = ReadWholeFile("/proc/self/smaps");
 
-        if (Smaps.empty())
+        if (Smaps.IsEmpty())
         {
             return;
         }
@@ -910,18 +815,18 @@ namespace Lumina::Platform
         ERegionKind Kind = ERegionKind::Private;
         bool bInRegion = false;
 
-        size_t LineStart = 0;
+        int32 LineStart = 0;
 
-        while (LineStart < Smaps.size())
+        while (LineStart < Smaps.Len())
         {
-            size_t LineEnd = Smaps.find('\n', LineStart);
+            int32 LineEnd = Smaps.Find('\n', LineStart);
 
-            if (LineEnd == FString::npos)
+            if (LineEnd == Constants::kIndexNone)
             {
-                LineEnd = Smaps.size();
+                LineEnd = Smaps.Len();
             }
 
-            const char* Line = Smaps.data() + LineStart;
+            const char* Line = Smaps.GetData() + LineStart;
             const size_t LineLength = LineEnd - LineStart;
 
             const bool bIsHeader = LineLength > 0 && ::isxdigit(static_cast<unsigned char>(Line[0]));
@@ -1019,7 +924,7 @@ namespace Lumina::Platform
         }
 
         const FString Directory = Paths::Parent(Path);
-        ShowFolderInExplorer(Directory.c_str());
+        ShowFolderInExplorer(*Directory);
     }
 
     void ShowFolderInExplorer(const TCHAR* Directory)
@@ -1085,7 +990,7 @@ namespace Lumina::Platform
 
             if (Terminal.Flag != nullptr)
             {
-                Arguments.push_back(FString(Terminal.Flag) + Directory);
+                Arguments.Add(FString(Terminal.Flag) + Directory);
             }
 
             if (LaunchDesktopHelper(Terminal.Program, Arguments))
@@ -1094,13 +999,7 @@ namespace Lumina::Platform
             }
         }
 
-        static bool bWarned = false;
-
-        if (!bWarned)
-        {
-            bWarned = true;
-            LOG_WARN("Platform::OpenTerminalAt: no supported terminal emulator was found.");
-        }
+        LOG_WARN_ONCE("Platform::OpenTerminalAt: no supported terminal emulator was found.");
     }
 
 
@@ -1118,7 +1017,7 @@ namespace Lumina::Platform
             while (*Cursor != '\0')
             {
                 const FString Description(Cursor);
-                Cursor += Description.size() + 1;
+                Cursor += Description.Len() + 1;
 
                 if (*Cursor == '\0')
                 {
@@ -1126,12 +1025,12 @@ namespace Lumina::Platform
                 }
 
                 const FString Patterns(Cursor);
-                Cursor += Patterns.size() + 1;
+                Cursor += Patterns.Len() + 1;
 
                 FString Translated = Patterns;
                 Algo::Replace(Translated, ';', ' ');
 
-                Arguments.push_back(FString("--file-filter=") + Description + " | " + Translated);
+                Arguments.Add(FString("--file-filter=") + Description + " | " + Translated);
             }
         }
 
@@ -1148,30 +1047,24 @@ namespace Lumina::Platform
             if (Filter != nullptr)
             {
                 LocalizedFilter = Localization::LocalizeFileDialogFilter(Filter);
-                Filter = LocalizedFilter.c_str();
+                Filter = *LocalizedFilter;
             }
 
             const FString Zenity = FindOnPath("zenity");
 
-            if (Zenity.empty())
+            if (Zenity.IsEmpty())
             {
-                static bool bWarned = false;
-
-                if (!bWarned)
-                {
-                    bWarned = true;
-                    LOG_WARN("Platform file dialogs need zenity, which is not installed.");
-                }
+                LOG_WARN_ONCE("Platform file dialogs need zenity, which is not installed.");
 
                 return false;
             }
 
             TVector<FString> Arguments;
-            Arguments.push_back("--file-selection");
+            Arguments.Add("--file-selection");
 
             if (Filter == nullptr)
             {
-                Arguments.push_back("--directory");
+                Arguments.Add("--directory");
             }
             else
             {
@@ -1180,45 +1073,45 @@ namespace Lumina::Platform
 
             if (bMultiple)
             {
-                Arguments.push_back("--multiple");
-                Arguments.push_back("--separator=\n");
+                Arguments.Add("--multiple");
+                Arguments.Add("--separator=\n");
             }
 
             if (Title != nullptr)
             {
-                Arguments.push_back(FString("--title=") + Title);
+                Arguments.Add(FString("--title=") + Title);
             }
 
             if (InitialDir != nullptr && InitialDir[0] != '\0')
             {
                 FString Start(InitialDir);
 
-                if (Start.back() != '/')
+                if (Start.Last() != '/')
                 {
                     Start += '/';
                 }
 
-                Arguments.push_back(FString("--filename=") + Start);
+                Arguments.Add(FString("--filename=") + Start);
             }
 
             TVector<FFixedString> Selected;
 
             const TFunction<void(FStringView)> Collect = [&Selected](FStringView Line)
             {
-                if (!Line.empty())
+                if (!Line.IsEmpty())
                 {
-                    Selected.push_back(FFixedString(Line.data(), Line.size()));
+                    Selected.Emplace(Line.GetData(), Line.Len());
                 }
             };
 
             const int ExitCode = SpawnAndWait(Zenity, Arguments, nullptr, &Collect);
 
-            if (ExitCode != 0 || Selected.empty())
+            if (ExitCode != 0 || Selected.IsEmpty())
             {
                 return false;
             }
 
-            OutPaths = std::move(Selected);
+            OutPaths = Move(Selected);
 
             return true;
         }
@@ -1233,7 +1126,7 @@ namespace Lumina::Platform
             return false;
         }
 
-        OutFile = Selected.front();
+        OutFile = Selected[0];
 
         return true;
     }
@@ -1247,7 +1140,7 @@ namespace Lumina::Platform
             return false;
         }
 
-        OutFiles = std::move(Selected);
+        OutFiles = Move(Selected);
 
         return true;
     }

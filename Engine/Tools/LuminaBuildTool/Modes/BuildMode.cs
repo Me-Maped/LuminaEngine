@@ -4,6 +4,7 @@ using LuminaBuildTool.Core;
 using LuminaBuildTool.Execution;
 using LuminaBuildTool.Graph;
 using LuminaBuildTool.Platform;
+using LuminaBuildTool.Platform.Linux;
 using LuminaBuildTool.ProjectFiles;
 using LuminaBuildTool.Rules;
 using LuminaBuildTool.Toolchain;
@@ -76,6 +77,11 @@ public static class BuildMode
         BuildConfiguration ConfigurationValue,
         CancellationToken Cancellation)
     {
+        if (WslBuild.IsNeeded(PlatformValue))
+        {
+            return WslBuild.Run(TargetNames, Arguments, Directories, TypeValue, ConfigurationValue);
+        }
+
         Stopwatch ToolchainTimer = Stopwatch.StartNew();
         IBuildPlatform PlatformSupport = BuildPlatformRegistry.Get(PlatformValue);
         BuildOptions Options = BuildOptions.Load(Directories, Arguments);
@@ -137,6 +143,20 @@ public static class BuildMode
             Environment.ProcessorCount);
 
         return FromMemory;
+    }
+
+    // Held while anything writes or deletes a target's output, keyed on platform, type and configuration, and rooted where shared binaries live.
+    public static BuildLock AcquireOutputLock(BuildTarget Target, CancellationToken Cancellation = default)
+    {
+        string OutputKey =
+            $"output|{Target.Directories.EngineRoot}|{Target.Info.PlatformName}|{Target.Info.Type}|{Target.Info.Configuration}";
+
+        return BuildLock.Acquire(
+            Target.Directories.EngineRoot,
+            OutputKey,
+            $"another build of {Target.Info.PlatformName} {Target.Info.Type} {Target.Info.Configuration} to finish",
+            TimeSpan.FromHours(1),
+            Cancellation);
     }
 
     /// <summary>Refreshes the IDE workspace after a successful build when a rules file has changed.</summary>
@@ -235,10 +255,9 @@ public static class BuildMode
                     TargetName, TypeValue, PlatformValue, ConfigurationValue, Directories,
                     bIsPrimary ? Options : Options.WithoutPgo());
                 // Assembling first touches the rules assembly, a fifth of a second of one-time JIT to hide behind.
-                string PrefetchDirectory = Directories.BuildRecordDirectory(PlatformValue, ConfigurationValue, TypeValue);
-                Task<(ActionHistory History, DependencyCache Dependencies)> Prefetch = Task.Run(() => (
-                    ActionHistory.Load(Path.Combine(PrefetchDirectory, "ActionHistory.json")),
-                    DependencyCache.Load(Path.Combine(PrefetchDirectory, "Dependencies.json"))), Cancellation);
+                BuildRecords PrefetchRecords = new(Directories, PlatformValue, ConfigurationValue, TypeValue);
+                Task<(ActionHistory History, DependencyCache Dependencies)> Prefetch = Task.Run(
+                    () => (PrefetchRecords.LoadHistory(), PrefetchRecords.LoadDependencies()), Cancellation);
 
                 Stopwatch AssembleTimer = Stopwatch.StartNew();
                 BuildTarget Target = new TargetAssembler(Assembly, Directories, PlatformSupport).Assemble(TargetName, Info);
@@ -266,9 +285,7 @@ public static class BuildMode
                 // Built at this target's own type and as the engine's build, so engine intermediates stay out of a project.
                 if (Target.Rules.RequiredTargetNames.Count > 0)
                 {
-                    BuildDirectories EngineOnly = Directories.ProjectRoot is null
-                        ? Directories
-                        : BuildDirectories.Discover(Directories.EngineRoot, null);
+                    BuildDirectories EngineOnly = Directories.ToEngineOnly();
 
                     BuildSession EngineBuild = ReferenceEquals(EngineOnly, Directories)
                         ? this
@@ -293,7 +310,7 @@ public static class BuildMode
                     }
                 }
 
-                return await BuildResolvedAsync(Target, PrefetchDirectory, Prefetch, Cancellation).ConfigureAwait(false);
+                return await BuildResolvedAsync(Target, PrefetchRecords, Prefetch, Cancellation).ConfigureAwait(false);
             }
             finally
             {
@@ -303,49 +320,40 @@ public static class BuildMode
 
         private async Task<int> BuildResolvedAsync(
             BuildTarget Target,
-            string PrefetchDirectory,
+            BuildRecords PrefetchRecords,
             Task<(ActionHistory History, DependencyCache Dependencies)> Prefetch,
             CancellationToken Cancellation)
         {
             Stopwatch Timer = Stopwatch.StartNew();
 
-            // Held for the whole build, keyed on platform, type and configuration, and rooted where shared binaries live.
-            string OutputKey =
-                $"output|{Target.Directories.EngineRoot}|{Target.Info.PlatformName}|{Target.Info.Type}|{Target.Info.Configuration}";
-
-            using BuildLock OutputLock = BuildLock.Acquire(
-                Target.Directories.EngineRoot,
-                OutputKey,
-                $"another build of {Target.Info.PlatformName} {Target.Info.Type} {Target.Info.Configuration} to finish",
-                TimeSpan.FromHours(1),
-                Cancellation);
+            using BuildLock OutputLock = AcquireOutputLock(Target, Cancellation);
 
             Log.Info("Building {0} - {1} - {2}", Target.Name, Target.Info.PlatformName, Target.Info.Configuration);
 
-            if (Arguments.HasFlag("Clean"))
+            // Building over a half-cleaned tree links against stale objects.
+            if (Arguments.HasFlag("Clean") && !CleanMode.CleanTarget(Target, Arguments.HasFlag("DryRun")))
             {
-                CleanMode.CleanTarget(Target);
+                return CleanMode.ReportHalfCleaned();
             }
 
             Stopwatch PhaseTimer = Stopwatch.StartNew();
             ActionGraph Graph = ActionGraph.Build(Target, Toolchain);
             Phase("  ActionGraph.Build", PhaseTimer);
 
-            string CacheDirectory = Target.Directories.BuildRecordDirectory(
-                Target.Info.Platform, Target.Info.Configuration, Target.Info.Type);
+            BuildRecords Records = new(Target.Directories, Target.Info.Platform, Target.Info.Configuration, Target.Info.Type);
 
             ActionHistory History;
             DependencyCache HeaderDependencies;
 
             // A target may pin its own configuration, which lands the records somewhere the prefetch did not look.
-            if (string.Equals(CacheDirectory, PrefetchDirectory, StringComparison.OrdinalIgnoreCase))
+            if (Records.IsSameLocation(PrefetchRecords))
             {
                 (History, HeaderDependencies) = await Prefetch.ConfigureAwait(false);
             }
             else
             {
-                History = ActionHistory.Load(Path.Combine(CacheDirectory, "ActionHistory.json"));
-                HeaderDependencies = DependencyCache.Load(Path.Combine(CacheDirectory, "Dependencies.json"));
+                History = Records.LoadHistory();
+                HeaderDependencies = Records.LoadDependencies();
             }
             Phase("  Build records (prefetched)", PhaseTimer);
 
@@ -370,9 +378,10 @@ public static class BuildMode
 
             if (Outdated.Count == 0)
             {
-                // Loading the cache prunes dead closures; without this the pruning is redone and never kept.
+                // Loading the records prunes dead outputs; without this the pruning is redone and never kept.
+                History.Save();
                 HeaderDependencies.Save();
-                Phase("  DependencyCache.Save", PhaseTimer);
+                Phase("  Build records save", PhaseTimer);
 
                 // A header no module here includes still moves the BuildId, and these binaries are unaffected by it.
                 ModuleManifest.Write(Target, EngineBuildId);
@@ -408,7 +417,17 @@ public static class BuildMode
 
             if (!Result.bSucceeded)
             {
-                Log.Error("{0} failed: {1} of {2} actions failed.", Target.Name, Result.ActionsFailed, Outdated.Count);
+                int ActionsNotCompleted = Result.ActionsFailed + Result.ActionsBlocked;
+
+                Log.Error(
+                    "{0} failed: {1} of {2} actions failed{3}.",
+                    Target.Name,
+                    Result.ActionsFailed,
+                    Outdated.Count,
+                    Result.ActionsBlocked > 0
+                        ? $" ({ActionsNotCompleted} of {Outdated.Count} actions did not complete, {Result.ActionsBlocked} blocked by a failed dependency)"
+                        : string.Empty);
+
                 return 1;
             }
 

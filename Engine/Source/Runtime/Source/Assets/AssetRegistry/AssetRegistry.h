@@ -22,7 +22,7 @@ namespace Lumina
 
 	struct FAssetDataPtrHash
 	{
-		static size_t operator() (const TSharedPtr<FAssetData>& Asset) noexcept
+		static size_t operator() (const FAssetDataPtr& Asset) noexcept
 		{
 			return Hash::GetHash(Asset->AssetGUID);
 		}
@@ -30,7 +30,7 @@ namespace Lumina
 
 	struct FAssetDataPtrEqual
 	{
-		static bool operator()(const TSharedPtr<FAssetData>& A, const TSharedPtr<FAssetData>& B) noexcept
+		static bool operator()(const FAssetDataPtr& A, const FAssetDataPtr& B) noexcept
 		{
 			return A->AssetGUID == B->AssetGUID;
 		}
@@ -46,16 +46,15 @@ namespace Lumina
 
 	struct FAssetDataGuidEqual
 	{
-		static bool operator()(const TSharedPtr<FAssetData>& Asset, const FGuid& GUID) noexcept
+		static bool operator()(const FAssetDataPtr& Asset, const FGuid& GUID) noexcept
 		{
 			return Asset->AssetGUID == GUID;
 		}
 	};
 
-	using FAssetDataMap = THashSet<TSharedPtr<FAssetData>, FAssetDataPtrHash, FAssetDataPtrEqual>;
+	using FAssetDataMap = THashSet<FAssetDataPtr, FAssetDataPtrHash, FAssetDataPtrEqual>;
 
-	// Lightweight identity record for a loose text asset (.rml/.rcss). Lives in a map entirely
-	// separate from FAssetData / the .lasset cook dependency graph. GUID sourced from the file's sidecar.
+	// Identity record for a loose text asset (.rml/.rcss), kept in a map separate from FAssetData and the cook dependency graph.
 	struct FTextAssetData
 	{
 		FGuid          Guid;
@@ -66,30 +65,33 @@ namespace Lumina
 		int64          SourceMTimeNs = 0;
 	};
 
+	using FTextAssetDataPtr = TSharedPtr<const FTextAssetData>;
+
 	struct FTextAssetPtrHash
 	{
-		static size_t operator()(const TUniquePtr<FTextAssetData>& A) noexcept { return Hash::GetHash(A->Guid); }
+		static size_t operator()(const FTextAssetDataPtr& A) noexcept { return Hash::GetHash(A->Guid); }
 	};
 	struct FTextAssetPtrEqual
 	{
-		static bool operator()(const TUniquePtr<FTextAssetData>& A, const TUniquePtr<FTextAssetData>& B) noexcept { return A->Guid == B->Guid; }
+		static bool operator()(const FTextAssetDataPtr& A, const FTextAssetDataPtr& B) noexcept { return A->Guid == B->Guid; }
 	};
 	struct FTextAssetGuidEqual
 	{
-		static bool operator()(const TUniquePtr<FTextAssetData>& A, const FGuid& G) noexcept { return A->Guid == G; }
+		static bool operator()(const FTextAssetDataPtr& A, const FGuid& G) noexcept { return A->Guid == G; }
 	};
 
-	using FTextAssetMap = THashSet<TUniquePtr<FTextAssetData>, FTextAssetPtrHash, FTextAssetPtrEqual>;
+	using FTextAssetMap = THashSet<FTextAssetDataPtr, FTextAssetPtrHash, FTextAssetPtrEqual>;
 
 
 	class RUNTIME_API FAssetRegistry final
 	{
+		friend struct FAssetRegistryTestAccess;
+
 	public:
 
 		static FAssetRegistry& Get();
 
-		// Walks engine/project/plugin content, extracting FAssetData (incl. Dependencies) per .lasset.
-		// Incremental via the binary cache, skipping files whose mtime and size match it; async on Task::AsyncTask.
+		// Incremental via the binary cache (skips files whose mtime and size match); async on a background job.
 		void RunInitialDiscovery();
 		void OnInitialDiscoveryCompleted();
 
@@ -98,25 +100,27 @@ namespace Lumina
 		void AssetRenamed(FStringView OldPath, FStringView NewPath);
 		void AssetSaved(CObject* Asset);
 
-		FAssetData* GetAssetByGUID(const FGuid& GUID) const;
-		FAssetData* GetAssetByPath(FStringView Path) const;
+		FAssetDataPtr GetAssetByGUID(const FGuid& GUID) const;
+		FAssetDataPtr GetAssetByPath(FStringView Path) const;
 
 		// One lock for the whole batch, since a folder of thousands looked up one by one mostly waits on the lock.
-		void GetAssetsByPath(TSpan<const FStringView> Paths, TSpan<const FAssetData*> OutAssets) const;
-		TVector<FAssetData*> FindByPredicate(const TFunction<bool(const FAssetData&)>& Predicate) const;
+		void GetAssetsByPath(TSpan<const FStringView> Paths, TSpan<FAssetDataPtr> OutAssets) const;
+		TVector<FAssetDataPtr> FindByPredicate(const TFunction<bool(const FAssetData&)>& Predicate) const;
+
+		// The One File Per Entity files of the world at WorldPath, sorted by GUID, which no other lookup lists.
+		TVector<FAssetDataPtr> GetEntityFilesOf(FStringView WorldPath) const;
 
 		// --- Text assets (.rml/.rcss): GUID identity sourced from hidden .lmeta sidecars. ---
 
-		// Editor-only: walk content roots, read-or-mint a sidecar GUID per text file, rebuild the map.
-		// Not called in cooked runtime (the shipped registry already carries the table).
+		// Editor-only; not called in cooked runtime, where the shipped registry already carries the table.
 		void RunTextAssetDiscovery();
 
 		// Resolve/mint a single text asset (used on create + first-touch). Returns its stable GUID.
 		FGuid EnsureTextAsset(FStringView Path);
 
-		FTextAssetData* GetTextAssetByGUID(const FGuid& GUID) const;
-		FTextAssetData* GetTextAssetByPath(FStringView Path) const;
-		TVector<FTextAssetData*> GetTextAssetsOfKind(ETextAssetKind Kind) const;
+		FTextAssetDataPtr GetTextAssetByGUID(const FGuid& GUID) const;
+		FTextAssetDataPtr GetTextAssetByPath(FStringView Path) const;
+		TVector<FTextAssetDataPtr> GetTextAssetsOfKind(ETextAssetKind Kind) const;
 
 		void TextAssetCreated(FStringView Path);
 		void TextAssetRenamed(FStringView OldPath, FStringView NewPath);
@@ -124,37 +128,37 @@ namespace Lumina
 		// Remap every tracked text file under OldDir to NewDir after a folder move/rename.
 		void TextAssetFolderRenamed(FStringView OldDir, FStringView NewDir);
 
-		const FTextAssetMap& GetTextAssets() const { return TextAssets; }
-
 		// Every asset listing GUID in its Dependencies; O(1) avg via a reverse map built lazily after change.
-		TVector<FAssetData*> GetReferencersOf(const FGuid& GUID) const;
+		TVector<FAssetDataPtr> GetReferencersOf(const FGuid& GUID) const;
 
-		// Serialize the live registry to compact binary; the cooker bundles a pre-baked registry into
-		// the PAK so the runtime skips the filesystem rescan at start. (The editor cache is JSON instead;
-		// see SaveCache/LoadCache.)
+		// The cooker bundles this pre-baked registry into the PAK so runtime skips the rescan; the editor cache is JSON.
 		void WriteToArchive(FArchive& Ar) const;
 		bool LoadFromArchive(FArchive& Ar);
 
 		FAssetRegistryUpdatedDelegate& GetOnAssetRegistryUpdated() { return OnAssetRegistryUpdated; }
 
-		// Coalesce registry-update broadcasts across a bulk operation (e.g. importing many assets). While
-		// suspended (count > 0) the per-asset mutators record a pending broadcast instead of firing one each;
-		// the final ResumeBroadcasts fires a single broadcast iff anything changed. Reentrant/thread-safe.
-		// Prefer the FScopedAssetRegistryBatch guard below.
+		// While suspended, mutators only flag a pending broadcast; the final ResumeBroadcasts fires one. Prefer FScopedAssetRegistryBatch.
 		void SuspendBroadcasts();
 		void ResumeBroadcasts();
 
-		const FAssetDataMap& GetAssets() const { return Assets; }
-		const TVector<FString>& GetFailedAssets() const { return FailedAssets; }
+		// Names an in-flight import has claimed but not yet saved, used by Tools/Import/ImportPaths.
+		bool IsImportPathReserved(FStringView Key) const;
+
+		// Atomically claims Key unless something has already reserved it, returning whether this call won.
+		bool TryReserveImportPath(FStringView Key);
+
+		// Safe to call on a Key nothing reserved.
+		void ReleaseImportPath(FStringView Key);
+
+		// For a teardown that cannot pair its releases.
+		void ReleaseAllImportPaths();
 
 	private:
 
-		// Fire OnAssetRegistryUpdated, or, while broadcasts are suspended, just flag one pending. Always called
-		// OUTSIDE AssetsMutex so a listener can re-enter the (non-recursive) registry without self-deadlock.
+		// Always called OUTSIDE AssetsMutex so a listener can re-enter the non-recursive registry without deadlock.
 		void NotifyRegistryChanged();
 
-		// Actually fires the delegate, hopping to the main thread first when called from anywhere else.
-		// Every subscriber touches editor UI state, and asset creation runs on import task fibers.
+		// Fires the delegate on the main thread, hopping there first, since every subscriber touches editor UI state.
 		void DispatchRegistryChanged();
 
 		// True when the cached entry came from a file with this exact stamp, so nothing needs reading.
@@ -169,17 +173,14 @@ namespace Lumina
 
 		void ClearAssets();
 
-		void RecordFailedAsset(FStringView Path);
-
 		// Persistence to <Project>/Intermediates/AssetRegistry.bin; stale entries re-validated on next discovery.
 		void SaveCache() const;
 		bool LoadCache();
 
-		// (Re)build the reverse-dep map from current Assets. Cheap O(N*avgDeps).
+		// Under a held read lock of AssetsMutex and write lock of ReverseMapMutex.
 		void RebuildReverseMap();
 
-		// Reap cached entries under a walked root not visited this discovery (externally deleted).
-		// Disabled-plugin content survives: its mount isn't a walked root.
+		// Disabled-plugin content survives because its mount is not a walked root.
 		size_t ReapStaleEntries();
 
 
@@ -190,38 +191,57 @@ namespace Lumina
 		void RebuildPathIndex() const;
 		void EnsurePathIndex() const;
 
-		// Inserts under the held AssetsMutex, replacing any entry with the same path or GUID and keeping PathIndex valid.
-		void InsertAssetLocked(TSharedPtr<FAssetData>&& AssetData);
+		// Under a held write lock of AssetsMutex.
+		const FAssetDataPtr* FindByPathLocked(FStringView Path) const;
 
-		// Lookups hand out entry pointers past the lock, so a dropped entry lives until the main thread's next pump.
-		void RetireLocked(const TSharedPtr<FAssetData>& Entry);
-		void RetireAllLocked();
-		void ReclaimRetired();
+		// Inserts under the held AssetsMutex, filing an entity file under its world and anything else through InsertListedLocked.
+		void InsertAssetLocked(FAssetDataPtr AssetData);
+
+		// Lists under the held AssetsMutex, replacing any entry with the same path or GUID and keeping PathIndex valid.
+		void InsertListedLocked(FAssetDataPtr AssetData);
+
+		// The entry as Path's own file lists it, which for a world is the one before its entity files were folded in.
+		FAssetDataPtr FindSourceLocked(FStringView Path) const;
+
+		// Lists each world whose entity files changed with their dependencies folded into its own.
+		void FoldEntityFiles();
+
+		// Under a held write lock of AssetsMutex, so a later fold cannot list a world or entity file that is gone.
+		void ForgetEntityFileOwnerEntry(FStringView Path);
 
 		mutable FSharedMutex			AssetsMutex;
 		FAssetDataMap 					Assets;
-		TVector<TSharedPtr<FAssetData>>	RetiredAssets;
-		std::atomic<bool>				bReclaimQueued { false };
-		mutable THashMap<FString, FAssetData*> PathIndex;
+		mutable THashMap<FString, FAssetDataPtr> PathIndex;
 		mutable bool					bPathIndexValid = false;
+
+		// A world that keeps its entities in their own files, as its own package lists it, with those files by path key.
+		struct FEntityFileOwner
+		{
+			FAssetDataPtr						World;
+			THashMap<FString, FAssetDataPtr>	Files;
+			bool								bFoldPending = false;
+		};
+
+		// By world path key, and kept out of Assets so no listing or lookup shows an entity file.
+		THashMap<FString, FEntityFileOwner> EntityFileOwners;
+
+		// Inserts under the held TextAssetsMutex unless the GUID is already listed.
+		void AddTextAssetLocked(FTextAssetDataPtr Data);
 
 		mutable FSharedMutex			TextAssetsMutex;
 		FTextAssetMap					TextAssets;
+		mutable THashMap<FString, FTextAssetDataPtr> TextPathIndex;
+		mutable bool					bTextPathIndexValid = false;
 
-		mutable FSharedMutex			FailedAssetsMutex;
-		TVector<FString>				FailedAssets;
-
+		// Taken only after AssetsMutex when both are held.
 		mutable FSharedMutex			ReverseMapMutex;
 		THashMap<FGuid, TVector<FGuid>, FGuidHash> ReverseDepMap; // dep -> referrers
 		mutable bool					bReverseMapDirty = true;
 
-		// Broadcast coalescing (see SuspendBroadcasts). Suspend count is reentrant; pending flag survives until
-		// the final resume fires the single broadcast.
 		std::atomic<int32>				BroadcastSuspendCount { 0 };
 		std::atomic<bool>				bBroadcastPending { false };
 
-		// Snapshot from the most recent RunInitialDiscovery, consumed by
-		// OnInitialDiscoveryCompleted to drive the reap pass.
+		// Snapshot from the latest RunInitialDiscovery, consumed by OnInitialDiscoveryCompleted for the reap pass.
 		TVector<FFixedString>			LastDiscoveryWalkedRoots;
 		TVector<FFixedString>			LastDiscoveryVisitedPaths; // sorted
 
@@ -233,10 +253,12 @@ namespace Lumina
 		std::atomic<uint32>				DiscoveryUnchanged { 0 };
 		std::atomic<uint32>				DiscoveryRehashed { 0 };
 		std::atomic<uint32>				DiscoveryExtracted { 0 };
+
+		mutable FMutex					ImportPathReservationMutex;
+		THashSet<FFixedString>			ReservedImportPaths;
 	};
 
-	// RAII: suspends FAssetRegistry broadcasts for its lifetime so a bulk operation (importing many assets)
-	// fires one registry-update broadcast at the end instead of one per asset. Reentrant (nests safely).
+	// Suspends FAssetRegistry broadcasts for its lifetime so a bulk operation fires one broadcast at the end.
 	struct RUNTIME_API FScopedAssetRegistryBatch
 	{
 		FScopedAssetRegistryBatch();
@@ -245,6 +267,34 @@ namespace Lumina
 		FScopedAssetRegistryBatch& operator=(const FScopedAssetRegistryBatch&) = delete;
 		FScopedAssetRegistryBatch(FScopedAssetRegistryBatch&&) = delete;
 		FScopedAssetRegistryBatch& operator=(FScopedAssetRegistryBatch&&) = delete;
+	};
+
+	// Flags itself stale on every registry broadcast, which can come from an import worker.
+	struct RUNTIME_API FAssetRegistryStaleLatch
+	{
+		FAssetRegistryStaleLatch();
+		~FAssetRegistryStaleLatch();
+		FAssetRegistryStaleLatch(const FAssetRegistryStaleLatch&) = delete;
+		FAssetRegistryStaleLatch& operator=(const FAssetRegistryStaleLatch&) = delete;
+		FAssetRegistryStaleLatch(FAssetRegistryStaleLatch&&) = delete;
+		FAssetRegistryStaleLatch& operator=(FAssetRegistryStaleLatch&&) = delete;
+
+		// Consumes the stale flag; also goes stale when Key differs from CachedKey.
+		template<typename T>
+		bool Refresh(const T& Key, T& CachedKey)
+		{
+			if (Key != CachedKey)
+			{
+				CachedKey = Key;
+				bStale.store(true, std::memory_order_relaxed);
+			}
+			return bStale.exchange(false, std::memory_order_relaxed);
+		}
+
+	private:
+
+		FDelegateHandle		Handle;
+		std::atomic<bool>	bStale { true };
 	};
 
 }

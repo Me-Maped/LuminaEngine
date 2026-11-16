@@ -101,7 +101,7 @@ namespace Lumina
             Ev.MouseY = MouseY;
             Ev.DeltaX = MouseEvent.GetDeltaX();
             Ev.DeltaY = MouseEvent.GetDeltaY();
-            FrameEvents.push_back(Ev);
+            FrameEvents.Add(Ev);
         }
         else if (Event.IsA<FMouseButtonPressedEvent>() || Event.IsA<FMouseButtonReleasedEvent>())
         {
@@ -116,7 +116,7 @@ namespace Lumina
             AddHeldModifiers(Ev);
             Ev.MouseX = MouseX;
             Ev.MouseY = MouseY;
-            FrameEvents.push_back(Ev);
+            FrameEvents.Add(Ev);
         }
         else if (Event.IsA<FKeyPressedEvent>() || Event.IsA<FKeyReleasedEvent>())
         {
@@ -147,18 +147,20 @@ namespace Lumina
             if (KeyEvent.IsCtrlDown())  { Ev.AddFlag(EInputEventFlags::Ctrl); }
             if (KeyEvent.IsShiftDown()) { Ev.AddFlag(EInputEventFlags::Shift); }
             if (KeyEvent.IsAltDown())   { Ev.AddFlag(EInputEventFlags::Alt); }
-            FrameEvents.push_back(Ev);
+            FrameEvents.Add(Ev);
         }
         else if (Event.IsA<FMouseScrolledEvent>())
         {
-            MouseZ = Event.As<FMouseScrolledEvent>().GetOffset();
+            const float Offset = Event.As<FMouseScrolledEvent>().GetOffset();
+            MouseZ += Offset;
+            LastUsedDevice = EInputDevice::KeyboardMouse;
 
             SInputEvent Ev;
             Ev.Type   = EInputEventType::MouseScroll;
-            Ev.Scroll = MouseZ;
+            Ev.Scroll = Offset;
             Ev.MouseX = MouseX;
             Ev.MouseY = MouseY;
-            FrameEvents.push_back(Ev);
+            FrameEvents.Add(Ev);
         }
 
         return false;
@@ -166,7 +168,9 @@ namespace Lumina
 
     void FInputContext::SetGamepadState(const FGamepadState& State)
     {
-        Gamepad = State;
+        Gamepad.bConnected = State.bConnected;
+        Gamepad.Family = State.Family;
+        Gamepad.Axes = State.Axes;
         for (float Axis : Gamepad.Axes)
         {
             if (Math::Abs(Axis) >= kDeviceSwitchAxis)
@@ -175,8 +179,10 @@ namespace Lumina
             }
         }
 
+        // Advance derives the edge instead of overwriting, so a held button still reports Released first.
         for (uint32 Button = 0; Button < (uint32)EGamepadButton::Num; ++Button)
         {
+            Gamepad.Buttons[Button] = Input::Advance(Gamepad.Buttons[Button], Input::IsDown(State.Buttons[Button]));
             const Input::EButtonState ButtonState = Gamepad.Buttons[Button];
             if (ButtonState != Input::EButtonState::Pressed && ButtonState != Input::EButtonState::Released)
             {
@@ -187,7 +193,7 @@ namespace Lumina
             SInputEvent Ev;
             Ev.Type = (ButtonState == Input::EButtonState::Pressed) ? EInputEventType::GamepadDown : EInputEventType::GamepadUp;
             Ev.SetKey(SKey((EGamepadButton)Button));
-            FrameEvents.push_back(Ev);
+            FrameEvents.Add(Ev);
         }
     }
 
@@ -198,16 +204,16 @@ namespace Lumina
             return;
         }
         PopInputLayer(Name);
-        InputLayers.push_back(Name);
+        InputLayers.Add(Name);
     }
 
     bool FInputContext::PopInputLayer(FName Name)
     {
-        for (size_t i = InputLayers.size(); i > 0; --i)
+        for (int32 i = InputLayers.Num(); i > 0; --i)
         {
             if (InputLayers[i - 1] == Name)
             {
-                InputLayers.erase(InputLayers.begin() + (i - 1));
+                InputLayers.RemoveAt((i - 1));
                 return true;
             }
         }
@@ -221,7 +227,7 @@ namespace Lumina
 
     void FInputContext::ClearInputLayers()
     {
-        InputLayers.clear();
+        InputLayers.Reset();
     }
 
     EKey FInputContext::GetFirstPressedKey() const
@@ -250,7 +256,7 @@ namespace Lumina
 
     bool FInputContext::ConsumeBufferedPress(int32 ActionIndex)
     {
-        if (ActionIndex < 0 || ActionIndex >= int32(ActionStates.size()) || ActionIndex >= int32(TriggerStates.size()))
+        if (ActionIndex < 0 || ActionIndex >= ActionStates.Num() || ActionIndex >= TriggerStates.Num())
         {
             return false;
         }
@@ -276,7 +282,7 @@ namespace Lumina
         MouseDeltaY = 0.0;
         MouseZ      = 0.0;
 
-        FrameEvents.clear();
+        FrameEvents.Reset();
     }
 
     void FInputContext::ResetState()
@@ -296,6 +302,6 @@ namespace Lumina
         {
             Trigger = FActionTriggerState();
         }
-        FrameEvents.clear();
+        FrameEvents.Reset();
     }
 }

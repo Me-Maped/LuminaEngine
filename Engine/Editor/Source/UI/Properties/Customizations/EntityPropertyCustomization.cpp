@@ -26,11 +26,11 @@ namespace Lumina
             FFixedString Label;
             if (const SNameComponent* Name = Registry.TryGet<SNameComponent>(Entity))
             {
-                Label.append(Name->Name.c_str());
+                Label.Append(*Name->Name);
             }
             else
             {
-                Label.append(LOC("Entity"));
+                Label.Append("Entity");
             }
             AppendFormat(Label, " ({})", Entity.Value);
             return Label;
@@ -79,24 +79,26 @@ namespace Lumina
 
         ECS::FRegistry& Registry = World->GetEntityRegistry();
 
-        // Index 0 is always "None"; the rest are the same named entities the outliner shows.
-        TVector<ECS::FEntity> Candidates;
-        Candidates.push_back(ECS::NullEntity);
-
         const ECS::FEntity CurrentEntity = CachedValue;
         const bool bHasCurrent = CurrentEntity != ECS::NullEntity && Registry.IsValid(CurrentEntity);
+        const FFixedString Preview = bHasCurrent ? MakeEntityLabel(Registry, CurrentEntity) : FFixedString("None");
+
+        // Index 0 is always "None"; the named entities the outliner shows are only walked while the list is open.
+        TVector<ECS::FEntity> Candidates;
+        Candidates.Add(ECS::NullEntity);
 
         int32 CurrentIndex = 0; // default to None
-        for (ECS::FEntity Entity : Registry.View<SNameComponent>(ECS::TExclude<FHideInSceneOutliner>{}))
+        if (ImGuiX::IsSearchableComboOpen("##entity"))
         {
-            if (bHasCurrent && Entity == CurrentEntity)
+            for (ECS::FEntity Entity : Registry.View<SNameComponent, ECS::Without<FHideInSceneOutliner>>())
             {
-                CurrentIndex = static_cast<int32>(Candidates.size());
+                if (bHasCurrent && Entity == CurrentEntity)
+                {
+                    CurrentIndex = Candidates.Num();
+                }
+                Candidates.Add(Entity);
             }
-            Candidates.push_back(Entity);
         }
-
-        const FFixedString Preview = bHasCurrent ? MakeEntityLabel(Registry, CurrentEntity) : FFixedString(LOC("None"));
 
         // Leave room on the right for the square eyedropper button.
         const float LineHeight = ImGui::GetFrameHeight();
@@ -105,7 +107,7 @@ namespace Lumina
 
         // Grouped so the whole combo is one drop target for an entity dragged from the outliner.
         ImGui::BeginGroup();
-        const int32 Picked = ImGuiX::SearchableCombo("##entity", Preview.c_str(), static_cast<int32>(Candidates.size()), CurrentIndex,
+        const int32 Picked = ImGuiX::SearchableCombo("##entity", *Preview, Candidates.Num(), CurrentIndex,
             [&Registry, &Candidates](int32 Index) -> FFixedString
             {
                 if (Index == 0)

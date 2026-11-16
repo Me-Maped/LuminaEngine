@@ -16,7 +16,7 @@
 #include "Memory/Memcpy.h"
 #include "Paths/Paths.h"
 #include "Platform/Filesystem/PlatformFilesystem.h"
-#include "Tools/UI/ImGui/ImGuiAllocator.h"
+#include "Tools/UI/ImGui/ImGuiModule.h"
 #include "Config/Config.h"
 #include "Config/EngineSettings.h"
 #include "Core/Object/ObjectCore.h"
@@ -44,7 +44,7 @@ namespace Lumina
             if (Key == GLFW_KEY_UNKNOWN) { return; }
             const bool Ctrl = (Mods & GLFW_MOD_CONTROL) != 0, Shift = (Mods & GLFW_MOD_SHIFT) != 0;
             const bool Alt  = (Mods & GLFW_MOD_ALT) != 0,     Super = (Mods & GLFW_MOD_SUPER) != 0;
-            FEventProcessor& EP = GApp->GetEventProcessor();
+            FEventProcessor& EP = Global::GApp->GetEventProcessor();
             switch (Action)
             {
             case GLFW_RELEASE: EP.Dispatch<FKeyReleasedEvent>(static_cast<EKey>(Key), Ctrl, Shift, Alt, Super); break;
@@ -56,7 +56,7 @@ namespace Lumina
         void SecondaryCharCallback(GLFWwindow* W, unsigned int Codepoint)
         {
             ImGui_ImplGlfw_CharCallback(W, Codepoint);
-            GApp->GetEventProcessor().Dispatch<FCharInputEvent>(Codepoint);
+            Global::GApp->GetEventProcessor().Dispatch<FCharInputEvent>(Codepoint);
         }
 
         void SecondaryMouseButtonCallback(GLFWwindow* W, int Button, int Action, int Mods)
@@ -64,7 +64,7 @@ namespace Lumina
             ImGui_ImplGlfw_MouseButtonCallback(W, Button, Action, Mods);
             double X, Y;
             glfwGetCursorPos(W, &X, &Y);
-            FEventProcessor& EP = GApp->GetEventProcessor();
+            FEventProcessor& EP = Global::GApp->GetEventProcessor();
             if (Action == GLFW_PRESS)        { EP.Dispatch<FMouseButtonPressedEvent>(static_cast<EMouseKey>(Button), (float)X, (float)Y); }
             else if (Action == GLFW_RELEASE) { EP.Dispatch<FMouseButtonReleasedEvent>(static_cast<EMouseKey>(Button), (float)X, (float)Y); }
         }
@@ -76,13 +76,13 @@ namespace Lumina
             const double DeltaX = X - Last.x;
             const double DeltaY = Y - Last.y;
             Last = ImVec2(static_cast<float>(X), static_cast<float>(Y));
-            GApp->GetEventProcessor().Dispatch<FMouseMovedEvent>((float)X, (float)Y, (float)DeltaX, (float)DeltaY);
+            Global::GApp->GetEventProcessor().Dispatch<FMouseMovedEvent>((float)X, (float)Y, (float)DeltaX, (float)DeltaY);
         }
 
         void SecondaryScrollCallback(GLFWwindow* W, double XOffset, double YOffset)
         {
             ImGui_ImplGlfw_ScrollCallback(W, XOffset, YOffset);
-            GApp->GetEventProcessor().Dispatch<FMouseScrolledEvent>(EMouseKey::Scroll, (float)YOffset);
+            Global::GApp->GetEventProcessor().Dispatch<FMouseScrolledEvent>(EMouseKey::Scroll, (float)YOffset);
         }
 
         // Re-set each frame, cheap and idempotent, so new windows are covered without tracking creation.
@@ -97,11 +97,11 @@ namespace Lumina
                 {
                     continue;
                 }
-                if (GSecondaryWindowLastMouse.find(W) == GSecondaryWindowLastMouse.end())
+                if (!GSecondaryWindowLastMouse.Contains(W))
                 {
                     double X, Y;
                     glfwGetCursorPos(W, &X, &Y);
-                    GSecondaryWindowLastMouse[W] = ImVec2(static_cast<float>(X), static_cast<float>(Y));
+                    GSecondaryWindowLastMouse.Add(W, ImVec2(static_cast<float>(X), static_cast<float>(Y)));
                 }
                 glfwSetKeyCallback(W, SecondaryKeyCallback);
                 glfwSetCharCallback(W, SecondaryCharCallback);
@@ -141,7 +141,7 @@ namespace Lumina
             }
 
             float Scale = 1.0f;
-            if (FWindow* Window = Windowing::PrimaryWindow)
+            if (FWindow* Window = Global::PrimaryWindow)
             {
                 Scale = Window->GetContentScale();
                 Scale *= ResolutionFactor(static_cast<float>(Window->GetMonitorResolution().y));
@@ -283,6 +283,11 @@ namespace Lumina
         return GHasActivePreset ? &GActivePreset : nullptr;
     }
 
+    void ImGuiX::AdoptRuntimeImGuiContext(ImGuiContext* InImGui, ImPlotContext* InImPlot)
+    {
+        AdoptImGuiContext(InImGui, InImPlot);
+    }
+
     void IImGuiRenderer::Initialize()
     {
         IMGUI_CHECKVERSION();
@@ -328,15 +333,15 @@ namespace Lumina
     	auto AddFontFromVirtualPath = [&io] (FStringView Path, float Size, const ImFontConfig& Config, const ImWchar* Ranges = nullptr) -> ImFont*
     	{
     		TVector<uint8> Bytes;
-    		if (!VFS::ReadFile(Bytes, Path) || Bytes.empty())
+    		if (!VFS::ReadFile(Bytes, Path) || Bytes.IsEmpty())
     		{
     			return nullptr;
     		}
-    		void* Data = IM_ALLOC(Bytes.size());
-    		Memory::Memcpy(Data, Bytes.data(), Bytes.size());
+    		void* Data = IM_ALLOC(Bytes.Num());
+    		Memory::Memcpy(Data, Bytes.GetData(), Bytes.Num());
     		ImFontConfig Owned = Config;
     		Owned.FontDataOwnedByAtlas = true;
-    		return io.Fonts->AddFontFromMemoryTTF(Data, (int)Bytes.size(), Size, &Owned, Ranges);
+    		return io.Fonts->AddFontFromMemoryTTF(Data, Bytes.Num(), Size, &Owned, Ranges);
     	};
 
     	auto CreateFontFromFile = [&] (FStringView Path, float FontSize, float IconFontSize, ImGuiX::Font::EFont FontID, const ImVec2& GlyphOffset)
@@ -346,7 +351,7 @@ namespace Lumina
     		{
     			PANIC("Failed to load font '{}'. The engine's resources are missing from this build.", Path);
     		}
-		    ImGuiX::Font::GFonts[static_cast<uint8>(FontID)] = pFont;
+		    Global::GFonts[static_cast<uint8>(FontID)] = pFont;
 
     		IconFontConfig.GlyphOffset = GlyphOffset;
     		IconFontConfig.GlyphMinAdvanceX = IconFontSize;
@@ -400,16 +405,16 @@ namespace Lumina
     	io.Fonts->TexMinWidth = 4096;
 
     	using namespace ImGuiX::Font;
-    	io.FontDefault = GFonts[static_cast<uint8>(EFont::Medium)];
+    	io.FontDefault = Global::GFonts[static_cast<uint8>(EFont::Medium)];
     	
-        DEBUG_ASSERT(GFonts[(uint8)EFont::Small]->IsLoaded());
-        DEBUG_ASSERT(GFonts[(uint8)EFont::SmallBold]->IsLoaded());
-        DEBUG_ASSERT(GFonts[(uint8)EFont::Medium]->IsLoaded());
-        DEBUG_ASSERT(GFonts[(uint8)EFont::MediumBold]->IsLoaded());
-        DEBUG_ASSERT(GFonts[(uint8)EFont::Large]->IsLoaded());
-        DEBUG_ASSERT(GFonts[(uint8)EFont::LargeBold]->IsLoaded());
-        DEBUG_ASSERT(GFonts[(uint8)EFont::Mono]->IsLoaded());
-        DEBUG_ASSERT(GFonts[(uint8)EFont::MonoBold]->IsLoaded());
+        DEBUG_ASSERT(Global::GFonts[(uint8)EFont::Small]->IsLoaded());
+        DEBUG_ASSERT(Global::GFonts[(uint8)EFont::SmallBold]->IsLoaded());
+        DEBUG_ASSERT(Global::GFonts[(uint8)EFont::Medium]->IsLoaded());
+        DEBUG_ASSERT(Global::GFonts[(uint8)EFont::MediumBold]->IsLoaded());
+        DEBUG_ASSERT(Global::GFonts[(uint8)EFont::Large]->IsLoaded());
+        DEBUG_ASSERT(Global::GFonts[(uint8)EFont::LargeBold]->IsLoaded());
+        DEBUG_ASSERT(Global::GFonts[(uint8)EFont::Mono]->IsLoaded());
+        DEBUG_ASSERT(Global::GFonts[(uint8)EFont::MonoBold]->IsLoaded());
 		
     	
     	io.ConfigWindowsMoveFromTitleBarOnly = true;
@@ -432,14 +437,14 @@ namespace Lumina
     	{
     		Filesystem::Copy("imgui.ini", LayoutFilePath, false);
     	}
-    	io.IniFilename = LayoutFilePath.c_str();
+    	io.IniFilename = *LayoutFilePath;
 #else
     	// Window positions persist per project, so a debug panel stays where it was dragged between runs.
-    	if (GEngine != nullptr && !GEngine->GetProjectPath().empty())
+    	if (Global::GEngine != nullptr && !Global::GEngine->GetProjectPath().IsEmpty())
     	{
-    		LayoutFilePath = FString(Paths::Combine(GEngine->GetProjectPath(), "Saved", "DevUILayout.ini").c_str());
+    		LayoutFilePath = FString(*Paths::Combine(Global::GEngine->GetProjectPath(), "Saved", "DevUILayout.ini"));
     		Filesystem::MakeParentDirectoryTree(LayoutFilePath);
-    		io.IniFilename = LayoutFilePath.c_str();
+    		io.IniFilename = *LayoutFilePath;
     	}
     	else
     	{

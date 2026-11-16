@@ -1,5 +1,6 @@
 ﻿#include "Localization/Localization.h"
 #include "ProfilerEditorTool.h"
+#include "Tools/UI/ImGui/ImGuiX.h"
 #include "ProfilerViewCommon.h"
 
 #include "imgui.h"
@@ -11,22 +12,6 @@ namespace Lumina
 {
     namespace
     {
-        void FormatBytes(uint64 Bytes, char* Out, size_t Capacity)
-        {
-            if (Bytes >= Constants::kMiB)
-            {
-                snprintf(Out, Capacity, LOC("%.1f MiB"), (double)Bytes / double(Constants::kMiB));
-            }
-            else if (Bytes >= 1024ull)
-            {
-                snprintf(Out, Capacity, LOC("%.1f KiB"), (double)Bytes / double(Constants::kKiB));
-            }
-            else
-            {
-                snprintf(Out, Capacity, LOC("%llu B"), (unsigned long long)Bytes);
-            }
-        }
-
         // Read at a glance only; the thresholds mark what is worth opening rather than what is wrong.
         ImVec4 CostColor(double Ms)
         {
@@ -75,7 +60,7 @@ namespace Lumina
 
     void FProfilerEditorTool::DrawAssetTable(const char* Id, TVector<FAssetLoadStat>& Stats, bool bShowSize)
     {
-        if (Stats.empty())
+        if (Stats.IsEmpty())
         {
             ImGui::TextDisabled(LOC("Nothing recorded at this layer yet."));
             return;
@@ -113,11 +98,10 @@ namespace Lumina
             }
         }
 
-        char Buffer[32];
         for (const FAssetLoadStat& Stat : Stats)
         {
             const FString Name = Stat.Name.ToString();
-            if (!ImGuiX::PassSearchFilter(FStringView(AssetFilter), FStringView(Name)))
+            if (AssetFilter[0] != '\0' && Name.Find(AssetFilter) == Constants::kIndexNone)
             {
                 continue;
             }
@@ -125,7 +109,7 @@ namespace Lumina
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(Name.c_str());
+            ImGui::TextUnformatted(*Name);
 
             ImGui::TableNextColumn();
             ImGui::Text("%u", Stat.Count);
@@ -142,8 +126,7 @@ namespace Lumina
             if (bShowSize)
             {
                 ImGui::TableNextColumn();
-                FormatBytes(Stat.Bytes, Buffer, sizeof(Buffer));
-                ImGui::TextUnformatted(Buffer);
+                ImGuiX::TextUnformatted(ImGuiX::FormatSize(Stat.Bytes));
                 if (ImGui::IsItemHovered())
                 {
                     ImGui::SetTooltip(LOC("%u exports, %u imports"), Stat.Exports, Stat.Imports);
@@ -196,9 +179,9 @@ namespace Lumina
         if (ImGui::SmallButton(LOC("Clear")))
         {
             Tracker.Clear();
-            AssetRecent.clear();
-            AssetRequests.clear();
-            AssetPackages.clear();
+            AssetRecent.Reset();
+            AssetRequests.Reset();
+            AssetPackages.Reset();
         }
 
         ImGui::SetNextItemWidth(220.0f);
@@ -206,7 +189,7 @@ namespace Lumina
         ImGui::SameLine();
         ImGui::TextDisabled(LOC("L loaded, R resident, J joined, F failed"));
 
-        if (Requests == 0 && AssetPackages.empty())
+        if (Requests == 0 && AssetPackages.IsEmpty())
         {
             ImGui::TextDisabled(LOC("No asset loads recorded yet. Open or import an asset."));
             return;
@@ -230,11 +213,11 @@ namespace Lumina
             if (ImGui::BeginChild("##assetrecent", ImVec2(0.0f, 200.0f), true))
             {
                 // Newest first, which is the order you want when you just clicked something.
-                for (size_t Index = AssetRecent.size(); Index > 0; --Index)
+                for (int32 Index = AssetRecent.Num(); Index > 0; --Index)
                 {
                     const FAssetLoadRecord& Record = AssetRecent[Index - 1];
                     const FString Name = Record.Name.ToString();
-                    if (!ImGuiX::PassSearchFilter(FStringView(AssetFilter), FStringView(Name)))
+                    if (AssetFilter[0] != '\0' && Name.Find(AssetFilter) == Constants::kIndexNone)
                     {
                         continue;
                     }
@@ -245,7 +228,7 @@ namespace Lumina
                     ImGui::SameLine();
                     ImGui::TextDisabled(Record.Source == EAssetLoadSource::Request ? LOC("req ") : LOC("pkg "));
                     ImGui::SameLine();
-                    ImGui::TextUnformatted(Name.c_str());
+                    ImGui::TextUnformatted(*Name);
                 }
             }
             ImGui::EndChild();

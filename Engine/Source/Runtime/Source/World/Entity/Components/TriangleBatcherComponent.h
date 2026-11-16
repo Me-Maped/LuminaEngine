@@ -41,12 +41,12 @@ namespace Lumina
         // Thread-safe. Becomes visible the next time DrainQueue runs (once per render-extraction tick).
         void EnqueueTriangles(TVector<FSimpleElementVertex>&& Vertices, ESolidDrawMode Mode = ESolidDrawMode::Translucent, float Duration = -1.0f)
         {
-            if (Vertices.empty())
+            if (Vertices.IsEmpty())
             {
                 return;
             }
             FQueuedBatch Q;
-            Q.Vertices      = std::move(Vertices);
+            Q.Vertices      = Move(Vertices);
             Q.Duration      = Duration;
             Q.Mode          = Mode;
             Q.bSingleFrame  = (Duration == -1.0f) ? 1u : 0u;
@@ -62,9 +62,9 @@ namespace Lumina
             FQueuedBatch Q;
             while (Queue.TryDequeue(Q))
             {
-                Batches.emplace_back(FBatchInstance
+                Batches.Emplace(FBatchInstance
                 {
-                    .Vertices           = std::move(Q.Vertices),
+                    .Vertices           = Move(Q.Vertices),
                     .RemainingLifetime  = Q.Duration,
                     .Mode               = Q.Mode,
                     .bSingleFrame       = Q.bSingleFrame,

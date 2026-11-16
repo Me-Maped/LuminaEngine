@@ -1,5 +1,4 @@
 ﻿#include "RuntimePCH.h"
-#include <string>
 #include "Config.h"
 #include "DeveloperSettings.h"
 
@@ -14,11 +13,52 @@
 #include "FileSystem/FileSystem.h"
 #include "Log/Log.h"
 
-using Json = nlohmann::json;
-
 namespace Lumina
 {
-    RUNTIME_API FConfig* GConfig;
+    RUNTIME_API FConfig* Global::GConfig;
+
+    namespace
+    {
+        // False only when the file cannot be read; an unparseable file logs and yields an empty object.
+        bool ReadJsonFile(const FString& VFSPath, FJsonValue& Out)
+        {
+            FString Result;
+            if (!VFS::ReadFile(Result, VFSPath))
+            {
+                return false;
+            }
+
+            FJsonParseError Error;
+            if (!FJsonValue::Parse(Result.View(), Out, &Error))
+            {
+                LOG_ERROR("FConfig: failed to parse {0} ({1})", *VFSPath, Error.Message);
+                Out = FJsonValue::MakeObject();
+            }
+            return true;
+        }
+
+        // Returns false and leaves Out empty for an empty key.
+        bool SplitDottedKey(FStringView Key, TVector<FString>& Out)
+        {
+            Out.Reset();
+            if (Key.IsEmpty())
+            {
+                return false;
+            }
+
+            size_t Start = 0;
+            for (int32 i = 0; i < Key.Len(); ++i)
+            {
+                if (Key[i] == '.')
+                {
+                    Out.Emplace(Key.GetData() + Start, Key.GetData() + i);
+                    Start = i + 1;
+                }
+            }
+            Out.Emplace(Key.GetData() + Start, Key.GetData() + Key.Len());
+            return !Out.IsEmpty();
+        }
+    }
 
     void FConfig::DiscoverAndLoadSettings()
     {
@@ -36,14 +76,14 @@ namespace Lumina
             CClass* Class = static_cast<CClass*>(Object);
             if (Class != BaseClass && Class->IsChildOf(BaseClass))
             {
-                Candidates.push_back(Class);
+                Candidates.Add(Class);
             }
         });
 
         // 1) Discover + snapshot pristine code defaults for any class not seen yet.
         for (CClass* Class : Candidates)
         {
-            if (SettingsDefaults.find(Class) != SettingsDefaults.end())
+            if (SettingsDefaults.Contains(Class))
             {
                 continue;
             }
@@ -59,12 +99,12 @@ namespace Lumina
                 Snapshot->AddToRoot();
             }
             SettingsDefaults[Class] = Snapshot;
-            DiscoveredSettings.push_back(Class);
+            DiscoveredSettings.Add(Class);
         }
         
         for (CClass* Class : DiscoveredSettings)
         {
-            if (SettingsFileLoaded.find(Class) != SettingsFileLoaded.end())
+            if (SettingsFileLoaded.Contains(Class))
             {
                 continue;
             }
@@ -76,76 +116,50 @@ namespace Lumina
     {
         if (!Class->HasMeta("ConfigFile"))
         {
-            SettingsFileLoaded.insert(Class);
+            SettingsFileLoaded.Add(Class);
             return;
         }
 
-        const FString& FilePath = Class->GetMeta("ConfigFile");
-        FString Result;
-        if (!VFS::ReadFile(Result, FilePath))
+        FJsonValue* FileJson = FindOrLoadSettingsFile(Class->GetMeta("ConfigFile"));
+        if (FileJson == nullptr)
         {
             return; // not available yet; retry on a later pass
         }
 
-        Json FileJson;
-        try
-        {
-            FileJson = Json::parse(Result.c_str());
-        }
-        catch (const std::exception& Ex)
-        {
-            LOG_ERROR("FConfig: failed to parse settings file {0} ({1})", FilePath.c_str(), Ex.what());
-            FileJson = Json::object();
-        }
-
-        SettingsFileCache[FilePath] = FileJson;
-
         const FString Section = GetSettingsSection(Class);
-        auto SectionIt = FileJson.find(Section.c_str());
-        if (SectionIt != FileJson.end())
+        if (FJsonValue* SectionNode = FileJson->Find(Section.View()))
         {
-            FJsonStructuredArchive::LoadStruct(*SectionIt, Class, Class->GetDefaultObject());
+            FJsonStructuredArchive::LoadStruct(*SectionNode, Class, Class->GetDefaultObject());
         }
 
         static_cast<CDeveloperSettings*>(Class->GetDefaultObject())->PostInitSettings();
-        SettingsFileLoaded.insert(Class);
+        SettingsFileLoaded.Add(Class);
     }
 
     FString FConfig::GetSettingsSection(CClass* SettingsClass)
     {
         FString Name = SettingsClass->GetName().ToString();
         // Drop the conventional leading 'C' for tidy, stable JSON keys (e.g. "WorldEditorSettings").
-        if (Name.size() > 1 && Name[0] == 'C')
+        if (Name.Len() > 1 && Name[0] == 'C')
         {
-            return Name.substr(1);
+            return Name.Mid(1);
         }
         return Name;
     }
 
-    Json& FConfig::LoadSettingsFile(const FString& VFSPath)
+    FJsonValue* FConfig::FindOrLoadSettingsFile(const FString& VFSPath)
     {
-        auto It = SettingsFileCache.find(VFSPath);
-        if (It != SettingsFileCache.end())
+        if (FJsonValue* Cached = SettingsFileCache.Find(VFSPath))
         {
-            return It->second;
+            return Cached;
         }
 
-        Json Parsed = Json::object();
-        FString Result;
-        if (VFS::ReadFile(Result, VFSPath))
+        FJsonValue Parsed;
+        if (!ReadJsonFile(VFSPath, Parsed))
         {
-            try
-            {
-                Parsed = Json::parse(Result.c_str());
-            }
-            catch (const std::exception& Ex)
-            {
-                LOG_ERROR("FConfig: failed to parse settings file {0} ({1})", VFSPath.c_str(), Ex.what());
-                Parsed = Json::object();
-            }
+            return nullptr;
         }
-
-        return SettingsFileCache.emplace(VFSPath, Move(Parsed)).first->second;
+        return &SettingsFileCache.Add(VFSPath, Move(Parsed));
     }
 
     void FConfig::SaveSettings(CClass* SettingsClass)
@@ -162,15 +176,20 @@ namespace Lumina
         }
 
         const FString& FilePath = SettingsClass->GetMeta("ConfigFile");
-        Json& FileJson = LoadSettingsFile(FilePath);
+        FJsonValue* Loaded = FindOrLoadSettingsFile(FilePath);
+        FJsonValue& FileJson = Loaded != nullptr ? *Loaded : SettingsFileCache.Add(FilePath, FJsonValue::MakeObject());
+        if (!FileJson.IsObject())
+        {
+            FileJson = FJsonValue::MakeObject();
+        }
 
         const FString Section = GetSettingsSection(SettingsClass);
-        FJsonStructuredArchive::SaveStruct(FileJson[Section.c_str()], SettingsClass, CDO);
+        FJsonStructuredArchive::SaveStruct(FileJson.FindOrAdd(Section.View()), SettingsClass, CDO);
 
-        const std::string Dumped = FileJson.dump(4);
-        if (!VFS::WriteFile(FilePath, FStringView(Dumped.c_str(), Dumped.size())))
+        const FString Dumped = FileJson.ToString(4);
+        if (!VFS::WriteFile(FilePath, Dumped.View()))
         {
-            LOG_ERROR("FConfig: failed to write settings file {0}", FilePath.c_str());
+            LOG_ERROR("FConfig: failed to write settings file {0}", *FilePath);
         }
 
         // Let open editors live-refresh from the just-saved values.
@@ -187,33 +206,8 @@ namespace Lumina
 
     CObject* FConfig::GetSettingsDefault(CClass* SettingsClass) const
     {
-        auto It = SettingsDefaults.find(SettingsClass);
-        return It == SettingsDefaults.end() ? nullptr : It->second;
-    }
-
-    namespace
-    {
-        // Returns false and leaves Out empty for an empty key.
-        bool SplitDottedKey(FStringView Key, TVector<FString>& Out)
-        {
-            Out.clear();
-            if (Key.empty())
-            {
-                return false;
-            }
-
-            size_t Start = 0;
-            for (size_t i = 0; i < Key.size(); ++i)
-            {
-                if (Key[i] == '.')
-                {
-                    Out.emplace_back(Key.data() + Start, Key.data() + i);
-                    Start = i + 1;
-                }
-            }
-            Out.emplace_back(Key.data() + Start, Key.data() + Key.size());
-            return !Out.empty();
-        }
+        auto It = SettingsDefaults.Find(SettingsClass);
+        return It == nullptr ? nullptr : (*It);
     }
 
     void FConfig::LoadPath(FStringView ConfigPath)
@@ -231,145 +225,29 @@ namespace Lumina
                 return;
             }
 
-            FString Result;
-            if (!VFS::ReadFile(Result, Info.VirtualPath))
+            FJsonValue Parsed;
+            if (!ReadJsonFile(FString(*Info.VirtualPath, Info.VirtualPath.Len()), Parsed))
             {
                 return;
             }
-
-            Json Parsed;
-            try
-            {
-                Parsed = Json::parse(Result.c_str());
-            }
-            catch (const std::exception& Ex)
-            {
-                LOG_ERROR("FConfig: failed to parse {0} ({1})", Info.VirtualPath.c_str(), Ex.what());
-                return;
-            }
-
-            FString FilePath(Info.VirtualPath.c_str(), Info.VirtualPath.size());
-            FileConfigs[FilePath] = Parsed;
-
-            IndexPathsForFile(Parsed, FString(), FilePath);
 
             // Later files take precedence, which is the intended project-overrides-engine layering.
-            for (auto It = Parsed.begin(); It != Parsed.end(); ++It)
+            for (const FJsonMember& Member : Parsed.Members())
             {
-                if (It->is_object() && RootConfig.contains(It.key()) && RootConfig[It.key()].is_object())
+                FJsonValue* Existing = RootConfig.Find(Member.Key.View());
+                if (Member.Value.IsObject() && Existing != nullptr && Existing->IsObject())
                 {
-                    RootConfig[It.key()].merge_patch(*It);
+                    Existing->MergePatch(Member.Value);
                 }
                 else
                 {
-                    RootConfig[It.key()] = *It;
+                    RootConfig.Set(Member.Key.View(), Member.Value);
                 }
             }
         });
     }
 
-    void FConfig::IndexPathsForFile(const Json& Obj, const FString& Prefix, const FString& File)
-    {
-        if (!Obj.is_object())
-        {
-            return;
-        }
-
-        for (auto It = Obj.begin(); It != Obj.end(); ++It)
-        {
-            FString Key = It.key().c_str();
-            FString FullPath = Prefix.empty() ? Key : (Prefix + "." + Key);
-
-            PathToFile[FullPath] = File;
-
-            if (It->is_object())
-            {
-                IndexPathsForFile(*It, FullPath, File);
-            }
-        }
-    }
-
-    const Json* FConfig::GetRaw(FStringView Key) const
-    {
-        return NavigateToNode(Key);
-    }
-
-    bool FConfig::SetRaw(FStringView Key, Json Value)
-    {
-        TVector<FString> Parts;
-        if (!SplitDottedKey(Key, Parts))
-        {
-            return false;
-        }
-
-        FString OwnerFile = FindOwnerFile(Key);
-        if (OwnerFile.empty())
-        {
-            LOG_WARN("FConfig::Set: no owner file for '{0}' (register the setting first or load a config file containing it)", FString(Key.data(), Key.size()).c_str());
-            return false;
-        }
-
-        // Update the unified tree.
-        Json* Current = &RootConfig;
-        for (size_t i = 0; i + 1 < Parts.size(); ++i)
-        {
-            const std::string PartStr = Parts[i].c_str();
-            if (!Current->contains(PartStr) || !(*Current)[PartStr].is_object())
-            {
-                (*Current)[PartStr] = Json::object();
-            }
-            Current = &(*Current)[PartStr];
-        }
-        (*Current)[Parts.back().c_str()] = Value;
-
-        // Mirror into the owner file's tree, then flush.
-        Json& File = FileConfigs[OwnerFile];
-        Current = &File;
-        for (size_t i = 0; i + 1 < Parts.size(); ++i)
-        {
-            const std::string PartStr = Parts[i].c_str();
-            if (!Current->contains(PartStr) || !(*Current)[PartStr].is_object())
-            {
-                (*Current)[PartStr] = Json::object();
-            }
-            Current = &(*Current)[PartStr];
-        }
-        (*Current)[Parts.back().c_str()] = Move(Value);
-
-        // Track the new key so future Get->Set round-trips know its owner.
-        PathToFile[FString(Key.data(), Key.size())] = OwnerFile;
-
-        const std::string Dumped = File.dump(4);
-        return VFS::WriteFile(OwnerFile, FStringView(Dumped.c_str(), Dumped.size()));
-    }
-
-    FString FConfig::FindOwnerFile(FStringView Key) const
-    {
-        // Did this exact key (or any ancestor) come from a known file?
-        FString KeyStr(Key.data(), Key.size());
-        auto It = PathToFile.find(KeyStr);
-        if (It != PathToFile.end())
-        {
-            return It->second;
-        }
-
-        FString Cursor = KeyStr;
-        size_t LastDot = Cursor.find_last_of('.');
-        while (LastDot != FString::npos)
-        {
-            Cursor = Cursor.substr(0, LastDot);
-            It = PathToFile.find(Cursor);
-            if (It != PathToFile.end())
-            {
-                return It->second;
-            }
-            LastDot = Cursor.find_last_of('.');
-        }
-
-        return FString();
-    }
-
-    Json* FConfig::NavigateToNode(FStringView Key, bool bCreate)
+    const FJsonValue* FConfig::NavigateToNode(FStringView Key) const
     {
         TVector<FString> Parts;
         if (!SplitDottedKey(Key, Parts))
@@ -377,32 +255,16 @@ namespace Lumina
             return nullptr;
         }
 
-        Json* Current = &RootConfig;
-        for (size_t i = 0; i < Parts.size(); ++i)
+        const FJsonValue* Current = &RootConfig;
+        for (const FString& Part : Parts)
         {
-            const std::string PartStr = Parts[i].c_str();
-            const bool bLast = (i + 1 == Parts.size());
-
-            if (Current->contains(PartStr))
-            {
-                Current = &(*Current)[PartStr];
-                continue;
-            }
-
-            if (!bCreate)
+            Current = Current->Find(Part.View());
+            if (Current == nullptr)
             {
                 return nullptr;
             }
-
-            (*Current)[PartStr] = bLast ? Json() : Json::object();
-            Current = &(*Current)[PartStr];
         }
         return Current;
-    }
-
-    const Json* FConfig::NavigateToNode(FStringView Key) const
-    {
-        return const_cast<FConfig*>(this)->NavigateToNode(Key, false);
     }
 
 }
@@ -414,30 +276,35 @@ namespace Lumina
         // Keyed by class, so a repointed key means a rebuilt table rather than an in-place write: the old
         // key would keep the bucket its old hash chose and the entry would never be found again.
         THashMap<CClass*, CObject*> RebuiltDefaults;
-        RebuiltDefaults.reserve(SettingsDefaults.size());
+        RebuiltDefaults.Reserve(SettingsDefaults.Num());
         for (const auto& [Class, Snapshot] : SettingsDefaults)
         {
             auto* const NewClass = Cast<CClass>(Func(Class));
             CObject* const NewSnapshot = Func(Snapshot);
             if (NewClass != nullptr)
             {
-                RebuiltDefaults.insert_or_assign(NewClass, NewSnapshot);
+                RebuiltDefaults.Add(NewClass, NewSnapshot);
+            }
+            else if (Snapshot != nullptr)
+            {
+                Snapshot->RemoveFromRoot();
             }
         }
         SettingsDefaults = Move(RebuiltDefaults);
 
-        for (CClass*& Class : DiscoveredSettings)
+        DiscoveredSettings.RemoveAll([&](CClass*& Class)
         {
             Class = Cast<CClass>(Func(Class));
-        }
+            return Class == nullptr;
+        });
 
         THashSet<CClass*> RebuiltLoaded;
-        RebuiltLoaded.reserve(SettingsFileLoaded.size());
+        RebuiltLoaded.Reserve(SettingsFileLoaded.Num());
         for (CClass* Class : SettingsFileLoaded)
         {
             if (auto* const Replacement = Cast<CClass>(Func(Class)))
             {
-                RebuiltLoaded.insert(Replacement);
+                RebuiltLoaded.Add(Replacement);
             }
         }
         SettingsFileLoaded = Move(RebuiltLoaded);

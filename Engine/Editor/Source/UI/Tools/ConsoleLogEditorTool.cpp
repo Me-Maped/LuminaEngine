@@ -22,27 +22,27 @@ namespace Lumina
         bool TryParseSourceLocation(FStringView Text, FString& OutPath, int32& OutLine)
         {
             const FStringView Extension(".cs");
-            for (size_t Dot = Text.find(Extension); Dot != FStringView::npos; Dot = Text.find(Extension, Dot + 1))
+            for (int32 Dot = Text.Find(Extension); Dot != Constants::kIndexNone; Dot = Text.Find(Extension, Dot + 1))
             {
-                const size_t PathEnd = Dot + Extension.size();
+                const int32 PathEnd = Dot + Extension.Len();
 
-                size_t LineStart = FStringView::npos;
-                if (Text.substr(PathEnd).starts_with(FStringView(":line ")))
+                int32 LineStart = Constants::kIndexNone;
+                if (Text.Mid(PathEnd).StartsWith(FStringView(":line ")))
                 {
                     LineStart = PathEnd + 6;
                 }
-                else if (Text.substr(PathEnd).starts_with('('))
+                else if (Text.Mid(PathEnd).StartsWith('('))
                 {
                     LineStart = PathEnd + 1;
                 }
-                if (LineStart == FStringView::npos)
+                if (LineStart == Constants::kIndexNone)
                 {
                     continue;
                 }
 
                 int32 Line = 0;
-                size_t Digit = LineStart;
-                for (; Digit < Text.size() && Text[Digit] >= '0' && Text[Digit] <= '9'; ++Digit)
+                int32 Digit = LineStart;
+                for (; Digit < Text.Len() && Text[Digit] >= '0' && Text[Digit] <= '9'; ++Digit)
                 {
                     Line = Line * 10 + (Text[Digit] - '0');
                 }
@@ -51,12 +51,12 @@ namespace Lumina
                     continue;
                 }
 
-                const size_t Newline = Text.rfind('\n', Dot);
-                const size_t LineBegin = Newline == FStringView::npos ? 0 : Newline + 1;
+                const int32 Newline = Text.FindLast('\n', Dot);
+                const int32 LineBegin = Newline == Constants::kIndexNone ? 0 : Newline + 1;
 
                 // Script paths are absolute, so the start is a drive anchor or the first separator on the line.
-                size_t PathStart = FStringView::npos;
-                for (size_t Index = Dot; Index-- > LineBegin && Index + 2 < Text.size(); )
+                int32 PathStart = Constants::kIndexNone;
+                for (int32 Index = Dot; Index-- > LineBegin && Index + 2 < Text.Len(); )
                 {
                     if (Text[Index + 1] == ':' && (Text[Index + 2] == '\\' || Text[Index + 2] == '/'))
                     {
@@ -64,17 +64,17 @@ namespace Lumina
                         break;
                     }
                 }
-                if (PathStart == FStringView::npos)
+                if (PathStart == Constants::kIndexNone)
                 {
-                    PathStart = Text.find('/', LineBegin);
+                    PathStart = Text.Find('/', LineBegin);
                 }
-                if (PathStart == FStringView::npos || PathStart > Dot)
+                if (PathStart == Constants::kIndexNone || PathStart > Dot)
                 {
                     continue;
                 }
 
-                const FStringView Path = Text.substr(PathStart, PathEnd - PathStart);
-                OutPath.assign(Path.data(), Path.size());
+                const FStringView Path = Text.Mid(PathStart, PathEnd - PathStart);
+                OutPath = FStringView(Path.GetData(), Path.Len());
                 OutLine = Line;
                 return true;
             }
@@ -182,7 +182,7 @@ namespace Lumina
             CWorldEditorSettings* WorldSettings = GetMutableDefault<CWorldEditorSettings>();
             if (ImGui::Checkbox(LOC("Clear on Play"), &WorldSettings->bClearConsoleOnPIE))
             {
-                GConfig->SaveSettings(CWorldEditorSettings::StaticClass());
+                Global::GConfig->SaveSettings(CWorldEditorSettings::StaticClass());
             }
             ImGuiX::TextTooltip(LOCF("Empty the console each time play in editor starts. Also in Editor Settings, World Tool."));
 
@@ -218,7 +218,7 @@ namespace Lumina
         }
 
         ImGui::Separator();
-        ImGui::Text(LOC("Messages: %u / %zu"), FilteredMessageCount, PreviousMessageSize);
+        ImGui::Text("Messages: %d / %d", VisibleRows.Indices.Num(), PreviousMessageSize);
     }
 
     void FConsoleLogEditorTool::DrawLogWindow(bool bIsFocused)
@@ -229,8 +229,8 @@ namespace Lumina
 
         ImGui::Spacing();
 
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.04f, 0.04f, 0.05f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.82f, 0.78f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, EditorColors::FrameBg());
+        ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextPrimary());
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 1));
 
@@ -244,29 +244,20 @@ namespace Lumina
 
         const Logging::FLogQueue& Messages = Logging::GetConsoleLogQueue();
         // A clear from anywhere, such as play starting, leaves the selected queue indices pointing at new lines.
-        if (Messages.size() < PreviousMessageSize)
+        if (Messages.Num() < PreviousMessageSize)
         {
-            SelectedMessages.clear();
+            SelectedMessages.Reset();
             SelectionAnchor = -1;
         }
-        PreviousMessageSize = Messages.size();
+        PreviousMessageSize = Messages.Num();
 
         if (Settings.FontScale != 1.0f)
         {
             ImGui::PushFontSize(ImGui::GetFontSize() * Settings.FontScale);
         }
 
-        // Cheap, since it holds indices only and allocates nothing beyond vector growth
-        TVector<uint32> VisibleIndices;
-        VisibleIndices.reserve(Messages.size());
-        for (size_t i = 0; i < Messages.size(); ++i)
-        {
-            if (Filter.PassesFilter(Messages[i]))
-            {
-                VisibleIndices.push_back((uint32)i);
-            }
-        }
-        FilteredMessageCount = (uint32)VisibleIndices.size();
+        VisibleRows.Refresh(Messages, Filter);
+        const TVector<uint32>& VisibleIndices = VisibleRows.Indices;
 
         // Wrap disables clipper; full iteration is still cheaper than a table.
         const bool bUseClipper = !Settings.bWordWrap;
@@ -288,7 +279,7 @@ namespace Lumina
 
             if (Settings.bShowTimestamps)
             {
-                ImGui::TextColored(EditorColors::TextMuted(), LOC("[%s]"), Message.Time.c_str());
+                ImGui::TextColored(EditorColors::TextMuted(), "[%s]", *Message.Time);
                 ImGui::SameLine(0, 6);
             }
 
@@ -300,7 +291,7 @@ namespace Lumina
 
             if (Settings.bShowLogger)
             {
-                ImGui::TextColored(EditorColors::TextDim(), LOC("%s:"), Message.LoggerName.data());
+                ImGui::TextColored(EditorColors::TextDim(), "%s:", Message.LoggerName.GetData());
                 ImGui::SameLine(0, 6);
             }
 
@@ -308,21 +299,21 @@ namespace Lumina
             {
                 ImGui::PushStyleColor(ImGuiCol_Text, Color);
                 ImGui::PushTextWrapPos(0.0f);
-                ImGui::TextUnformatted(Message.Message.c_str());
+                ImGui::TextUnformatted(*Message.Message);
                 ImGui::PopTextWrapPos();
                 ImGui::PopStyleColor();
             }
             else
             {
-                ImGui::TextColored(Color, "%s", Message.Message.c_str());
+                ImGui::TextColored(Color, "%s", *Message.Message);
             }
 
             const ImVec2 RowMax(RowRight, ImGui::GetCursorScreenPos().y);
 
-            if (SelectedMessages.find(Index) != SelectedMessages.end())
+            if (SelectedMessages.Contains(Index))
             {
                 RowDrawList->ChannelsSetCurrent(0);
-                RowDrawList->AddRectFilled(RowMin, RowMax, IM_COL32(38, 79, 120, 255));
+                RowDrawList->AddRectFilled(RowMin, RowMax, EditorColors::U32(EditorColors::WithAlpha(EditorColors::Accent(), 0.35f)));
                 RowDrawList->ChannelsSetCurrent(1);
             }
 
@@ -335,19 +326,19 @@ namespace Lumina
                 if (bHasSource)
                 {
                     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                    ImGui::SetTooltip(LOC("Double-click to open %s at line %d"), SourcePath.c_str(), SourceLine);
+                    ImGui::SetTooltip("Double-click to open %s at line %d", *SourcePath, SourceLine);
                 }
 
                 if (bHasSource && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                 {
-                    FEditorUI::OpenScriptInExternalEditor(FStringView(SourcePath.c_str(), SourcePath.size()), SourceLine);
+                    ToolContext->OpenScriptInExternalEditor(FStringView(*SourcePath, SourcePath.Len()), SourceLine);
                 }
                 else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 {
                     HandleRowClick(Index, VisibleIndices);
                 }
                 else if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)
-                    && SelectedMessages.find(Index) == SelectedMessages.end())
+                    && !SelectedMessages.Contains(Index))
                 {
                     // Right-clicking outside the selection retargets it, matching every list view.
                     HandleRowClick(Index, VisibleIndices);
@@ -358,7 +349,7 @@ namespace Lumina
         if (bUseClipper)
         {
             ImGuiListClipper Clipper;
-            Clipper.Begin((int)VisibleIndices.size());
+            Clipper.Begin(VisibleIndices.Num());
             while (Clipper.Step())
             {
                 for (int Row = Clipper.DisplayStart; Row < Clipper.DisplayEnd; ++Row)
@@ -385,28 +376,28 @@ namespace Lumina
 
             if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C))
             {
-                CopyToClipboard(VisibleIndices, !SelectedMessages.empty());
+                CopyToClipboard(VisibleIndices, !SelectedMessages.IsEmpty());
             }
 
             if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A))
             {
-                SelectedMessages.clear();
+                SelectedMessages.Reset();
                 for (uint32 Visible : VisibleIndices)
                 {
-                    SelectedMessages.insert(Visible);
+                    SelectedMessages.Add(Visible);
                 }
             }
 
             if (ImGui::IsKeyPressed(ImGuiKey_Escape))
             {
-                SelectedMessages.clear();
+                SelectedMessages.Reset();
                 SelectionAnchor = -1;
             }
         }
 
         if (ImGui::BeginPopupContextWindow("##LogContext"))
         {
-            const size_t SelectedCount = SelectedMessages.size();
+            const int32 SelectedCount = SelectedMessages.Num();
 
             if (ImGui::MenuItem(LOC("Copy"), "Ctrl+C", false, SelectedCount > 0))
             {
@@ -422,7 +413,7 @@ namespace Lumina
             int32   SourceLine = 0;
             for (uint32 Selected : SelectedMessages)
             {
-                if (Selected < Messages.size() && TryParseSourceLocation(Messages[Selected].Message, SourcePath, SourceLine))
+                if (Selected < static_cast<uint32>(Messages.Num()) && TryParseSourceLocation(Messages[Selected].Message, SourcePath, SourceLine))
                 {
                     break;
                 }
@@ -430,23 +421,23 @@ namespace Lumina
 
             if (ImGui::MenuItem(LOC("Open Source"), nullptr, false, SourceLine > 0))
             {
-                FEditorUI::OpenScriptInExternalEditor(FStringView(SourcePath.c_str(), SourcePath.size()), SourceLine);
+                ToolContext->OpenScriptInExternalEditor(FStringView(*SourcePath, SourcePath.Len()), SourceLine);
             }
 
             ImGui::Separator();
 
             if (ImGui::MenuItem(LOC("Select All"), "Ctrl+A"))
             {
-                SelectedMessages.clear();
+                SelectedMessages.Reset();
                 for (uint32 Visible : VisibleIndices)
                 {
-                    SelectedMessages.insert(Visible);
+                    SelectedMessages.Add(Visible);
                 }
             }
 
             if (ImGui::MenuItem(LOC("Clear Selection"), "Esc", false, SelectedCount > 0))
             {
-                SelectedMessages.clear();
+                SelectedMessages.Reset();
                 SelectionAnchor = -1;
             }
 
@@ -470,11 +461,11 @@ namespace Lumina
     
         ImGui::Spacing();
 
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.04f, 0.04f, 0.05f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.95f, 0.85f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, EditorColors::FrameBg());
+        ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextPrimary());
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 4));
 
-        ImGui::TextColored(ImVec4(0.45f, 0.90f, 0.45f, 1.0f), ">");
+        ImGui::TextColored(EditorColors::Success(), ">");
         ImGui::SameLine(0, 6);
         ImGui::SetNextItemWidth(-1);
 
@@ -512,14 +503,14 @@ namespace Lumina
         if (bExecuteCommand)
         {
             FStringView Command(InputBuffer);
-            if (!Command.empty())
+            if (!Command.IsEmpty())
             {
                 ProcessCommand(Command);
                 AddCommandToHistory(Command);
                 InputBuffer[0] = '\0';
                 bNeedsScrollToBottom = true;
                 bShowAutoComplete = false;
-                AutoCompleteCandidates.clear();
+                AutoCompleteCandidates.Reset();
             }
             bFocusInput = true;
         }
@@ -529,7 +520,7 @@ namespace Lumina
             if (bShowAutoComplete)
             {
                 bShowAutoComplete = false;
-                AutoCompleteCandidates.clear();
+                AutoCompleteCandidates.Reset();
             }
             else if (bShowHistory)
             {
@@ -549,7 +540,7 @@ namespace Lumina
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(2);
 
-        if (bShowAutoComplete && !AutoCompleteCandidates.empty())
+        if (bShowAutoComplete && !AutoCompleteCandidates.IsEmpty())
         {
             DrawAutoCompletePopup();
         }
@@ -590,11 +581,11 @@ namespace Lumina
                 if (bPendingBufferReplacement)
                 {
                     Data->DeleteChars(0, Data->BufTextLen);
-                    Data->InsertChars(0, PendingBufferReplacement.c_str());
+                    Data->InsertChars(0, *PendingBufferReplacement);
                     Data->CursorPos = Data->BufTextLen;
                     Data->SelectionStart = Data->SelectionEnd = Data->CursorPos;
                     bPendingBufferReplacement = false;
-                    PendingBufferReplacement.clear();
+                    PendingBufferReplacement.Reset();
                 }
                 break;
             }
@@ -606,37 +597,37 @@ namespace Lumina
             }
             case ImGuiInputTextFlags_CallbackCompletion:
             {
-                if (bShowAutoComplete && !AutoCompleteCandidates.empty())
+                if (bShowAutoComplete && !AutoCompleteCandidates.IsEmpty())
                 {
                     int32 Index = AutoCompleteSelectedIndex;
-                    if (Index < 0 || Index >= (int32)AutoCompleteCandidates.size())
+                    if (Index < 0 || Index >= AutoCompleteCandidates.Num())
                     {
                         Index = 0;
                     }
 
                     FStringView Replacement = AutoCompleteCandidates[Index].Name;
                     Data->DeleteChars(0, Data->BufTextLen);
-                    Data->InsertChars(0, Replacement.data(), Replacement.data() + Replacement.size());
+                    Data->InsertChars(0, Replacement.GetData(), Replacement.GetData() + Replacement.Len());
                     Data->CursorPos = Data->BufTextLen;
                     bShowAutoComplete = false;
-                    AutoCompleteCandidates.clear();
+                    AutoCompleteCandidates.Reset();
                 }
                 break;
             }
             case ImGuiInputTextFlags_CallbackHistory:
             {
-                if (bShowAutoComplete && !AutoCompleteCandidates.empty())
+                if (bShowAutoComplete && !AutoCompleteCandidates.IsEmpty())
                 {
                     if (Data->EventKey == ImGuiKey_DownArrow)
                     {
-                        AutoCompleteSelectedIndex = (AutoCompleteSelectedIndex + 1) % (int32)AutoCompleteCandidates.size();
+                        AutoCompleteSelectedIndex = (AutoCompleteSelectedIndex + 1) % AutoCompleteCandidates.Num();
                     }
                     else if (Data->EventKey == ImGuiKey_UpArrow)
                     {
                         AutoCompleteSelectedIndex--;
                         if (AutoCompleteSelectedIndex < 0)
                         {
-                            AutoCompleteSelectedIndex = (int32)AutoCompleteCandidates.size() - 1;
+                            AutoCompleteSelectedIndex = AutoCompleteCandidates.Num() - 1;
                         }
                     }
                 }
@@ -654,13 +645,13 @@ namespace Lumina
 
                     if (HistoryIndex != PrevHistoryIndex)
                     {
-                        const FString& Replacement = (HistoryIndex < CommandHistory.size())
-                            ? CommandHistory[HistoryIndex]
+                        const FString& Replacement = (HistoryIndex < static_cast<uint64>(CommandHistory.Num()))
+                            ? CommandHistory[static_cast<int32>(HistoryIndex)]
                             : FString();
                         Data->DeleteChars(0, Data->BufTextLen);
-                        if (!Replacement.empty())
+                        if (!Replacement.IsEmpty())
                         {
-                            Data->InsertChars(0, Replacement.c_str());
+                            Data->InsertChars(0, *Replacement);
                         }
                         Data->CursorPos = Data->BufTextLen;
                     }
@@ -674,10 +665,10 @@ namespace Lumina
 
     void FConsoleLogEditorTool::ApplyCompletion(FStringView Replacement)
     {
-        PendingBufferReplacement.assign(Replacement.data(), Replacement.size());
+        PendingBufferReplacement = FStringView(Replacement.GetData(), Replacement.Len());
         bPendingBufferReplacement = true;
         bShowAutoComplete = false;
-        AutoCompleteCandidates.clear();
+        AutoCompleteCandidates.Reset();
         bFocusInput = true;
     }
 
@@ -685,13 +676,13 @@ namespace Lumina
     {
         switch (Level)
         {
-            case ELogLevel::Error:      return ImVec4(0.95f, 0.25f, 0.25f, 1.0f);
-            case ELogLevel::Warn:     return ImVec4(1.00f, 0.70f, 0.20f, 1.0f);
-            case ELogLevel::Info:     return ImVec4(0.90f, 0.90f, 0.90f, 1.0f);
-            case ELogLevel::Debug:    return ImVec4(0.45f, 0.80f, 1.00f, 1.0f);
-            case ELogLevel::Trace:    return ImVec4(0.55f, 0.55f, 0.55f, 1.0f);
-            case ELogLevel::Critical: return ImVec4(1.00f, 0.10f, 0.10f, 1.0f);
-            default:                      return ImVec4(0.80f, 0.80f, 0.80f, 1.0f);
+            case ELogLevel::Error:
+            case ELogLevel::Critical: return EditorColors::Danger();
+            case ELogLevel::Warn:     return EditorColors::Warning();
+            case ELogLevel::Info:     return EditorColors::TextPrimary();
+            case ELogLevel::Debug:    return EditorColors::Accent();
+            case ELogLevel::Trace:    return EditorColors::TextMuted();
+            default:                  return EditorColors::TextDim();
         }
     }
 
@@ -702,26 +693,26 @@ namespace Lumina
 
     void FConsoleLogEditorTool::AddCommandToHistory(FStringView Command)
     {
-        if (!CommandHistory.empty() && CommandHistory.back() == Command)
+        if (!CommandHistory.IsEmpty() && CommandHistory.Last() == Command)
         {
-            HistoryIndex = CommandHistory.size();
+            HistoryIndex = CommandHistory.Num();
             return;
         }
 
-        CommandHistory.push_back(FString(Command));
+        CommandHistory.PushLast(FString(Command));
 
-        constexpr size_t MaxHistory = 100;
-        if (CommandHistory.size() > MaxHistory)
+        constexpr int32 MaxHistory = 100;
+        if (CommandHistory.Num() > MaxHistory)
         {
-            CommandHistory.pop_front();
+            CommandHistory.PopFirst();
         }
         
-        HistoryIndex = CommandHistory.size();
+        HistoryIndex = CommandHistory.Num();
     }
 
     void FConsoleLogEditorTool::NavigateHistory(int32 Direction)
     {
-        if (CommandHistory.empty())
+        if (CommandHistory.IsEmpty())
         {
             return;
         }
@@ -735,7 +726,7 @@ namespace Lumina
         }
         else if (Direction > 0)
         {
-            if (HistoryIndex < CommandHistory.size())
+            if (HistoryIndex < static_cast<uint64>(CommandHistory.Num()))
             {
                 HistoryIndex++;
             }
@@ -755,10 +746,10 @@ namespace Lumina
 
     void FConsoleLogEditorTool::UpdateAutoComplete(FStringView CurrentInput)
     {
-        AutoCompleteCandidates.clear();
+        AutoCompleteCandidates.Reset();
         AutoCompleteSelectedIndex = 0;
 
-        if (CurrentInput.empty())
+        if (CurrentInput.IsEmpty())
         {
             bShowAutoComplete = false;
             return;
@@ -773,9 +764,9 @@ namespace Lumina
             {
                 TOptional<FString> Value = Registry.GetValueAsString(Name);
 
-                if (Value.has_value())
+                if (Value.IsSet())
                 {
-                    AutoCompleteCandidates.emplace_back(Name, Var.Hint, Value.value(), Score);
+                    AutoCompleteCandidates.Emplace(Name, Var.Hint, Value.GetValue(), Score);
                 }
             }
         }
@@ -785,7 +776,7 @@ namespace Lumina
             float Score = CalculateMatchScore(Name, CurrentInput);
             if (Score > 0.0f)
             {
-                AutoCompleteCandidates.emplace_back(Name, Cmd.Hint, FString(), Score);
+                AutoCompleteCandidates.Emplace(Name, Cmd.Hint, FString(), Score);
             }
         }
 
@@ -794,12 +785,12 @@ namespace Lumina
             return A.MatchScore > B.MatchScore;
         });
 
-        if (AutoCompleteCandidates.size() > 10)
+        if (AutoCompleteCandidates.Num() > 10)
         {
-            AutoCompleteCandidates.resize(10);
+            AutoCompleteCandidates.SetNum(10);
         }
 
-        bShowAutoComplete = !AutoCompleteCandidates.empty();
+        bShowAutoComplete = !AutoCompleteCandidates.IsEmpty();
     }
 
     void FConsoleLogEditorTool::DrawAutoCompletePopup()
@@ -812,17 +803,17 @@ namespace Lumina
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 4));
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.12f, 0.14f, 0.98f));
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.3f, 0.3f, 0.35f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, EditorColors::PanelBg());
+        ImGui::PushStyleColor(ImGuiCol_Border, EditorColors::Border());
 
         if (ImGui::BeginChild("##AutoComplete", ImVec2(InputWidth, 0.0f),
             ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
             ImGuiWindowFlags_NoNavFocus))
         {
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), LOC("Auto-Complete (%zu matches)"), AutoCompleteCandidates.size());
+            ImGui::TextColored(EditorColors::TextDim(), "Auto-Complete (%d matches)", AutoCompleteCandidates.Num());
             ImGui::Separator();
 
-            for (int32 i = 0; i < (int32)AutoCompleteCandidates.size(); ++i)
+            for (int32 i = 0; i < AutoCompleteCandidates.Num(); ++i)
             {
                 const FAutoCompleteCandidate& Candidate = AutoCompleteCandidates[i];
                 
@@ -830,7 +821,7 @@ namespace Lumina
                 
                 if (bIsSelected)
                 {
-                    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.5f, 0.8f, 0.8f));
+                    ImGui::PushStyleColor(ImGuiCol_Header, EditorColors::WithAlpha(EditorColors::Accent(), 0.8f));
                 }
 
                 ImGui::PushID(i);
@@ -842,18 +833,18 @@ namespace Lumina
 
                 ImGui::SameLine(0, 4);
 
-                ImGui::TextColored(ImVec4(0.8f, 1.0f, 0.8f, 1.0f), "%s", Candidate.Name.data());
+                ImGui::TextColored(EditorColors::TextPrimary(), "%s", Candidate.Name.GetData());
                 
-                if (!Candidate.CurrentValue.empty())
+                if (!Candidate.CurrentValue.IsEmpty())
                 {
                     ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(0.5f, 0.7f, 1.0f, 1.0f), LOC("= %s"), Candidate.CurrentValue.c_str());
+                    ImGui::TextColored(EditorColors::Accent(), "= %s", *Candidate.CurrentValue);
                 }
 
-                if (!Candidate.Description.empty())
+                if (!Candidate.Description.IsEmpty())
                 {
                     ImGui::Indent(20.0f);
-                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "%s", Candidate.Description.data());
+                    ImGui::TextColored(EditorColors::TextMuted(), "%s", Candidate.Description.GetData());
                     ImGui::Unindent(20.0f);
                 }
 
@@ -866,10 +857,7 @@ namespace Lumina
             }
 
             ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "%s  %s  %s",
-                LOC_ICON(LE_ICON_ARROW_UP_DOWN, "Navigate"),
-                LOC_ICON(LE_ICON_KEYBOARD_TAB, "Accept"),
-                LOC_ICON(LE_ICON_KEYBOARD_ESC, "Cancel"));
+            ImGui::TextColored(EditorColors::TextMuted(), LE_ICON_ARROW_UP_DOWN " Navigate  " LE_ICON_KEYBOARD_TAB " Accept  " LE_ICON_KEYBOARD_ESC " Cancel");
         }
         AutoCompleteOverlayHeight = ImGui::GetWindowHeight();
         ImGui::EndChild();
@@ -887,18 +875,18 @@ namespace Lumina
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 3));
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.12f, 0.14f, 0.98f));
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.3f, 0.3f, 0.35f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, EditorColors::PanelBg());
+        ImGui::PushStyleColor(ImGuiCol_Border, EditorColors::Border());
 
         if (ImGui::BeginChild("##CommandHistory", ImVec2(InputWidth, Height),
             ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding))
         {
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), LOC_ICON(LE_ICON_HISTORY, "Command History (%zu)"), CommandHistory.size());
+            ImGui::TextColored(EditorColors::TextDim(), LE_ICON_HISTORY " Command History (%d)", CommandHistory.Num());
             
             ImGui::SameLine();
             if (ImGui::SmallButton(LOC("Clear")))
             {
-                CommandHistory.clear();
+                CommandHistory.Reset();
                 HistoryIndex = 0;
             }
 
@@ -906,13 +894,13 @@ namespace Lumina
 
             ImGui::BeginChild("##HistoryList", ImVec2(0, 0), false);
 
-            if (CommandHistory.empty())
+            if (CommandHistory.IsEmpty())
             {
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), LOC("No command history"));
+                ImGui::TextColored(EditorColors::TextMuted(), "No command history");
             }
             else
             {
-                for (int32 i = (int32)CommandHistory.size() - 1; i >= 0; --i)
+                for (int32 i = CommandHistory.Num() - 1; i >= 0; --i)
                 {
                     const FString& Cmd = CommandHistory[i];
                     
@@ -920,7 +908,7 @@ namespace Lumina
                     
                     bool bIsSelected = (i == (int32)HistoryIndex);
                     
-                    if (ImGui::Selectable(Cmd.c_str(), bIsSelected))
+                    if (ImGui::Selectable(*Cmd, bIsSelected))
                     {
                         ApplyCompletion(Cmd);
                         bShowHistory = false;
@@ -947,29 +935,29 @@ namespace Lumina
     
     float FConsoleLogEditorTool::CalculateMatchScore(FStringView Candidate, FStringView Input)
     {
-        if (Candidate.empty() || Input.empty())
+        if (Candidate.IsEmpty() || Input.IsEmpty())
         {
             return 0.0f;
         }
         
-        if (Candidate.starts_with(Input))
+        if (Candidate.StartsWith(Input))
         {
             return 1.0f;
         }
 
-        size_t Pos = Candidate.find(Input);
-        if (Pos != FString::npos)
+        int32 Pos = Candidate.Find(Input);
+        if (Pos != Constants::kIndexNone)
         {
-            return 0.7f - static_cast<float>(Pos) / static_cast<float>(Input.size()) * 0.2f;
+            return 0.7f - static_cast<float>(Pos) / static_cast<float>(Input.Len()) * 0.2f;
         }
 
-        size_t CandidatePos = 0;
-        size_t MatchedChars = 0;
+        int32 CandidatePos = 0;
+        int32 MatchedChars = 0;
         
-        for (size_t i = 0; i < Input.size() && CandidatePos < Candidate.size(); ++i)
+        for (int32 i = 0; i < Input.Len() && CandidatePos < Candidate.Len(); ++i)
         {
             char InputChar = (char)std::tolower((unsigned char)Input[i]);
-            while (CandidatePos < Candidate.size())
+            while (CandidatePos < Candidate.Len())
             {
                 if (std::tolower(Candidate[CandidatePos]) == InputChar)
                 {
@@ -981,9 +969,9 @@ namespace Lumina
             }
         }
 
-        if (MatchedChars == Input.size())
+        if (MatchedChars == Input.Len())
         {
-            return 0.5f * static_cast<float>(MatchedChars) / static_cast<float>(Candidate.size());
+            return 0.5f * static_cast<float>(MatchedChars) / static_cast<float>(Candidate.Len());
         }
 
         return 0.0f;
@@ -996,24 +984,24 @@ namespace Lumina
         if (IO.KeyShift && SelectionAnchor >= 0)
         {
             // Range over the visible order, so a filtered-out message between the two is not swept in.
-            size_t AnchorPos = VisibleIndices.size();
-            size_t ClickPos  = VisibleIndices.size();
+            int32 AnchorPos = VisibleIndices.Num();
+            int32 ClickPos  = VisibleIndices.Num();
 
-            for (size_t i = 0; i < VisibleIndices.size(); ++i)
+            for (int32 i = 0; i < VisibleIndices.Num(); ++i)
             {
                 if (VisibleIndices[i] == (uint32)SelectionAnchor) { AnchorPos = i; }
                 if (VisibleIndices[i] == MessageIndex)            { ClickPos  = i; }
             }
 
-            if (AnchorPos < VisibleIndices.size() && ClickPos < VisibleIndices.size())
+            if (AnchorPos < VisibleIndices.Num() && ClickPos < VisibleIndices.Num())
             {
-                const size_t Begin = AnchorPos < ClickPos ? AnchorPos : ClickPos;
-                const size_t End   = AnchorPos < ClickPos ? ClickPos  : AnchorPos;
+                const int32 Begin = AnchorPos < ClickPos ? AnchorPos : ClickPos;
+                const int32 End   = AnchorPos < ClickPos ? ClickPos  : AnchorPos;
 
-                SelectedMessages.clear();
-                for (size_t i = Begin; i <= End; ++i)
+                SelectedMessages.Reset();
+                for (int32 i = Begin; i <= End; ++i)
                 {
-                    SelectedMessages.insert(VisibleIndices[i]);
+                    SelectedMessages.Add(VisibleIndices[i]);
                 }
                 return;
             }
@@ -1021,19 +1009,19 @@ namespace Lumina
 
         if (IO.KeyCtrl)
         {
-            if (SelectedMessages.find(MessageIndex) != SelectedMessages.end())
+            if (SelectedMessages.Contains(MessageIndex))
             {
-                SelectedMessages.erase(MessageIndex);
+                SelectedMessages.Remove(MessageIndex);
             }
             else
             {
-                SelectedMessages.insert(MessageIndex);
+                SelectedMessages.Add(MessageIndex);
             }
         }
         else
         {
-            SelectedMessages.clear();
-            SelectedMessages.insert(MessageIndex);
+            SelectedMessages.Reset();
+            SelectedMessages.Add(MessageIndex);
         }
 
         SelectionAnchor = (int32)MessageIndex;
@@ -1045,17 +1033,17 @@ namespace Lumina
         if (Settings.bShowTimestamps)
         {
             Out += "[";
-            Out += Message.Time.c_str();
+            Out += *Message.Time;
             Out += "] ";
         }
 
         if (Settings.bShowLogger)
         {
-            Out.append(Message.LoggerName.data(), Message.LoggerName.size());
+            Out.Append(Message.LoggerName.GetData(), Message.LoggerName.Len());
             Out += ": ";
         }
 
-        Out += Message.Message.c_str();
+        Out += *Message.Message;
         Out += "\n";
     }
 
@@ -1068,20 +1056,20 @@ namespace Lumina
         // Walk the visible order rather than the set, so copied lines come out in the order shown.
         for (uint32 Index : VisibleIndices)
         {
-            if (bSelectionOnly && SelectedMessages.find(Index) == SelectedMessages.end())
+            if (bSelectionOnly && !SelectedMessages.Contains(Index))
             {
                 continue;
             }
 
-            if (Index < Messages.size())
+            if (Index < static_cast<uint32>(Messages.Num()))
             {
                 AppendMessageText(Text, Messages[Index]);
             }
         }
 
-        if (!Text.empty())
+        if (!Text.IsEmpty())
         {
-            ImGui::SetClipboardText(Text.c_str());
+            ImGui::SetClipboardText(*Text);
         }
     }
 

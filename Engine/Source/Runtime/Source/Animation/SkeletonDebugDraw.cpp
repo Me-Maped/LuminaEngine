@@ -1,5 +1,6 @@
 ﻿#include "RuntimePCH.h"
 #include "SkeletonDebugDraw.h"
+#include "Animation/BindPose.h"
 #include "World/ECS/Registry.h"
 
 #include "Assets/AssetTypes/Mesh/Skeleton/Skeleton.h"
@@ -22,7 +23,7 @@ namespace Lumina::SkeletonDebugDraw
                                      TVector<FMatrix4>& OutGlobals)
     {
         const int32 NumBones = Skeleton ? Skeleton->GetNumBones() : 0;
-        OutGlobals.resize(NumBones);
+        OutGlobals.SetNum(NumBones);
         if (NumBones == 0)
         {
             return;
@@ -31,13 +32,11 @@ namespace Lumina::SkeletonDebugDraw
         const bool bHasBinds = Skeleton->HasBindGlobalMatrices();
 
         // Live pose has Global*InvBind; recover model-space by undoing InvBind.
-        if ((int32)BoneTransforms.size() == NumBones)
+        if (BoneTransforms.Num() == NumBones)
         {
             for (int32 i = 0; i < NumBones; ++i)
             {
-                const FMatrix4 Bind = bHasBinds ? Skeleton->BindGlobalMatrices[i]
-                                                : Math::Inverse(Skeleton->GetBone(i).InvBindMatrix);
-                OutGlobals[i] = BoneTransforms[i] * Bind;
+                OutGlobals[i] = BoneTransforms[i] * AnimPose::GetBindGlobalMatrix(Skeleton, i);
             }
         }
         else if (bHasBinds)
@@ -110,32 +109,44 @@ namespace Lumina::SkeletonDebugDraw
             V += VertexCount;
         }
 
-        void WriteOctahedralBone(FSimpleElementVertex*& V, const FVector3& From, const FVector3& To, uint32 Color)
-        {
-            const FVector3 Axis  = To - From;
-            const float    LenSq = Math::Dot(Axis, Axis);
-            if (LenSq < 1e-10f)
-            {
-                WritePadLines(V, kOctahedralLines);
-                return;
-            }
+        constexpr float kMinBoneLengthSq = 1e-10f;
 
+        constexpr FVector4 kAxisColors[3] =
+        {
+            FVector4(1.00f, 0.25f, 0.25f, 1.0f),
+            FVector4(0.35f, 1.00f, 0.35f, 1.0f),
+            FVector4(0.35f, 0.55f, 1.00f, 1.0f),
+        };
+
+        void BuildOctahedralRidge(const FVector3& From, const FVector3& Axis, float LenSq, FVector3 (&OutRidge)[4])
+        {
             const float    Length = Math::Sqrt(LenSq);
             const FVector3 Dir    = Axis / Length;
-            FVector3       Up     = (fabsf(Dir.y) < 0.99f) ? FVector3(0, 1, 0) : FVector3(1, 0, 0);
+            FVector3       Up     = (Math::Abs(Dir.y) < 0.99f) ? FVector3(0, 1, 0) : FVector3(1, 0, 0);
             const FVector3 Side   = Math::Normalize(Math::Cross(Dir, Up));
             Up                    = Math::Normalize(Math::Cross(Side, Dir));
 
             const float    RidgeRadius = Math::Clamp(Length * 0.10f, 0.006f, 0.05f);
             const FVector3 Center      = From + Dir * (Length * 0.18f);
 
-            const FVector3 R[4] =
+            OutRidge[0] = Center + Side * RidgeRadius;
+            OutRidge[1] = Center + Up   * RidgeRadius;
+            OutRidge[2] = Center - Side * RidgeRadius;
+            OutRidge[3] = Center - Up   * RidgeRadius;
+        }
+
+        void WriteOctahedralBone(FSimpleElementVertex*& V, const FVector3& From, const FVector3& To, uint32 Color)
+        {
+            const FVector3 Axis  = To - From;
+            const float    LenSq = Math::Dot(Axis, Axis);
+            if (LenSq < kMinBoneLengthSq)
             {
-                Center + Side * RidgeRadius,
-                Center + Up   * RidgeRadius,
-                Center - Side * RidgeRadius,
-                Center - Up   * RidgeRadius,
-            };
+                WritePadLines(V, kOctahedralLines);
+                return;
+            }
+
+            FVector3 R[4];
+            BuildOctahedralRidge(From, Axis, LenSq, R);
 
             for (uint32 k = 0; k < 4; ++k)
             {
@@ -189,10 +200,10 @@ namespace Lumina::SkeletonDebugDraw
             const bool bJoints = Options.bJoints && bFull;
             const bool bShaped = Options.bOctahedral && (Job.Detail != EDetail::Sticks);
 
-            Scratch.Positions.resize(NumBones);
+            Scratch.Positions.SetNum(NumBones);
             if (bAxes)
             {
-                Scratch.Bases.resize(NumBones);
+                Scratch.Bases.SetNum(NumBones);
             }
 
             uint32 NumParented = 0;
@@ -233,9 +244,9 @@ namespace Lumina::SkeletonDebugDraw
             const uint32 BoneColor  = PackColor(Options.BoneColor);
             const uint32 RootColor  = PackColor(Options.RootColor);
             const uint32 JointColor = PackColor(Options.JointColor);
-            const uint32 AxisXColor = PackColor(FVector4(1.00f, 0.25f, 0.25f, 1.0f));
-            const uint32 AxisYColor = PackColor(FVector4(0.35f, 1.00f, 0.35f, 1.0f));
-            const uint32 AxisZColor = PackColor(FVector4(0.35f, 0.55f, 1.00f, 1.0f));
+            const uint32 AxisXColor = PackColor(kAxisColors[0]);
+            const uint32 AxisYColor = PackColor(kAxisColors[1]);
+            const uint32 AxisZColor = PackColor(kAxisColors[2]);
 
             for (int32 i = 0; i < NumBones; ++i)
             {
@@ -285,7 +296,7 @@ namespace Lumina::SkeletonDebugDraw
         }
 
         const int32 NumBones = Skeleton->GetNumBones();
-        if ((int32)GlobalBoneTransforms.size() != NumBones)
+        if (GlobalBoneTransforms.Num() != NumBones)
         {
             return;
         }
@@ -302,23 +313,10 @@ namespace Lumina::SkeletonDebugDraw
                 const FVector3 Axis      = Position - ParentPos;
                 const float    LenSq     = Math::Dot(Axis, Axis);
 
-                if (Options.bOctahedral && LenSq >= 1e-10f)
+                if (Options.bOctahedral && LenSq >= kMinBoneLengthSq)
                 {
-                    const float    Length = Math::Sqrt(LenSq);
-                    const FVector3 Dir    = Axis / Length;
-                    FVector3       Up     = (fabsf(Dir.y) < 0.99f) ? FVector3(0, 1, 0) : FVector3(1, 0, 0);
-                    const FVector3 Side   = Math::Normalize(Math::Cross(Dir, Up));
-                    Up                    = Math::Normalize(Math::Cross(Side, Dir));
-
-                    const float    RidgeRadius = Math::Clamp(Length * 0.10f, 0.006f, 0.05f);
-                    const FVector3 Center      = ParentPos + Dir * (Length * 0.18f);
-                    const FVector3 R[4] =
-                    {
-                        Center + Side * RidgeRadius,
-                        Center + Up   * RidgeRadius,
-                        Center - Side * RidgeRadius,
-                        Center - Up   * RidgeRadius,
-                    };
+                    FVector3 R[4];
+                    BuildOctahedralRidge(ParentPos, Axis, LenSq, R);
 
                     for (int k = 0; k < 4; ++k)
                     {
@@ -346,9 +344,9 @@ namespace Lumina::SkeletonDebugDraw
                 const FVector3 AxisX = Math::Normalize(FVector3(WorldBone[0])) * Options.AxisLength;
                 const FVector3 AxisY = Math::Normalize(FVector3(WorldBone[1])) * Options.AxisLength;
                 const FVector3 AxisZ = Math::Normalize(FVector3(WorldBone[2])) * Options.AxisLength;
-                DrawInterface->DrawLine(Position, Position + AxisX, FVector4(1.0f, 0.25f, 0.25f, 1.0f), 1.5f, Options.bDepthTest);
-                DrawInterface->DrawLine(Position, Position + AxisY, FVector4(0.35f, 1.0f, 0.35f, 1.0f), 1.5f, Options.bDepthTest);
-                DrawInterface->DrawLine(Position, Position + AxisZ, FVector4(0.35f, 0.55f, 1.0f, 1.0f), 1.5f, Options.bDepthTest);
+                DrawInterface->DrawLine(Position, Position + AxisX, kAxisColors[0], 1.5f, Options.bDepthTest);
+                DrawInterface->DrawLine(Position, Position + AxisY, kAxisColors[1], 1.5f, Options.bDepthTest);
+                DrawInterface->DrawLine(Position, Position + AxisZ, kAxisColors[2], 1.5f, Options.bDepthTest);
             }
         }
     }
@@ -384,7 +382,7 @@ namespace Lumina::SkeletonDebugDraw
                 FSkeletonJob Job;
                 Job.MeshWorld = View.Get<STransformComponent>(Entity).GetWorldMatrix();
                 Job.Skeleton  = Skeleton;
-                Job.Pose      = ((int32)Mesh.BoneTransforms.size() == Skeleton->GetNumBones()) ? &Mesh.BoneTransforms : nullptr;
+                Job.Pose      = ((int32)Mesh.BoneTransforms.Num() == Skeleton->GetNumBones()) ? &Mesh.BoneTransforms : nullptr;
 
                 const SAABB LocalBounds = SkeletalMesh->GetAABB();
                 if (State != nullptr && LocalBounds.IsValid())
@@ -440,12 +438,10 @@ namespace Lumina::SkeletonDebugDraw
             return;
         }
 
-        // Game thread only, so one persistent list keeps the gather off the allocator every frame.
-        static TVector<FSkeletonJob> Jobs;
-        Jobs.clear();
-        ForEachVisibleSkeleton(World, State, Options, [&](const FSkeletonJob& Job) { Jobs.push_back(Job); });
+        TVector<FSkeletonJob> Jobs;
+        ForEachVisibleSkeleton(World, State, Options, [&](const FSkeletonJob& Job) { Jobs.Add(Job); });
 
-        if (Jobs.empty())
+        if (Jobs.IsEmpty())
         {
             return;
         }
@@ -454,7 +450,7 @@ namespace Lumina::SkeletonDebugDraw
             ? FImmediateLineRenderer::DepthTested
             : FImmediateLineRenderer::XRay;
 
-        Task::ParallelFor((uint32)Jobs.size(), [&](const Task::FParallelRange& Range)
+        Jobs::ParallelFor((uint32)Jobs.Num(), [&](const Jobs::FParallelRange& Range)
         {
             for (uint32 i = Range.Start; i < Range.End; ++i)
             {
@@ -481,7 +477,7 @@ namespace Lumina::SkeletonDebugDraw
             const FSkeletonResource& Skeleton = *Job.Skeleton;
             const int32              NumBones = Skeleton.GetNumBones();
 
-            for (int32 i = 0; i < NumBones && (int32)OutLabels.size() < MaxLabels; ++i)
+            for (int32 i = 0; i < NumBones && OutLabels.Num() < MaxLabels; ++i)
             {
                 const FVector4 Model = Job.Pose ? ((*Job.Pose)[i] * Skeleton.BindGlobalMatrices[i][3])
                                                 : Skeleton.BindGlobalMatrices[i][3];
@@ -493,7 +489,7 @@ namespace Lumina::SkeletonDebugDraw
                     continue;
                 }
 
-                OutLabels.push_back({ Skeleton.GetBone(i).Name, Position });
+                OutLabels.Emplace(Skeleton.GetBone(i).Name, Position);
             }
         });
     }

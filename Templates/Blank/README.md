@@ -10,8 +10,8 @@
 
 ## 首次配置（Windows）
 
-1. 在本文件夹中运行 `GenerateProject.bat`。它会在本机找到引擎，并为本项目运行该引擎的 `LuminaBuild.bat GenerateProjectFiles`，写出 `$PROJECTNAME.sln`。
-2. 在 **Visual Studio** 或 **JetBrains Rider** 中打开 `$PROJECTNAME.sln`。
+1. 在本文件夹中运行 `GenerateProject.bat`。它会在本机找到引擎，并为本项目运行该引擎的 `LuminaBuild.bat GenerateProjectFiles`，写出 `$PROJECTNAME.slnx`。
+2. 在 **Visual Studio** 或 **JetBrains Rider** 中打开 `$PROJECTNAME.slnx`。
 3. 按 **F5**。
 
 F5 会构建游戏 DLL（`Binaries\Windows64\$PROJECTNAME-Development.dll`），并启动已预加载本项目的
@@ -57,7 +57,7 @@ clangd、CLion 以及 VS Code 的 clangd 扩展会读取它来实现补全。
 
 ```
 $PROJECTNAME.lproject          项目描述符（名称、GUID、插件）
-GenerateProject.bat            在增删源文件后重新生成 .sln（Windows）
+GenerateProject.bat            在增删源文件后重新生成 .slnx（Windows）
 GenerateProject.sh             同上，但改为写出 compile_commands.json（Linux）
 Config/GameSettings.json       按项目划分的引擎设置（启动地图、cook 根目录等）
 Source/                        你的 C++ 模块（可选）

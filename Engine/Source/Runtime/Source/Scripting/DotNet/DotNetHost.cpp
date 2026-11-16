@@ -90,11 +90,11 @@ namespace Lumina::DotNet
             #if defined(_WIN32)
                 Storage = StringUtils::ToWideString(Utf8);
             #else
-                Storage.assign(Utf8.data(), Utf8.size());
+                Storage = FStringView(Utf8.GetData(), Utf8.Len());
             #endif
             }
 
-            const char_t* Get() const { return Storage.c_str(); }
+            const char_t* Get() const { return *Storage; }
 
         private:
 
@@ -268,15 +268,6 @@ namespace Lumina::DotNet
             return Filesystem::CopyTree(Src, Dst);
         }
 
-        // Core owns the cache but knows nothing about the managed runtime, so it calls back through here.
-        void FreeManagedGCHandle(void* Handle)
-        {
-            if (Handle != nullptr && GManaged.FreeHandle != nullptr)
-            {
-                GManaged.FreeHandle(Handle);
-            }
-        }
-
         bool IsManagedGCHandleAlive(void* Handle)
         {
             return Handle != nullptr && (GManaged.IsHandleAlive == nullptr || GManaged.IsHandleAlive(Handle) != 0);
@@ -291,12 +282,12 @@ namespace Lumina::DotNet
         }
 
         // A packaged game ships the runtime in its data folder, so probe that before the install dir.
-        const FString ExeDir = ParentOf(Platform::GetCurrentProcessPath());
+        const FString ExeDir = Paths::Parent(Platform::GetCurrentProcessPath());
 
-        FString Bundled = Join(Paths::GetGameDataDirectory(), FString("Runtime/") + RuntimeRid());
+        FString Bundled(Paths::Combine(Paths::GetGameDataDirectory(), "Runtime", RuntimeRid()));
         if (!Filesystem::Exists(Bundled))
         {
-            Bundled = Join(Paths::GetEngineInstallDirectory(), FString("External/DotNet/runtime/") + RuntimeRid());
+            Bundled = Paths::Combine(Paths::GetEngineInstallDirectory(), "External/DotNet/runtime", RuntimeRid());
         }
         if (!Filesystem::Exists(Bundled))
         {
@@ -306,7 +297,7 @@ namespace Lumina::DotNet
         Bundled = NativePath(Bundled);
 
         // Locate host/fxr/<version>/hostfxr.<ext> under the bundled root.
-        const FString FxrRoot  = Join(Bundled, "host/fxr");
+        const FString FxrRoot(Paths::Combine(Bundled, "host/fxr"));
         const FString FxrName  = FString(kSharedPrefix) + "hostfxr" + kSharedExt;
 
         FString HostfxrPath;
@@ -317,7 +308,7 @@ namespace Lumina::DotNet
                 return Filesystem::EVisit::Continue;
             }
 
-            FString Candidate = Join(Entry.FullPath, FxrName);
+            const FFixedString Candidate = Paths::Combine(Entry.FullPath, FxrName);
             if (!Filesystem::Exists(Candidate))
             {
                 return Filesystem::EVisit::Continue;
@@ -327,7 +318,7 @@ namespace Lumina::DotNet
             return Filesystem::EVisit::Stop;
         });
 
-        if (HostfxrPath.empty())
+        if (HostfxrPath.IsEmpty())
         {
             LOG_ERROR("C# scripting disabled: hostfxr not found under '{}'.", FxrRoot);
             return;
@@ -351,19 +342,22 @@ namespace Lumina::DotNet
 
         // Managed bootstrap, built next to the binaries by the LuminaSharp project.
         const FString ExePath    = NativePath(Platform::GetCurrentProcessPath());
-        const FString PackagedManagedDir = Join(Paths::GetGameDataDirectory(), "Managed");
-        const FString ManagedDir = Filesystem::Exists(Join(PackagedManagedDir, "LuminaSharp.dll"))
+        const FString PackagedManagedDir(Paths::Combine(Paths::GetGameDataDirectory(), "Managed"));
+        const FString ManagedDir = Filesystem::Exists(Paths::Combine(PackagedManagedDir, "LuminaSharp.dll"))
             ? PackagedManagedDir
-            : Join(ExeDir, "DotNet/Managed");
+            : FString(Paths::Combine(ExeDir, "DotNet/Managed"));
 
         // Loading from a shadow copy leaves the canonical output free for a packaging build to overwrite.
         FString LoadDir = ManagedDir;
     #if WITH_EDITOR
         {
-            const FString ShadowDir = Join(ExeDir, "DotNet/ManagedShadow");
-            if (CopyTreeBestEffort(ManagedDir, ShadowDir)
-                && Filesystem::Exists(Join(ShadowDir, "LuminaSharp.dll"))
-                && Filesystem::Exists(Join(ShadowDir, "LuminaSharp.runtimeconfig.json")))
+            const FString ShadowDir(Paths::Combine(ExeDir, "DotNet/ManagedShadow"));
+
+            // Once per process: a runtime cannot unload, so a later start would rewrite files it still has mapped.
+            static const bool bShadowCopied = CopyTreeBestEffort(ManagedDir, ShadowDir);
+            if (bShadowCopied
+                && Filesystem::Exists(Paths::Combine(ShadowDir, "LuminaSharp.dll"))
+                && Filesystem::Exists(Paths::Combine(ShadowDir, "LuminaSharp.runtimeconfig.json")))
             {
                 LoadDir = ShadowDir;
             }
@@ -374,8 +368,8 @@ namespace Lumina::DotNet
         }
     #endif
 
-        const FString BootstrapDll = NativePath(Join(LoadDir, "LuminaSharp.dll"));
-        const FString BootstrapCfg = NativePath(Join(LoadDir, "LuminaSharp.runtimeconfig.json"));
+        const FString BootstrapDll = NativePath(Paths::Combine(LoadDir, "LuminaSharp.dll"));
+        const FString BootstrapCfg = NativePath(Paths::Combine(LoadDir, "LuminaSharp.runtimeconfig.json"));
         if (!Filesystem::Exists(BootstrapDll) || !Filesystem::Exists(BootstrapCfg))
         {
             LOG_ERROR("C# scripting disabled: managed bootstrap missing under '{}'. Did LuminaSharp build?", LoadDir);
@@ -428,7 +422,7 @@ namespace Lumina::DotNet
 
         // Bootstrap registers every engine export by name rather than handing native a pointer table.
         GExports.Log = &Export_Log;
-        GExports.LogThreshold = &Logging::GLevelThreshold;
+        GExports.LogThreshold = &Global::GLevelThreshold;
         GExports.ScriptScopesActive = FGameplayProfiler::Get().GetScriptScopesActive();
 
         FBootstrapArgs Args{};
@@ -479,7 +473,7 @@ namespace Lumina::DotNet
         bInitialized = true;
 
         // Core must not know about GC handles, so hand it the free function once managed can service one.
-        Lumina::ManagedInstances::SetFreeHandleFn(&FreeManagedGCHandle);
+        Lumina::ManagedInstances::SetFreeHandleFn(&FreeManagedHandle);
         Lumina::ManagedInstances::SetIsHandleAliveFn(&IsManagedGCHandleAlive);
 
         LOG_DISPLAY(".NET host initialized (bundled runtime: {}).", Bundled);
@@ -572,7 +566,7 @@ namespace Lumina::DotNet
             GatherSourcesUnder(Unit.DiskDir, Bucket.Sources);
 
             // Loading the emitted DLL would resurrect every deleted class, so the marker identifies and deletes it.
-            if (Bucket.Sources.empty() && !Unit.DiskDir.empty() && !Unit.AssemblyPath.empty())
+            if (Bucket.Sources.IsEmpty() && !Unit.DiskDir.IsEmpty() && !Unit.AssemblyPath.IsEmpty())
             {
                 const FString Marker = CompiledMarkerPath(Unit.AssemblyPath);
                 if (Filesystem::Exists(Marker))
@@ -580,20 +574,20 @@ namespace Lumina::DotNet
                     Filesystem::RemoveFile(Unit.AssemblyPath);
                     Filesystem::RemoveFile(Marker);
                     Filesystem::RemoveFile(Unit.AssemblyPath + ".compilekey");
-                    LOG_DISPLAY("C#: unit '{}' no longer has sources; deleted its stale compiled assembly.", Unit.Name.c_str());
+                    LOG_DISPLAY("C#: unit '{}' no longer has sources; deleted its stale compiled assembly.", *Unit.Name);
                     continue;
                 }
             }
 
             // With no sources a unit can still load a prebuilt assembly at its canonical path.
-            const bool bHasPrebuilt = Bucket.Sources.empty() && !Unit.AssemblyPath.empty()
+            const bool bHasPrebuilt = Bucket.Sources.IsEmpty() && !Unit.AssemblyPath.IsEmpty()
                 && Filesystem::Exists(Unit.AssemblyPath);
-            if (Bucket.Sources.empty() && !bHasPrebuilt)
+            if (Bucket.Sources.IsEmpty() && !bHasPrebuilt)
             {
                 continue;
             }
 
-            for (size_t Index = 0; Index < Unit.Deps.size(); ++Index)
+            for (int32 Index = 0; Index < Unit.Deps.Num(); ++Index)
             {
                 if (Index != 0)
                 {
@@ -602,7 +596,7 @@ namespace Lumina::DotNet
                 Bucket.Deps += Unit.Deps[Index];
             }
 
-            for (size_t Index = 0; Index < Unit.References.size(); ++Index)
+            for (int32 Index = 0; Index < Unit.References.Num(); ++Index)
             {
                 if (Index != 0)
                 {
@@ -611,12 +605,12 @@ namespace Lumina::DotNet
                 Bucket.References += Unit.References[Index];
             }
 
-            Out.Buckets.push_back(std::move(Bucket));
+            Out.Buckets.Add(Move(Bucket));
         }
 
         for (const FSourceBucket& Bucket : Out.Buckets)
         {
-            Out.TotalFiles += Bucket.Sources.size();
+            Out.TotalFiles += Bucket.Sources.Num();
         }
     }
 
@@ -625,40 +619,40 @@ namespace Lumina::DotNet
     int32 WithMarshaledUnits(const FScriptLoadRequest& Request, TCall&& Call)
     {
         TVector<TVector<FSourceFile>> PerBucketFiles;
-        PerBucketFiles.resize(Request.Buckets.size());
+        PerBucketFiles.SetNum(Request.Buckets.Num());
         TVector<FSourceAssembly>      Units;
-        Units.reserve(Request.Buckets.size());
+        Units.Reserve(Request.Buckets.Num());
 
-        for (size_t Index = 0; Index < Request.Buckets.size(); ++Index)
+        for (int32 Index = 0; Index < Request.Buckets.Num(); ++Index)
         {
             const FSourceBucket&   Bucket = Request.Buckets[Index];
             TVector<FSourceFile>&  Files  = PerBucketFiles[Index];
-            Files.reserve(Bucket.Sources.size());
+            Files.Reserve(Bucket.Sources.Num());
             for (const FGatheredSource& S : Bucket.Sources)
             {
                 FSourceFile File;
-                File.Path    = S.Path.c_str();
-                File.PathLen = (int32)S.Path.size();
-                File.Text    = S.Text.c_str();
-                File.TextLen = (int32)S.Text.size();
-                Files.push_back(File);
+                File.Path    = *S.Path;
+                File.PathLen = (int32)S.Path.Len();
+                File.Text    = *S.Text;
+                File.TextLen = (int32)S.Text.Len();
+                Files.Add(File);
             }
 
             FSourceAssembly Unit;
-            Unit.Name        = Bucket.Name.c_str();
-            Unit.NameLen     = (int32)Bucket.Name.size();
-            Unit.Deps        = Bucket.Deps.c_str();
-            Unit.DepsLen     = (int32)Bucket.Deps.size();
-            Unit.Sources     = Files.empty() ? nullptr : Files.data();
-            Unit.SourceCount = (int32)Files.size();
-            Unit.DllPath     = Bucket.DllPath.c_str();
-            Unit.DllPathLen  = (int32)Bucket.DllPath.size();
-            Unit.References    = Bucket.References.c_str();
-            Unit.ReferencesLen = (int32)Bucket.References.size();
-            Units.push_back(Unit);
+            Unit.Name        = *Bucket.Name;
+            Unit.NameLen     = (int32)Bucket.Name.Len();
+            Unit.Deps        = *Bucket.Deps;
+            Unit.DepsLen     = (int32)Bucket.Deps.Len();
+            Unit.Sources     = Files.IsEmpty() ? nullptr : Files.GetData();
+            Unit.SourceCount = (int32)Files.Num();
+            Unit.DllPath     = *Bucket.DllPath;
+            Unit.DllPathLen  = (int32)Bucket.DllPath.Len();
+            Unit.References    = *Bucket.References;
+            Unit.ReferencesLen = (int32)Bucket.References.Len();
+            Units.Add(Unit);
         }
 
-        return Call(Units.empty() ? nullptr : Units.data(), (int32)Units.size());
+        return Call(Units.IsEmpty() ? nullptr : Units.GetData(), (int32)Units.Num());
     }
 
     // Releases what the outgoing generation holds, returning the generation it replaces.
@@ -667,7 +661,7 @@ namespace Lumina::DotNet
         FCoreDelegates::OnScriptsWillReload.Broadcast();
 
         // A queued Task.Run body is user code holding a strong handle, so let it finish before the teardown.
-        GTaskSystem->WaitForAll();
+        Jobs::WaitForSpawned();
 
         // Before the teardown, since the stages are what the teardown runs through.
         Scripting::RegisterBuiltInManagedTypeStages();
@@ -706,7 +700,7 @@ namespace Lumina::DotNet
         // So a later reload tells our emitted DLL apart from an authored prebuilt assembly.
         for (const FSourceBucket& Bucket : Buckets)
         {
-            if (!Bucket.Sources.empty() && !Bucket.DllPath.empty())
+            if (!Bucket.Sources.IsEmpty() && !Bucket.DllPath.IsEmpty())
             {
                 const FString Marker = CompiledMarkerPath(Bucket.DllPath);
                 if (!Filesystem::Exists(Marker))
@@ -782,7 +776,7 @@ namespace Lumina::DotNet
         GatherScriptLoad(UnitList, bEditorFollowups, Request);
 
         LOG_DISPLAY("C#: {} {} script unit(s), {} file(s)...",
-            bEditorFollowups ? "compiling" : "loading", Request.Buckets.size(), Request.TotalFiles);
+            bEditorFollowups ? "compiling" : "loading", Request.Buckets.Num(), Request.TotalFiles);
 
         const int32 PreviousGeneration = PrepareGenerationSwap();
         const int32 Result = WithMarshaledUnits(Request, [](const FSourceAssembly* Units, int32 Count)
@@ -807,7 +801,7 @@ namespace Lumina::DotNet
 
         GatherScriptLoad(BuildScriptUnits(), /*bEditorFollowups*/true, GCompileRequest);
         LOG_DISPLAY("C#: compiling {} script unit(s), {} file(s) in the background...",
-            GCompileRequest.Buckets.size(), GCompileRequest.TotalFiles);
+            GCompileRequest.Buckets.Num(), GCompileRequest.TotalFiles);
 
         const int32 Started = WithMarshaledUnits(GCompileRequest, [](const FSourceAssembly* Units, int32 Count)
         {
@@ -865,35 +859,35 @@ namespace Lumina::DotNet
         if (World != nullptr && Listener != nullptr)
         {
             FScopeLock Lock(GSignalListenersMutex);
-            GSignalListeners[World].push_back(Listener);
+            GSignalListeners[World].Add(Listener);
         }
     }
 
     bool ForgetSignalListener(CWorld* World, void* Listener)
     {
         FScopeLock Lock(GSignalListenersMutex);
-        auto It = GSignalListeners.find(World);
-        if (It == GSignalListeners.end())
+        auto It = GSignalListeners.Find(World);
+        if (It == nullptr)
         {
             return false;
         }
 
-        TVector<void*>& Listeners = It->second;
+        TVector<void*>& Listeners = (*It);
         bool bFound = false;
-        for (size_t Index = 0; Index < Listeners.size(); ++Index)
+        for (int32 Index = 0; Index < Listeners.Num(); ++Index)
         {
             if (Listeners[Index] == Listener)
             {
-                Listeners[Index] = Listeners.back();
-                Listeners.pop_back();
+                Listeners[Index] = Listeners.Last();
+                Listeners.Pop();
                 bFound = true;
                 break;
             }
         }
 
-        if (Listeners.empty())
+        if (Listeners.IsEmpty())
         {
-            GSignalListeners.erase(It);
+            GSignalListeners.Remove(World);
         }
         return bFound;
     }
@@ -909,11 +903,11 @@ namespace Lumina::DotNet
         TVector<void*> Listeners;
         {
             FScopeLock Lock(GSignalListenersMutex);
-            auto It = GSignalListeners.find(World);
-            if (It != GSignalListeners.end())
+            auto It = GSignalListeners.Find(World);
+            if (It != nullptr)
             {
-                Listeners = Move(It->second);
-                GSignalListeners.erase(It);
+                Listeners = Move(*It);
+                GSignalListeners.Remove(World);
             }
         }
 
@@ -987,7 +981,7 @@ namespace Lumina::DotNet
         }
 
         const TVector<FScriptUnit> Units = BuildCookedScriptUnits();
-        if (Units.empty())
+        if (Units.IsEmpty())
         {
             LOG_DISPLAY("C#: no cooked script units to load (no DotNet/Scripts/scripts.manifest.json or it was empty).");
             return;
@@ -997,7 +991,7 @@ namespace Lumina::DotNet
 
     void GatherScriptUnitsForPackaging(TVector<FPackagedScriptUnit>& Out)
     {
-        Out.clear();
+        Out.Reset();
         if (!bInitialized)
         {
             return;
@@ -1012,7 +1006,7 @@ namespace Lumina::DotNet
 
         for (const FScriptUnit& Unit : BuildScriptUnits())
         {
-            if (Unit.AssemblyPath.empty())
+            if (Unit.AssemblyPath.IsEmpty())
             {
                 continue; // no canonical DLL location, so there is nothing to ship
             }
@@ -1021,7 +1015,7 @@ namespace Lumina::DotNet
             Packaged.DllSourcePath = Unit.AssemblyPath;
             Packaged.Deps          = Unit.Deps;
             Packaged.References    = Unit.References;
-            Out.push_back(std::move(Packaged));
+            Out.Add(Move(Packaged));
         }
 
         // The live generation is the optimized one until this puts a debuggable build back in the editor.
@@ -1043,7 +1037,7 @@ namespace Lumina::DotNet
         {
             return nullptr;
         }
-        return GResolveManagedExport(Name.data(), (int32)Name.size());
+        return GResolveManagedExport(Name.GetData(), Name.Len());
     }
 
     bool GetRuntimeDiagnostics(FScriptDiagnostics& OutDiagnostics, bool bForceCollect)
@@ -1062,7 +1056,7 @@ namespace Lumina::DotNet
         {
             return nullptr;
         }
-        return GManaged.CreateScriptable(TypeName.data(), (int32)TypeName.size(), NativePtr);
+        return GManaged.CreateScriptable(TypeName.GetData(), TypeName.Len(), NativePtr);
     }
 
     void ApplyScriptableDefaults(FStringView TypeName, void* DefaultObject)
@@ -1071,7 +1065,7 @@ namespace Lumina::DotNet
         {
             return;
         }
-        GManaged.ApplyScriptableDefaults(TypeName.data(), (int32)TypeName.size(), (uint64)(uintptr_t)DefaultObject);
+        GManaged.ApplyScriptableDefaults(TypeName.GetData(), TypeName.Len(), (uint64)(uintptr_t)DefaultObject);
     }
 
     namespace
@@ -1082,15 +1076,16 @@ namespace Lumina::DotNet
             auto* Out = static_cast<TVector<uint8>*>(Ctx);
             if (Out != nullptr && Data != nullptr && Len > 0)
             {
-                Out->assign(reinterpret_cast<const uint8*>(Data), reinterpret_cast<const uint8*>(Data) + Len);
+                Out->Reset();
+                Out->Append(reinterpret_cast<const uint8*>(Data), reinterpret_cast<const uint8*>(Data) + Len);
             }
         }
     }
 
     void GatherManagedTypeDefinitions(TVector<Scripting::FManagedTypeDefinition>& OutTypes, TVector<Scripting::FManagedTypeAlias>& OutAliases)
     {
-        OutTypes.clear();
-        OutAliases.clear();
+        OutTypes.Reset();
+        OutAliases.Reset();
         if (!bInitialized || GManaged.GetTypeManifest == nullptr)
         {
             return;
@@ -1098,7 +1093,7 @@ namespace Lumina::DotNet
 
         TVector<uint8> Blob;
         GManaged.GetTypeManifest(reinterpret_cast<void*>(&LmSchemaBlobSink), &Blob);
-        if (!Blob.empty())
+        if (!Blob.IsEmpty())
         {
             Scripting::ParseTypeManifest(Blob, OutTypes, OutAliases);
         }
@@ -1107,6 +1102,14 @@ namespace Lumina::DotNet
     bool IsInitialized()
     {
         return bInitialized;
+    }
+
+    void FreeManagedHandle(void* Handle)
+    {
+        if (Handle != nullptr && GManaged.FreeHandle != nullptr)
+        {
+            GManaged.FreeHandle(Handle);
+        }
     }
 
     namespace

@@ -11,7 +11,7 @@
 
 namespace Lumina
 {
-    RUNTIME_API FWorldManager* GWorldManager = nullptr;
+    RUNTIME_API FWorldManager* Global::GWorldManager = nullptr;
 
     static TConsoleVar<float> CVarIdleReclaimSeconds("Editor.RenderScene.IdleReclaimSeconds", 3.0f,
         "Seconds a hidden world's render scene is kept resident before being freed.");
@@ -29,7 +29,7 @@ namespace Lumina
                 (*It)->World->TeardownWorld();
             }
         }
-        Contexts.clear();
+        Contexts.Reset();
     }
 
     void FWorldManager::BeginFrame(double NowSeconds)
@@ -205,7 +205,7 @@ namespace Lumina
         // Parallel only earns its keep with multiple live worlds; one world takes the serial path.
         if (CVarParallelWorldRender.GetValue() && LiveWorlds > 1)
         {
-            Task::ParallelFor((uint32)Contexts.size(), [&](const Task::FParallelRange& Range)
+            Jobs::ParallelFor((uint32)Contexts.Num(), [&](const Jobs::FParallelRange& Range)
             {
                 for (uint32 i = Range.Start; i < Range.End; ++i)
                 {
@@ -215,7 +215,7 @@ namespace Lumina
         }
         else
         {
-            for (uint32 i = 0; i < (uint32)Contexts.size(); ++i)
+            for (int32 i = 0; i < Contexts.Num(); ++i)
             {
                 RecordContext(i);
             }
@@ -249,16 +249,16 @@ namespace Lumina
 
         FWorldContext* Raw = Context.get();
         
-        Contexts.push_back(Move(Context));
+        Contexts.Add(Move(Context));
 
         World->OwningContext = Raw;
 
         World->InitializeWorld(Type);
 
         // Loading frees far more than it keeps, and without a trim those spans stay cached for the session.
-        if (GEngine != nullptr)
+        if (Global::GEngine != nullptr)
         {
-            GEngine->ScheduleCacheTrim();
+            Global::GEngine->ScheduleCacheTrim();
         }
 
         return Raw;
@@ -271,23 +271,23 @@ namespace Lumina
             return;
         }
 
-        for (size_t i = 0; i < Contexts.size(); ++i)
+        for (int32 i = 0; i < Contexts.Num(); ++i)
         {
             if (Contexts[i]->World.Get() == World)
             {
-                if (GEngine != nullptr)
+                if (Global::GEngine != nullptr)
                 {
-                    GEngine->ScheduleCacheTrim();
+                    Global::GEngine->ScheduleCacheTrim();
                 }
                 World->TeardownWorld();
                 World->OwningContext = nullptr;
 
-                size_t Last = Contexts.size() - 1;
+                int32 Last = Contexts.Num() - 1;
                 if (i != Last)
                 {
                     std::swap(Contexts[i], Contexts[Last]);
                 }
-                Contexts.pop_back();
+                Contexts.Pop();
                 return;
             }
         }
@@ -343,7 +343,7 @@ namespace Lumina
             // Map identity is the editor source map's path, which lets a PIE client skip travel.
             if (CPackage* Pkg = SourceWorld->GetPackage())
             {
-                Ctx->MapPath = FString(Pkg->GetName().c_str());
+                Ctx->MapPath = FString(*Pkg->GetName());
             }
         }
 

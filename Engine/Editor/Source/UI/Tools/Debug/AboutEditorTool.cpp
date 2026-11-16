@@ -15,10 +15,6 @@ namespace Lumina
         });
     }
 
-    void FAboutEditorTool::OnDeinitialize(const FUpdateContext& UpdateContext)
-    {
-    }
-
     void FAboutEditorTool::DrawHelpMenu()
     {
         DrawHelpTextRow(LOC("Engine Version"),

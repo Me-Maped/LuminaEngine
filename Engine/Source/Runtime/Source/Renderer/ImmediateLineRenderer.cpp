@@ -6,11 +6,11 @@ namespace Lumina
 {
     FImmediateLineRenderer::FImmediateLineRenderer()
     {
-        // One reservation per addressable thread, so GetWorkerIndex() below is always in range.
+        // One reservation per addressable thread, so GetThreadSlot() below is always in range.
         const uint32 NumSlots = Jobs::GetNumThreadSlots();
         for (FChannel& Channel : Channels)
         {
-            Channel.Reservations.resize(NumSlots);
+            Channel.Reservations.SetNum(NumSlots);
         }
     }
 
@@ -107,19 +107,6 @@ namespace Lumina
         Channel.LastDemand = (uint32)Math::Min<uint64>(Demand, (uint64)kMaxVerts);
     }
 
-    uint64 FImmediateLineRenderer::GetResidentBytes() const
-    {
-        uint64 Bytes = 0;
-        for (const FChannel& Channel : Channels)
-        {
-            for (uint32 Slot = 0; Slot < kSlots; ++Slot)
-            {
-                Bytes += (uint64)Channel.SlotCapacity[Slot] * sizeof(FSimpleElementVertex);
-            }
-        }
-        return Bytes;
-    }
-
     FSimpleElementVertex* FImmediateLineRenderer::Reserve(FChannel& Channel, uint32 Count)
     {
         if (!Channel.bOpen.load(std::memory_order_acquire))
@@ -174,8 +161,8 @@ namespace Lumina
             return nullptr;
         }
 
-        const uint32 ThreadSlot = Jobs::GetWorkerIndex();
-        if (ThreadSlot >= Ch.Reservations.size())
+        const uint32 ThreadSlot = Jobs::GetThreadSlot();
+        if (ThreadSlot >= static_cast<uint32>(Ch.Reservations.Num()))
         {
             return nullptr;
         }

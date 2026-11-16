@@ -42,7 +42,7 @@ namespace Lumina
         {
             if (EnumHasAnyFlags(Usage, Flag))
             {
-                if (!Out.empty()) { Out += " | "; }
+                if (!Out.IsEmpty()) { Out += " | "; }
                 Out += Name;
             }
         };
@@ -93,10 +93,6 @@ namespace Lumina
         });
     }
 
-    void FTextureHeapEditorTool::OnDeinitialize(const FUpdateContext& UpdateContext)
-    {
-    }
-
     void FTextureHeapEditorTool::DrawHelpMenu()
     {
         DrawHelpTextRow(LOC("Heap"),
@@ -139,9 +135,9 @@ namespace Lumina
         ImGui::SameLine();
         ImGui::SetNextItemWidth(220.0f);
         ImGui::ProgressBar(Fraction, ImVec2(220.0f, 0.0f),
-            Format(LOCF("{} / {}"),
+            *Format("{} / {}",
                 ImGuiX::FormatSize(Stats.ResidentBytes),
-                ImGuiX::FormatSize(Stats.BudgetBytes)).c_str());
+                ImGuiX::FormatSize(Stats.BudgetBytes)));
 
         ImGui::SameLine();
         ImGui::TextDisabled("|");
@@ -154,7 +150,7 @@ namespace Lumina
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), LOC("%s saved"), ImGuiX::FormatSize(Saved).c_str());
+        ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f), "%s saved", *ImGuiX::FormatSize(Saved));
 
         if (Stats.NumLoadsInFlight > 0 || Stats.NumPromotedLastFrame > 0 || Stats.NumDemotedLastFrame > 0)
         {
@@ -174,11 +170,11 @@ namespace Lumina
             TotalBytes += EstimateTextureBytes(Info.Desc);
         }
 
-        ImGui::Text(LOC("%u sampled slots in use"), (uint32)Textures.size());
+        ImGui::Text("%u sampled slots in use", (uint32)Textures.Num());
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
-        ImGui::Text(LOC("~%s estimated"), ImGuiX::FormatSize(TotalBytes).c_str());
+        ImGui::Text("~%s estimated", *ImGuiX::FormatSize(TotalBytes));
 
         DrawStreamingStats();
 
@@ -234,12 +230,13 @@ namespace Lumina
             const RHI::FTextureDesc& Desc = Info.Desc;
             const char* FormatName = RHI::Format::Info(Desc.Format).Name;
 
-            if (!FilterView.empty())
+            if (!FilterView.IsEmpty())
             {
                 char SlotText[16];
                 snprintf(SlotText, sizeof(SlotText), "%u", Info.Slot);
-                const bool bMatch = ImGuiX::PassSearchFilter(FilterView,
-                    { FormatName, HeapTextureTypeName(Desc.Type), HeapTextureTypeSourceName(Desc.Type), SlotText });
+                const bool bMatch = FString(FormatName).Find(Filter) != Constants::kIndexNone
+                                 || FString(HeapTextureTypeName(Desc.Type)).Find(Filter) != Constants::kIndexNone
+                                 || FStringView(SlotText) == FilterView;
                 if (!bMatch)
                 {
                     continue;
@@ -293,7 +290,7 @@ namespace Lumina
             ImGui::Text("%u", Desc.MipCount);
 
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(ImGuiX::FormatSize(EstimateTextureBytes(Desc)).c_str());
+            ImGui::TextUnformatted(*ImGuiX::FormatSize(EstimateTextureBytes(Desc)));
 
             ImGui::PopID();
         }
@@ -361,14 +358,14 @@ namespace Lumina
                 ImGui::Text(Fmt, Args...);
             };
 
-            Row(LOC("Dimensions"), "%u x %u x %u", Desc.Dimension.x, Desc.Dimension.y, Desc.Dimension.z);
-            Row(LOC("Format"),     "%s", RHI::Format::Info(Desc.Format).Name);
-            Row(LOC("Type"),       "%s", HeapTextureTypeName(Desc.Type));
-            Row(LOC("Mips"),       "%u", Desc.MipCount);
-            Row(LOC("Layers"),     "%u", Desc.LayerCount);
-            Row(LOC("Samples"),    "%u", Desc.SampleCount);
-            Row(LOC_CTX("Usage", "texture"), "%s", UsageString(Desc.Usage).c_str());
-            Row(LOC("Memory"),     "~%s", ImGuiX::FormatSize(EstimateTextureBytes(Desc)).c_str());
+            Row("Dimensions", "%u x %u x %u", Desc.Dimension.x, Desc.Dimension.y, Desc.Dimension.z);
+            Row("Format",     "%s", RHI::Format::Info(Desc.Format).Name);
+            Row("Type",       "%s", HeapTextureTypeName(Desc.Type));
+            Row("Mips",       "%u", Desc.MipCount);
+            Row("Layers",     "%u", Desc.LayerCount);
+            Row("Samples",    "%u", Desc.SampleCount);
+            Row("Usage",      "%s", *UsageString(Desc.Usage));
+            Row("Memory",     "~%s", *ImGuiX::FormatSize(EstimateTextureBytes(Desc)));
 
             ImGui::EndTable();
         }

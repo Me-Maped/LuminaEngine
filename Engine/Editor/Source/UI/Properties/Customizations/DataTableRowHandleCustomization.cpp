@@ -3,7 +3,6 @@
 #include "UI/Properties/Customizations/AssetPickerFilter.h"
 
 #include "Assets/AssetRegistry/AssetData.h"
-#include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Containers/Vector.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/ObjectCore.h"
@@ -26,22 +25,6 @@ namespace Lumina
                 return nullptr;
             }
             return ResolveStructByName(FName(Property->GetMetadata("RowType")));
-        }
-
-        TVector<FAssetData*> GatherDataTables()
-        {
-            TVector<FAssetData*> Assets = FAssetRegistry::Get().FindByPredicate([](const FAssetData& Data)
-            {
-                CClass* DataClass = FindObject<CClass>(Data.AssetClass);
-                return DataClass != nullptr && DataClass->IsChildOf(CDataTable::StaticClass());
-            });
-
-            Algo::Sort(Assets, [](const FAssetData* A, const FAssetData* B)
-            {
-                return strcmp(A->AssetName.c_str(), B->AssetName.c_str()) < 0;
-            });
-
-            return Assets;
         }
     }
 
@@ -82,7 +65,7 @@ namespace Lumina
         ImGui::BeginGroup();
 
         ImGui::SetNextItemWidth(TextWidth);
-        FFixedString TableLabel = Table != nullptr ? Table->GetName().c_str() : LOC("None");
+        FFixedString TableLabel = Table != nullptr ? *Table->GetName() : "None";
         ImGui::PushStyleColor(ImGuiCol_Text, Table != nullptr ? AssetPickerFilter::kMutedText : AssetPickerFilter::kEmptyText);
         ImGuiX::InputText("##Table", TableLabel,
             ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_AutoSelectAll);
@@ -113,14 +96,14 @@ namespace Lumina
             ImGui::SetNextWindowSizeConstraints(ImVec2(200, 200), DropdownSize);
             if (ImGui::BeginChild("##TableList", DropdownSize, false, ImGuiChildFlags_NavFlattened))
             {
-                for (const FAssetData* Asset : GatherDataTables())
+                for (const FAssetDataPtr& Asset : AssetsOfClass.Get(CDataTable::StaticClass()))
                 {
-                    if (!ImGuiX::PassSearchFilter(TableFilter, { Asset->AssetName.c_str(), Asset->Path.c_str(), Asset->AssetClass.c_str() }))
+                    if (!ImGuiX::PassSearchFilter(TableFilter, *Asset->AssetName))
                     {
                         continue;
                     }
 
-                    if (ImGui::Selectable(Asset->AssetName.c_str()))
+                    if (ImGui::Selectable(*Asset->AssetName))
                     {
                         SetTable(LoadObject<CDataTable>(Asset->AssetGUID));
                         ImGui::CloseCurrentPopup();
@@ -156,14 +139,14 @@ namespace Lumina
             }
         }
 
-        const char* RowPreview = DisplayValue.RowName.IsNone() ? LOC("None") : DisplayValue.RowName.c_str();
+        const char* RowPreview = DisplayValue.RowName.IsNone() ? "None" : *DisplayValue.RowName;
 
         ImGui::SetNextItemWidth(FullWidth);
         const int32 Picked = ImGuiX::SearchableCombo("##Row", RowPreview, RowCount + 1, CurrentIndex,
             [Table](int32 Index) -> FFixedString
             {
-                return Index == 0 ? FFixedString(LOC("None")) : FFixedString(Table->Rows[Index - 1].Name.c_str());
-            }, LE_ICON_TABLE_ROW, nullptr, [](int32 Index) { return Index == 0 ? FFixedString("None") : FFixedString(); });
+                return Index == 0 ? FFixedString("None") : FFixedString(*Table->Rows[Index - 1].Name);
+            }, LE_ICON_TABLE_ROW);
 
         if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
         {
@@ -179,13 +162,13 @@ namespace Lumina
 
             if (RequiredRowStruct != nullptr && RowStruct != RequiredRowStruct)
             {
-                ImGui::TextColored(GWarnText, LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "Needs rows of %s, table holds %s."),
-                    RequiredRowStruct->GetName().c_str(), RowStruct != nullptr ? RowStruct->GetName().c_str() : LOC("nothing"));
+                ImGui::TextColored(GWarnText, LE_ICON_ALERT_CIRCLE_OUTLINE " Needs rows of %s, table holds %s.",
+                    *RequiredRowStruct->GetName(), RowStruct != nullptr ? *RowStruct->GetName() : "nothing");
             }
             else if (!DisplayValue.RowName.IsNone() && Table->FindRowIndex(DisplayValue.RowName) == Constants::kIndexNone)
             {
-                ImGui::TextColored(GWarnText, LOC_ICON(LE_ICON_ALERT_CIRCLE_OUTLINE, "'%s' is not a row in this table."),
-                    DisplayValue.RowName.c_str());
+                ImGui::TextColored(GWarnText, LE_ICON_ALERT_CIRCLE_OUTLINE " '%s' is not a row in this table.",
+                    *DisplayValue.RowName);
             }
         }
 

@@ -27,9 +27,9 @@ namespace Lumina::ECS
         FRegistryContext& operator = (const FRegistryContext&) = delete;
 
         FRegistryContext(FRegistryContext&& Other) noexcept
-            : Entries(std::move(Other.Entries))
+            : Entries(Move(Other.Entries))
         {
-            Other.Entries.clear();
+            Other.Entries.Reset();
         }
 
         FRegistryContext& operator = (FRegistryContext&& Other) noexcept
@@ -37,8 +37,8 @@ namespace Lumina::ECS
             if (this != &Other)
             {
                 Reset();
-                Entries = std::move(Other.Entries);
-                Other.Entries.clear();
+                Entries = Move(Other.Entries);
+                Other.Entries.Reset();
             }
             return *this;
         }
@@ -57,14 +57,14 @@ namespace Lumina::ECS
 
             Entry.Info = &FComponentTypeRegistry::Get().GetInfo(TypeID);
             Entry.Data = Memory::Malloc(sizeof(T), alignof(T));
-            return *Memory::ConstructAt(static_cast<T*>(Entry.Data), std::forward<TArgs>(Args)...);
+            return *Memory::ConstructAt(static_cast<T*>(Entry.Data), Forward<TArgs>(Args)...);
         }
 
         template<typename T>
         NODISCARD FORCEINLINE T* Find()
         {
             const FComponentTypeID TypeID = GetComponentTypeID<T>();
-            return TypeID < Entries.size() ? static_cast<T*>(Entries[TypeID].Data) : nullptr;
+            return TypeID < Entries.Num() ? static_cast<T*>(Entries[TypeID].Data) : nullptr;
         }
 
         template<typename T>
@@ -108,7 +108,7 @@ namespace Lumina::ECS
         bool Erase()
         {
             const FComponentTypeID TypeID = GetComponentTypeID<T>();
-            if (TypeID >= Entries.size() || Entries[TypeID].Data == nullptr)
+            if (TypeID >= Entries.Num() || Entries[TypeID].Data == nullptr)
             {
                 return false;
             }
@@ -125,12 +125,12 @@ namespace Lumina::ECS
                     DestroyEntry(Entry);
                 }
             }
-            Entries.clear();
+            Entries.Reset();
         }
 
         void Swap(FRegistryContext& Other) noexcept
         {
-            Entries.swap(Other.Entries);
+            swap(Entries, Other.Entries);
         }
 
     private:
@@ -143,9 +143,9 @@ namespace Lumina::ECS
 
         FEntry& AssureEntry(FComponentTypeID TypeID)
         {
-            if (TypeID >= Entries.size())
+            if (TypeID >= Entries.Num())
             {
-                Entries.resize(static_cast<size_t>(TypeID) + 1u);
+                Entries.SetNum(TypeID + 1);
             }
             return Entries[TypeID];
         }

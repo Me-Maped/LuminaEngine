@@ -52,13 +52,13 @@ namespace
         Options.EntryPoint = EntryPoint;
         Options.bGenerateReflectionData = false;
 
-        GShaderCompiler->CompilerShaderRaw(FString(Source), Options,
+        Global::GShaderCompiler->CompilerShaderRaw(FString(Source), Options,
             [&Spirv](FShaderHeader Header) { Spirv = Move(Header.Binaries); });
 
         // The join. Nothing reads Spirv until the compile task has landed.
-        GShaderCompiler->Flush();
+        Global::GShaderCompiler->Flush();
 
-        if (Spirv.empty())
+        if (Spirv.IsEmpty())
         {
             LOG_ERROR("Failed to compile '{}'.", DebugName);
         }
@@ -69,8 +69,8 @@ namespace
     {
         return RHI::FShaderSource
         {
-            .Source     = TSpan<const std::byte>(reinterpret_cast<const std::byte*>(Spirv.data()),
-                                                 Spirv.size() * sizeof(uint32)),
+            .Source     = TSpan<const std::byte>(reinterpret_cast<const std::byte*>(Spirv.GetData()),
+                                                 Spirv.Num() * sizeof(uint32)),
             .EntryPoint = EntryPoint,
         };
     }
@@ -79,7 +79,7 @@ namespace
     {
         const TVector<uint32> Vertex = CompileSpirv(kShader, "VSMain", "HelloTriangle.Vertex");
         const TVector<uint32> Pixel  = CompileSpirv(kShader, "PSMain", "HelloTriangle.Pixel");
-        if (Vertex.empty() || Pixel.empty())
+        if (Vertex.IsEmpty() || Pixel.IsEmpty())
         {
             return {};
         }
@@ -153,10 +153,10 @@ int main(int ArgC, char** ArgV)
     Memory::Initialize();
 
     FApplicationGlobalState GlobalState("HelloTriangle Main");
-    Task::Initialize();
+    Jobs::Initialize();
 
     FCommandLine ParsedCommandLine { ArgC, ArgV };
-    GCommandLine = &ParsedCommandLine;
+    Global::GCommandLine = &ParsedCommandLine;
 
     // The Vulkan instance asks GLFW for its surface extensions, and only a window brings GLFW up.
     FWindow Window(FWindowSpecs{ .Title = "Lumina Hello Triangle", .Extent = { 1280, 720 } });
@@ -164,7 +164,7 @@ int main(int ArgC, char** ArgV)
     RHI::CreateDevice(RHI::FDeviceDesc{ .bValidation = !ParsedCommandLine.Has("novalidation") });
 
     FSpirVShaderCompiler ShaderCompiler;
-    GShaderCompiler = &ShaderCompiler;
+    Global::GShaderCompiler = &ShaderCompiler;
 
     RHI::FSwapchainTarget Target;
     Target.Initialize(RHI::CreateSurface(Window.GetWindow()), Window.GetExtent());
@@ -186,11 +186,11 @@ int main(int ArgC, char** ArgV)
         RHI::Retire(Pipeline);
     }
 
-    GShaderCompiler = nullptr;
+    Global::GShaderCompiler = nullptr;
     RHI::FreeDevice();
 
-    Task::Shutdown();
-    GCommandLine = nullptr;
+    Jobs::Shutdown();
+    Global::GCommandLine = nullptr;
 
     return bCompiled ? 0 : 1;
 }

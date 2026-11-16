@@ -3,6 +3,7 @@
 #include "ShaderCompiler.h"
 #include "ShaderPaths.h"
 #include "FileSystem/FileSystem.h"
+#include "Memory/Memcpy.h"
 #include "Memory/Memory.h"
 #include "Memory/MemoryTracking.h"
 
@@ -30,41 +31,34 @@ namespace Lumina
         return Hash;
     }
 
-    FShaderLibrary::FShaderLibrary()
-    {
-        // TSegmentMap::Erase calls DtorFn unconditionally, so leaving it null is a null call on first free.
-        Entries.SetDtor([](FShaderEntry* Entry) { Entry->~FShaderEntry(); });
-    }
+    FShaderLibrary::FShaderLibrary() = default;
 
-    FShaderLibrary::~FShaderLibrary()
-    {
-        Entries.Clear();
-    }
+    FShaderLibrary::~FShaderLibrary() = default;
 
     FShaderH FShaderLibrary::FindOrCreate(uint64 Hash)
     {
-        auto It = HandlesByHash.find(Hash);
-        if (It != HandlesByHash.end())
+        auto It = HandlesByHash.Find(Hash);
+        if (It != nullptr)
         {
-            if (Entries.IsLive(It->second))
+            if (Entries.IsLive(*It))
             {
-                return It->second;
+                return (*It);
             }
             // The slot was released since this hash was interned, so mint a fresh entry.
-            HandlesByHash.erase(It);
+            HandlesByHash.Remove(Hash);
         }
 
         const FShaderH Handle = Entries.Emplace();
         FShaderEntry& Entry   = Entries[Handle];
         Entry.ID       = NextID++;
         Entry.MapHash  = Hash;
-        HandlesByHash.emplace(Hash, Handle);
+        HandlesByHash.TryAdd(Hash, Handle);
         return Handle;
     }
 
     const FShaderEntry* FShaderLibrary::Resolve(FShaderH Handle)
     {
-        FShaderLibrary* Library = GShaderLibrary;
+        FShaderLibrary* Library = Global::GShaderLibrary;
         if (Library == nullptr)
         {
             return nullptr;
@@ -74,7 +68,7 @@ namespace Lumina
 
     void FShaderLibrary::AddRef(FShaderH Handle)
     {
-        FShaderLibrary* Library = GShaderLibrary;
+        FShaderLibrary* Library = Global::GShaderLibrary;
         if (Library == nullptr)
         {
             return;
@@ -89,7 +83,7 @@ namespace Lumina
 
     void FShaderLibrary::Release(FShaderH Handle)
     {
-        FShaderLibrary* Library = GShaderLibrary;
+        FShaderLibrary* Library = Global::GShaderLibrary;
         if (Library == nullptr)
         {
             return;
@@ -105,25 +99,25 @@ namespace Lumina
         if (--Entry->RefCount == 0)
         {
             // Queued rather than freed, since handles are dereferenced lock-free off the render thread.
-            Library->PendingRelease.push_back(Handle);
+            Library->PendingRelease.Add(Handle);
         }
     }
 
     void FShaderLibrary::FlushPendingReleases()
     {
-        FShaderLibrary* Library = GShaderLibrary;
+        FShaderLibrary* Library = Global::GShaderLibrary;
         if (Library == nullptr)
         {
             return;
         }
 
         static thread_local TVector<FShaderH> Ready;
-        Ready.clear();
+        Ready.Reset();
         {
             FScopeLock Lock(Library->Mutex);
 
             // Swapping a cleared buffer in keeps the pending list's capacity instead of dropping it.
-            Ready.swap(Library->PendingRelease);
+            swap(Ready, Library->PendingRelease);
         }
 
         for (FShaderH Handle : Ready)
@@ -143,10 +137,10 @@ namespace Lumina
 
             {
                 FScopeLock Lock(Library->Mutex);
-                auto It = Library->HandlesByHash.find(MapHash);
-                if (It != Library->HandlesByHash.end() && It->second.Handle == Handle.Handle)
+                auto It = Library->HandlesByHash.Find(MapHash);
+                if (It != nullptr && It->Handle == Handle.Handle)
                 {
-                    Library->HandlesByHash.erase(It);
+                    Library->HandlesByHash.Remove(MapHash);
                 }
             }
 
@@ -157,7 +151,7 @@ namespace Lumina
 
     FName FShaderLibrary::CanonicalPath(const FName& NameOrPath)
     {
-        const char* Str = NameOrPath.c_str();
+        const char* Str = *NameOrPath;
         if (Str == nullptr || Str[0] == '\0' || Str[0] == '/')
         {
             // Already a full virtual path (or nothing to resolve).
@@ -165,50 +159,50 @@ namespace Lumina
         }
 
         // A packaged build strips the source tree, so the name index is its only mapping.
-        if (FShaderLibrary* Library = GShaderLibrary)
+        if (FShaderLibrary* Library = Global::GShaderLibrary)
         {
             FScopeLock Lock(Library->Mutex);
-            auto It = Library->PathsByName.find(NameOrPath);
-            if (It != Library->PathsByName.end())
+            auto It = Library->PathsByName.Find(NameOrPath);
+            if (It != nullptr)
             {
-                return It->second;
+                return (*It);
             }
         }
 
         const FString Resolved = Shaders::Resolve(FStringView(Str));
 
         // Slang still resolves a bare module name, so this degrades to a compile attempt.
-        return Resolved.empty() ? NameOrPath : FName(Resolved);
+        return Resolved.IsEmpty() ? NameOrPath : FName(Resolved);
     }
 
     void FShaderLibrary::IndexShaderName(const FName& Path)
     {
-        const FStringView FullPath(Path.c_str());
+        const FStringView FullPath(*Path);
         const FStringView File = VFS::FileName(FullPath);
-        if (File.empty() || File.size() == FullPath.size())
+        if (File.IsEmpty() || File.Len() == FullPath.Len())
         {
             return;   // not a path, so there is nothing to index it under
         }
 
         const FName Name(File);
-        auto It = PathsByName.find(Name);
-        if (It == PathsByName.end())
+        auto It = PathsByName.Find(Name);
+        if (It == nullptr)
         {
-            PathsByName.emplace(Name, Path);
+            PathsByName.TryAdd(Name, Path);
             return;
         }
 
-        if (It->second != Path)
+        if ((*It) != Path)
         {
             LOG_WARN("Two shader roots ship '{}' ('{}' and '{}'). The first wins by name; request the "
-                     "other by its full virtual path.", Name, It->second, Path);
+                     "other by its full virtual path.", Name, (*It), Path);
         }
     }
 
     FShaderH FShaderLibrary::Get(const FName& NameOrPath, TSpan<const FString> Defines)
     {
         LUMINA_MEMORY_SCOPE("Shaders");
-        FShaderLibrary* Library = GShaderLibrary;
+        FShaderLibrary* Library = Global::GShaderLibrary;
 
         // Two roots shipping the same file name stay distinct rather than overwriting each other.
         const FName Path  = CanonicalPath(NameOrPath);
@@ -227,15 +221,15 @@ namespace Lumina
             if (Entry.Path.IsNone())
             {
                 Entry.Path = Path;
-                Entry.Defines.assign(Defines.begin(), Defines.end());
+                Entry.Defines = TVector<FString>(Defines.begin(), Defines.end());
             }
         }
 
         FShaderCompileOptions Options;
         Options.bGenerateReflectionData = true;
-        Options.MacroDefinitions.assign(Defines.begin(), Defines.end());
+        Options.MacroDefinitions = TVector<FString>(Defines.begin(), Defines.end());
         FShaderCompileWaiter Waiter;
-        GShaderCompiler->CompileShaderPath(FString(Path.c_str()), Options, [](const FShaderHeader& Header)
+        Global::GShaderCompiler->CompileShaderPath(FString(*Path), Options, [](const FShaderHeader& Header)
         {
             Commit(Header);
         }, Waiter.Track());
@@ -255,7 +249,7 @@ namespace Lumina
 
         // Magic + 4 header words. Anything shorter is not a module we can walk.
         constexpr uint32 kSpirvMagic = 0x07230203u;
-        if (Spirv.size() < 5 || Spirv[0] != kSpirvMagic)
+        if (Spirv.Num() < 5 || Spirv[0] != kSpirvMagic)
         {
             return;
         }
@@ -283,14 +277,14 @@ namespace Lumina
         TVector<uint32> PointeeOfPointer(IdBound, 0);
         TVector<uint8>  PointerIsFunction(IdBound, 0);
 
-        for (size_t Word = 5; Word < Spirv.size(); )
+        for (int32 Word = 5; Word < Spirv.Num(); )
         {
             const uint32 Instruction = Spirv[Word];
             const uint32 WordCount   = Instruction >> 16;
             const uint32 Opcode      = Instruction & 0xFFFFu;
 
             // A zero word count would loop forever; a run past the end means the module is truncated.
-            if (WordCount == 0 || Word + WordCount > Spirv.size())
+            if (WordCount == 0 || Word + WordCount > static_cast<unsigned int>(Spirv.Num()))
             {
                 break;
             }
@@ -366,27 +360,27 @@ namespace Lumina
 
     FShaderEntry::FGPUStats FShaderLibrary::GetGPUStats(FShaderH Handle)
     {
-        FScopeLock Lock(GShaderLibrary->Mutex);
-        const FShaderEntry* Entry = GShaderLibrary->Entries.TryGet(Handle);
+        FScopeLock Lock(Global::GShaderLibrary->Mutex);
+        const FShaderEntry* Entry = Global::GShaderLibrary->Entries.TryGet(Handle);
         return Entry != nullptr ? Entry->GPUStats : FShaderEntry::FGPUStats{};
     }
 
     bool FShaderLibrary::HasPipelineStats(FShaderH Handle)
     {
-        FScopeLock Lock(GShaderLibrary->Mutex);
-        const FShaderEntry* Entry = GShaderLibrary->Entries.TryGet(Handle);
+        FScopeLock Lock(Global::GShaderLibrary->Mutex);
+        const FShaderEntry* Entry = Global::GShaderLibrary->Entries.TryGet(Handle);
         // Nothing to publish against; treat as done so callers skip the query.
-        return Entry == nullptr || !Entry->GPUStats.Pipeline.empty();
+        return Entry == nullptr || !Entry->GPUStats.Pipeline.IsEmpty();
     }
 
     void FShaderLibrary::PublishPipelineStats(FShaderH Handle, TVector<RHI::FPipelineStat>&& Stats)
     {
-        if (Stats.empty())
+        if (Stats.IsEmpty())
         {
             return;
         }
-        FScopeLock Lock(GShaderLibrary->Mutex);
-        if (FShaderEntry* Entry = GShaderLibrary->Entries.TryGet(Handle))
+        FScopeLock Lock(Global::GShaderLibrary->Mutex);
+        if (FShaderEntry* Entry = Global::GShaderLibrary->Entries.TryGet(Handle))
         {
             Entry->GPUStats.Pipeline = Move(Stats);
         }
@@ -396,7 +390,7 @@ namespace Lumina
     FShaderH FShaderLibrary::Commit(const FName& Key, ERHIShaderType Type, TSpan<const uint32> Spirv)
     {
         LUMINA_MEMORY_SCOPE("Shaders");
-        FShaderLibrary* Library = GShaderLibrary;
+        FShaderLibrary* Library = Global::GShaderLibrary;
 
         // A headless process never built one, and materials still post-load there.
         if (Library == nullptr)
@@ -410,18 +404,18 @@ namespace Lumina
         const uint64 ContentHash = SpirvContentHash(Type, Spirv);
 
         uint64 Slot = ContentHash;
-        if (auto It = Library->HandlesByHash.find(ContentHash); It != Library->HandlesByHash.end())
+        if (auto It = Library->HandlesByHash.Find(ContentHash); It != nullptr)
         {
-            if (const FShaderEntry* Existing = Library->Entries.TryGet(It->second))
+            if (const FShaderEntry* Existing = Library->Entries.TryGet(*It))
             {
                 const bool bIdentical = Existing->Type == Type
-                                     && Existing->Spirv.size() == Spirv.size()
-                                     && std::memcmp(Existing->Spirv.data(), Spirv.data(),
-                                                    Spirv.size() * sizeof(uint32)) == 0;
+                                     && Existing->Spirv.Num() == Spirv.Num()
+                                     && Memory::Memcmp(Existing->Spirv.GetData(), Spirv.GetData(),
+                                                       Spirv.Num() * sizeof(uint32)) == 0;
                 if (bIdentical)
                 {
                     // The bytecode is unchanged, so every pipeline built from this entry stays valid.
-                    const FShaderH Handle = It->second;
+                    const FShaderH Handle = (*It);
                     ++Library->Entries[Handle].RefCount;
                     return Handle;
                 }
@@ -435,11 +429,12 @@ namespace Lumina
         FShaderEntry& Entry   = Library->Entries[Handle];
         Entry.Path = Key;
         Entry.Type = Type;
-        Entry.Spirv.assign(Spirv.begin(), Spirv.end());
+        Entry.Spirv.Reset();
+        Entry.Spirv.Append(Spirv.begin(), Spirv.end());
         Entry.Generation++;
         ++Entry.RefCount;
 #if USING(WITH_EDITOR)
-        Entry.GPUStats.Pipeline.clear();
+        Entry.GPUStats.Pipeline.Reset();
         ScanSpirvLocalArrays(Spirv, Entry.GPUStats.LocalArrayCount, Entry.GPUStats.LocalArrayScalars);
 #endif
         return Handle;
@@ -448,11 +443,11 @@ namespace Lumina
     void FShaderLibrary::Commit(const FShaderHeader& Header)
     {
         LUMINA_MEMORY_SCOPE("Shaders");
-        FShaderLibrary* Library = GShaderLibrary;
+        FShaderLibrary* Library = Global::GShaderLibrary;
         FScopeLock Lock(Library->Mutex);
 
-        const FName Path(Header.DebugName.c_str());
-        const FShaderH Handle = Library->FindOrCreate(EntryHash(Path, TSpan<const FString>(Header.Defines.data(), Header.Defines.size())));
+        const FName Path(*Header.DebugName);
+        const FShaderH Handle = Library->FindOrCreate(EntryHash(Path, TSpan<const FString>(Header.Defines.GetData(), Header.Defines.Num())));
         FShaderEntry& Entry   = Library->Entries[Handle];
         Entry.Path    = Path;
         Entry.Defines = Header.Defines;
@@ -462,8 +457,8 @@ namespace Lumina
 
         Library->IndexShaderName(Path);
 #if USING(WITH_EDITOR)
-        Entry.GPUStats.Pipeline.clear();
-        ScanSpirvLocalArrays(TSpan<const uint32>(Entry.Spirv.data(), Entry.Spirv.size()),
+        Entry.GPUStats.Pipeline.Reset();
+        ScanSpirvLocalArrays(TSpan<const uint32>(Entry.Spirv.GetData(), Entry.Spirv.Num()),
                              Entry.GPUStats.LocalArrayCount, Entry.GPUStats.LocalArrayScalars);
 #endif
     }

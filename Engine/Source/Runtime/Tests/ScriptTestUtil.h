@@ -53,7 +53,7 @@ namespace ScriptTest
         return New;
     }
 
-    // Publishes a C# enum the way a reload does, so a schema can name it.
+    // Publishes a C# enum the way a reload does, so a schema can name it, which retires any published earlier.
     inline void PublishEnum(const char* Name, Lumina::EPropertyTypeFlags Underlying,
         std::initializer_list<Lumina::Scripting::FScriptEnumEntry> Entries)
     {
@@ -63,7 +63,8 @@ namespace ScriptTest
         Definition.Kind = Scripting::EManagedTypeKind::Enum;
         Definition.TypeName = FName(Name);
         Definition.EnumUnderlying = Underlying;
-        Definition.EnumEntries.assign(Entries.begin(), Entries.end());
+        Definition.EnumEntries.Reset();
+        Definition.EnumEntries.Append(Entries.begin(), Entries.end());
         FScriptEnumRegistry::Get().Refresh(TSpan<const Scripting::FManagedTypeDefinition>(&Definition, 1));
     }
 
@@ -81,6 +82,6 @@ namespace ScriptTest
     inline void PublishStructs(std::initializer_list<Lumina::Scripting::FManagedTypeDefinition> Definitions)
     {
         Lumina::FScriptStructRegistry::Get().Refresh(
-            Lumina::TSpan<const Lumina::Scripting::FManagedTypeDefinition>(Definitions.begin(), Definitions.size()));
+            Lumina::TSpan<const Lumina::Scripting::FManagedTypeDefinition>(Definitions.begin(), Lumina::IntCastChecked<Lumina::int32>(Definitions.size())));
     }
 }

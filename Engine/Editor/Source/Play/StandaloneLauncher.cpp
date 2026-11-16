@@ -6,82 +6,56 @@
 #include "Platform/Filesystem/PlatformFilesystem.h"
 #include "Platform/Process/PlatformProcess.h"
 #include "Containers/StringFormat.h"
-#include "Core/Threading/Thread.h"
-#include "Memory/SmartPtr.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
-
-#include <atomic>
 
 namespace Lumina
 {
     namespace
     {
-        struct FLaunchSession
+        FFixedString GameExecutablePath()
         {
-            std::atomic<bool>           bDone{false};
-            std::atomic<bool>           bSuccess{false};
-            FString                     ErrorMessage;
-            FStandaloneLaunchOptions    Options;
-        };
-
-        TSharedPtr<FLaunchSession>  GSession;
-        FThread                     GWorker;
-
-        FString StandaloneLauncherJoin(FStringView Left, FStringView Right)
-        {
-            FString Result(Left.data(), Left.size());
-            if (!Result.empty() && Result.back() != '/' && Result.back() != '\\')
-            {
-                Result.push_back('/');
-            }
-            Result.append(Right.data(), Right.size());
-            return Result;
-        }
-
-        FString EngineBinariesDirectory()
-        {
-            return StandaloneLauncherJoin(Paths::GetEngineInstallDirectory(), StandaloneLauncherJoin("Binaries", LUMINA_PLATFORM_NAME));
-        }
-
-        FString GameExecutablePath()
-        {
-            const FFixedString Name = Paths::MakeGameApplicationName();
-            return StandaloneLauncherJoin(EngineBinariesDirectory(), FStringView(Name.c_str(), Name.size()));
+            return Paths::Combine(Paths::GetEngineInstallDirectory(), "Binaries", LUMINA_PLATFORM_NAME, Paths::MakeGameApplicationName());
         }
 
         FString ProjectDirectory()
         {
-            const FStringView Path = GEngine != nullptr ? GEngine->GetProjectPath() : FStringView();
-            return FString(Path.data(), Path.size());
+            const FStringView Path = Global::GEngine != nullptr ? Global::GEngine->GetProjectPath() : FStringView();
+            return FString(Path.GetData(), Path.Len());
         }
 
         FString ProjectName()
         {
-            const FStringView Name = GEngine != nullptr ? GEngine->GetProjectName() : FStringView();
-            return FString(Name.data(), Name.size());
+            const FStringView Name = Global::GEngine != nullptr ? Global::GEngine->GetProjectName() : FStringView();
+            return FString(Name.GetData(), Name.Len());
         }
 
-        FString ProjectBinaryPath(const FFixedString& FileName)
+        FFixedString ProjectBinaryPath(const FFixedString& FileName)
         {
             const FString Directory = ProjectDirectory();
-            if (Directory.empty())
+            if (Directory.IsEmpty())
             {
                 return {};
             }
-            return StandaloneLauncherJoin(StandaloneLauncherJoin(Directory, StandaloneLauncherJoin("Binaries", LUMINA_PLATFORM_NAME)),
-                        FStringView(FileName.c_str(), FileName.size()));
+            return Paths::Combine(Directory, "Binaries", LUMINA_PLATFORM_NAME, FileName);
         }
 
         // A project with no editor-flavor module has no C++ at all, so a game build would produce nothing.
         bool ProjectHasNativeModule()
         {
-            const FString EditorModule = ProjectBinaryPath(Paths::MakeModuleFileName(ProjectName()));
-            return !EditorModule.empty() && Filesystem::Exists(EditorModule);
+            const FFixedString EditorModule = ProjectBinaryPath(Paths::MakeModuleFileName(ProjectName()));
+            return !EditorModule.IsEmpty() && Filesystem::Exists(EditorModule);
         }
 
-        FString ProjectGameModulePath()
+        FFixedString ProjectGameModulePath()
         {
             return ProjectBinaryPath(Paths::MakeGameModuleFileName(ProjectName()));
+        }
+
+        void AppendQuoted(FString& Out, FStringView Value)
+        {
+            Out += "\"";
+            Out += Value;
+            Out += "\"";
         }
 
         FString BuildArguments()
@@ -90,54 +64,51 @@ namespace Lumina
             Args += ProjectName();
             Args += " -TargetType=Game -Configuration=";
             Args += LUMINA_CONFIGURATION_NAME;
-            Args += " -Project=\"";
-            Args += ProjectDirectory();
-            Args += "\"";
+            Args += " -Project=";
+            AppendQuoted(Args, *ProjectDirectory());
             return Args;
         }
 
         bool StartGameProcess(const FStandaloneLaunchOptions& Options, FString& OutError)
         {
-            const FString Executable = GameExecutablePath();
+            const FFixedString Executable = GameExecutablePath();
             if (!Filesystem::Exists(Executable))
             {
                 OutError = Format("The game application is missing at {}. Build the Game target first.",
-                                  Executable.c_str());
+                                  *Executable);
                 return false;
             }
 
-            const FStringView ProjectFile = GEngine->GetProjectFile();
-            if (ProjectFile.empty())
+            const FStringView ProjectFile = Global::GEngine->GetProjectFile();
+            if (ProjectFile.IsEmpty())
             {
                 OutError = "No .lproject file for the loaded project, so the game has nothing to open.";
                 return false;
             }
 
-            FString Params = "--Project=\"";
-            Params += ProjectFile;
-            Params += "\"";
+            FString Params = "--Project=";
+            AppendQuoted(Params, ProjectFile);
 
-            if (!Options.MapPath.empty())
+            if (!Options.MapPath.IsEmpty())
             {
                 Params += " --map=";
-                Params += Options.MapPath;
+                AppendQuoted(Params, *Options.MapPath);
             }
 
             // Its own log, or its startup rotates the file this editor is still writing.
             Params += " --logfile=Standalone";
 
-            FString Quoted = "\"";
-            Quoted += Executable;
-            Quoted += "\"";
+            FString Quoted;
+            AppendQuoted(Quoted, *Executable);
 
-            const int Error = Platform::LaunchProcess(UTF8_TO_TCHAR(Quoted.c_str()), UTF8_TO_TCHAR(Params.c_str()));
+            const int Error = Platform::LaunchProcess(UTF8_TO_TCHAR(*Quoted), UTF8_TO_TCHAR(*Params));
             if (Error != 0)
             {
-                OutError = Format("Could not start {} (system error {}).", Executable.c_str(), Error);
+                OutError = Format("Could not start {} (system error {}).", *Executable, Error);
                 return false;
             }
 
-            LOG_DISPLAY("Standalone: launched {} {}", Executable.c_str(), Params.c_str());
+            LOG_DISPLAY("Standalone: launched {} {}", *Executable, *Params);
             return true;
         }
 
@@ -150,8 +121,8 @@ namespace Lumina
                 return;
             }
 
-            LOG_ERROR("Standalone: {}", Error.c_str());
-            ImGuiX::Notifications::NotifyError("{}", Error.c_str());
+            LOG_ERROR("Standalone: {}", *Error);
+            ImGuiX::Notifications::NotifyError("{}", *Error);
         }
     }
 
@@ -175,14 +146,9 @@ namespace Lumina
         return Paths::GetBuildToolScript() + " " + BuildArguments();
     }
 
-    bool FStandaloneLauncher::IsBuilding()
-    {
-        return GSession != nullptr;
-    }
-
     void FStandaloneLauncher::Request(const FStandaloneLaunchOptions& Options)
     {
-        if (GEngine == nullptr || !GEngine->HasLoadedProject())
+        if (Global::GEngine == nullptr || !Global::GEngine->HasLoadedProject())
         {
             ImGuiX::Notifications::NotifyError("Open a project before launching standalone.");
             return;
@@ -203,67 +169,72 @@ namespace Lumina
             }
 
             const FString Command = GetBuildCommandLine();
-            LOG_ERROR("Standalone: the project's Game binaries are missing. Run: {}", Command.c_str());
-            ImGuiX::Notifications::NotifyError("Game binaries are missing. Run: {}", Command.c_str());
+            LOG_ERROR("Standalone: the project's Game binaries are missing. Run: {}", *Command);
+            ImGuiX::Notifications::NotifyError("Game binaries are missing. Run: {}", *Command);
             return;
         }
 
         ImGuiX::Notifications::NotifyInfo("Building the Game target for standalone play.");
 
-        GSession = MakeShared<FLaunchSession>();
-        GSession->Options = Options;
+        PendingOptions = Options;
+        bBuildDone.store(false, std::memory_order_relaxed);
 
-        TSharedPtr<FLaunchSession> Session = GSession;
         const FString Tool = Paths::GetBuildToolScript();
         const FString Args = BuildArguments();
         const FString WorkingDirectory(Paths::GetEngineInstallDirectory());
 
-        GWorker = FThread([Session, Tool, Args, WorkingDirectory]()
+        Worker = FThread([this, Tool, Args, WorkingDirectory](const FThreadStop& Stop)
         {
-            const int ExitCode = Platform::RunProcessAndWaitCapture(
-                UTF8_TO_TCHAR(Tool.c_str()),
-                UTF8_TO_TCHAR(Args.c_str()),
-                UTF8_TO_TCHAR(WorkingDirectory.c_str()),
+            BuildExitCode = Platform::RunProcessAndWaitCapture(
+                UTF8_TO_TCHAR(*Tool),
+                UTF8_TO_TCHAR(*Args),
+                UTF8_TO_TCHAR(*WorkingDirectory),
                 [](FStringView Line)
                 {
-                    if (!Line.empty())
+                    if (!Line.IsEmpty())
                     {
-                        LOG_INFO("[Standalone build] {}", FString(Line.data(), Line.size()).c_str());
+                        LOG_INFO("[Standalone build] {}", *FString(Line.GetData(), Line.Len()));
                     }
-                });
+                },
+                0, &Stop);
 
-            if (ExitCode != 0)
-            {
-                Session->ErrorMessage = Format("Game build failed (exit code {}). See the log above.", ExitCode);
-            }
-
-            Session->bSuccess.store(ExitCode == 0, std::memory_order_release);
-            Session->bDone.store(true, std::memory_order_release);
+            bBuildDone.store(true, std::memory_order_release);
         });
     }
 
     void FStandaloneLauncher::Tick()
     {
-        if (GSession == nullptr || !GSession->bDone.load(std::memory_order_acquire))
+        if (!IsBuilding() || !bBuildDone.load(std::memory_order_acquire))
         {
             return;
         }
 
-        if (GWorker.joinable())
-        {
-            GWorker.join();
-        }
+        Worker.Join();
 
-        TSharedPtr<FLaunchSession> Finished = Move(GSession);
-        GSession = nullptr;
-
-        if (!Finished->bSuccess.load(std::memory_order_acquire))
+        if (BuildExitCode != 0)
         {
-            LOG_ERROR("Standalone: {}", Finished->ErrorMessage.c_str());
-            ImGuiX::Notifications::NotifyError("{}", Finished->ErrorMessage.c_str());
+            const FString Error = Format("Game build failed (exit code {}). See the log above.", BuildExitCode);
+            LOG_ERROR("Standalone: {}", *Error);
+            ImGuiX::Notifications::NotifyError("{}", *Error);
             return;
         }
 
-        LaunchOrReport(Finished->Options);
+        LaunchOrReport(PendingOptions);
+    }
+
+    void FStandaloneLauncher::Shutdown()
+    {
+        if (!IsBuilding())
+        {
+            return;
+        }
+
+        if (!bBuildDone.load(std::memory_order_acquire))
+        {
+            LOG_WARN("Standalone: stopping the game build because the editor is shutting down.");
+        }
+
+        Worker.RequestStop();
+        Worker.Join();
     }
 }

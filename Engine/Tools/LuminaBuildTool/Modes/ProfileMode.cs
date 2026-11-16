@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using LuminaBuildTool.Configuration;
 using LuminaBuildTool.Core;
+using LuminaBuildTool.Execution;
 using LuminaBuildTool.Graph;
 using LuminaBuildTool.Platform;
 using LuminaBuildTool.Rules;
@@ -26,6 +27,8 @@ public static class ProfileMode
     private const string CaptureToolName = "tracy-capture";
 
     private const string ExportToolName = "tracy-csvexport";
+
+    private const int ExportTimeoutMs = 10 * 60 * 1000;
 
     // Not a comma, since a zone name is a C++ signature and template arguments carry their own.
     private const string FieldSeparator = ";";
@@ -397,11 +400,7 @@ public static class ProfileMode
 
     private static string Export(string ExportTool, string TracePath, string Filter, bool bGpu)
     {
-        ProcessStartInfo Info = new(ExportTool)
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-        };
+        ProcessStartInfo Info = new(ExportTool);
 
         // Self time attributes cost to a zone rather than what it calls, and the GPU export resolves nesting here.
         Info.ArgumentList.Add(bGpu ? "-g" : "-e");
@@ -416,21 +415,19 @@ public static class ProfileMode
 
         Info.ArgumentList.Add(TracePath);
 
-        using Process? Export_ = Process.Start(Info)
-            ?? throw new BuildException($"Could not start '{ExportTool}'.");
+        ProcessResult Export_ = ProcessRunner.RunCaptured(Info, ExportTimeoutMs)
+            ?? throw new BuildException($"'{ExportTool}' could not start or did not finish within {ExportTimeoutMs / 1000} s.");
 
-        string Output = Export_.StandardOutput.ReadToEnd();
-        Export_.WaitForExit();
-
-        if (Export_.ExitCode != 0)
+        if (!Export_.bSucceeded)
         {
-            throw new BuildException($"'{ExportTool}' failed with exit code {Export_.ExitCode}.");
+            string Suffix = Export_.Error.Length == 0 ? string.Empty : $" {Export_.Error.Trim()}";
+            throw new BuildException($"'{ExportTool}' failed with exit code {Export_.ExitCode}.{Suffix}");
         }
 
-        return Output;
+        return Export_.Output;
     }
 
-    private static List<ProfileEntry> Parse(string Csv)
+    internal static List<ProfileEntry> Parse(string Csv)
     {
         List<ProfileEntry> Entries = new();
         string[] Lines = Csv.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -480,7 +477,7 @@ public static class ProfileMode
     }
 
     // Median across the repeats, keeping only zones every pass saw, since a partial zone yields no delta.
-    private static List<ProfileEntry> Merge(List<List<ProfileEntry>> Runs)
+    internal static List<ProfileEntry> Merge(List<List<ProfileEntry>> Runs)
     {
         if (Runs.Count == 1)
         {
@@ -529,7 +526,7 @@ public static class ProfileMode
         return Merged;
     }
 
-    private static double Median(double[] Sorted)
+    internal static double Median(double[] Sorted)
     {
         if (Sorted.Length == 0)
         {
@@ -560,7 +557,7 @@ public static class ProfileMode
     }
 
     // The GPU export is one row per event with no parent link, so nesting is rebuilt from the intervals.
-    private static List<ProfileEntry> ParseGpuZones(string Csv)
+    internal static List<ProfileEntry> ParseGpuZones(string Csv)
     {
         string[] Lines = Csv.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 

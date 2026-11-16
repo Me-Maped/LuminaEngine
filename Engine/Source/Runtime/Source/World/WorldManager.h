@@ -33,7 +33,7 @@ namespace Lumina
         void ReclaimIdleRenderers(double NowSeconds);
 
         // Steps every live world's physics and dispatches the contact events it raised. Game thread,
-        // synchronous, between the DuringPhysics and PostPhysics stages.
+        // synchronous, between the PrePhysics and PostPhysics stages.
         void TickPhysics();
 
         // Game thread
@@ -93,5 +93,8 @@ namespace Lumina
         TVector<TUniquePtr<FWorldContext>> Contexts;
     };
 
-    RUNTIME_API extern FWorldManager* GWorldManager;
+    namespace Global
+    {
+        RUNTIME_API extern FWorldManager* GWorldManager;
+    }
 }

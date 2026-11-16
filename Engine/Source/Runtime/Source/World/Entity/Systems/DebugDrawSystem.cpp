@@ -2,9 +2,7 @@
 #include "DebugDrawSystem.h"
 #include "Core/Console/ConsoleVariable.h"
 #include "Renderer/ImmediateLineRenderer.h"
-#include "SystemSingletons.h"
 #include "World/World.h"
-#include "World/Entity/Components/CameraComponent.h"
 
 namespace Lumina
 {
@@ -17,31 +15,18 @@ namespace Lumina
     static TConsoleVar<float> CVarDebugDrawDistance("DebugDraw.MaxDistance", 0.0f,
         "Prune debug sources further than this from the camera. 0 disables the distance test.");
 
-    void SDebugDrawSystem::Configure()
+    void CDebugDrawSystem::Configure()
     {
         #if !defined(LE_SHIPPING)
         RequireUpdate(EUpdateStage::FrameStart);
         RequireUpdate(EUpdateStage::Paused);
-        Reads<SCameraComponent>();
         #endif
     }
 
-    void SDebugDrawSystem::OnStartup(const SSystemContext& Context)
+    void CDebugDrawSystem::OnUpdate(const SSystemContext& Context)
     {
         #if !defined(LE_SHIPPING)
-
-        Context.GetRegistry().Ctx().Emplace<FDebugDrawState>();
-        #endif
-    }
-
-    void SDebugDrawSystem::OnUpdate(const SSystemContext& Context)
-    {
-        #if !defined(LE_SHIPPING)
-
-        FDebugDrawState& State = Context.GetRegistry().Ctx().Get<FDebugDrawState>();
-
-        CWorld* World = Context.GetWorld();
-
+        FDebugDrawState& State = *DrawState;
         State.bEnabled     = CVarDebugDrawEnabled.GetValue();
         State.bCullSources = CVarDebugDrawCullSources.GetValue();
         State.bHasView     = false;
@@ -49,23 +34,18 @@ namespace Lumina
         const float MaxDistance = CVarDebugDrawDistance.GetValue();
         State.MaxDistanceSq = (MaxDistance > 0.0f) ? (MaxDistance * MaxDistance) : 0.0f;
 
-        if (World == nullptr)
-        {
-            return;
-        }
-
         // The resolved view is one frame old, which is fine for a broad-phase cull.
-        const FResolvedSceneView* Resolved = Context.GetRegistry().Ctx().Find<FResolvedSceneView>();
-        if (Resolved != nullptr && Resolved->bHasView)
+        const FResolvedSceneView& Resolved = *ResolvedView;
+        if (Resolved.bHasView)
         {
-            State.Frustum    = Resolved->ViewVolume.GetFrustum();
-            State.ViewOrigin = Resolved->ViewVolume.GetViewPosition();
+            State.Frustum    = Resolved.ViewVolume.GetFrustum();
+            State.ViewOrigin = Resolved.ViewVolume.GetViewPosition();
             State.bHasView   = true;
             return;
         }
 
         // Before the first bake (world just loaded) fall back to the live camera so frame one still draws.
-        if (const SCameraComponent* Camera = World->GetCamera()->GetActiveCamera())
+        if (const SCameraComponent* Camera = Cameras.TryGet<SCameraComponent>(CameraState->ActiveCameraEntity))
         {
             State.Frustum    = Camera->GetViewVolume().GetFrustum();
             State.ViewOrigin = Camera->GetPosition();
@@ -74,10 +54,9 @@ namespace Lumina
         #endif
     }
 
-    void SDebugDrawSystem::OnTeardown(const SSystemContext& Context)
+    void CDebugDrawSystem::OnTeardown(const SExclusiveContext& Context)
     {
         #if !defined(LE_SHIPPING)
-
         Context.GetRegistry().Ctx().Erase<FDebugDrawState>();
         #endif
     }
@@ -110,9 +89,10 @@ namespace Lumina
             return World->GetImmediateLines();
         }
 
-        bool ShouldDraw(const FDebugDrawState& State, const FVector3& Center, float Radius)
+        #if !defined(LE_SHIPPING)
+        template<typename TFrustumTest>
+        static bool ShouldDrawSource(const FDebugDrawState& State, const FVector3& Center, float Radius, TFrustumTest&& FrustumTest)
         {
-            #if !defined(LE_SHIPPING)
             if (!State.bEnabled || !State.bHasView)
             {
                 return false;
@@ -134,7 +114,14 @@ namespace Lumina
                 }
             }
 
-            return State.Frustum.IntersectsSphere(Center, Radius);
+            return FrustumTest();
+        }
+        #endif
+
+        bool ShouldDraw(const FDebugDrawState& State, const FVector3& Center, float Radius)
+        {
+            #if !defined(LE_SHIPPING)
+            return ShouldDrawSource(State, Center, Radius, [&] { return State.Frustum.IntersectsSphere(Center, Radius); });
             #else
             return false;
             #endif
@@ -143,31 +130,8 @@ namespace Lumina
         bool ShouldDraw(const FDebugDrawState& State, const SAABB& Bounds)
         {
             #if !defined(LE_SHIPPING)
-            if (!State.bEnabled || !State.bHasView)
-            {
-                return false;
-            }
-
-            if (!State.bCullSources)
-            {
-                return true;
-            }
-
-            if (State.MaxDistanceSq > 0.0f)
-            {
-                const FVector3 Center = (Bounds.Min + Bounds.Max) * 0.5f;
-                const FVector3 Extent = (Bounds.Max - Bounds.Min) * 0.5f;
-                const float    Radius = Math::Sqrt(Math::Dot(Extent, Extent));
-
-                const FVector3 Delta = Center - State.ViewOrigin;
-                const float Reach = Math::Max(0.0f, Math::Sqrt(Math::Dot(Delta, Delta)) - Radius);
-                if (Reach * Reach > State.MaxDistanceSq)
-                {
-                    return false;
-                }
-            }
-
-            return State.Frustum.IsInside(Bounds);
+            const FVector3 Extent = (Bounds.Max - Bounds.Min) * 0.5f;
+            return ShouldDrawSource(State, (Bounds.Min + Bounds.Max) * 0.5f, Math::Sqrt(Math::Dot(Extent, Extent)), [&] { return State.Frustum.IsInside(Bounds); });
             #else
             return false;
             #endif

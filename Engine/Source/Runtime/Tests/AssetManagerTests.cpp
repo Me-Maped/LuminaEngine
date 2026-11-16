@@ -6,9 +6,13 @@
 #include "Core/Object/Package/Package.h"
 #include "Core/Serialization/MemoryArchiver.h"
 #include "Core/Serialization/Package/PackageSaver.h"
+#include "Core/Serialization/ProxyArchive.h"
+#include "Platform/Time/PlatformTime.h"
 #include "TaskSystem/CoroutineAssets.h"
 #include "TaskSystem/ThreadedCallback.h"
 #include "World/World.h"
+#include <atomic>
+#include <thread>
 
 using namespace Lumina;
 
@@ -50,7 +54,7 @@ TEST(AssetBundles, TheSaverRecordsEveryBundleThatNamesASoftReference)
 
     EXPECT_EQ(IconImport->Bundles, (TVector<FName>{ FName("Icon"), FName("UI"), FName("Visual") })) << "names are trimmed and a repeat is kept once";
     EXPECT_EQ(MeshImport->Bundles, (TVector<FName>{ FName("Visual") }));
-    EXPECT_TRUE(PlainImport->Bundles.empty()) << "restoring the outer scope stops tagging";
+    EXPECT_TRUE(PlainImport->Bundles.IsEmpty()) << "restoring the outer scope stops tagging";
 }
 
 TEST(AssetBundles, AnImportKeepsItsBundlesThroughASaveAndLoad)
@@ -87,8 +91,32 @@ TEST(AssetBundles, AnImportFromBeforeBundlesReadsWithNone)
     Reader << Read;
 
     EXPECT_EQ(Read.ObjectGUID, Written.ObjectGUID);
-    EXPECT_TRUE(Read.Bundles.empty());
-    EXPECT_EQ(Reader.Tell(), (int64)Bytes.size()) << "an older package has no bundle list to read past";
+    EXPECT_TRUE(Read.Bundles.IsEmpty());
+    EXPECT_EQ(Reader.Tell(), (int64)Bytes.Num()) << "an older package has no bundle list to read past";
+}
+
+TEST(ProxyArchive, APlainProxyForwardsAnObjectReferenceAndASoftReferenceToTheImportTable)
+{
+    CDataAsset* Target = NewObject<CDataAsset>(CPackage::CreatePackage("/ProxyArchiveTests/Target"), "Target");
+    const FGuid SoftGuid = FGuid::New();
+
+    TVector<uint8> Bytes;
+    FPackageSaver Saver(Bytes, nullptr);
+    FProxyArchive Proxy(Saver);
+
+    CObject* Obj = Target;
+    Proxy << Obj;
+    Proxy.RegisterSoftAssetReference(SoftGuid);
+
+    TVector<FObjectImport> Imports;
+    Saver.PopulateImportTable(Imports);
+
+    const FObjectImport* HardImport = FindImport(Imports, Target->GetGUID());
+    const FObjectImport* SoftImport = FindImport(Imports, SoftGuid);
+    ASSERT_NE(HardImport, nullptr) << "a proxy that drops CObject*& loses the import entirely";
+    ASSERT_NE(SoftImport, nullptr) << "a proxy that drops RegisterSoftAssetReference loses the soft edge";
+    EXPECT_EQ(HardImport->Type, EDependencyType::Hard);
+    EXPECT_EQ(SoftImport->Type, EDependencyType::Soft);
 }
 
 TEST(AssetHandles, AnObjectStaysExactlyAsLongAsAHandleHoldsIt)
@@ -133,6 +161,61 @@ TEST(AssetHandles, WhatResolvesToNothingIsAnInvalidHandleWhoseCallbackStillRuns)
     ByPath.OnReady([&bCalled](const FAssetHandle& Loaded) { bCalled = Loaded.Get() == nullptr; });
     MainThread::ProcessQueue();
     EXPECT_TRUE(bCalled) << "a failure still completes, so an awaiting caller is never left hanging";
+}
+
+// Requests from several threads race the drain deciding to stop, so a waiter queued just as it stops must still be loaded.
+TEST(AssetHandles, EveryRequestRacingTheDrainCompletes)
+{
+    constexpr int32 kThreads = 4;
+    constexpr int32 kRounds = 200;
+    constexpr int32 kShared = 3;
+    constexpr double kSecondsThatOnlyCatchAHang = 60.0;
+
+    // Unregistered ids still run through the queue and complete with null, and shared ones make requests join loads in flight.
+    TVector<FGuid> Shared;
+    for (int32 Index = 0; Index < kShared; ++Index)
+    {
+        Shared.Add(FGuid::New());
+    }
+
+    TVector<FAssetHandle> Handles[kThreads];
+    std::atomic<int32> Started { 0 };
+    std::thread Workers[kThreads];
+    for (int32 Thread = 0; Thread < kThreads; ++Thread)
+    {
+        Workers[Thread] = std::thread([&, Thread]
+        {
+            Started.fetch_add(1);
+            while (Started.load() < kThreads)
+            {
+                PlatformTime::YieldThread();
+            }
+            for (int32 Round = 0; Round < kRounds; ++Round)
+            {
+                Handles[Thread].Add(FAssetManager::Get().Load(FGuid::New()));
+                Handles[Thread].Add(FAssetManager::Get().Load(Shared[Round % kShared]));
+            }
+        });
+    }
+    for (std::thread& Worker : Workers)
+    {
+        Worker.join();
+    }
+
+    const double Deadline = PlatformTime::Seconds() + kSecondsThatOnlyCatchAHang;
+    for (const TVector<FAssetHandle>& ThreadHandles : Handles)
+    {
+        for (const FAssetHandle& Handle : ThreadHandles)
+        {
+            while (!Handle.IsReady() && PlatformTime::Seconds() < Deadline)
+            {
+                PlatformTime::YieldThread();
+            }
+            ASSERT_TRUE(Handle.IsReady()) << "a queued waiter was never loaded";
+            EXPECT_EQ(Handle.Get(), nullptr);
+        }
+    }
+    MainThread::ProcessQueue();
 }
 
 TEST(AssetCoroutines, AResidentObjectLoadsWithoutSuspendingAndStaysWhileHeld)

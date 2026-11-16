@@ -8,6 +8,7 @@
 #include "RHI.h"
 #include "RHICore.h"
 #include "MeshletHeaderSlab.h"
+#include "Assets/AssetTypes/Mesh/Mesh.h"
 #include "Core/Application/Application.h"
 #include "Core/CommandLine/CommandLine.h"
 #include "Core/Console/ConsoleVariable.h"
@@ -16,8 +17,7 @@
 #include "Paths/Paths.h"
 #include "Platform/Process/PlatformProcess.h"
 #include <thread>
-#include "TaskSystem/Future.h"
-#include "TaskSystem/Scheduler/JobScheduler.h"
+#include "TaskSystem/TaskSystem.h"
 #include "Core/Engine/Engine.h"
 #include "Core/Windows/Window.h"
 #include "Core/Profiler/Profile.h"
@@ -68,17 +68,17 @@ namespace Lumina
     // Beside the user settings, which is writable in an installed game where the shader cache is not.
     static FString PipelineCachePath()
     {
-        if (GCommandLine != nullptr && GCommandLine->Has("nopipelinecache"))
+        if (Global::GCommandLine != nullptr && Global::GCommandLine->Has("nopipelinecache"))
         {
             return {};
         }
         const FString Settings = CGameUserSettings::GetSettingsFilePath();
-        FString Path = Paths::Parent(FStringView(Settings.c_str(), Settings.size()), true);
+        FString Path = Paths::Parent(FStringView(*Settings, Settings.Len()), true);
 
         // A packaged game creates the device before it knows its project name, which would share one cache across games.
-        if (GEngine == nullptr || (GEngine->GetProjectPath().empty() && GEngine->GetProjectName().empty()))
+        if (Global::GEngine == nullptr || (Global::GEngine->GetProjectPath().IsEmpty() && Global::GEngine->GetProjectName().IsEmpty()))
         {
-            Path = Paths::Parent(FStringView(Path.c_str(), Path.size()), true);
+            Path = Paths::Parent(FStringView(*Path, Path.Len()), true);
             Path += "/";
             #if PLATFORM_TCHAR_IS_WIDE
             Path += StringUtils::FromWideString(Platform::ExecutableName());
@@ -101,7 +101,7 @@ namespace Lumina
         // Half the cores, since a driver compile pins a whole thread and the frame's own jobs still need workers.
         uint32 MaxConcurrentPipelineBuilds()
         {
-            const uint32 Cores = Math::Max(1u, (uint32)std::thread::hardware_concurrency());
+            const uint32 Cores = Math::Max(1u, std::thread::hardware_concurrency());
             return Math::Clamp(Cores / 2u, 1u, 8u);
         }
 
@@ -122,21 +122,20 @@ namespace Lumina
         FShaderH              Shaders[3];
         FPipelineBuild        Build;
         std::atomic<uint8>    State{ PendingQueued };
-        TPromise<void>        Done;
-        TFuture<void>         DoneFuture = Done.GetFuture();
+        Jobs::FTaskEvent      Done;
     };
 
     RHI::FPipelineH FScenePipelineCache::Find(uint64 Hash)
     {
         FReadScopeLock Lock(Mutex);
-        auto It = Entries.find(Hash);
-        return It != Entries.end() ? It->second.Pipeline : RHI::FPipelineH{};
+        auto It = Entries.Find(Hash);
+        return It != nullptr ? It->Pipeline : RHI::FPipelineH{};
     }
 
     bool FScenePipelineCache::IsPending(uint64 Hash)
     {
         FReadScopeLock Lock(Mutex);
-        return PendingBuilds.find(Hash) != PendingBuilds.end();
+        return PendingBuilds.Contains(Hash);
     }
 
     TSharedPtr<FScenePipelineCache::FPendingBuild> FScenePipelineCache::AddPending(uint64 Hash, const FShaderH (&Shaders)[3], FPipelineBuild&& Build, bool bQueued)
@@ -149,7 +148,7 @@ namespace Lumina
         }
         Pending->Build = Move(Build);
         Pending->State.store(bQueued ? PendingQueued : PendingRunning, std::memory_order_relaxed);
-        PendingBuilds.emplace(Hash, Pending);
+        PendingBuilds.TryAdd(Hash, Pending);
         return Pending;
     }
 
@@ -162,16 +161,16 @@ namespace Lumina
             FWriteScopeLock Lock(Mutex);
             if (Pipeline)
             {
-                Entries.emplace(Hash, FEntry{ Pipeline, { Pending.Shaders[0], Pending.Shaders[1], Pending.Shaders[2] } });
+                Entries.TryAdd(Hash, FEntry{ Pipeline, { Pending.Shaders[0], Pending.Shaders[1], Pending.Shaders[2] } });
             }
-            if (auto It = PendingBuilds.find(Hash); It != PendingBuilds.end() && It->second.get() == &Pending)
+            if (auto It = PendingBuilds.Find(Hash); It != nullptr && It->get() == &Pending)
             {
-                PendingBuilds.erase(It);
+                PendingBuilds.Remove(Hash);
             }
         }
 
         Pending.State.store(PendingDone, std::memory_order_release);
-        Pending.Done.SetValue();
+        Pending.Done.Signal();
         return Pipeline;
     }
 
@@ -179,18 +178,18 @@ namespace Lumina
     {
         {
             FWriteScopeLock Lock(Mutex);
-            if (auto It = Entries.find(Hash); It != Entries.end())
+            if (auto It = Entries.Find(Hash); It != nullptr)
             {
-                return It->second.Pipeline;
+                return It->Pipeline;
             }
-            if (PendingBuilds.find(Hash) != PendingBuilds.end() || !Build)
+            if (PendingBuilds.Contains(Hash) || !Build)
             {
                 return {};
             }
 
             TSharedPtr<FPendingBuild> Pending = AddPending(Hash, Shaders, Move(Build), true);
             FScopeLock QueueLock(QueueMutex);
-            Queue.push_back(Move(Pending));
+            Queue.Add(Move(Pending));
         }
 
         Pump();
@@ -203,14 +202,14 @@ namespace Lumina
         bool bOwn = false;
         {
             FWriteScopeLock Lock(Mutex);
-            if (auto It = Entries.find(Hash); It != Entries.end())
+            if (auto It = Entries.Find(Hash); It != nullptr)
             {
-                return It->second.Pipeline;
+                return It->Pipeline;
             }
 
-            if (auto It = PendingBuilds.find(Hash); It != PendingBuilds.end())
+            if (auto It = PendingBuilds.Find(Hash); It != nullptr)
             {
-                Pending = It->second;
+                Pending = (*It);
                 // A build still waiting for a worker is taken over here rather than waited behind the queue.
                 uint8 Expected = PendingQueued;
                 bOwn = Pending->State.compare_exchange_strong(Expected, PendingRunning, std::memory_order_acq_rel);
@@ -231,20 +230,16 @@ namespace Lumina
             return RunBuild(Hash, *Pending);
         }
 
-        Pending->DoneFuture.Wait();
+        Pending->Done.Wait();
         return Find(Hash);
     }
 
     struct FScenePipelineCache::FPumpJob
     {
-        FScenePipelineCache*        Cache;
-        TSharedPtr<FPendingBuild>   Pending;
-
-        static void Run(void* Arg, uint32)
+        static Jobs::TTask<void> Run(FScenePipelineCache* Cache, TSharedPtr<FPendingBuild> Pending)
         {
-            FPumpJob* Job = static_cast<FPumpJob*>(Arg);
-            Job->Cache->RunQueued(*Job->Pending);
-            Memory::Delete(Job);
+            Cache->RunQueued(*Pending);
+            co_return;
         }
     };
 
@@ -261,7 +256,7 @@ namespace Lumina
         {
             FScopeLock Lock(QueueMutex);
             --InFlight;
-            bDrained = InFlight == 0 && Queue.empty();
+            bDrained = InFlight == 0 && Queue.IsEmpty();
         }
 
         if (bDrained && BuiltSinceSave.load(std::memory_order_relaxed) >= kBuildsPerCacheSave)
@@ -281,18 +276,17 @@ namespace Lumina
             TSharedPtr<FPendingBuild> Next;
             {
                 FScopeLock Lock(QueueMutex);
-                if (InFlight >= MaxInFlight || Queue.empty())
+                if (InFlight >= MaxInFlight || Queue.IsEmpty())
                 {
                     return;
                 }
-                Next = Move(Queue.front());
-                Queue.erase(Queue.begin());
+                Next = Move(Queue[0]);
+                Queue.RemoveAt(0);
                 ++InFlight;
             }
 
             // Background, so a thread assist-waiting on frame work never inherits a driver compile.
-            FPumpJob* Job = Memory::New<FPumpJob>(FPumpJob{ this, Move(Next) });
-            Jobs::RunJob(&FPumpJob::Run, Job, Jobs::EJobPriority::Background, nullptr, "PipelineBuild");
+            Jobs::Spawn(Jobs::EJobPriority::Background, &FPumpJob::Run, this, Move(Next));
         }
     }
 
@@ -305,10 +299,10 @@ namespace Lumina
                 uint8 Expected = PendingQueued;
                 if (Pending->State.compare_exchange_strong(Expected, PendingDone, std::memory_order_acq_rel))
                 {
-                    Pending->Done.SetValue();
+                    Pending->Done.Signal();
                 }
             }
-            Queue.clear();
+            Queue.Reset();
         }
 
         // A worker still compiling writes into Entries and needs the device alive until it returns.
@@ -325,7 +319,7 @@ namespace Lumina
         }
 
         FWriteScopeLock Lock(Mutex);
-        PendingBuilds.clear();
+        PendingBuilds.Reset();
     }
 
     void FScenePipelineCache::PurgeStale()
@@ -334,15 +328,15 @@ namespace Lumina
         for (auto It = Entries.begin(); It != Entries.end();)
         {
             bool bStale = false;
-            for (const FShaderH& Shader : It->second.Shaders)
+            for (const FShaderH& Shader : It->Value.Shaders)
             {
                 bStale |= Shader != nullptr && FShaderLibrary::Resolve(Shader) == nullptr;
             }
 
             if (bStale)
             {
-                RHI::Retire(It->second.Pipeline);
-                It = Entries.erase(It);
+                RHI::Retire(It->Value.Pipeline);
+                It = Entries.Remove(It);
             }
             else
             {
@@ -359,7 +353,7 @@ namespace Lumina
         {
             RHI::Retire(Entry.Pipeline);
         }
-        Entries.clear();
+        Entries.Reset();
     }
 
     FRenderManager::FRenderManager()
@@ -399,14 +393,14 @@ namespace Lumina
         SharedRenderResources.Reset();
         ScenePipelineCache.ReleaseAll();
 
-        GShaderCompiler = nullptr;
+        Global::GShaderCompiler = nullptr;
         if (ShaderCompiler != nullptr)
         {
             ShaderCompiler->Shutdown();
             Memory::Delete(ShaderCompiler);
             ShaderCompiler = nullptr;
         }
-        GShaderLibrary = nullptr;
+        Global::GShaderLibrary = nullptr;
         if (ShaderLibrary != nullptr)
         {
             Memory::Delete(ShaderLibrary);
@@ -434,29 +428,29 @@ namespace Lumina
         constexpr bool bDebugUtils = true;
         #endif
         
-        if (GCommandLine != nullptr)
+        if (Global::GCommandLine != nullptr)
         {
-            if (GCommandLine->Has("validation"))
+            if (Global::GCommandLine->Has("validation"))
             {
                 bValidation = true;
             }
-            if (GCommandLine->Has("novalidation"))
+            if (Global::GCommandLine->Has("novalidation"))
             {
                 bValidation = false;
             }
         }
         
         uint32 MinVRAMMiB = kMinimumVRAMMiB;
-        if (GCommandLine != nullptr)
+        if (Global::GCommandLine != nullptr)
         {
-            if (GCommandLine->Has("ignoreminspec"))
+            if (Global::GCommandLine->Has("ignoreminspec"))
             {
                 LOG_WARN("-ignoreminspec, so the {} MiB graphics memory minimum is not enforced. "
                          "Expect corrupt rendering and device loss on a card below it.", kMinimumVRAMMiB);
                 MinVRAMMiB = 0;
             }
             // Exercises the rejection dialog on hardware that would otherwise pass.
-            else if (const TOptional<int> Override = GCommandLine->GetInt("minvram"))
+            else if (const TOptional<int> Override = Global::GCommandLine->GetInt("minvram"))
             {
                 MinVRAMMiB = (uint32)Math::Max(*Override, 0);
                 LOG_WARN("-minvram, so the graphics memory minimum is {} MiB rather than {} MiB.",
@@ -464,7 +458,7 @@ namespace Lumina
             }
         }
 
-        const bool bRenderBootTimings = GCommandLine != nullptr && GCommandLine->Has("boottimings");
+        const bool bRenderBootTimings = Global::GCommandLine != nullptr && Global::GCommandLine->Has("boottimings");
         double RenderBootLast = PlatformTime::Seconds();
         auto RenderBootMark = [&RenderBootLast, bRenderBootTimings](const char* Name)
         {
@@ -482,7 +476,7 @@ namespace Lumina
             .bDebugUtils = bDebugUtils,
             .bHeadless   = false,
             // Meshlets draw through the vertex path without mesh shading, and -nomeshshaders forces that path.
-            .DisabledFeatures = GCommandLine != nullptr && GCommandLine->Has("nomeshshaders") ? RHI::EDeviceFeature::MeshShading : RHI::EDeviceFeature::None,
+            .DisabledFeatures = Global::GCommandLine != nullptr && Global::GCommandLine->Has("nomeshshaders") ? RHI::EDeviceFeature::MeshShading : RHI::EDeviceFeature::None,
             .MinDeviceLocalMemoryMiB = MinVRAMMiB,
             .PipelineCachePath = PipelineCachePath(),
         });
@@ -491,9 +485,9 @@ namespace Lumina
         WarnIfBelowRecommendedVRAM();
 
         ShaderLibrary   = Memory::New<FShaderLibrary>();
-        GShaderLibrary  = ShaderLibrary;
+        Global::GShaderLibrary  = ShaderLibrary;
         ShaderCompiler  = Memory::New<FSpirVShaderCompiler>();
-        GShaderCompiler = ShaderCompiler;
+        Global::GShaderCompiler = ShaderCompiler;
         ShaderCompiler->Initialize();
         RenderBootMark("ShaderCompiler::Initialize");
 
@@ -520,9 +514,36 @@ namespace Lumina
     {
         LUMINA_PROFILE_SECTION_COLORED("Frame Fence (GPU)", tracy::Color::Crimson);
 
+        if (GetDefault<CRendererSettings>()->bLowLatencyMode)
+        {
+            const uint8 PreviousFrameIndex = (CurrentFrameIndex + RHI::kFramesInFlight - 1) % RHI::kFramesInFlight;
+            RHI::WaitForSlotGPU(PreviousFrameIndex);
+            PlotInputToGPUComplete(PreviousFrameIndex);
+        }
+
         // FrameEnd records into CurrentFrameIndex and advances afterwards, so this is that same slot.
         RHI::BeginFrame(CurrentFrameIndex);
+        PlotInputToGPUComplete(CurrentFrameIndex);
         bFrameSlotWaited = true;
+    }
+
+    void FRenderManager::MarkInputRead()
+    {
+        InputReadSeconds = PlatformTime::Seconds();
+    }
+
+    static void PlotMilliseconds(const char* PlotName, double StartSeconds, double EndSeconds)
+    {
+        TracyPlot(PlotName, (EndSeconds - StartSeconds) * 1000.0);
+    }
+
+    void FRenderManager::PlotInputToGPUComplete(uint8 FrameIndex)
+    {
+        if (SlotInputReadSeconds[FrameIndex] != 0.0)
+        {
+            PlotMilliseconds("Latency/InputToGPUComplete (ms)", SlotInputReadSeconds[FrameIndex], PlatformTime::Seconds());
+            SlotInputReadSeconds[FrameIndex] = 0.0;
+        }
     }
 
     void FRenderManager::FrameStart(const FUpdateContext& UpdateContext)
@@ -532,7 +553,32 @@ namespace Lumina
         #if USING(WITH_DEV_UI)
         ImGuiRenderer->StartFrame(UpdateContext);
         #endif
-        
+
+        // Before the worlds sync, so a resource that landed is resolved and drawn this frame.
+        PublishPendingMeshes();
+    }
+
+    void FRenderManager::WatchMeshPublish(CMesh* Mesh)
+    {
+        FScopeLock Lock(MeshPublishMutex);
+        MeshesAwaitingPublish.AddUnique(TWeakObjectPtr<CMesh>(Mesh));
+    }
+
+    void FRenderManager::PublishPendingMeshes()
+    {
+        FScopeLock Lock(MeshPublishMutex);
+        for (int32 i = 0; i < MeshesAwaitingPublish.Num(); )
+        {
+            CMesh* Mesh = MeshesAwaitingPublish[i].Get();
+            if (Mesh == nullptr || Mesh->PublishPendingMeshResource())
+            {
+                MeshesAwaitingPublish.RemoveAtSwap(i);
+            }
+            else
+            {
+                ++i;
+            }
+        }
     }
     
     void FRenderManager::FrameEnd()
@@ -542,18 +588,23 @@ namespace Lumina
         const uint8 ThisFrameIndex = CurrentFrameIndex;
         CurrentFrameIndex = (CurrentFrameIndex + 1) % RHI::kFramesInFlight;
 
+        // Cleared here so a frame that never presents leaves no stale read behind for a later frame to plot.
+        const double FrameInputReadSeconds = InputReadSeconds;
+        const double ExtractedSeconds      = PlatformTime::Seconds();
+        InputReadSeconds = 0.0;
+
         [[maybe_unused]] ImDrawData* ImGuiDrawData = nullptr;
         #if USING(WITH_DEV_UI)
         ImGuiDrawData = ImGuiRenderer->BuildFrame();
         #endif
 
         {
-            // Normally already done at the top of the frame; this covers a caller that drives FrameEnd
-            // directly, and a frame whose slot advanced past an early-out above.
+            // Covers a caller driving FrameEnd directly and a frame whose slot advanced past an early-out above.
             if (!bFrameSlotWaited)
             {
                 LUMINA_PROFILE_SECTION_COLORED("Frame Fence (GPU)", tracy::Color::Crimson);
                 RHI::BeginFrame(ThisFrameIndex);
+                PlotInputToGPUComplete(ThisFrameIndex);
             }
             bFrameSlotWaited = false;
 
@@ -567,7 +618,7 @@ namespace Lumina
             // Read every frame like the other renderer settings, and a no-op unless the value moved.
             RHI::SetMaxAnisotropy((float)GetDefault<CRendererSettings>()->MaxAnisotropy);
 
-            GWorldManager->RenderWorlds(ThisFrameIndex);
+            Global::GWorldManager->RenderWorlds(ThisFrameIndex);
 
             RHI::FTextureH SwapImage;
             {
@@ -600,7 +651,7 @@ namespace Lumina
                 LUMINA_PROFILE_SECTION_COLORED("Game Composite", tracy::Color::ForestGreen);
 
                 IRenderScene* Scene = nullptr;
-                if (FWorldContext* GameContext = GWorldManager->GetPrimaryGameContext())
+                if (FWorldContext* GameContext = Global::GWorldManager->GetPrimaryGameContext())
                 {
                     if (CWorld* GameWorld = GameContext->World.Get())
                     {
@@ -632,6 +683,12 @@ namespace Lumina
 
             {
                 LUMINA_PROFILE_SECTION_COLORED("Present", tracy::Color::Orange4);
+                if (FrameInputReadSeconds != 0.0)
+                {
+                    PlotMilliseconds("Latency/InputToExtract (ms)", FrameInputReadSeconds, ExtractedSeconds);
+                    PlotMilliseconds("Latency/InputToPresentSubmit (ms)", FrameInputReadSeconds, PlatformTime::Seconds());
+                    SlotInputReadSeconds[ThisFrameIndex] = FrameInputReadSeconds;
+                }
                 // A secondary viewport's present waits this one out, so only a frame with tool windows torn off serializes.
                 SwapchainTarget.PresentAsync(CL);
             }
@@ -710,7 +767,8 @@ namespace Lumina
         {
             CompletedWindowCapture.Width  = Extent.x;
             CompletedWindowCapture.Height = Extent.y;
-            CompletedWindowCapture.Pixels.assign(Mapped, Mapped + (size_t)Extent.x * Extent.y * 4u);
+            CompletedWindowCapture.Pixels.Reset();
+            CompletedWindowCapture.Pixels.Append(Mapped, Mapped + (size_t)Extent.x * Extent.y * 4u);
             CompletedWindowCaptureTicket = InFlightWindowCapture.Ticket;
         }
 

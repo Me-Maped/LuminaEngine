@@ -11,26 +11,36 @@
 #include "World/Net/NetGUID.h"
 #include "Net/NetReplication.h"
 #include "World/Subsystems/WorldSettings.h"
-#include <algorithm>
-#include <cmath>
 
 namespace Lumina::NetGraph
 {
+    // Deterministic viewpoint anchor pick for a connection owning more than one record, independent of extract order.
+    static bool IsBetterViewpointAnchor(const FNetExtract& Out, uint32 CandidateRec, uint32 CurrentRec)
+    {
+        const bool bCandidatePitch = (Out.Flags[CandidateRec] & NETREC_HasPitch) != 0;
+        const bool bCurrentPitch   = (Out.Flags[CurrentRec]   & NETREC_HasPitch) != 0;
+        if (bCandidatePitch != bCurrentPitch)
+        {
+            return bCandidatePitch;
+        }
+        return Out.Guid[CandidateRec] < Out.Guid[CurrentRec];
+    }
+
     void BuildExtract(ECS::FRegistry& Registry, FNetExtract& Out, THashMap<uint32, uint32>& OutOwnerToRecord)
     {
         LUMINA_PROFILE_SCOPE();
         Out.Reset();
-        OutOwnerToRecord.clear();
+        OutOwnerToRecord.Reset();
 
         // Every replicating entity needs a record whether or not it streams a transform.
-        auto View   = Registry.View<SNetworkComponent>();
-        auto Handle = View.GetDriver();
-        const uint32 N = static_cast<uint32>(Handle->GetDenseSize());
+        auto View   = Registry.View<ECS::Read<SNetworkComponent>>();
+        const TSpan<const ECS::FEntity> DenseSlots = View.GetDenseEntities();
+        const uint32 N = static_cast<uint32>(DenseSlots.Num());
 
-        const uint32 NumThreads = (GTaskSystem != nullptr) ? GTaskSystem->GetNumTaskThreads() : 1u;
-        if (static_cast<uint32>(Out.Threads.size()) < NumThreads)
+        const uint32 NumThreads = Jobs::IsRuntimeRunning() ? Jobs::GetNumThreadSlots() : 1u;
+        if (static_cast<uint32>(Out.Threads.Num()) < NumThreads)
         {
-            Out.Threads.resize(NumThreads);
+            Out.Threads.SetNum(NumThreads);
         }
         for (FNetExtractThread& T : Out.Threads)
         {
@@ -46,12 +56,12 @@ namespace Lumina::NetGraph
         if (N > 0)
         {
             LUMINA_PROFILE_SECTION("Extract::Parallel");
-            Task::ParallelFor(N, [&](const Task::FParallelRange& Range)
+            Jobs::ParallelFor(N, [&](const Jobs::FParallelRange& Range)
             {
                 FNetExtractThread& L = Out.Threads[Range.Thread];
                 for (uint32 i = Range.Start; i < Range.End; ++i)
                 {
-                    const ECS::FEntity E = Handle->GetDenseData()[i];
+                    const ECS::FEntity E = DenseSlots.GetData()[i];
                     SNetworkComponent& Net = NetStorage.Get(E);
 
                     // A static-but-stateful or purely logical entity must still spawn and replicate.
@@ -73,14 +83,15 @@ namespace Lumina::NetGraph
                         {
                             continue;
                         }
-                        L.Guid.push_back(Net.NetGUID.Value);
-                        L.Pos.push_back(FVector3(0.0f));
-                        L.WorldPos.push_back(FVector3(0.0f));
-                        L.Rot.push_back(NetQuantize::FQuantizedQuat::FromQuat(FQuat::Identity()));
-                        L.Scale.push_back(NetQuantize::FQuantizedVector::FromVector(FVector3(1.0f), NetQuantize::ScaleQuantum));
-                        L.OwnerConn.push_back(Net.OwningConnectionId);
-                        L.Flags.push_back(Flags);
-                        L.Pitch.push_back(0);
+                        L.Guid.Add(Net.NetGUID.Value);
+                        L.Pos.Emplace(0.0f);
+                        L.WorldPos.Emplace(0.0f);
+                        L.Rot.Add(NetQuantize::FQuantizedQuat::FromQuat(FQuat::Identity()));
+                        L.Scale.Add(NetQuantize::FQuantizedVector::FromVector(FVector3(1.0f), NetQuantize::ScaleQuantum));
+                        L.OwnerConn.Add(Net.OwningConnectionId);
+                        L.Flags.Add(Flags);
+                        L.Pitch.Add(0);
+                        L.Seq.Emplace();
                         continue;
                     }
 
@@ -120,13 +131,15 @@ namespace Lumina::NetGraph
                     }
 
                     // A non-movement entity's pose only ever rides the spawn baseline, so it skips this gate.
+                    FNetChangeSeq Seq;
                     if (bMovement)
                     {
                         FRepTransform& Rep = RepStorage.Get(E);
-                        if (!Rep.bSendCacheValid || QPos != Rep.LastSentPos || QRot != Rep.LastSentRot) { Flags |= NETREC_Changed; }
-                        if ((Flags & NETREC_HasPitch) && Pitch != Rep.LastSentPitch)                     { Flags |= NETREC_Changed; }
+                        const bool bPitchChanged = (Flags & NETREC_HasPitch) && Pitch != Rep.LastSentPitch;
+                        if (!Rep.bSendCacheValid || QPos != Rep.LastSentPos || QRot != Rep.LastSentRot || bPitchChanged) { ++Rep.ChangeSeq.Pose; }
+                        if (!Rep.bSendCacheValid || QScale != Rep.LastSentScale)                                         { ++Rep.ChangeSeq.Scale; }
+                        Seq = Rep.ChangeSeq;
                         Rep.LastSentPitch   = Pitch;
-                        if (!Rep.bSendCacheValid || QScale != Rep.LastSentScale)                        { Flags |= NETREC_ScaleChanged; }
                         Rep.LastSentPos     = QPos;
                         Rep.LastSentRot     = QRot;
                         Rep.LastSentScale   = QScale;
@@ -134,76 +147,88 @@ namespace Lumina::NetGraph
                         Flags |= NETREC_Movement;
                     }
 
-                    L.Guid.push_back(Net.NetGUID.Value);
-                    L.Pos.push_back(Pos);                       // LOCAL -> wire
-                    L.WorldPos.push_back(T.GetWorldLocationCached()); // WORLD -> grid/relevancy (== local for roots)
-                    L.Rot.push_back(QRot);
-                    L.Scale.push_back(QScale);
-                    L.OwnerConn.push_back(Net.OwningConnectionId);
-                    L.Flags.push_back(Flags);
-                    L.Pitch.push_back(Pitch);
+                    L.Guid.Add(Net.NetGUID.Value);
+                    L.Pos.Add(Pos);                       // LOCAL -> wire
+                    L.WorldPos.Add(T.GetWorldLocationCached()); // WORLD -> grid/relevancy (== local for roots)
+                    L.Rot.Add(QRot);
+                    L.Scale.Add(QScale);
+                    L.OwnerConn.Add(Net.OwningConnectionId);
+                    L.Flags.Add(Flags);
+                    L.Pitch.Add(Pitch);
+                    L.Seq.Add(Seq);
                 }
             }, 256);
         }
 
         // The cost is the BuildExtract zone minus its parallel child.
         uint32 Total = 0;
-        for (uint32 t = 0; t < NumThreads; ++t) { Total += static_cast<uint32>(Out.Threads[t].Guid.size()); }
-        Out.Guid.reserve(Total); 
-        Out.Pos.reserve(Total); 
-        Out.WorldPos.reserve(Total); 
-        Out.Rot.reserve(Total);
-        Out.Scale.reserve(Total);
-        Out.OwnerConn.reserve(Total);
-        Out.Flags.reserve(Total);
-        Out.Pitch.reserve(Total);
+        for (uint32 t = 0; t < NumThreads; ++t) { Total += static_cast<uint32>(Out.Threads[t].Guid.Num()); }
+        Out.Guid.Reserve(Total); 
+        Out.Pos.Reserve(Total); 
+        Out.WorldPos.Reserve(Total); 
+        Out.Rot.Reserve(Total);
+        Out.Scale.Reserve(Total);
+        Out.OwnerConn.Reserve(Total);
+        Out.Flags.Reserve(Total);
+        Out.Pitch.Reserve(Total);
+        Out.Seq.Reserve(Total);
 
         for (uint32 t = 0; t < NumThreads; ++t)
         {
             FNetExtractThread& L = Out.Threads[t];
-            const uint32 LN = static_cast<uint32>(L.Guid.size());
+            const uint32 LN = static_cast<uint32>(L.Guid.Num());
             for (uint32 i = 0; i < LN; ++i)
             {
-                const uint32 Rec = static_cast<uint32>(Out.Guid.size());
-                Out.Guid.push_back(L.Guid[i]);
-                Out.Pos.push_back(L.Pos[i]);
-                Out.WorldPos.push_back(L.WorldPos[i]);
-                Out.Rot.push_back(L.Rot[i]);
-                Out.Scale.push_back(L.Scale[i]);
-                Out.OwnerConn.push_back(L.OwnerConn[i]);
-                Out.Flags.push_back(L.Flags[i]);
-                Out.Pitch.push_back(L.Pitch[i]);
+                const uint32 Rec = static_cast<uint32>(Out.Guid.Num());
+                Out.Guid.Add(L.Guid[i]);
+                Out.Pos.Add(L.Pos[i]);
+                Out.WorldPos.Add(L.WorldPos[i]);
+                Out.Rot.Add(L.Rot[i]);
+                Out.Scale.Add(L.Scale[i]);
+                Out.OwnerConn.Add(L.OwnerConn[i]);
+                Out.Flags.Add(L.Flags[i]);
+                Out.Pitch.Add(L.Pitch[i]);
+                Out.Seq.Add(L.Seq[i]);
                 if (L.OwnerConn[i] != 0)
                 {
-                    OutOwnerToRecord[L.OwnerConn[i]] = Rec; // a client owns one pawn; last wins
+                    uint32* Existing = OutOwnerToRecord.Find(L.OwnerConn[i]);
+                    if (!Existing || IsBetterViewpointAnchor(Out, Rec, *Existing))
+                    {
+                        OutOwnerToRecord[L.OwnerConn[i]] = Rec;
+                    }
                 }
             }
         }
 
         // The total replicating-entity count, the dominant driver of every per-tick replication cost.
-        LUMINA_PROFILE_VALUE("Net/ExtractRecords", static_cast<int64>(Out.Num()));
+        LUMINA_PROFILE_VALUE("Net/ExtractRecords", Out.Num());
     }
 
     void BuildGrid(const FNetExtract& Extract, const SDefaultWorldSettings& Settings, FNetGrid& Grid)
     {
         LUMINA_PROFILE_SCOPE();
         const float Half = Settings.WorldHalfExtent;
-        const float Cell = (Settings.GridCellSize > 1.0f) ? Settings.GridCellSize : 1.0f;
+        float Cell = Math::Max(Settings.GridCellSize, 1.0f);
+        const float Dim = Math::Ceil((2.0f * Half) / Cell);
+        if (Dim > static_cast<float>(FNetGrid::MaxDim))
+        {
+            Cell = (2.0f * Half) / static_cast<float>(FNetGrid::MaxDim);
+            LOG_WARN_ONCE("Net relevancy grid would need {} cells per axis, widening cells to {} to stay at {}", Dim, Cell, FNetGrid::MaxDim);
+        }
         Grid.Origin   = FVector3(-Half, 0.0f, -Half);
         Grid.CellSize = Cell;
-        Grid.DimX     = static_cast<int32>(std::ceil((2.0f * Half) / Cell));
-        Grid.DimX = Math::Max(Grid.DimX, 1);
+        Grid.DimX     = Math::Max(static_cast<int32>(Math::Min(Dim, static_cast<float>(FNetGrid::MaxDim))), 1);
         Grid.DimZ     = Grid.DimX;
 
         const int32  NumCells = Grid.NumCells();
         const uint32 N        = Extract.Num();
 
         // A counting sort, so count, prefix-sum, then scatter.
-        Grid.CellStart.assign(NumCells + 1, 0);
-        Grid.SortedRecords.resize(N);
-        Grid.SortedWorldPos.resize(N);
-        Grid.SortedFlags.resize(N);
-        Grid.SortedGuid.resize(N);
+        Grid.CellStart.Init(0, NumCells + 1);
+        Grid.SortedRecords.SetNum(N);
+        Grid.SortedWorldPos.SetNum(N);
+        Grid.SortedFlags.SetNum(N);
+        Grid.SortedGuid.SetNum(N);
 
         for (uint32 i = 0; i < N; ++i)
         {
@@ -217,8 +242,8 @@ namespace Lumina::NetGraph
         }
 
         // Scatter with a per-cell cursor.
-        TVector<int32> Cursor;
-        Cursor.resize(NumCells);
+        TVector<int32>& Cursor = Grid.Cursor;
+        Cursor.SetNum(NumCells);
         for (int32 c = 0; c < NumCells; ++c) { Cursor[c] = Grid.CellStart[c]; }
         for (uint32 i = 0; i < N; ++i)
         {
@@ -231,6 +256,26 @@ namespace Lumina::NetGraph
             Grid.SortedFlags[Dst]    = Extract.Flags[i];
             Grid.SortedGuid[Dst]     = Extract.Guid[i];
         }
+    }
+
+    bool IsTransformDue(const FRelevantEntry& Entry, const FNetChangeSeq& Current, bool bForceBaseline,
+        const SDefaultWorldSettings& Settings, bool& bOutScale)
+    {
+        const bool bScaleChanged = Current.Scale != Entry.SentSeq.Scale;
+        const bool bChanged      = bScaleChanged || Current.Pose != Entry.SentSeq.Pose;
+        const bool bBaseline     = bForceBaseline || Entry.bNeedsBaseline;
+
+        // A pose not sent for a whole keyframe interval goes again, which heals a lost final update.
+        const bool bRefresh = Settings.TransformKeyframeInterval > 0.0f && Entry.TimeSinceSent >= Settings.TransformKeyframeInterval;
+
+        // Near sends every changed tick, Mid and Far throttle to tier rate, and a baseline bypasses.
+        float Period = 0.0f;
+        if (Entry.Tier == ENetLODTier::Mid)      { Period = (Settings.TierMidRate > 0.0f) ? 1.0f / Settings.TierMidRate : 0.0f; }
+        else if (Entry.Tier == ENetLODTier::Far) { Period = (Settings.TierFarRate > 0.0f) ? 1.0f / Settings.TierFarRate : 0.0f; }
+        const bool bCadence = (Period <= 0.0f) || (Entry.TimeSinceSent >= Period);
+
+        bOutScale = bScaleChanged || bBaseline || bRefresh;
+        return bBaseline || bRefresh || (bChanged && bCadence);
     }
 
     ENetLODTier TierForDistanceSq(float DistSq, const SDefaultWorldSettings& Settings)

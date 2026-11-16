@@ -9,7 +9,7 @@
 
 struct FPushConstants
 {
-    FRWTexture2D Scatter;      // half-res rgb = scattered radiance, a = transmittance
+    FRWTexture2D Scatter;      // rgb = scattered radiance, a = transmittance, indexed by block when Stride is 2
     FTexture2D   Depth;        // scene depth, clamps the march
     FTexture3D   Noise;        // the baked shape and erosion volume
     uint         ScreenW;
@@ -46,10 +46,10 @@ struct FPushConstants
     uint         OffsetX;
     uint         OffsetY;
 
-    uint         FrameIndex;   // turns the march jitter every frame, so the resolve integrates it
     FTexture2D   Weather;
     uint         _Pad1;
     uint         _Pad2;
+    uint         _Pad3;
 };
 FPushConstants* Pass() { return GetPassArgs<FPushConstants>(); }
 
@@ -96,12 +96,6 @@ static const float kEmptyStepScale = 3.0;
 static const float kMaxEmptyStride = 300.0;
 static const uint  kEntryFineSteps = 3u;
 
-// Turned by the golden ratio each frame, since one fixed offset per pixel samples a cloud at the same slices forever and the resolve sees them as slats.
-float Cloud_MarchJitter(float2 PixelPos, uint FrameIndex)
-{
-    return frac(InterleavedGradientNoise(PixelPos) + float(FrameIndex & 1023u) * 0.61803399);
-}
-
 // Light that scattered more than once, approximated by octaves each weaker, softer and more forward, so dense cores glow instead of going flat.
 static const uint  kScatterOctaves     = 3u;
 static const float kOctaveAttenuation  = 0.5;
@@ -113,17 +107,20 @@ static const float kOctaveEccentricity = 0.5;
 void ComputeMain(uint3 DTid : SV_DispatchThreadID)
 {
     uint2 Size = uint2(Pass().ScreenW, Pass().ScreenH);
-    int2  P    = int2(DTid.xy * Pass().Stride + uint2(Pass().OffsetX, Pass().OffsetY));
-    if (P.x >= int(Size.x) || P.y >= int(Size.y))
+    if (any(DTid.xy * Pass().Stride >= Size))
     {
         return;
     }
+    // A block cut by an odd screen edge still marches, on its in-bounds texel.
+    const int2 P = min(int2(DTid.xy * Pass().Stride + uint2(Pass().OffsetX, Pass().OffsetY)), int2(Size) - 1);
+
+    const int2 Out = Pass().Stride > 1u ? int2(DTid.xy) : P;
 
     const FCloudRay Ray = Cloud_SetupRay(Pass().Depth, P, Size, Pass().LayerBottom, Pass().LayerTop, Pass().MaxDistance);
     Pass().CloudDepth[P] = float4(Ray.RawDepth, 0.0, 0.0, 0.0);
     if (Ray.End <= Ray.Start)
     {
-        Pass().Scatter[P] = float4(0.0, 0.0, 0.0, 1.0);
+        Pass().Scatter[Out] = float4(0.0, 0.0, 0.0, 1.0);
         return;
     }
 
@@ -159,8 +156,8 @@ void ComputeMain(uint3 DTid : SV_DispatchThreadID)
     // Clear air between clouds is cheap, so stride through it in whole fine steps, which keeps every sample on one jittered lattice.
     float EmptyStep = BaseStep * clamp(floor(kMaxEmptyStride / BaseStep), 1.0, kEmptyStepScale);
 
-    // Within one fine step, since the empty strides are whole fine steps and a wider jitter lets a stride skip a small puff on some frames only.
-    float T        = Start + Cloud_MarchJitter(float2(P), Pass().FrameIndex) * BaseStep;
+    // One fixed fine-step offset per texel, spread like blue noise so the composite's tent averages it, with no frame history to integrate it.
+    float T        = Start + InterleavedGradientNoise(float2(P)) * BaseStep;
     bool  bStrode  = false;
     uint  FineLeft = 0u;
 
@@ -262,5 +259,5 @@ void ComputeMain(uint3 DTid : SV_DispatchThreadID)
     Scattered     *= DistanceFade;
     Transmittance  = lerp(1.0, Transmittance, DistanceFade);
 
-    Pass().Scatter[P] = float4(SanitizeRadiance(Scattered), Transmittance);
+    Pass().Scatter[Out] = float4(SanitizeRadiance(Scattered), Transmittance);
 }

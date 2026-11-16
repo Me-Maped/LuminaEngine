@@ -1,23 +1,28 @@
 #pragma once
 #include "EntitySystem.h"
 #include "Core/Object/ObjectMacros.h"
+#include "World/Entity/Components/RagdollComponent.h"
+#include "World/Entity/Components/SkeletalMeshComponent.h"
+#include "World/Entity/Components/TransformComponent.h"
 #include "RagdollSystem.generated.h"
 
 namespace Lumina
 {
-    // Bridges SRagdollComponent to the physics scene: on PrePhysics it creates and destroys the ragdoll
-    // (seeded from the current animation pose, so it must run after SAnimationSystem); on PostPhysics it
-    // reads the simulated bodies back into the skeletal mesh's bone transforms.
+
+    // Creates ragdolls from the animated pose in PrePhysics and reads the simulated bodies back into the bones in PostPhysics.
     REFLECT()
-    class SRagdollSystem : public CEntitySystem
+    class CRagdollSystem : public CEntitySystem
     {
         GENERATED_BODY()
     public:
 
         void Configure() override;
 
-    public:
-
         void OnUpdate(const SSystemContext& Context) override;
+
+    private:
+
+        ECS::TQuery<ECS::Write<SRagdollComponent>, ECS::Read<SSkeletalMeshComponent>, ECS::Read<STransformComponent>> Ragdolls;
+        ECS::TQuery<ECS::Write<SSkeletalMeshComponent>> PoseTargets;
     };
 }

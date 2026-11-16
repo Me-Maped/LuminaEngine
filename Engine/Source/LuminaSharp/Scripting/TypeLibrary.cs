@@ -27,6 +27,7 @@ internal sealed class TypeLibrary
         // Proves the view table still matches the classifier the rewriter emitted accessors from, failures it catches being otherwise silent.
         ScriptPropertyViews.Validate();
 
+        StateTreeNodes = new StateTreeNodeInvokers(this);
         AllTypes = new List<Type>(Types);
         foreach (Type Type in AllTypes)
         {
@@ -118,10 +119,8 @@ internal sealed class TypeLibrary
     // Prior type names to current ones from [Alias], which native mirrors so saved scenes and live instances follow a rename.
     public IEnumerable<KeyValuePair<string, string>> TypeAliases => ScriptAliases;
 
-    /// <summary>Full type names of every discovered Scriptable C# subclass.</summary>
     public IReadOnlyCollection<string> ScriptableTypeNames => Scriptables.Keys;
 
-    /// <summary>Every discovered Scriptable C# subclass type.</summary>
     public IEnumerable<Type> ScriptableTypes => Scriptables.Values;
 
     // Every reflected struct as (StableId, description, native base name), each after the structs it holds by value.
@@ -162,6 +161,9 @@ internal sealed class TypeLibrary
 
     // Builds the handle for a script struct named at runtime, so a caller can reach it through an interface it implements.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Func<nint, object>?> StructViews = new();
+
+    // The invokers state trees run this generation's C# nodes through.
+    internal readonly StateTreeNodeInvokers StateTreeNodes;
 
     public object? ViewScriptStruct(string StableId, nint Address)
     {
@@ -220,7 +222,6 @@ internal sealed class TypeLibrary
         return ScriptStructs.TryGetValue(StableId, out ScriptStructEntry Entry) ? Entry.Description : null;
     }
 
-    /// <summary>A Scriptable C# subclass by full name, or null if unknown.</summary>
     public Type? GetScriptable(string FullName) => Scriptables.TryGetValue(FullName, out Type? Type) ? Type : null;
 
     // A type that views native storage, so a get-only member of it is still a real property.
@@ -321,18 +322,21 @@ internal sealed class TypeLibrary
         return null;
     }
 
-    /// <summary>Get-or-build the description for any type (used recursively for nested struct members).</summary>
+    // Locked whole, since an entry is published before it is built and a parallel system must not read it half done.
     public TypeDescription Describe(Type Type)
     {
-        if (ByType.TryGetValue(Type, out TypeDescription? Cached))
+        lock (ByType)
         {
-            return Cached;
-        }
+            if (ByType.TryGetValue(Type, out TypeDescription? Cached))
+            {
+                return Cached;
+            }
 
-        TypeDescription Description = new(Type);
-        ByType[Type] = Description; // insert before building members so self/cyclic references resolve
-        Description.Build(this);
-        return Description;
+            TypeDescription Description = new(Type);
+            ByType[Type] = Description; // Inserted before its members build, so a self or cyclic reference resolves.
+            Description.Build(this);
+            return Description;
+        }
     }
 
     // The reflected shape of a CLR type, which names any struct, enum or class rather than describing it, or None when it has none.
@@ -672,7 +676,7 @@ internal sealed class TypeLibrary
 
     private static bool TryGetMapTypes(Type Type, out Type? KeyType, out Type? ValueType)
     {
-        // A managed Dictionary<K,V> -- a data struct's own member, copied across the wire.
+        // A managed Dictionary is a data struct's own member, copied across the wire.
         if (Type.IsGenericType && Type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
         {
             Type[] Args = Type.GetGenericArguments();
@@ -680,7 +684,7 @@ internal sealed class TypeLibrary
             ValueType = Args[1];
             return true;
         }
-        // THashMap<K,V>: a VIEW over the native map, shaped identically on the wire.
+        // A THashMap is a view over the native map, shaped the same on the wire.
         return ScriptPropertyViews.TryGetKeyValue(Type, out KeyType, out ValueType);
     }
 }
@@ -946,7 +950,7 @@ internal sealed class TypeDescription
         }
     }
 
-    /// <summary>Hands one action's state to each of the instance's bindings that listens to it.</summary>
+    // Hands one action's state to each of the instance's bindings that listens to it.
     public void DispatchAction(Lumina.CEntityScript Script, Lumina.FName Action, in Lumina.SInputActionState State)
     {
         foreach (ScriptProperty Property in InputBindings)
@@ -960,7 +964,7 @@ internal sealed class TypeDescription
     }
 }
 
-/// <summary>A discovered data type: its member description plus the native struct it derives from.</summary>
+// A discovered data type, its member description and the native struct it derives from.
 internal readonly struct ScriptStructEntry
 {
     public ScriptStructEntry(TypeDescription Description, string NativeBase)
@@ -971,6 +975,6 @@ internal readonly struct ScriptStructEntry
 
     public TypeDescription Description { get; }
 
-    /// <summary>Registered name of the native CStruct the minted type is given as its super.</summary>
+    // The native CStruct the minted type is given as its super.
     public string NativeBase { get; }
 }

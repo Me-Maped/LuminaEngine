@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "Log/Log.h"
+#include "Memory/Memcpy.h"
 #include "Renderer/API/Vulkan/VulkanAllocator.h"
 
 namespace Lumina::RHI
@@ -139,7 +140,7 @@ namespace Lumina::RHI
 
         const size_t NameLength = Name != nullptr ? std::strlen(Name) : 0;
         const size_t Copied     = NameLength < MaxNameChars ? NameLength : MaxNameChars - 1;
-        std::memcpy(Entry.Name, Name != nullptr ? Name : "", Copied);
+        Memory::Memcpy(Entry.Name, Name != nullptr ? Name : "", Copied);
         Entry.Name[Copied] = 0;
 
         Entry.Depth    = Depth;
@@ -182,7 +183,7 @@ namespace Lumina::RHI
         const FEntry* LastCompleted = nullptr;
 
         TVector<const FEntry*> Outstanding;
-        Outstanding.reserve(64);
+        Outstanding.Reserve(64);
 
         for (uint32 Index = 0; Index < MaxMarkers; ++Index)
         {
@@ -197,7 +198,7 @@ namespace Lumina::RHI
 
             if (BeganValue == Entry.MarkerId && EndedValue != Entry.MarkerId)
             {
-                Outstanding.push_back(&Entry);
+                Outstanding.Add(&Entry);
             }
             else if (EndedValue == Entry.MarkerId
                 && (LastCompleted == nullptr || Entry.MarkerId > LastCompleted->MarkerId))
@@ -206,7 +207,7 @@ namespace Lumina::RHI
             }
         }
 
-        if (Outstanding.empty())
+        if (Outstanding.IsEmpty())
         {
             if (TotalRecorded == 0)
             {
@@ -249,7 +250,7 @@ namespace Lumina::RHI
             });
 
         LOG_ERROR("[GPU] GPU breadcrumbs: {} pass(es) in flight when the device was lost "
-                  "(submission order, deepest nesting last):", (uint32)Outstanding.size());
+                  "(submission order, deepest nesting last):", (uint32)Outstanding.Num());
 
         for (const FEntry* Entry : Outstanding)
         {
@@ -260,9 +261,9 @@ namespace Lumina::RHI
                 Indent += "  ";
             }
 
-            LOG_ERROR("[GPU]   {}> {} (#{})", Indent.c_str(), Entry->Name, Entry->MarkerId);
+            LOG_ERROR("[GPU]   {}> {} (#{})", *Indent, Entry->Name, Entry->MarkerId);
         }
 
-        return FString(Outstanding.back()->Name);
+        return FString(Outstanding.Last()->Name);
     }
 }

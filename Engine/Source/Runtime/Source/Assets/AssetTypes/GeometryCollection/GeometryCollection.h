@@ -38,7 +38,7 @@ namespace Lumina
         TVector<FFracturePiece> Pieces;
         SAABB                   SourceBounds;
 
-        FORCEINLINE bool IsEmpty() const { return Pieces.empty(); }
+        FORCEINLINE bool IsEmpty() const { return Pieces.IsEmpty(); }
 
         friend FArchive& operator<<(FArchive& Ar, FFractureData& D)
         {
@@ -72,7 +72,7 @@ namespace Lumina
         /** Pre-build the shared piece meshes so the first runtime fracture doesn't hitch. */
         void PostLoad() override;
 
-        FORCEINLINE int32 GetNumPieces() const { return static_cast<int32>(Data.Pieces.size()); }
+        FORCEINLINE int32 GetNumPieces() const { return Data.Pieces.Num(); }
         FORCEINLINE const FFractureData& GetFractureData() const { return Data; }
         FORCEINLINE const FFracturePiece& GetPiece(int32 Index) const { return Data.Pieces[Index]; }
 
@@ -85,7 +85,7 @@ namespace Lumina
 
         void SerializeFractureData(FArchive& Ar) { Ar << Data; }
 
-        void InvalidatePieceMeshes() { PieceMeshes.clear(); }
+        void InvalidatePieceMeshes() { PieceMeshes.Reset(); }
 
         /** Bake convex Voronoi pieces from a source mesh's bounds. Returns a new collection owned by Outer. */
         static CGeometryCollection* GenerateFromMesh(CStaticMesh* Source, const FFractureSettings& Settings, CObject* Outer = nullptr);
@@ -122,6 +122,9 @@ namespace Lumina
         // Convex Voronoi fracture: clip the mesh's convex hull by perpendicular bisectors between seed
         // points, so pieces follow the silhouette. Falls back to the AABB for degenerate/dense meshes.
         RUNTIME_API void GenerateConvexFracture(const CMesh* SourceMesh, const FFractureSettings& Settings, TVector<FFracturePiece>& OutPieces);
+
+        // Outward planes (normal, distance) of the triangles that have every position on one side.
+        RUNTIME_API void ComputeHullPlanes(const TVector<FVector3>& Positions, const TVector<FUIntVector3>& Triangles, float Tol, TVector<FVector4>& OutPlanes);
 
         /** Build a transient, render- and collision-ready CStaticMesh from one piece. */
         RUNTIME_API CStaticMesh* BuildPieceMesh(const FFracturePiece& Piece, const TVector<TStrongObjectPtr<CMaterialInterface>>& Materials, const char* DebugName);

@@ -1,18 +1,19 @@
 #include "ParticleModule.h"
 #include "Containers/String.h"
 #include "Containers/StringFormat.h"
+#include "UI/Tools/NodeGraph/Particle/ParticleCompiler.h"
 #include <cctype>
 
 namespace Lumina
 {
     FString CParticleModule::LocalVar(int32 ModuleIndex, const char* Name)
     {
-        return "m" + FString(Format("{}", ModuleIndex)) + "_" + Name;
+        return "m" + Format("{}", ModuleIndex) + "_" + Name;
     }
 
     bool CParticleModule::IsIdentifier(const FString& Name)
     {
-        if (Name.empty() || std::isdigit((unsigned char)Name[0]))
+        if (Name.IsEmpty() || std::isdigit((unsigned char)Name[0]))
         {
             return false;
         }
@@ -29,7 +30,7 @@ namespace Lumina
 
     FString CParticleModule::Lit(float V)
     {
-        return FString(Format("{}", V));
+        return Format("{}", V);
     }
 
     FString CParticleModule::Lit(const FVector2& V)
@@ -45,5 +46,10 @@ namespace Lumina
     FString CParticleModule::Lit(const FVector4& V)
     {
         return "float4(" + Lit(V.x) + ", " + Lit(V.y) + ", " + Lit(V.z) + ", " + Lit(V.w) + ")";
+    }
+
+    FString CParticleModule::OverLifeExpr(FParticleCompiler& Compiler, const char* Name, const SCurve& Curve)
+    {
+        return "SampleCurveLUT(" + Compiler.ParamCurve(Name, Curve) + ", LifeRatio)";
     }
 }

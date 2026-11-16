@@ -14,7 +14,7 @@ namespace Lumina
 {
 	class IAudioSource;
 
-	/** Everything the pump hands the mixer to start one voice. The source stays owned by the caller. */
+	// Everything the pump hands the mixer to start one voice. The source stays owned by the caller.
 	struct FMixerVoiceDesc
 	{
 		uint32           Slot = 0;
@@ -24,7 +24,7 @@ namespace Lumina
 		SAudioPlayParams Params;
 	};
 
-	/** One listener's pose, published by the pump and sampled by the mixer once per block. */
+	// One listener's pose, published by the pump and sampled by the mixer once per block.
 	struct FMixerListener
 	{
 		FVector3 Position = FVector3(0.0f);
@@ -35,7 +35,7 @@ namespace Lumina
 		bool     bEnabled = false;
 	};
 
-	/** Block mixer rendering on the device thread; the pump reaches it only through queues and atomics. */
+	// Block mixer rendering on the device thread; the pump reaches it only through queues and atomics.
 	class RUNTIME_API FAudioMixer final : public IAudioRenderCallback
 	{
 	public:
@@ -73,7 +73,7 @@ namespace Lumina
 		bool StartVoice(const FMixerVoiceDesc& Desc);
 		bool PostCommand(const FAudioCommand& Cmd);
 
-		/** Free means the mixer has let go of the slot's source and the pump may release it. */
+		// Free means the mixer has let go of the slot's source and the pump may release it.
 		EAudioVoiceState GetSlotState(uint32 Slot) const;
 		uint64 GetSlotFrame(uint32 Slot) const;
 
@@ -111,7 +111,7 @@ namespace Lumina
 
 	private:
 
-		/** Mixer-owned voice state. Touched only on the device thread once the voice is live. */
+		// Mixer-owned voice state. Touched only on the device thread once the voice is live.
 		struct FVoice
 		{
 			IAudioSource* Source = nullptr;
@@ -159,16 +159,18 @@ namespace Lumina
 			uint64 PlayedFrames = 0;
 		};
 
-		void RenderBlock(float* Out, uint32 Frames);
+		void RenderBlock(float* RESTRICT Out, uint32 Frames);
 		void DrainStarts();
 		void DrainCommands();
 		void ApplyCommand(const FAudioCommand& Cmd);
 
 		void RenderVoice(FVoice& Voice, uint32 Frames);
 		uint32 ResampleVoice(FVoice& Voice, uint32 Frames, float Ratio);
-		void ComputeVoiceGains(const FVoice& Voice, float* OutGains) const;
-		float ComputeVoicePitch(const FVoice& Voice) const;
+		void ComputeVoiceGains(const FVoice& Voice, const FMixerListener& Listener, const FVector3& ToVoice, float* OutGains) const;
+		float ComputeVoicePitch(const FVoice& Voice, const FMixerListener& Listener, const FVector3& ToVoice) const;
+		FVector3 SelectVoiceListener(const FVoice& Voice, FMixerListener& OutListener) const;
 
+		void StopVoice(FVoice& Voice, uint32 Slot, const FAudioCommand& Cmd);
 		void DeactivateVoice(FVoice& Voice, uint32 Slot);
 		void PublishSlot(uint32 Slot, EAudioVoiceState State, uint64 Frame);
 
@@ -179,6 +181,7 @@ namespace Lumina
 		uint32 NumChannels = 2;
 
 		FVoice Voices[MaxVoices];
+		uint32 RenderStartSlot = 0;
 
 		// A stereo-linked peak limiter on the master, so a pile of explosions ducks the mix instead of hard clipping it.
 		static constexpr float LimiterCeiling = 0.89f;
@@ -219,7 +222,6 @@ namespace Lumina
 		TAtomic<float>  DopplerScale{1.0f};
 		TAtomic<uint32> GainRampFrames{0};
 		TAtomic<bool>   bInitialized{false};
-		TAtomic<bool>   bReverbDirty{false};
 
 		FAudioReverbParams PendingReverbParams;
 	};

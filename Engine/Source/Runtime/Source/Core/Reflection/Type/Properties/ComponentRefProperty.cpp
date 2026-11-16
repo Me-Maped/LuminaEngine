@@ -17,7 +17,7 @@ namespace Lumina
     FString FComponentRefProperty::ToString(const void* Data) const
     {
         const FComponentRef* Ref = static_cast<const FComponentRef*>(Data);
-        FString Text = ComponentStruct != nullptr ? FString(ComponentStruct->MakeDisplayName().c_str()) : FString("Component");
+        FString Text = ComponentStruct != nullptr ? FString(*ComponentStruct->MakeDisplayName()) : FString("Component");
         Text += Ref != nullptr && Ref->Resolve() != nullptr ? " (bound)" : " (unbound)";
         return Text;
     }

@@ -35,11 +35,11 @@ namespace
 {
     FEditorUI* GetEditorUI()
     {
-        if (GEditorEngine == nullptr)
+        if (Global::GEditorEngine == nullptr)
         {
             return nullptr;
         }
-        return static_cast<FEditorUI*>(GEditorEngine->GetDevelopmentToolsUI());
+        return static_cast<FEditorUI*>(Global::GEditorEngine->GetDevelopmentToolsUI());
     }
 }
 
@@ -57,11 +57,11 @@ void FNsightPerfEditorModule::StartupModule()
         RHI::Native::FDeviceCreationRequest Request;
         for (const char* Name : InstanceExts)
         {
-            Request.InstanceExtensions.push_back(Name);
+            Request.InstanceExtensions.Add(Name);
         }
         for (const char* Name : DeviceExts)
         {
-            Request.DeviceExtensions.push_back(Name);
+            Request.DeviceExtensions.Add(Name);
         }
         RHI::Native::RegisterDeviceCreationRequest(Request);
 
@@ -91,7 +91,7 @@ void FNsightPerfEditorModule::StartupModule()
     ToolsMenuHandle = FToolsMenuRegistry::Get().Register(Move(Entry));
 
     // The editor UI does not exist yet, so the tool can only be opened once the engine is up.
-    if (GCommandLine != nullptr && GCommandLine->Has("nsightexport"))
+    if (Global::GCommandLine != nullptr && Global::GCommandLine->Has("nsightexport"))
     {
         (void)FCoreDelegates::OnPostEngineInit.AddLambda([]
         {

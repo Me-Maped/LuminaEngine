@@ -17,15 +17,15 @@ namespace Lumina
     
         if (bIsBitmask)
         {
-            int64 EnumCount = (int64)EnumProperty->GetEnum()->Names.size();
+            int64 EnumCount = (int64)EnumProperty->GetEnum()->Names.Num();
             FFixedString PreviewString = EnumProperty->GetEnum()->GetValueOrBitFieldAsString(CachedValue);
     
-            if (PreviewString.empty())
+            if (PreviewString.IsEmpty())
             {
                 PreviewString = LOC("None");
             }
 
-            if (ImGui::BeginCombo("##", PreviewString.c_str(), ImGuiComboFlags_HeightLarge))
+            if (ImGui::BeginCombo("##", *PreviewString, ImGuiComboFlags_HeightLarge))
             {
                 bool bNoneSelected = (CachedValue == 0);
                 if (ImGui::Selectable(LOC_ID("None"), bNoneSelected))
@@ -48,7 +48,7 @@ namespace Lumina
                         continue;
                     }
 
-                    const char* Label = EnumProperty->GetEnum()->GetNameAtIndex(i).c_str();
+                    const char* Label = *EnumProperty->GetEnum()->GetNameAtIndex(i);
                     bool bIsSet = (CachedValue & BitValue) != 0;
     
                     if (ImGui::Checkbox(Label, &bIsSet))
@@ -73,7 +73,7 @@ namespace Lumina
         else
         {
             CEnum* Enum = EnumProperty->GetEnum();
-            const int64 EnumCount = (int64)Enum->Names.size();
+            const int64 EnumCount = Enum->Names.Num();
 
             // Map the stored value to its row; values need not be contiguous with indices.
             int32 CurrentIndex = Constants::kIndexNone;
@@ -86,13 +86,13 @@ namespace Lumina
                 }
             }
 
-            const FFixedString Preview = Enum->GetNameAtValue(CachedValue).c_str();
-            const int32 Picked = ImGuiX::SearchableCombo("##enum", Preview.c_str(), (int32)EnumCount, CurrentIndex, [Enum](int32 Index)
+            const FFixedString Preview = *Enum->GetNameAtValue(CachedValue);
+            const int32 Picked = ImGuiX::SearchableCombo("##enum", *Preview, (int32)EnumCount, CurrentIndex, [Enum](int32 Index)
             {
-                return FFixedString(Enum->GetNameAtIndex(Index).c_str());
+                return FFixedString(*Enum->GetNameAtIndex(Index));
             }, LE_ICON_RHOMBUS_OUTLINE);
 
-            if (Picked != Constants::kIndexNone)
+            if (Picked != Constants::kIndexNone && Picked != CurrentIndex)
             {
                 CachedValue = (int64)Enum->GetValueAtIndex(Picked);
                 bWasChanged = true;

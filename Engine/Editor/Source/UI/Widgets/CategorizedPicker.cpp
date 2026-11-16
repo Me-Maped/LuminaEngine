@@ -22,21 +22,23 @@ namespace Lumina
 
         const FString& PickerItemIdentity(const FPickerItem& Item)
         {
-            return !Item.Key.empty() ? Item.Key : !Item.SourceName.empty() ? Item.SourceName : Item.Name;
-        }
-
-        FStringView NextCategoryPathSegment(FStringView Path, size_t& Cursor)
-        {
-            // Source and display paths may have different leading/repeated separators.
-            // Skip only separators, leaving the caller's folder names unchanged.
-            while (Cursor < Path.size() && Path[Cursor] == '/')
+            const int32 NeedleLength = static_cast<int32>(strlen(Needle));
+            if (NeedleLength == 0 || NeedleLength > Haystack.Len())
             {
                 ++Cursor;
             }
-            const size_t Begin = Cursor;
-            while (Cursor < Path.size() && Path[Cursor] != '/')
+            for (int32 Start = 0; Start + NeedleLength <= Haystack.Len(); ++Start)
             {
-                ++Cursor;
+                int32 Index = 0;
+                while (Index < NeedleLength
+                    && std::tolower((unsigned char)Haystack[Start + Index]) == std::tolower((unsigned char)Needle[Index]))
+                {
+                    ++Index;
+                }
+                if (Index == NeedleLength)
+                {
+                    return true;
+                }
             }
             return Path.substr(Begin, Cursor - Begin);
         }
@@ -45,10 +47,34 @@ namespace Lumina
         void DrawPickerMatchedName(const FString& Name, const TVector<uint16>& Matches)
         {
             const ImVec4 MatchColor(1.0f, 0.82f, 0.35f, 1.0f);
-            const char* Text = Name.c_str();
-            for (const FGraphActionTextSpan& Span : BuildGraphActionHighlightSpans(Text, Matches))
+            const char* Text = *Name;
+            const int32 Length = Name.Len();
+
+            int32 Cursor = 0;
+            int32 MatchCursor = 0;
+            bool bFirstRun = true;
+            while (Cursor < Length)
             {
-                if (Span.Begin != 0)
+                const bool bMatched = MatchCursor < Matches.Num() && Matches[MatchCursor] == Cursor;
+                int32 RunEnd = Cursor + 1;
+                if (bMatched)
+                {
+                    ++MatchCursor;
+                    while (RunEnd < Length && MatchCursor < Matches.Num() && Matches[MatchCursor] == RunEnd)
+                    {
+                        ++RunEnd;
+                        ++MatchCursor;
+                    }
+                }
+                else
+                {
+                    while (RunEnd < Length && (MatchCursor >= Matches.Num() || Matches[MatchCursor] != RunEnd))
+                    {
+                        ++RunEnd;
+                    }
+                }
+
+                if (!bFirstRun)
                 {
                     ImGui::SameLine(0.0f, 0.0f);
                 }
@@ -133,7 +159,7 @@ namespace Lumina
             ImGui::SetKeyboardFocusHere();
         }
         const FString Hint = Lumina::Format("{} {}", LE_ICON_MAGNIFY, SearchHint);
-        const bool bEnter = ImGui::InputTextWithHint("##PickerSearch", Hint.c_str(), Query, sizeof(Query), ImGuiInputTextFlags_EnterReturnsTrue);
+        const bool bEnter = ImGui::InputTextWithHint("##PickerSearch", *Hint, Query, sizeof(Query), ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::PopStyleVar();
 
         if (ScoredQuery != Query)
@@ -141,34 +167,34 @@ namespace Lumina
             Rescore();
         }
 
-        if (!DrawnOrder.empty())
+        if (!DrawnOrder.IsEmpty())
         {
             int32 Position = 0;
-            while (Position < (int32)DrawnOrder.size() && DrawnOrder[Position] != SelectedItem)
+            while (Position < DrawnOrder.Num() && DrawnOrder[Position] != SelectedItem)
             {
                 ++Position;
             }
             if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true))
             {
-                SelectedItem = DrawnOrder[Position >= (int32)DrawnOrder.size() ? 0 : (Position + 1) % (int32)DrawnOrder.size()];
+                SelectedItem = DrawnOrder[Position >= DrawnOrder.Num() ? 0 : (Position + 1) % DrawnOrder.Num()];
                 bScrollToSelected = true;
             }
             if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true))
             {
-                SelectedItem = DrawnOrder[Position >= (int32)DrawnOrder.size() ? 0 : (Position + (int32)DrawnOrder.size() - 1) % (int32)DrawnOrder.size()];
+                SelectedItem = DrawnOrder[Position >= DrawnOrder.Num() ? 0 : (Position + DrawnOrder.Num() - 1) % DrawnOrder.Num()];
                 bScrollToSelected = true;
             }
         }
 
         int32 Picked = -1;
-        DrawingOrder.clear();
+        DrawingOrder.Reset();
 
         ImGui::Spacing();
         if (ImGui::BeginChild("##PickerList", ImVec2(kPickerWidth, kPickerListHeight)))
         {
             // Searching expands categories under its own ids, so the user's browsing layout survives clearing the query.
             ImGui::PushID(IsSearching() ? 1 : 0);
-            if (!Categories.empty())
+            if (!Categories.IsEmpty())
             {
                 for (int32 Child : Categories[0].Children)
                 {
@@ -181,21 +207,21 @@ namespace Lumina
             }
             ImGui::PopID();
 
-            if (DrawingOrder.empty())
+            if (DrawingOrder.IsEmpty())
             {
                 ImGui::Spacing();
-                ImGui::TextDisabled(Items.empty() ? LOC("Nothing to pick from.") : LOC("No matches."));
+                ImGui::TextDisabled(Items.IsEmpty() ? "Nothing to pick from." : "No matches.");
             }
         }
         ImGui::EndChild();
 
         ImGui::Separator();
-        const int32 Total = (int32)Items.size();
+        const int32 Total = Items.Num();
         const int32 Shown = IsSearching() ? CountItems(0, true) : Total;
         const FString Count = IsSearching()
             ? Lumina::Format("{} of {} {}", Shown, Total, ItemNoun)
             : Lumina::Format("{} {}", Total, ItemNoun);
-        ImGui::TextDisabled("%s", Count.c_str());
+        ImGui::TextDisabled("%s", *Count);
         if (SelectedItem >= 0)
         {
             constexpr const char* EnterHint = "Enter to pick";
@@ -212,12 +238,12 @@ namespace Lumina
         }
 
         // Enter reaches a disabled item the same as the arrow keys do, so it is refused here rather than per input.
-        return Picked >= 0 && Picked < (int32)Items.size() && !Items[Picked].bDisabled ? &Items[Picked] : nullptr;
+        return Picked >= 0 && Picked < Items.Num() && !Items[Picked].bDisabled ? &Items[Picked] : nullptr;
     }
 
     void FCategorizedPicker::Rebuild(const FGatherItems& Gather, const FLocalizationSnapshot& Snapshot)
     {
-        Items.clear();
+        Items.Reset();
         if (Gather)
         {
             Gather(Items);
@@ -226,22 +252,27 @@ namespace Lumina
 
         Algo::StableSort(Items, [](const FPickerItem& A, const FPickerItem& B) { return A.Name < B.Name; });
 
-        Categories.clear();
-        Categories.emplace_back();
-        for (int32 Index = 0; Index < (int32)Items.size(); ++Index)
+        Categories.Reset();
+        Categories.Emplace();
+        for (int32 Index = 0; Index < Items.Num(); ++Index)
         {
             int32 Category = 0;
             const FStringView Path(Items[Index].Category);
-            const FStringView SourcePath(Items[Index].SourceCategory.empty() ? Items[Index].Category : Items[Index].SourceCategory);
-            size_t Start = 0;
-            size_t SourceStart = 0;
-            for (FStringView Label = NextCategoryPathSegment(Path, Start); !Label.empty();
-                Label = NextCategoryPathSegment(Path, Start))
+            int32 Start = 0;
+            while (Start < Path.Len())
             {
-                const FStringView SourceLabel = NextCategoryPathSegment(SourcePath, SourceStart);
-                Category = FindOrAddChild(Category, Label, SourceLabel.empty() ? Label : SourceLabel);
+                int32 End = Path.Find('/', Start);
+                if (End == Constants::kIndexNone)
+                {
+                    End = Path.Len();
+                }
+                if (End > Start)
+                {
+                    Category = FindOrAddChild(Category, Path.Mid(Start, End - Start));
+                }
+                Start = End + 1;
             }
-            Categories[Category].Items.push_back(Index);
+            Categories[Category].Items.Add(Index);
         }
 
         CompressChains(0);
@@ -255,9 +286,9 @@ namespace Lumina
         });
         CountItems(0, false);
 
-        bOpenCategoriesByDefault = Items.size() <= (size_t)kOpenAllBelowCount || Categories[0].Children.size() == 1;
+        bOpenCategoriesByDefault = static_cast<size_t>(Items.Num()) <= (size_t)kOpenAllBelowCount || Categories[0].Children.Num() == 1;
         SelectedItem = -1;
-        DrawnOrder.clear();
+        DrawnOrder.Reset();
     }
 
     int32 FCategorizedPicker::FindOrAddChild(int32 Parent, FStringView Label, FStringView SourceLabel)
@@ -271,11 +302,10 @@ namespace Lumina
             }
         }
 
-        const int32 Added = (int32)Categories.size();
-        FCategory& Category = Categories.emplace_back();
-        Category.Label = FString(Label.data(), Label.size());
-        Category.Identity = Identity;
-        Categories[Parent].Children.push_back(Added);
+        const int32 Added = Categories.Num();
+        FCategory& Category = Categories.EmplaceGetRef();
+        Category.Label = FString(Label.GetData(), Label.Len());
+        Categories[Parent].Children.Add(Added);
         return Added;
     }
 
@@ -284,14 +314,14 @@ namespace Lumina
         // A folder holding only another folder is one more click with nothing to choose, so the two share a row.
         if (CategoryIndex != 0)
         {
-            while (Categories[CategoryIndex].Items.empty() && Categories[CategoryIndex].Children.size() == 1)
+            while (Categories[CategoryIndex].Items.IsEmpty() && Categories[CategoryIndex].Children.Num() == 1)
             {
                 const int32 Only = Categories[CategoryIndex].Children[0];
                 Categories[CategoryIndex].Label += " / " + Categories[Only].Label;
                 Categories[CategoryIndex].Items = Categories[Only].Items;
                 Categories[CategoryIndex].Children = Categories[Only].Children;
-                Categories[Only].Children.clear();
-                Categories[Only].Items.clear();
+                Categories[Only].Children.Reset();
+                Categories[Only].Items.Reset();
             }
         }
 
@@ -335,8 +365,8 @@ namespace Lumina
     void FCategorizedPicker::Rescore()
     {
         ScoredQuery = Query;
-        ItemScores.assign(Items.size(), 0);
-        ItemMatches.assign(Items.size(), TVector<uint16>());
+        ItemScores.Init(0, Items.Num());
+        ItemMatches.Init(TVector<uint16>(), Items.Num());
 
         if (!IsSearching())
         {
@@ -345,18 +375,12 @@ namespace Lumina
 
         int32 BestScore = -1;
         SelectedItem = -1;
-        const TextSearch::FQuery SearchQuery(Query);
-        for (int32 Index = 0; Index < (int32)Items.size(); ++Index)
+        for (int32 Index = 0; Index < Items.Num(); ++Index)
         {
             const FPickerItem& Item = Items[Index];
             int32 Score = 0;
             TVector<uint16> Matches;
-            if (FuzzyMatchAliases(SearchQuery, {
-                {Item.Name.c_str(), 1000, true},
-                {Item.SourceName.c_str(), 1000},
-                {Item.Key.c_str(), 500},
-                {Item.Category.c_str()},
-                {Item.SourceCategory.c_str()}}, Score, Matches))
+            if (FuzzyMatch(Query, *Items[Index].Name, Score, Matches))
             {
                 // Negative scores are reserved for hidden rows; retain fuzzy ranking for visible hits.
                 ItemScores[Index]  = Math::Max(Score, 0);
@@ -403,11 +427,11 @@ namespace Lumina
         ImGui::SameLine();
         ImGui::TextUnformatted(bOpen ? LE_ICON_FOLDER_OPEN : LE_ICON_FOLDER);
         ImGui::SameLine();
-        ImGui::TextUnformatted(Category.Label.c_str());
+        ImGui::TextUnformatted(*Category.Label);
 
         const FString CountText = Lumina::Format("{}", IsSearching() ? Category.MatchCount : Category.TotalCount);
-        ImGui::SameLine(RowRight - ImGui::CalcTextSize(CountText.c_str()).x - ImGui::GetStyle().FramePadding.x);
-        ImGui::TextDisabled("%s", CountText.c_str());
+        ImGui::SameLine(RowRight - ImGui::CalcTextSize(*CountText).x - ImGui::GetStyle().FramePadding.x);
+        ImGui::TextDisabled("%s", *CountText);
 
         if (bOpen)
         {
@@ -430,7 +454,7 @@ namespace Lumina
         {
             return;
         }
-        DrawingOrder.push_back(ItemIndex);
+        DrawingOrder.Add(ItemIndex);
 
         const FPickerItem& Item = Items[ItemIndex];
         const bool bSelected = ItemIndex == SelectedItem;
@@ -459,13 +483,13 @@ namespace Lumina
         DrawPickerMatchedName(Item.Name, ItemMatches[ItemIndex]);
         ImGui::EndDisabled();
 
-        if (bHovered && !Item.Tooltip.empty())
+        if (bHovered && !Item.Tooltip.IsEmpty())
         {
             ImGui::BeginTooltip();
-            ImGui::TextUnformatted(Item.Name.c_str());
+            ImGui::TextUnformatted(*Item.Name);
             ImGui::Separator();
             ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
-            ImGui::TextDisabled("%s", Item.Tooltip.c_str());
+            ImGui::TextDisabled("%s", *Item.Tooltip);
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();
         }

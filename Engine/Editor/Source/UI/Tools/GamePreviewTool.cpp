@@ -8,7 +8,7 @@ namespace Lumina
 {
     static FString MakeGamePreviewName(int32 ClientIndex)
     {
-        return ClientIndex > 0 ? FString(Format("Client: {}", ClientIndex).c_str()) : FString("Game Preview");
+        return ClientIndex > 0 ? FString(*Format("Client: {}", ClientIndex)) : FString("Game Preview");
     }
 
     FGamePreviewTool::FGamePreviewTool(IEditorToolContext* Context, CWorld* InWorld, int32 ClientIndex)
@@ -46,11 +46,6 @@ namespace Lumina
         //FEditorTool::SetupWorldForTool();//... Don't create editor entity.
     }
 
-    void FGamePreviewTool::DrawToolMenu(const FUpdateContext& UpdateContext)
-    {
-
-    }
-
     void FGamePreviewTool::DrawHelpMenu()
     {
         DrawHelpTextRow(LOC("Play (PIE)"),
@@ -64,7 +59,7 @@ namespace Lumina
 
     void FGamePreviewTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const
     {
-        ImGui::DockBuilderDockWindow(GetToolWindowName(ViewportWindowName).c_str(), InDockspaceID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(ViewportWindowName), InDockspaceID);
     }
 
     void FGamePreviewTool::DrawViewportOverlayElements(const FUpdateContext& UpdateContext, ImTextureRef ViewportTexture, ImVec2 ViewportSize)

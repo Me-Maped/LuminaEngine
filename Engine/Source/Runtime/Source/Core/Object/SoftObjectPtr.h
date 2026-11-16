@@ -10,15 +10,16 @@ namespace Lumina
 {
     class CObject;
     class FArchive;
+    class FAssetHandle;
 
     // Serializable asset reference by path; resolves on demand, never force-loads.
     struct RUNTIME_API FSoftObjectPath
     {
         FSoftObjectPath() = default;
-        explicit FSoftObjectPath(FStringView InPath) : Path(InPath.data(), InPath.size()) {}
+        explicit FSoftObjectPath(FStringView InPath) : Path(InPath.GetData(), InPath.Len()) {}
         explicit FSoftObjectPath(const FGuid& InGUID) : CachedGUID(InGUID) {}
         FSoftObjectPath(FStringView InPath, const FGuid& InGUID)
-            : Path(InPath.data(), InPath.size())
+            : Path(InPath.GetData(), InPath.Len())
             , CachedGUID(InGUID)
         {}
 
@@ -39,28 +40,31 @@ namespace Lumina
             return *this;
         }
 
-        bool        IsNull() const  { return Path.empty() && !CachedGUID.IsValid(); }
+        bool        IsNull() const  { return Path.IsEmpty() && !CachedGUID.IsValid(); }
         bool        IsValid() const { return !IsNull(); }
 
-        FStringView GetPath() const { return FStringView(Path.c_str(), Path.size()); }
+        FStringView GetPath() const { return FStringView(*Path, Path.Len()); }
         const FGuid& GetCachedGUID() const { return CachedGUID; }
 
         void SetPath(FStringView InPath)
         {
-            Path.assign(InPath.data(), InPath.size());
+            Path = InPath;
             CachedGUID = FGuid();
         }
 
         void Reset()
         {
-            Path.clear();
+            Path.Reset();
             CachedGUID = FGuid();
         }
 
         // Populates CachedGUID from Path, or repoints Path at the GUID's current location after a rename.
         bool TryResolve() const;
 
-        /** Blocking load through FAssetManager; returns nullptr on miss. */
+        // Starts the load through FAssetManager, handing back an invalid handle when the path resolves to nothing.
+        FAssetHandle Load() const;
+
+        // Blocking load through FAssetManager, returning nullptr on a miss.
         CObject* LoadSynchronous() const;
 
         // Runs Callback on the game thread once loaded, or right away with null when the path does not resolve.
@@ -76,14 +80,16 @@ namespace Lumina
         friend RUNTIME_API FArchive& operator<<(FArchive& Ar, FSoftObjectPath& Self);
 
     private:
+        // Resolves under ResolveMutex and reports the resolved GUID, so loads never reread CachedGUID unlocked.
+        bool TryResolveInternal(FGuid& OutGUID) const;
+
         // Mutable because TryResolve heals a stale path in place; see the hash specialization below.
         mutable FString Path;
         mutable FGuid   CachedGUID;
     };
 
 
-    /** Typed soft pointer wrapping FSoftObjectPath; layout-identical to it
-     *  (single member, no vtable), the reflector relies on this. */
+    // The reflector relies on this being layout-identical to FSoftObjectPath, with one member and no vtable.
     template<typename T>
     struct TSoftObjectPtr
     {

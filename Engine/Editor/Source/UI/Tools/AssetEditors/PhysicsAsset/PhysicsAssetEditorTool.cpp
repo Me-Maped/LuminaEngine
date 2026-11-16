@@ -12,7 +12,6 @@
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "UI/Properties/PropertyTable.h"
 #include "UI/Tools/Transactions/EditorTransaction.h"
-#include "UI/Tools/Transactions/ObjectSnapshotCommand.h"
 #include "World/Entity/Components/CameraComponent.h"
 #include "World/Entity/Components/EnvironmentComponent.h"
 #include "World/Entity/Components/LightComponent.h"
@@ -20,7 +19,9 @@
 #include "World/Entity/Components/RagdollComponent.h"
 #include "World/Entity/Components/SkeletalMeshComponent.h"
 #include "World/Entity/Components/SkyLightComponent.h"
+#include "World/World.h"
 #include "imgui.h"
+#include "implot.h"
 #include "Renderer/SkeletonResource.h"
 #include "Tools/UI/ImGui/EditorColors.h"
 
@@ -32,9 +33,12 @@ namespace Lumina
 
     static const FVector4 BodyColor             = FVector4(0.35f, 0.70f, 1.00f, 1.0f);
     static const FVector4 BodySelectedColor     = FVector4(1.00f, 0.75f, 0.15f, 1.0f);
-    static const FVector4 ConstraintColor       = FVector4(0.40f, 1.00f, 0.55f, 1.0f);
-    static const FVector4 ConstraintSelColor    = FVector4(1.00f, 0.45f, 0.25f, 1.0f);
     static const FVector4 BoneLineColor         = FVector4(0.35f, 0.35f, 0.40f, 1.0f);
+
+    constexpr float SelectedConeLength = 0.18f;
+    constexpr float ConeLength = 0.12f;
+    constexpr float HardTwistArcShare = 0.5f;
+    constexpr float SoftTwistArcShare = 0.4f;
 
     static const char* ShapeIcon(ERagdollBodyShape Shape)
     {
@@ -69,24 +73,56 @@ namespace Lumina
         return Math::Degrees(Math::EulerAngles(Rotation));
     }
 
+    // Where the limb points when swung onto the elliptical cone's rim at Phi, in the joint frame, the inverse of ClampToSoftRange's reach.
+    static FVector3 SwingRimDirection(float Swing1, float Swing2, float Phi)
+    {
+        const FVector3 RotationVector(Swing1 * Math::Cos(Phi), Swing2 * Math::Sin(Phi), 0.0f);
+        const float Angle = Math::Length(RotationVector);
+        return Angle > 1e-6f ? Math::AngleAxis(Angle, RotationVector / Angle) * FVector3(0.0f, 0.0f, 1.0f) : FVector3(0.0f, 0.0f, 1.0f);
+    }
+
+    static void DrawSwingCone(IPrimitiveDrawInterface& Draw, const FVector3& Pivot, const FQuat& Frame, float Swing1, float Swing2, float Length,
+                              const FVector4& Color, float Thickness)
+    {
+        constexpr int32 Segments = 32;
+        constexpr int32 SegmentsPerSpoke = 8;
+
+        FVector3 Previous = Pivot + Frame * SwingRimDirection(Swing1, Swing2, 0.0f) * Length;
+        for (int32 Index = 1; Index <= Segments; ++Index)
+        {
+            const FVector3 Current = Pivot + Frame * SwingRimDirection(Swing1, Swing2, Math::TwoPi<float>() * (float)Index / (float)Segments) * Length;
+            Draw.DrawLine(Previous, Current, Color, Thickness, false);
+            if (Index % SegmentsPerSpoke == 0)
+            {
+                Draw.DrawLine(Pivot, Current, Color, Thickness, false);
+            }
+            Previous = Current;
+        }
+    }
+
+    static FVector4 DimmedColor(const FVector4& Color, bool bSelected)
+    {
+        return bSelected ? Color : FVector4(FVector3(Color) * 0.45f, Color.w);
+    }
+
     static void GatherChildOffsets(const FSkeletonResource& Resource, int32 BoneIndex, TVector<FVector3>& OutOffsets)
     {
-        OutOffsets.clear();
+        OutOffsets.Reset();
         for (int32 ChildIndex : Resource.GetChildBones(BoneIndex))
         {
-            OutOffsets.push_back(FVector3(Resource.GetBone(ChildIndex).LocalTransform[3]));
+            OutOffsets.Emplace(Resource.GetBone(ChildIndex).LocalTransform[3]);
         }
     }
 
     // False means the bone is too small to be worth simulating and Body was left untouched.
     static bool ShapeBodyForBone(SPhysicsBodySetup& Body, const TVector<FVector3>& ChildOffsets, float MinBoneLength)
     {
-        if (ChildOffsets.empty())
+        if (ChildOffsets.IsEmpty())
         {
             return false;
         }
 
-        if (ChildOffsets.size() == 1)
+        if (ChildOffsets.Num() == 1)
         {
             const FVector3& Offset = ChildOffsets[0];
             const float BoneLength = Math::Length(Offset);
@@ -110,7 +146,7 @@ namespace Lumina
         {
             MeanDistance += Math::Length(Offset);
         }
-        MeanDistance /= (float)ChildOffsets.size();
+        MeanDistance /= (float)ChildOffsets.Num();
 
         if (MeanDistance < MinBoneLength || MeanDistance < 1e-4f)
         {
@@ -122,85 +158,6 @@ namespace Lumina
         Body.HalfExtent = FVector3(Body.Radius);
         Body.TranslationOffset = FVector3(0.0f);
         Body.RotationOffset = FVector3(0.0f);
-        return true;
-    }
-
-    // False when the two are near-parallel, where t runs away to nothing useful.
-    static bool PhysicsAssetClosestParamOnAxisToRay(const FVector3& Anchor, const FVector3& Axis,
-                                        const FVector3& RayOrigin, const FVector3& RayDirection, float& OutT)
-    {
-        const FVector3 ToAnchor = Anchor - RayOrigin;
-        const float AxisDotRay = Math::Dot(Axis, RayDirection);
-        const float Denominator = 1.0f - AxisDotRay * AxisDotRay;
-        if (Math::Abs(Denominator) < 1e-5f)
-        {
-            return false;
-        }
-
-        OutT = (AxisDotRay * Math::Dot(RayDirection, ToAnchor) - Math::Dot(Axis, ToAnchor)) / Denominator;
-        return true;
-    }
-
-    static bool PhysicsAssetRayHitsSphere(const FVector3& Origin, const FVector3& Direction, const FVector3& Center, float Radius, float& OutT)
-    {
-        const FVector3 ToOrigin = Origin - Center;
-        const float B = Math::Dot(ToOrigin, Direction);
-        const float C = Math::Dot(ToOrigin, ToOrigin) - Radius * Radius;
-
-        if (C > 0.0f && B > 0.0f)
-        {
-            return false;
-        }
-
-        const float Discriminant = B * B - C;
-        if (Discriminant < 0.0f)
-        {
-            return false;
-        }
-
-        OutT = Math::Max(0.0f, -B - Math::Sqrt(Discriminant));
-        return true;
-    }
-
-    // OutT is the ray parameter at closest approach, close enough to order overlapping bodies.
-    static bool RayHitsCapsule(const FVector3& Origin, const FVector3& Direction,
-                               const FVector3& SegmentStart, const FVector3& SegmentEnd, float Radius, float& OutT)
-    {
-        const FVector3 Segment = SegmentEnd - SegmentStart;
-        const float SegmentLengthSq = Math::LengthSquared(Segment);
-        if (SegmentLengthSq < 1e-8f)
-        {
-            return PhysicsAssetRayHitsSphere(Origin, Direction, SegmentStart, Radius, OutT);
-        }
-
-        const FVector3 ToStart = Origin - SegmentStart;
-        const float DirDotSeg = Math::Dot(Direction, Segment);
-        const float DirDotToStart = Math::Dot(Direction, ToStart);
-        const float SegDotToStart = Math::Dot(Segment, ToStart);
-
-        float SegmentParam = 0.0f;
-        const float Denominator = SegmentLengthSq - DirDotSeg * DirDotSeg;
-        if (Math::Abs(Denominator) > 1e-6f)
-        {
-            SegmentParam = Math::Clamp((SegDotToStart - DirDotSeg * DirDotToStart) / Denominator, 0.0f, 1.0f);
-        }
-
-        // Ray parameter for the closest point on the (clamped) segment, then re-clamp behind the eye.
-        float RayParam = DirDotSeg * SegmentParam - DirDotToStart;
-        if (RayParam < 0.0f)
-        {
-            RayParam = 0.0f;
-            SegmentParam = Math::Clamp(SegDotToStart / SegmentLengthSq, 0.0f, 1.0f);
-        }
-
-        const FVector3 PointOnRay = Origin + Direction * RayParam;
-        const FVector3 PointOnSegment = SegmentStart + Segment * SegmentParam;
-        if (Math::LengthSquared(PointOnRay - PointOnSegment) > Radius * Radius)
-        {
-            return false;
-        }
-
-        OutT = RayParam;
         return true;
     }
 
@@ -226,7 +183,7 @@ namespace Lumina
     }
 
     FPhysicsAssetEditorTool::FPhysicsAssetEditorTool(IEditorToolContext* Context, CObject* InAsset)
-        : FAssetEditorTool(Context, InAsset->GetName().c_str(), InAsset, NewObject<CWorld>())
+        : FAssetEditorTool(Context, *InAsset->GetName(), InAsset, NewObject<CWorld>())
     {
     }
 
@@ -248,6 +205,7 @@ namespace Lumina
         DetailsTable->SetPostEditCallback([this](const FPropertyChangedEvent&)
         {
             NotifyAssetDataChanged();
+            RetuneSimulatedRagdoll();
             RebuildBodySubtreeMask();
             BoneListView.MarkTreeDirty();
         });
@@ -284,9 +242,9 @@ namespace Lumina
                 const char* Icon = (BodyIndex != Constants::kIndexNone) ? ShapeIcon(PhysicsAsset->Bodies[BodyIndex].Shape) : LE_ICON_BONE;
 
                 // The widget draws IconText OVER the row, so without the prefix it lands on the name.
-                const FString Label = FString(Icon) + "  " + BoneName.c_str();
+                const FString Label = FString(Icon) + "  " + *BoneName;
 
-                FTreeNodeID Node = Tree.CreateNode(ParentNode, FStringView(Label.c_str()));
+                FTreeNodeID Node = Tree.CreateNode(ParentNode, FStringView(*Label));
                 Tree.EmplaceUserData<int32>(Node, BoneIndex);
                 Tree.Get<FTreeNodeState>(Node).bExpanded = true;
 
@@ -325,7 +283,7 @@ namespace Lumina
             }
 
             const int32 BoneIndex = Tree.Get<int32>(Item);
-            return BoneIndex >= 0 && BoneIndex < (int32)BodySubtreeMask.size() && BodySubtreeMask[BoneIndex] != 0;
+            return BoneIndex >= 0 && BoneIndex < BodySubtreeMask.Num() && BodySubtreeMask[BoneIndex] != 0;
         };
 
         BoneListContext.ItemSelectedFunction = [this](FTreeListView& Tree, FTreeNodeID Item, bool)
@@ -408,6 +366,7 @@ namespace Lumina
     void FPhysicsAssetEditorTool::SetupWorldForTool()
     {
         FEditorTool::SetupWorldForTool();
+        World->GetRenderSettings().bDrawBillboards = false;
 
         CreateFloorPlane();
 
@@ -485,8 +444,8 @@ namespace Lumina
         DetailsType = nullptr;
 
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
-        if (SelectedBodyIndex >= (int32)PhysicsAsset->Bodies.size()
-            || SelectedConstraintIndex >= (int32)PhysicsAsset->Constraints.size())
+        if (SelectedBodyIndex >= PhysicsAsset->Bodies.Num()
+            || SelectedConstraintIndex >= PhysicsAsset->Constraints.Num())
         {
             ClearSelection();
         }
@@ -494,6 +453,7 @@ namespace Lumina
         SyncDetailsTable();
         RebuildBodySubtreeMask();
         BoneListView.MarkTreeDirty();
+        RetuneSimulatedRagdoll();
     }
 
     void FPhysicsAssetEditorTool::Update(const FUpdateContext& UpdateContext)
@@ -514,11 +474,6 @@ namespace Lumina
 
         SyncDetailsTable();
 
-        if (World->GetRenderer() != nullptr)
-        {
-            World->GetRenderSettings().bDrawBillboards = false;
-        }
-
         // The overlays are drawn from the bind pose, which the live ragdoll has already left behind.
         if (bSimulating)
         {
@@ -528,7 +483,7 @@ namespace Lumina
 
         RebuildBoneWorldTransforms();
 
-        if (BoneWorldTransforms.empty())
+        if (BoneWorldTransforms.IsEmpty())
         {
             return;
         }
@@ -559,7 +514,7 @@ namespace Lumina
 
     void FPhysicsAssetEditorTool::RebuildBoneWorldTransforms()
     {
-        BoneWorldTransforms.clear();
+        BoneWorldTransforms.Reset();
 
         FSkeletonResource* Resource = GetSkeletonResource();
         if (Resource == nullptr || Resource->GetNumBones() == 0)
@@ -573,7 +528,7 @@ namespace Lumina
             EntityMatrix = World->GetComponent<STransformComponent>(MeshEntity).GetWorldMatrix();
         }
 
-        BoneWorldTransforms.resize(Resource->GetNumBones());
+        BoneWorldTransforms.SetNum(Resource->GetNumBones());
         for (int32 i = 0; i < Resource->GetNumBones(); ++i)
         {
             const FSkeletonResource::FBoneInfo& Bone = Resource->GetBone(i);
@@ -590,7 +545,7 @@ namespace Lumina
 
     void FPhysicsAssetEditorTool::RebuildBodySubtreeMask()
     {
-        BodySubtreeMask.clear();
+        BodySubtreeMask.Reset();
 
         FSkeletonResource* Resource = GetSkeletonResource();
         if (Resource == nullptr)
@@ -598,12 +553,12 @@ namespace Lumina
             return;
         }
 
-        BodySubtreeMask.resize(Resource->GetNumBones(), 0);
+        BodySubtreeMask.SetNum(Resource->GetNumBones(), 0);
 
         for (const SPhysicsBodySetup& Body : GetAsset<CPhysicsAsset>()->Bodies)
         {
             int32 Index = Resource->FindBoneIndex(Body.BoneName);
-            while (Index >= 0 && Index < (int32)BodySubtreeMask.size())
+            while (Index >= 0 && Index < BodySubtreeMask.Num())
             {
                 BodySubtreeMask[Index] = 1;
                 Index = Resource->GetBone(Index).ParentIndex;
@@ -620,7 +575,7 @@ namespace Lumina
         }
 
         const int32 BoneIndex = Resource->FindBoneIndex(Body.BoneName);
-        if (BoneIndex == Constants::kIndexNone || BoneIndex >= (int32)BoneWorldTransforms.size())
+        if (BoneIndex == Constants::kIndexNone || BoneIndex >= BoneWorldTransforms.Num())
         {
             return FMatrix4(1.0f);
         }
@@ -637,14 +592,14 @@ namespace Lumina
             return false;
         }
         const int32 BoneIndex = Resource->FindBoneIndex(Body.BoneName);
-        return BoneIndex != Constants::kIndexNone && BoneIndex < (int32)BoneWorldTransforms.size();
+        return BoneIndex != Constants::kIndexNone && BoneIndex < BoneWorldTransforms.Num();
     }
 
     void FPhysicsAssetEditorTool::DrawBodies()
     {
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
 
-        for (int32 i = 0; i < (int32)PhysicsAsset->Bodies.size(); ++i)
+        for (int32 i = 0; i < PhysicsAsset->Bodies.Num(); ++i)
         {
             const SPhysicsBodySetup& Body = PhysicsAsset->Bodies[i];
             if (!HasBodyBone(Body))
@@ -687,6 +642,44 @@ namespace Lumina
         }
     }
 
+    bool FPhysicsAssetEditorTool::GetConstraintFrame(const SPhysicsConstraintSetup& Constraint, FVector3& OutPivot, FQuat& OutFrame)
+    {
+        FSkeletonResource* Resource = GetSkeletonResource();
+        const int32 ChildIndex = Resource != nullptr ? Resource->FindBoneIndex(Constraint.ChildBone) : Constants::kIndexNone;
+        if (ChildIndex == Constants::kIndexNone || ChildIndex >= BoneWorldTransforms.Num())
+        {
+            return false;
+        }
+
+        OutPivot = FVector3(BoneWorldTransforms[ChildIndex][3]);
+
+        FVector3 TowardChildren(0.0f);
+        for (int32 GrandChild : Resource->GetChildBones(ChildIndex))
+        {
+            TowardChildren += FVector3(BoneWorldTransforms[GrandChild][3]) - OutPivot;
+        }
+
+        const int32 ParentIndex = Resource->FindBoneIndex(Constraint.ParentBone);
+        const FVector3 AwayFromParent = ParentIndex != Constants::kIndexNone && ParentIndex < BoneWorldTransforms.Num()
+            ? OutPivot - FVector3(BoneWorldTransforms[ParentIndex][3]) : FVector3(0.0f);
+
+        OutFrame = MakeRagdollJointFrame(TowardChildren, AwayFromParent, FVector3(BoneWorldTransforms[ChildIndex][1]));
+        return true;
+    }
+
+    SPhysicsConstraintSetup* FPhysicsAssetEditorTool::GetSelectedConstraint()
+    {
+        CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
+        const bool bValid = SelectionMode == EPhysicsAssetSelection::Constraint
+            && SelectedConstraintIndex >= 0 && SelectedConstraintIndex < PhysicsAsset->Constraints.Num();
+        return bValid ? &PhysicsAsset->Constraints[SelectedConstraintIndex] : nullptr;
+    }
+
+    float FPhysicsAssetEditorTool::GetPreviewScale()
+    {
+        return MeshEntity != ECS::NullEntity ? World->GetComponent<STransformComponent>(MeshEntity).GetWorldMaxScaleCached() : 1.0f;
+    }
+
     void FPhysicsAssetEditorTool::DrawConstraints()
     {
         FSkeletonResource* Resource = GetSkeletonResource();
@@ -696,33 +689,47 @@ namespace Lumina
         }
 
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
+        IPrimitiveDrawInterface& Draw = *World->GetDebugInterface();
+        const CEditorColorSettings& Palette = EditorColors::Palette();
+        const float Scale = GetPreviewScale();
 
-        for (int32 i = 0; i < (int32)PhysicsAsset->Constraints.size(); ++i)
+        for (int32 i = 0; i < PhysicsAsset->Constraints.Num(); ++i)
         {
             const SPhysicsConstraintSetup& Constraint = PhysicsAsset->Constraints[i];
 
-            const int32 ChildIndex = Resource->FindBoneIndex(Constraint.ChildBone);
-            if (ChildIndex == Constants::kIndexNone || ChildIndex >= (int32)BoneWorldTransforms.size())
+            FVector3 Pivot;
+            FQuat Frame;
+            if (!GetConstraintFrame(Constraint, Pivot, Frame))
             {
                 continue;
             }
 
             const bool bSelected = (SelectionMode == EPhysicsAssetSelection::Constraint && i == SelectedConstraintIndex);
-            const FVector4 Color = bSelected ? ConstraintSelColor : ConstraintColor;
+            const FVector4 HardColor = DimmedColor(Palette.Danger, bSelected);
+            const FVector4 SoftColor = DimmedColor(Palette.Warning, bSelected);
             const float Thickness = bSelected ? 3.0f : 1.5f;
-
-            const FMatrix4 ChildMatrix = BoneWorldTransforms[ChildIndex];
-            const FVector3 Pivot = FVector3(ChildMatrix[3]);
+            const float Length = (bSelected ? SelectedConeLength : ConeLength) * Scale;
 
             const int32 ParentIndex = Resource->FindBoneIndex(Constraint.ParentBone);
-            if (ParentIndex != Constants::kIndexNone && ParentIndex < (int32)BoneWorldTransforms.size())
+            if (ParentIndex != Constants::kIndexNone && ParentIndex < BoneWorldTransforms.Num())
             {
-                World->GetDebugInterface()->DrawLine(Pivot, FVector3(BoneWorldTransforms[ParentIndex][3]), Color, Thickness, false);
+                Draw.DrawLine(Pivot, FVector3(BoneWorldTransforms[ParentIndex][3]), DimmedColor(Palette.Accent, bSelected), Thickness, false);
             }
 
-            const FVector3 TwistAxis = Math::Normalize(FVector3(ChildMatrix[1]));
-            const float ConeLength = bSelected ? 0.18f : 0.12f;
-            World->GetDebugInterface()->DrawCone(Pivot, TwistAxis, Math::Radians(Constraint.Swing1LimitDegrees), ConeLength, Color, 16, 4, Thickness, false);
+            const FVector3 Limits = Constraint.GetLimitsRadians();
+            const float SoftStart = Constraint.GetSoftLimitStart();
+            DrawSwingCone(Draw, Pivot, Frame, Limits.y, Limits.z, Length, HardColor, Thickness);
+
+            // Arcs about the limb, zero along the frame's X axis where DrawArc starts.
+            const FVector3 TwistAxis = Frame * FVector3(0.0f, 0.0f, 1.0f);
+            const FVector3 ArcCenter = Pivot + TwistAxis * Length;
+            Draw.DrawArc(ArcCenter, TwistAxis, Length * HardTwistArcShare, -Limits.x, 2.0f * Limits.x, HardColor, 24, Thickness, false);
+
+            if (Constraint.bSoftLimits)
+            {
+                DrawSwingCone(Draw, Pivot, Frame, Limits.y * SoftStart, Limits.z * SoftStart, Length, SoftColor, Thickness);
+                Draw.DrawArc(ArcCenter, TwistAxis, Length * SoftTwistArcShare, -Limits.x * SoftStart, 2.0f * Limits.x * SoftStart, SoftColor, 24, Thickness, false);
+            }
         }
     }
 
@@ -733,7 +740,7 @@ namespace Lumina
         int32 BestBody = Constants::kIndexNone;
         float BestDistance = 1e30f;
 
-        for (int32 i = 0; i < (int32)PhysicsAsset->Bodies.size(); ++i)
+        for (int32 i = 0; i < PhysicsAsset->Bodies.Num(); ++i)
         {
             const SPhysicsBodySetup& Body = PhysicsAsset->Bodies[i];
             if (!HasBodyBone(Body))
@@ -751,13 +758,13 @@ namespace Lumina
             case ERagdollBodyShape::Capsule:
                 {
                     const FVector3 Axis = Math::Normalize(FVector3(BodyMatrix[1]));
-                    bHit = RayHitsCapsule(RayOrigin, RayDirection, Center - Axis * Body.HalfHeight,
+                    bHit = ShapeHandles::RayHitsCapsule(RayOrigin, RayDirection, Center - Axis * Body.HalfHeight,
                                           Center + Axis * Body.HalfHeight, Body.Radius, Distance);
                 }
                 break;
 
             case ERagdollBodyShape::Sphere:
-                bHit = PhysicsAssetRayHitsSphere(RayOrigin, RayDirection, Center, Body.Radius, Distance);
+                bHit = ShapeHandles::RayHitsSphere(RayOrigin, RayDirection, Center, Body.Radius, Distance);
                 break;
 
             case ERagdollBodyShape::Box:
@@ -777,11 +784,41 @@ namespace Lumina
 
     void FPhysicsAssetEditorTool::GatherShapeHandles(TVector<FShapeHandle>& OutHandles)
     {
-        OutHandles.clear();
+        OutHandles.Reset();
 
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
+        FVector3 Pivot;
+        FQuat Frame;
+        SPhysicsConstraintSetup* SelectedConstraint = GetSelectedConstraint();
+        if (SelectedConstraint != nullptr && GetConstraintFrame(*SelectedConstraint, Pivot, Frame))
+        {
+            const SPhysicsConstraintSetup& Constraint = *SelectedConstraint;
+            const FVector3 Limits = Constraint.GetLimitsRadians();
+            const float SoftStart = Constraint.GetSoftLimitStart();
+            const float Length = SelectedConeLength * GetPreviewScale();
+            const FVector3 AxisX = Frame * FVector3(1.0f, 0.0f, 0.0f);
+            const FVector3 AxisY = Frame * FVector3(0.0f, 1.0f, 0.0f);
+            const FVector3 AxisZ = Frame * FVector3(0.0f, 0.0f, 1.0f);
+            const FVector3 ArcCenter = Pivot + AxisZ * Length;
+            auto OnTwistArc = [&](float Angle, float RadiusShare)
+            {
+                return ArcCenter + (AxisX * Math::Cos(Angle) + AxisY * Math::Sin(Angle)) * (Length * RadiusShare);
+            };
+
+            // Soft dots sit opposite the hard ones, so the two never overlap.
+            OutHandles.Emplace(EShapeHandle::SwingLimit1, Pivot + Frame * SwingRimDirection(Limits.y, Limits.z, 0.0f) * Length, AxisX, Pivot);
+            OutHandles.Emplace(EShapeHandle::SwingLimit2, Pivot + Frame * SwingRimDirection(Limits.y, Limits.z, Math::HalfPi<float>()) * Length, AxisY, Pivot);
+            OutHandles.Emplace(EShapeHandle::TwistLimit, OnTwistArc(Limits.x, HardTwistArcShare), AxisZ, ArcCenter);
+            if (Constraint.bSoftLimits)
+            {
+                OutHandles.Emplace(EShapeHandle::SoftSwing, Pivot + Frame * SwingRimDirection(Limits.y * SoftStart, Limits.z * SoftStart, Math::Pi<float>()) * Length, AxisX, Pivot);
+                OutHandles.Emplace(EShapeHandle::SoftTwist, OnTwistArc(-Limits.x * SoftStart, SoftTwistArcShare), AxisZ, ArcCenter);
+            }
+            return;
+        }
+
         if (SelectionMode != EPhysicsAssetSelection::Body
-            || SelectedBodyIndex < 0 || SelectedBodyIndex >= (int32)PhysicsAsset->Bodies.size())
+            || SelectedBodyIndex < 0 || SelectedBodyIndex >= PhysicsAsset->Bodies.Num())
         {
             return;
         }
@@ -797,18 +834,18 @@ namespace Lumina
         switch (Body.Shape)
         {
         case ERagdollBodyShape::Capsule:
-            OutHandles.push_back({ EShapeHandle::Radius,     Center + AxisX * Body.Radius,     AxisX, Center });
-            OutHandles.push_back({ EShapeHandle::HalfHeight, Center + AxisY * Body.HalfHeight, AxisY, Center });
+            OutHandles.Emplace(EShapeHandle::Radius,     Center + AxisX * Body.Radius,     AxisX, Center);
+            OutHandles.Emplace(EShapeHandle::HalfHeight, Center + AxisY * Body.HalfHeight, AxisY, Center);
             break;
 
         case ERagdollBodyShape::Sphere:
-            OutHandles.push_back({ EShapeHandle::Radius, Center + AxisX * Body.Radius, AxisX, Center });
+            OutHandles.Emplace(EShapeHandle::Radius, Center + AxisX * Body.Radius, AxisX, Center);
             break;
 
         case ERagdollBodyShape::Box:
-            OutHandles.push_back({ EShapeHandle::ExtentX, Center + AxisX * Body.HalfExtent.x, AxisX, Center });
-            OutHandles.push_back({ EShapeHandle::ExtentY, Center + AxisY * Body.HalfExtent.y, AxisY, Center });
-            OutHandles.push_back({ EShapeHandle::ExtentZ, Center + AxisZ * Body.HalfExtent.z, AxisZ, Center });
+            OutHandles.Emplace(EShapeHandle::ExtentX, Center + AxisX * Body.HalfExtent.x, AxisX, Center);
+            OutHandles.Emplace(EShapeHandle::ExtentY, Center + AxisY * Body.HalfExtent.y, AxisY, Center);
+            OutHandles.Emplace(EShapeHandle::ExtentZ, Center + AxisZ * Body.HalfExtent.z, AxisZ, Center);
             break;
         }
     }
@@ -816,13 +853,45 @@ namespace Lumina
     void FPhysicsAssetEditorTool::ApplyShapeHandleDrag(const FShapeHandle& Handle, const FVector3& RayOrigin, const FVector3& RayDirection)
     {
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
-        if (SelectedBodyIndex < 0 || SelectedBodyIndex >= (int32)PhysicsAsset->Bodies.size())
+        FVector3 Pivot;
+        FQuat Frame;
+        SPhysicsConstraintSetup* SelectedConstraint = GetSelectedConstraint();
+        if (SelectedConstraint != nullptr && GetConstraintFrame(*SelectedConstraint, Pivot, Frame))
+        {
+            // Twist dots sweep around the limb from the frame's X axis, swing dots tip the limb away from Z about their own axis.
+            const bool bTwist = Handle.Type == EShapeHandle::TwistLimit || Handle.Type == EShapeHandle::SoftTwist;
+            const FVector3 Zero = Frame * (bTwist ? FVector3(1.0f, 0.0f, 0.0f) : FVector3(0.0f, 0.0f, 1.0f));
+            const FVector3 Ninety = Frame * (Handle.Type == EShapeHandle::SwingLimit2 ? FVector3(1.0f, 0.0f, 0.0f) : FVector3(0.0f, 1.0f, 0.0f));
+
+            float Angle = 0.0f;
+            if (!ShapeHandles::AngleOnPlaneToRay(Handle.Anchor, Zero, Ninety, RayOrigin, RayDirection, Angle))
+            {
+                return;
+            }
+
+            SPhysicsConstraintSetup& Constraint = *SelectedConstraint;
+            const float Degrees = Math::Min(Math::Degrees(Math::Abs(Angle)), 180.0f);
+            switch (Handle.Type)
+            {
+            case EShapeHandle::SwingLimit1: Constraint.Swing1LimitDegrees = Degrees; break;
+            case EShapeHandle::SwingLimit2: Constraint.Swing2LimitDegrees = Degrees; break;
+            case EShapeHandle::TwistLimit:  Constraint.TwistLimitDegrees = Degrees; break;
+            case EShapeHandle::SoftSwing:   Constraint.SoftLimitStart = Math::Clamp(Degrees / Math::Max(Constraint.Swing1LimitDegrees, 0.1f), 0.0f, 1.0f); break;
+            case EShapeHandle::SoftTwist:   Constraint.SoftLimitStart = Math::Clamp(Degrees / Math::Max(Constraint.TwistLimitDegrees, 0.1f), 0.0f, 1.0f); break;
+            default: return;
+            }
+
+            NotifyAssetDataChanged();
+            return;
+        }
+
+        if (SelectedBodyIndex < 0 || SelectedBodyIndex >= PhysicsAsset->Bodies.Num())
         {
             return;
         }
 
         float AxisDistance = 0.0f;
-        if (!PhysicsAssetClosestParamOnAxisToRay(Handle.Anchor, Handle.Axis, RayOrigin, RayDirection, AxisDistance))
+        if (!ShapeHandles::ClosestParamOnAxisToRay(Handle.Anchor, Handle.Axis, RayOrigin, RayDirection, AxisDistance))
         {
             return;
         }
@@ -846,27 +915,9 @@ namespace Lumina
         NotifyAssetDataChanged();
     }
 
-    void FPhysicsAssetEditorTool::BeginAssetTransaction(FName Name)
-    {
-        FTransactionManager& Manager = GetTransactionManager();
-        Manager.BeginTransaction(Name);
-        Manager.Record(MakeUnique<FObjectSnapshotCommand>(Asset.Get(), Name));
-    }
-
-    void FPhysicsAssetEditorTool::EndAssetTransaction()
-    {
-        // The command captures its after-image here and drops itself if the drag changed nothing.
-        GetTransactionManager().CommitTransaction();
-    }
-
     void FPhysicsAssetEditorTool::CloseOpenDragTransaction()
     {
-        if (HandleState.bHandleTransactionOpen || HandleState.bGizmoTransactionOpen)
-        {
-            HandleState.bHandleTransactionOpen = false;
-            HandleState.bGizmoTransactionOpen = false;
-            EndAssetTransaction();
-        }
+        ShapeHandles::CloseOpenDragTransaction(*this, HandleState);
     }
 
     void FPhysicsAssetEditorTool::ApplyGizmoMatrix(const FMatrix4& NewBodyMatrix)
@@ -874,7 +925,7 @@ namespace Lumina
         FSkeletonResource* Resource = GetSkeletonResource();
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
 
-        if (Resource == nullptr || SelectedBodyIndex < 0 || SelectedBodyIndex >= (int32)PhysicsAsset->Bodies.size())
+        if (Resource == nullptr || SelectedBodyIndex < 0 || SelectedBodyIndex >= PhysicsAsset->Bodies.Num())
         {
             return;
         }
@@ -882,7 +933,7 @@ namespace Lumina
         SPhysicsBodySetup& Body = PhysicsAsset->Bodies[SelectedBodyIndex];
 
         const int32 BoneIndex = Resource->FindBoneIndex(Body.BoneName);
-        if (BoneIndex == Constants::kIndexNone || BoneIndex >= (int32)BoneWorldTransforms.size())
+        if (BoneIndex == Constants::kIndexNone || BoneIndex >= BoneWorldTransforms.Num())
         {
             return;
         }
@@ -903,7 +954,7 @@ namespace Lumina
         FSkeletonResource* Resource = GetSkeletonResource();
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
 
-        if (Resource == nullptr || BodyIndex < 0 || BodyIndex >= (int32)PhysicsAsset->Bodies.size())
+        if (Resource == nullptr || BodyIndex < 0 || BodyIndex >= PhysicsAsset->Bodies.Num())
         {
             return;
         }
@@ -964,7 +1015,7 @@ namespace Lumina
             const TOptional<SRayResult> Hit = Scene->CastRay(Settings);
 
             // The floor is static, so grabbing it would latch the drag onto something that can never move.
-            if (!Hit.has_value() || (ECS::FEntity)Hit->Entity == FloorBodyEntity)
+            if (!Hit.IsSet() || (ECS::FEntity)Hit->Entity == FloorBodyEntity)
             {
                 return;
             }
@@ -1043,7 +1094,7 @@ namespace Lumina
             return;
         }
 
-        if (BoneWorldTransforms.empty())
+        if (BoneWorldTransforms.IsEmpty())
         {
             return;
         }
@@ -1068,7 +1119,7 @@ namespace Lumina
         Frame.bViewportHovered = bViewportHovered;
         Frame.bSuppressClicks  = ShouldSuppressViewportClickInput();
         Frame.bHasGizmoTarget  = SelectionMode == EPhysicsAssetSelection::Body
-                              && SelectedBodyIndex >= 0 && SelectedBodyIndex < (int32)PhysicsAsset->Bodies.size();
+                              && SelectedBodyIndex >= 0 && SelectedBodyIndex < PhysicsAsset->Bodies.Num();
 
         TickShapeHandles(*this, HandleState, Frame);
     }
@@ -1085,7 +1136,7 @@ namespace Lumina
 
         BeginAssetTransaction(LOC("Add Body"));
 
-        SPhysicsBodySetup& Body = PhysicsAsset->Bodies.emplace_back();
+        SPhysicsBodySetup& Body = PhysicsAsset->Bodies.EmplaceGetRef();
         Body.BoneName = BoneName;
 
         FSkeletonResource* Resource = GetSkeletonResource();
@@ -1106,13 +1157,13 @@ namespace Lumina
         BoneListView.MarkTreeDirty();
         EndAssetTransaction();
 
-        return (int32)PhysicsAsset->Bodies.size() - 1;
+        return PhysicsAsset->Bodies.Num() - 1;
     }
 
     void FPhysicsAssetEditorTool::RemoveBodyAt(int32 BodyIndex)
     {
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
-        if (BodyIndex < 0 || BodyIndex >= (int32)PhysicsAsset->Bodies.size())
+        if (BodyIndex < 0 || BodyIndex >= PhysicsAsset->Bodies.Num())
         {
             return;
         }
@@ -1120,14 +1171,14 @@ namespace Lumina
         BeginAssetTransaction(LOC("Remove Body"));
 
         const FName BoneName = PhysicsAsset->Bodies[BodyIndex].BoneName;
-        PhysicsAsset->Bodies.erase(PhysicsAsset->Bodies.begin() + BodyIndex);
+        PhysicsAsset->Bodies.RemoveAt(BodyIndex);
 
         // A joint referencing a body that no longer exists cannot be built at runtime.
-        for (int32 i = (int32)PhysicsAsset->Constraints.size() - 1; i >= 0; --i)
+        for (int32 i = PhysicsAsset->Constraints.Num() - 1; i >= 0; --i)
         {
             if (PhysicsAsset->Constraints[i].ChildBone == BoneName || PhysicsAsset->Constraints[i].ParentBone == BoneName)
             {
-                PhysicsAsset->Constraints.erase(PhysicsAsset->Constraints.begin() + i);
+                PhysicsAsset->Constraints.RemoveAt(i);
             }
         }
 
@@ -1141,15 +1192,15 @@ namespace Lumina
     void FPhysicsAssetEditorTool::ClearAllBodies()
     {
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
-        if (PhysicsAsset->Bodies.empty() && PhysicsAsset->Constraints.empty())
+        if (PhysicsAsset->Bodies.IsEmpty() && PhysicsAsset->Constraints.IsEmpty())
         {
             return;
         }
 
         BeginAssetTransaction(LOC("Clear Bodies"));
 
-        PhysicsAsset->Bodies.clear();
-        PhysicsAsset->Constraints.clear();
+        PhysicsAsset->Bodies.Reset();
+        PhysicsAsset->Constraints.Reset();
 
         ClearSelection();
         NotifyAssetDataChanged();
@@ -1179,7 +1230,7 @@ namespace Lumina
         }
 
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
-        for (int32 i = 0; i < (int32)PhysicsAsset->Constraints.size(); ++i)
+        for (int32 i = 0; i < PhysicsAsset->Constraints.Num(); ++i)
         {
             if (PhysicsAsset->Constraints[i].ChildBone == ChildBone)
             {
@@ -1189,27 +1240,27 @@ namespace Lumina
 
         BeginAssetTransaction(LOC("Add Constraint"));
 
-        SPhysicsConstraintSetup& Constraint = PhysicsAsset->Constraints.emplace_back();
+        SPhysicsConstraintSetup& Constraint = PhysicsAsset->Constraints.EmplaceGetRef();
         Constraint.ChildBone = ChildBone;
         Constraint.ParentBone = ParentBone;
 
         NotifyAssetDataChanged();
         EndAssetTransaction();
 
-        return (int32)PhysicsAsset->Constraints.size() - 1;
+        return PhysicsAsset->Constraints.Num() - 1;
     }
 
     void FPhysicsAssetEditorTool::RemoveConstraintAt(int32 ConstraintIndex)
     {
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
-        if (ConstraintIndex < 0 || ConstraintIndex >= (int32)PhysicsAsset->Constraints.size())
+        if (ConstraintIndex < 0 || ConstraintIndex >= PhysicsAsset->Constraints.Num())
         {
             return;
         }
 
         BeginAssetTransaction(LOC("Remove Constraint"));
 
-        PhysicsAsset->Constraints.erase(PhysicsAsset->Constraints.begin() + ConstraintIndex);
+        PhysicsAsset->Constraints.RemoveAt(ConstraintIndex);
 
         ClearSelection();
         NotifyAssetDataChanged();
@@ -1254,8 +1305,8 @@ namespace Lumina
 
         if (bReplaceExisting)
         {
-            PhysicsAsset->Bodies.clear();
-            PhysicsAsset->Constraints.clear();
+            PhysicsAsset->Bodies.Reset();
+            PhysicsAsset->Constraints.Reset();
             ClearSelection();
         }
 
@@ -1278,11 +1329,11 @@ namespace Lumina
                 continue;
             }
 
-            PhysicsAsset->Bodies.push_back(Candidate);
+            PhysicsAsset->Bodies.Add(Candidate);
         }
 
         // Every body exists by the second pass, so the ancestor walk sees the whole set.
-        for (int32 i = 0; i < (int32)PhysicsAsset->Bodies.size(); ++i)
+        for (int32 i = 0; i < PhysicsAsset->Bodies.Num(); ++i)
         {
             const FName ChildBone = PhysicsAsset->Bodies[i].BoneName;
 
@@ -1313,7 +1364,7 @@ namespace Lumina
                 continue;
             }
 
-            SPhysicsConstraintSetup& Constraint = PhysicsAsset->Constraints.emplace_back();
+            SPhysicsConstraintSetup& Constraint = PhysicsAsset->Constraints.EmplaceGetRef();
             Constraint.ChildBone = ChildBone;
             Constraint.ParentBone = ParentBone;
         }
@@ -1378,7 +1429,7 @@ namespace Lumina
             ? World->TryGetComponent<SSkeletalMeshComponent>(MeshEntity) : nullptr;
 
         if (Resource == nullptr || MeshComponent == nullptr
-            || (int32)MeshComponent->BoneTransforms.size() != Resource->GetNumBones())
+            || MeshComponent->BoneTransforms.Num() != Resource->GetNumBones())
         {
             return;
         }
@@ -1411,7 +1462,7 @@ namespace Lumina
         }
 
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
-        if (PhysicsAsset->Bodies.empty())
+        if (PhysicsAsset->Bodies.IsEmpty())
         {
             return;
         }
@@ -1482,6 +1533,123 @@ namespace Lumina
         bSimulating = false;
     }
 
+    void FPhysicsAssetEditorTool::RetuneSimulatedRagdoll()
+    {
+        Physics::IPhysicsScene* Scene = bSimulating ? World->GetPhysicsScene() : nullptr;
+        if (Scene != nullptr)
+        {
+            Scene->RetuneRagdollLimits(MeshEntity, *GetAsset<CPhysicsAsset>());
+        }
+    }
+
+    float FPhysicsAssetEditorTool::SampleSoftLimitPull(const SPhysicsConstraintSetup& Constraint, int32 Axis, float AngleRadians)
+    {
+        const FVector3 Axes[] = { FVector3(0.0f, 0.0f, 1.0f), FVector3(1.0f, 0.0f, 0.0f), FVector3(0.0f, 1.0f, 0.0f) };
+        FQuat Held = Math::AngleAxis(AngleRadians, Axes[Axis]);
+        const float Depth = ClampToSoftRange(Held, Constraint.GetLimitsRadians(), Constraint.GetSoftLimitStart());
+
+        // The ligament springs toward the held pose at the limit stiffness scaled by depth, retuned to the inertia it swings.
+        const float Overshoot = AngleRadians - 2.0f * Math::Acos(Math::Min(Math::Abs(Held.w), 1.0f));
+        const float Omega = Math::TwoPi<float>() * Constraint.LimitStiffness * Depth;
+        return Omega * Omega * Overshoot;
+    }
+
+    void FPhysicsAssetEditorTool::CopySoftLimits(CPhysicsAsset& Asset, int32 SourceIndex, const FSkeletonResource* SubtreeSkeleton)
+    {
+        if (SourceIndex < 0 || SourceIndex >= Asset.Constraints.Num())
+        {
+            return;
+        }
+
+        const SPhysicsConstraintSetup Source = Asset.Constraints[SourceIndex];
+        const int32 SubtreeRoot = SubtreeSkeleton != nullptr ? SubtreeSkeleton->FindBoneIndex(Source.ChildBone) : Constants::kIndexNone;
+        for (SPhysicsConstraintSetup& Target : Asset.Constraints)
+        {
+            if (SubtreeSkeleton != nullptr)
+            {
+                int32 Bone = SubtreeSkeleton->FindBoneIndex(Target.ChildBone);
+                while (SubtreeSkeleton->IsBoneIndexValid(Bone) && Bone != SubtreeRoot)
+                {
+                    Bone = SubtreeSkeleton->GetBone(Bone).ParentIndex;
+                }
+                if (Bone != SubtreeRoot || SubtreeRoot == Constants::kIndexNone)
+                {
+                    continue;
+                }
+            }
+
+            Target.bSoftLimits       = Source.bSoftLimits;
+            Target.SoftLimitStart    = Source.SoftLimitStart;
+            Target.LimitStiffness    = Source.LimitStiffness;
+            Target.LimitDampingRatio = Source.LimitDampingRatio;
+            Target.MaxLimitTorque    = Source.MaxLimitTorque;
+        }
+    }
+
+    void FPhysicsAssetEditorTool::ApplySelectedSoftLimits(bool bSubtreeOnly)
+    {
+        BeginAssetTransaction(bSubtreeOnly ? "Apply Soft Limits To Subtree" : "Apply Soft Limits To All");
+        CopySoftLimits(*GetAsset<CPhysicsAsset>(), SelectedConstraintIndex, bSubtreeOnly ? GetSkeletonResource() : nullptr);
+        NotifyAssetDataChanged();
+        EndAssetTransaction();
+        RetuneSimulatedRagdoll();
+    }
+
+    void FPhysicsAssetEditorTool::DrawSoftLimitResponse(const SPhysicsConstraintSetup& Constraint)
+    {
+        constexpr int32 Samples = 64;
+        constexpr const char* AxisNames[] = { "Twist", "Swing 1", "Swing 2" };
+
+        ImGui::SeparatorText("Soft Limit Response");
+        for (int32 Axis = 0; Axis < 3; ++Axis)
+        {
+            if (Axis > 0)
+            {
+                ImGui::SameLine();
+            }
+            ImGui::RadioButton(AxisNames[Axis], &ResponseCurveAxis, Axis);
+        }
+
+        const float HardDegrees = Math::Degrees(Constraint.GetLimitsRadians()[ResponseCurveAxis]);
+        double Angles[Samples];
+        double Pulls[Samples];
+        for (int32 i = 0; i < Samples; ++i)
+        {
+            const float Degrees = HardDegrees * (float)i / (float)(Samples - 1);
+            Angles[i] = Degrees;
+            Pulls[i] = SampleSoftLimitPull(Constraint, ResponseCurveAxis, Math::Radians(Degrees));
+        }
+
+        const double SoftStart = HardDegrees * Constraint.GetSoftLimitStart();
+        if (ImPlot::BeginPlot("##SoftLimitResponse", ImVec2(-1.0f, 150.0f), ImPlotFlags_CanvasOnly))
+        {
+            ImPlot::SetupAxes("Angle (deg)", "Pull (rad/s^2)", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+            ImPlot::SetNextLineStyle(EditorColors::Accent(), 2.0f);
+            ImPlot::PlotLine("Pull", Angles, Pulls, Samples);
+            ImPlot::SetNextLineStyle(EditorColors::Warning());
+            ImPlot::PlotInfLines("Soft Start", &SoftStart, 1);
+            ImPlot::SetNextLineStyle(EditorColors::Danger());
+            ImPlot::PlotInfLines("Hard Limit", &Angles[Samples - 1], 1);
+            ImPlot::TagX(SoftStart, EditorColors::Warning(), "soft");
+            ImPlot::TagX(Angles[Samples - 1], EditorColors::Danger(), "hard");
+            ImPlot::EndPlot();
+        }
+        ImGuiX::TextTooltip("Angular pull the ligament gives the limb, per unit of the inertia it swings, up to its Max Limit Torque.");
+
+        if (ImGui::Button(LE_ICON_CONTENT_COPY " Apply To All"))
+        {
+            ApplySelectedSoftLimits(false);
+        }
+        ImGuiX::TextTooltip("Copy this joint's soft limit settings onto every constraint.");
+
+        ImGui::SameLine();
+        if (ImGui::Button(LE_ICON_SITEMAP " Apply To Subtree"))
+        {
+            ApplySelectedSoftLimits(true);
+        }
+        ImGuiX::TextTooltip("Copy this joint's soft limit settings onto the constraints at and below its child bone.");
+    }
+
     void FPhysicsAssetEditorTool::SyncDetailsTable()
     {
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
@@ -1490,15 +1658,14 @@ namespace Lumina
         CStruct* Type = nullptr;
 
         if (SelectionMode == EPhysicsAssetSelection::Body
-            && SelectedBodyIndex >= 0 && SelectedBodyIndex < (int32)PhysicsAsset->Bodies.size())
+            && SelectedBodyIndex >= 0 && SelectedBodyIndex < PhysicsAsset->Bodies.Num())
         {
             Target = &PhysicsAsset->Bodies[SelectedBodyIndex];
             Type = SPhysicsBodySetup::StaticStruct();
         }
-        else if (SelectionMode == EPhysicsAssetSelection::Constraint
-            && SelectedConstraintIndex >= 0 && SelectedConstraintIndex < (int32)PhysicsAsset->Constraints.size())
+        else if (SPhysicsConstraintSetup* Constraint = GetSelectedConstraint())
         {
-            Target = &PhysicsAsset->Constraints[SelectedConstraintIndex];
+            Target = Constraint;
             Type = SPhysicsConstraintSetup::StaticStruct();
         }
 
@@ -1539,8 +1706,8 @@ namespace Lumina
         }
         else
         {
-            ImGui::BeginDisabled(PhysicsAsset->Bodies.empty() || MeshEntity == ECS::NullEntity);
-            if (ImGui::Button(LOC_ICON(LE_ICON_PLAY, "Simulate")))
+            ImGui::BeginDisabled(PhysicsAsset->Bodies.IsEmpty() || MeshEntity == ECS::NullEntity);
+            if (ImGui::Button(LE_ICON_PLAY " Simulate"))
             {
                 StartSimulation();
             }
@@ -1595,7 +1762,7 @@ namespace Lumina
         }
 
         ImGui::SameLine();
-        ImGui::TextDisabled(LOC("%d bodies, %d constraints"), (int)PhysicsAsset->Bodies.size(), (int)PhysicsAsset->Constraints.size());
+        ImGui::TextDisabled("%d bodies, %d constraints", PhysicsAsset->Bodies.Num(), PhysicsAsset->Constraints.Num());
 
         ImGui::Separator();
         ImGui::Spacing();
@@ -1607,7 +1774,7 @@ namespace Lumina
     {
         CPhysicsAsset* PhysicsAsset = GetAsset<CPhysicsAsset>();
 
-        if (PhysicsAsset->Constraints.empty())
+        if (PhysicsAsset->Constraints.IsEmpty())
         {
             ImGui::TextDisabled(LOC("No constraints."));
             ImGui::TextWrapped(LOC("Right-click a bone that has a body and choose \"Constrain To Parent Body\"."));
@@ -1623,7 +1790,7 @@ namespace Lumina
 
             int32 PendingRemoval = Constants::kIndexNone;
 
-            for (int32 i = 0; i < (int32)PhysicsAsset->Constraints.size(); ++i)
+            for (int32 i = 0; i < PhysicsAsset->Constraints.Num(); ++i)
             {
                 const SPhysicsConstraintSetup& Constraint = PhysicsAsset->Constraints[i];
 
@@ -1640,10 +1807,10 @@ namespace Lumina
                 }
 
                 ImGui::SameLine(0.0f, 0.0f);
-                ImGui::TextUnformatted(Constraint.ParentBone.c_str());
+                ImGui::TextUnformatted(*Constraint.ParentBone);
 
                 ImGui::TableNextColumn();
-                ImGui::TextUnformatted(Constraint.ChildBone.c_str());
+                ImGui::TextUnformatted(*Constraint.ChildBone);
 
                 ImGui::TableNextColumn();
                 ImGui::BeginDisabled(bSimulating);
@@ -1673,9 +1840,11 @@ namespace Lumina
         ImGuiX::Font::PopFont();
         ImGui::Spacing();
 
+        // Constraint limits stay editable while simulating, since the running ragdoll is retuned on each edit.
+        const bool bEditingConstraint = SelectionMode == EPhysicsAssetSelection::Constraint;
         if (bSimulating)
         {
-            ImGui::TextDisabled(LOC("Stop simulating to edit."));
+            ImGui::TextDisabled(bEditingConstraint ? "Limit edits retune the running ragdoll." : "Stop simulating to edit.");
         }
 
         int32 Orphaned = 0;
@@ -1687,16 +1856,23 @@ namespace Lumina
         {
             ImGui::TextColored(EditorColors::Warning(), LOC_ICON(LE_ICON_ALERT, "%d body(s) name a bone this skeleton does not have."), Orphaned);
         }
-        ImGui::BeginDisabled(bSimulating);
+        ImGui::BeginDisabled(bSimulating && !bEditingConstraint);
 
         if (DetailsTarget != nullptr)
         {
             DetailsTable->DrawTree();
+            if (const SPhysicsConstraintSetup* Constraint = GetSelectedConstraint())
+            {
+                DrawSoftLimitResponse(*Constraint);
+            }
         }
         else
         {
             ImGui::TextDisabled(LOC("Select a bone with a body, or a constraint."));
         }
+
+        ImGui::EndDisabled();
+        ImGui::BeginDisabled(bSimulating);
 
         ImGui::Spacing();
         ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
@@ -1772,27 +1948,28 @@ namespace Lumina
 
     void FPhysicsAssetEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow(LOC("Bodies"),
-            LOC("Each body is a collision primitive bound to a bone. Right-click a bone in the tree to add or "
-            "remove one. The selected body draws its frame axes so offsets can be dialed in."));
-        DrawHelpTextRow(LOC("Generate"),
-            LOC("Fits a capsule down every bone longer than the minimum length and joins each to its nearest "
-            "ancestor body. Start here, then fix up by hand."));
-        DrawHelpTextRow(LOC("Constraints"),
-            LOC("A swing-twist joint limiting how far a child body rotates against its parent. The cone in the "
-            "viewport is the first swing limit; the line runs to the parent bone."));
-        DrawHelpTextRow(LOC("Preview"),
-            LOC("The mesh comes from the Skeleton's Preview Mesh and is drawn in bind pose. Bodies are authored "
-            "against the bind pose, so what you see is what the ragdoll starts from."));
-        DrawHelpTextRow(LOC("Viewport Editing"),
-            LOC("Click a body in the viewport to select it. The orange dots resize it: one per box extent, or "
-            "radius and half-height on a capsule. Drag a dot along its axis to set that dimension."));
-        DrawHelpTextRow(LOC("Body Frame"),
-            LOC("The gizmo on the selected body moves and rotates its frame relative to the bone, writing the "
-            "Translation and Rotation offsets. Space swaps between move and rotate."));
-        DrawHelpTextRow(LOC("Grabbing"),
-            LOC("While simulating, Shift + left-drag pulls the body under the cursor with a spring. Fling it to "
-            "check whether the joint limits hold up under real forces."));
+        DrawHelpTextRow("Bodies",
+            "Each body is a collision primitive bound to a bone. Right-click a bone in the tree to add or "
+            "remove one. The selected body draws its frame axes so offsets can be dialed in.");
+        DrawHelpTextRow("Generate",
+            "Fits a capsule down every bone longer than the minimum length and joins each to its nearest "
+            "ancestor body. Start here, then fix up by hand.");
+        DrawHelpTextRow("Constraints",
+            "A swing-twist joint limiting how far a child body rotates against its parent. The red cone is the "
+            "elliptical swing limit and the red arc the twist limit; the amber cone and arc are where the soft "
+            "limit starts pulling back. The selected constraint's dots drag those angles.");
+        DrawHelpTextRow("Preview",
+            "The mesh comes from the Skeleton's Preview Mesh and is drawn in bind pose. Bodies are authored "
+            "against the bind pose, so what you see is what the ragdoll starts from.");
+        DrawHelpTextRow("Viewport Editing",
+            "Click a body in the viewport to select it. The orange dots resize it: one per box extent, or "
+            "radius and half-height on a capsule. Drag a dot along its axis to set that dimension.");
+        DrawHelpTextRow("Body Frame",
+            "The gizmo on the selected body moves and rotates its frame relative to the bone, writing the "
+            "Translation and Rotation offsets. Space swaps between move and rotate.");
+        DrawHelpTextRow("Grabbing",
+            "While simulating, Shift + left-drag pulls the body under the cursor with a spring. Fling it to "
+            "check whether the joint limits hold up under real forces.");
     }
 
     void FPhysicsAssetEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const
@@ -1804,9 +1981,9 @@ namespace Lumina
         ImGui::DockBuilderSplitNode(CenterID, ImGuiDir_Left, 0.26f, &LeftID, &CenterID);
         ImGui::DockBuilderSplitNode(LeftID, ImGuiDir_Down, 0.35f, &LeftBottomID, &LeftID);
 
-        ImGui::DockBuilderDockWindow(GetToolWindowName(ViewportWindowName).c_str(), CenterID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(SkeletonTreeWindowName).c_str(), LeftID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(ConstraintsWindowName).c_str(), LeftBottomID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(PhysicsAssetDetailsWindowName).c_str(), RightID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(ViewportWindowName), CenterID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(SkeletonTreeWindowName), LeftID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(ConstraintsWindowName), LeftBottomID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(PhysicsAssetDetailsWindowName), RightID);
     }
 }

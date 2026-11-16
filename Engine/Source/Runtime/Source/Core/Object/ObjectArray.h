@@ -8,11 +8,12 @@
 namespace Lumina
 {
     class CObjectBase;
+    class IObjectReferenceProvider;
 }
 
 namespace Lumina::Object::Internal
 {
-    /** Global CObject control block. Never reallocates. */
+    // Global CObject control block that never reallocates.
     class FChunkedFixedCObjectArray
     {
     public:
@@ -95,6 +96,7 @@ namespace Lumina::Object::Internal
         mutable FSlotShard          SlotShards[SlotShardCount];
 
         THashMap<FObjectHandle, FObjectHandle> ReinstanceRedirects;
+        TVector<IObjectReferenceProvider*> ReferenceProviders;
         bool                        bInitialized = false;
         bool                        bShuttingDown = false;
     
@@ -118,8 +120,8 @@ namespace Lumina::Object::Internal
 
         CObjectBase* ResolveHandle(const FObjectHandle& Handle) const;
 
-        /** Points every future resolve of From at To, so weak references follow a reinstanced object. */
-        void AddReinstanceRedirect(const FObjectHandle& From, const FObjectHandle& To);
+        // Points every future resolve of each old handle at its replacement, so weak references follow a reinstanced object.
+        void AddReinstanceRedirects(const THashMap<FObjectHandle, FObjectHandle>& Redirects);
 
     private:
 
@@ -153,21 +155,18 @@ namespace Lumina::Object::Internal
 
         void AddStrongRef(CObjectBase* Object);
 
-        /** Returns true if object was deleted. */
         bool ReleaseStrongRef(CObjectBase* Object);
 
-        /** Validate a weak handle and acquire a strong ref in one atomic step (serialized with the
-         *  destroy decision below). Returns the live object with its strong count already incremented,
-         *  or nullptr if it was freed/reused. This is the only safe weak->strong upgrade. */
+        // The only safe weak to strong upgrade, serialized with the destroy decision, and null once the slot was freed or reused.
         CObjectBase* TryAddStrongRef(const FObjectHandle& Handle);
 
-        /** Frees Object iff nothing holds a strong ref, via one atomic claim only one caller can win. */
+        // Frees Object iff nothing holds a strong ref, via one atomic claim only one caller can win.
         bool ConditionalDestroy(CObjectBase* Object);
 
-        /** Frees Object whatever its strong count says, still exactly once. Shutdown and reinstancing only. */
+        // Frees Object whatever its strong count says, still exactly once, for shutdown and reinstancing only.
         bool ForceDestroy(CObjectBase* Object);
 
-        /** Claims the destroy for the shutdown sweep, which frees the object itself rather than via above. */
+        // Claims the destroy for the shutdown sweep, which frees the object itself rather than via ForceDestroy.
         bool TryClaimDestroyForShutdown(CObjectBase* Object);
 
         bool IsReferencedByIndex(int32 Index) const;
@@ -179,6 +178,9 @@ namespace Lumina::Object::Internal
         int32 GetMaxObjects() const;
 
         FORCEINLINE bool IsShuttingDown() const { return bShuttingDown; }
+
+        // The holders the reflected graph cannot reach on its own, such as an ECS registry or an editor selection.
+        NODISCARD TVector<IObjectReferenceProvider*>& GetReferenceProviders() { return ReferenceProviders; }
     
         template<typename Func>
         requires std::is_invocable_v<Func, CObjectBase*, int32>
@@ -212,7 +214,7 @@ namespace Lumina::Object::Internal
     RUNTIME_API void Shutdown();
     RUNTIME_API FObjectHandle AllocateObject(CObjectBase* Object);
     RUNTIME_API void DeallocateObject(int32 Index);
-    RUNTIME_API void AddReinstanceRedirect(const FObjectHandle& From, const FObjectHandle& To);
+    RUNTIME_API void AddReinstanceRedirects(const THashMap<FObjectHandle, FObjectHandle>& Redirects);
     RUNTIME_API FObjectHandle GetHandleByIndex(int32 Index);
     RUNTIME_API bool ReleaseStrongRef(CObjectBase* Object);
     RUNTIME_API bool ConditionalDestroy(CObjectBase* Object);
@@ -222,8 +224,9 @@ namespace Lumina::Object::Internal
     RUNTIME_API int32 GetNumAliveObjects();
     RUNTIME_API int32 GetMaxObjects();
     RUNTIME_API bool IsShuttingDown();
+    RUNTIME_API TVector<IObjectReferenceProvider*>& GetReferenceProviders();
 
-    /** Downgrades the stale-reference assert to a log for this thread, for tests that stage one on purpose. */
+    // Downgrades the stale-reference assert to a log for this thread, for tests that stage one on purpose.
     class FScopedStaleReferenceTolerance
     {
     public:

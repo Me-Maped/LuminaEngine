@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Assets/AssetRegistry/AssetData.h"
 #include "imgui.h"
 #include "Containers/Function.h"
 #include "Containers/String.h"
@@ -13,7 +14,6 @@ namespace Lumina
     class CClass;
     class CPackage;
     class FAssetRegistry;
-    struct FAssetData;
 }
 
 namespace Lumina
@@ -34,6 +34,9 @@ namespace Lumina
         virtual void OpenFileEditor(FStringView VirtualPath) = 0;
 
         virtual void OpenScriptEditor(FStringView ScriptPath) = 0;
+
+        // Opens the file in the script editor chosen in the editor settings, at Line when it is above zero.
+        virtual void OpenScriptInExternalEditor(FStringView ScriptPath, int32 Line) = 0;
         // The open file editor for VirtualPath, or null.
         virtual FEditorTool* FindFileEditor(FStringView VirtualPath) const = 0;
 
@@ -44,7 +47,7 @@ namespace Lumina
         /** The asset highlighted in the Content Browser right now, or null when nothing (or something
          *  that isn't an asset) is selected. Backs the "use the selected asset" button on object
          *  reference properties -- the counterpart to BrowseToAsset. */
-        virtual const FAssetData* GetContentBrowserSelectedAsset() const = 0;
+        virtual FAssetDataPtr GetContentBrowserSelectedAsset() const = 0;
 
         virtual void OnDestroyAsset(CObject* InAsset) = 0;
 

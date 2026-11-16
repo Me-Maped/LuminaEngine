@@ -50,21 +50,21 @@ namespace Lumina::Import::Textures
                 return;
         }
     
-        const uint32 BytesPerPixel = (uint32)Source.Pixels.size() / (SrcW * SrcH);
+        const uint32 BytesPerPixel = (uint32)Source.Pixels.Num() / (SrcW * SrcH);
 
         // A fresh buffer rather than in place, since the resampler reads the source while it writes.
-        TVector<uint8> Resized(static_cast<size_t>(DstW) * DstH * BytesPerPixel);
+        TVector64<uint8> Resized(static_cast<int64>(DstW) * DstH * BytesPerPixel);
 
         stbir_resize
         (
-            Source.Pixels.data(), (int)SrcW, (int)SrcH, 0,
-            Resized.data(), (int)DstW, (int)DstH, 0,
+            Source.Pixels.GetData(), (int)SrcW, (int)SrcH, 0,
+            Resized.GetData(), (int)DstW, (int)DstH, 0,
             Layout, DataType,
             STBIR_EDGE_CLAMP,
             STBIR_FILTER_MITCHELL
         );
     
-        Source.Pixels     = std::move(Resized);
+        Source.Pixels     = Move(Resized);
         Source.Dimensions = TargetSize;
     }
 
@@ -77,17 +77,17 @@ namespace Lumina::Import::Textures
             return;
         }
 
-        const size_t RowBytes = Source.Pixels.size() / Height;
-        TVector<uint8> Scratch(RowBytes);
+        const size_t RowBytes = Source.Pixels.Num() / Height;
+        TVector<uint8> Scratch(IntCastChecked<int32>(RowBytes));
 
         for (uint32 Row = 0; Row < Height / 2; ++Row)
         {
-            uint8* Top    = Source.Pixels.data() + (size_t)Row * RowBytes;
-            uint8* Bottom = Source.Pixels.data() + (size_t)(Height - 1 - Row) * RowBytes;
+            uint8* Top    = Source.Pixels.GetData() + (size_t)Row * RowBytes;
+            uint8* Bottom = Source.Pixels.GetData() + (size_t)(Height - 1 - Row) * RowBytes;
 
-            Memory::Memcpy(Scratch.data(), Top, RowBytes);
+            Memory::Memcpy(Scratch.GetData(), Top, RowBytes);
             Memory::Memcpy(Top, Bottom, RowBytes);
-            Memory::Memcpy(Bottom, Scratch.data(), RowBytes);
+            Memory::Memcpy(Bottom, Scratch.GetData(), RowBytes);
         }
     }
 
@@ -100,26 +100,26 @@ namespace Lumina::Import::Textures
             return;
         }
 
-        const size_t RowBytes      = Source.Pixels.size() / Height;
+        const size_t RowBytes      = Source.Pixels.Num() / Height;
         const size_t BytesPerTexel = RowBytes / Width;
         if (BytesPerTexel == 0)
         {
             return;
         }
 
-        TVector<uint8> Scratch(BytesPerTexel);
+        TVector<uint8> Scratch(IntCastChecked<int32>(BytesPerTexel));
 
         for (uint32 Row = 0; Row < Height; ++Row)
         {
-            uint8* RowStart = Source.Pixels.data() + (size_t)Row * RowBytes;
+            uint8* RowStart = Source.Pixels.GetData() + (size_t)Row * RowBytes;
             for (uint32 Column = 0; Column < Width / 2; ++Column)
             {
                 uint8* Left  = RowStart + (size_t)Column * BytesPerTexel;
                 uint8* Right = RowStart + (size_t)(Width - 1 - Column) * BytesPerTexel;
 
-                Memory::Memcpy(Scratch.data(), Left, BytesPerTexel);
+                Memory::Memcpy(Scratch.GetData(), Left, BytesPerTexel);
                 Memory::Memcpy(Left, Right, BytesPerTexel);
-                Memory::Memcpy(Right, Scratch.data(), BytesPerTexel);
+                Memory::Memcpy(Right, Scratch.GetData(), BytesPerTexel);
             }
         }
     }
@@ -143,272 +143,142 @@ namespace Lumina::Import::Textures
             Math::Max(1u, (uint32)std::lround(Size.y * Scale)));
     }
 
+    TOptional<EFormat> GetHDRChannelFormat(int Channels)
+    {
+        switch (Channels)
+        {
+            case 1: return EFormat::R32_FLOAT;
+            case 2: return EFormat::RG32_FLOAT;
+            case 3: return EFormat::RGB32_FLOAT;
+            case 4: return EFormat::RGBA32_FLOAT;
+            default: return NullOpt;
+        }
+    }
+
     // A source "path" can be a data URI, and the whole payload in a log line or a GPU label is dead weight.
     static FFixedString ClipPathForLabel(FStringView Path)
     {
         constexpr size_t MaxLabelChars = 96;
-        if (Path.size() <= MaxLabelChars)
+        if (static_cast<size_t>(Path.Len()) <= MaxLabelChars)
         {
-            return FFixedString(Path.data(), Path.size());
+            return FFixedString(Path.GetData(), Path.Len());
         }
 
         return FormatAs<FFixedString>("{}...[{} chars]",
-                                      FStringView(Path.data(), MaxLabelChars), (uint64)Path.size());
+                                      FStringView(Path.GetData(), MaxLabelChars), (uint64)Path.Len());
+    }
+
+    template<typename TPixel>
+    static TOptional<EFormat> GetChannelFormat(int Channels)
+    {
+        if constexpr (std::is_same_v<TPixel, float>)
+        {
+            return GetHDRChannelFormat(Channels);
+        }
+        else
+        {
+            constexpr bool b16Bit = sizeof(TPixel) == sizeof(uint16);
+            switch (Channels)
+            {
+                case 1: return b16Bit ? EFormat::R16_UNORM : EFormat::R8_UNORM;
+                case 2: return b16Bit ? EFormat::RG16_UNORM : EFormat::RG8_UNORM;
+                // RGB is rarely a supported GPU format, so three channels expand to RGBA.
+                case 3:
+                case 4: return b16Bit ? EFormat::RGBA16_UNORM : EFormat::RGBA8_UNORM;
+                default: return NullOpt;
+            }
+        }
+    }
+
+    template<typename TPixel, typename TLoader>
+    static TOptional<FTextureImportResult> DecodeImage(FStringView SourceLabel, FUIntVector2 Size, TLoader&& Load)
+    {
+        constexpr const char* DepthName = std::is_same_v<TPixel, float> ? "HDR" : sizeof(TPixel) == sizeof(uint16) ? "16-bit" : "8-bit";
+
+        int X, Y, Channels;
+        TPixel* Data = Load(&X, &Y, &Channels);
+        if (Data == nullptr)
+        {
+            LOG_WARN("Failed to load {0} image: {1}", DepthName, ClipPathForLabel(SourceLabel));
+            return NullOpt;
+        }
+
+        TOptional<EFormat> Format = GetChannelFormat<TPixel>(Channels);
+        if (!Format.IsSet())
+        {
+            stbi_image_free(Data);
+            LOG_WARN("Unsupported channel count for {0}: {1}", DepthName, Channels);
+            return NullOpt;
+        }
+
+        FTextureImportResult Result = {};
+        Result.Format     = Format.GetValue();
+        Result.Dimensions = FUIntVector2(X, Y);
+
+        const size_t PixelCount = static_cast<size_t>(X) * Y;
+        if constexpr (!std::is_same_v<TPixel, float>)
+        {
+            if (Channels == 3)
+            {
+                Result.Pixels = TVector64<uint8>(static_cast<int64>(PixelCount * 4 * sizeof(TPixel)));
+                if constexpr (sizeof(TPixel) == sizeof(uint16))
+                {
+                    SIMD::ExpandRGBToRGBA16(Data, reinterpret_cast<uint16*>(Result.Pixels.GetData()), PixelCount);
+                }
+                else
+                {
+                    SIMD::ExpandRGBToRGBA8(Data, Result.Pixels.GetData(), PixelCount);
+                }
+            }
+        }
+
+        if (Result.Pixels.IsEmpty())
+        {
+            const uint8* Bytes = reinterpret_cast<const uint8*>(Data);
+            Result.Pixels.Append(Bytes, Bytes + PixelCount * Channels * sizeof(TPixel));
+        }
+
+        stbi_image_free(Data);
+        ResizeImportResult(Result, Size);
+        return Result;
     }
 
     TOptional<FTextureImportResult> ImportTexture(FStringView RawFilePath, bool bFlipVertical, FUIntVector2 Size)
     {
         LUMINA_MEMORY_SCOPE("Textures");
 
-        FTextureImportResult Result = {};
-        
         stbi_set_flip_vertically_on_load_thread(bFlipVertical);
-        
-        int x, y, channels;
-        
-        if (stbi_is_hdr(RawFilePath.data()))
+
+        const char* Path = RawFilePath.GetData();
+        if (stbi_is_hdr(Path))
         {
-            float* data = stbi_loadf(RawFilePath.data(), &x, &y, &channels, 0);
-            if (data == nullptr)
-            {
-                LOG_WARN("Failed to load HDR image: {0}", ClipPathForLabel(RawFilePath));
-                return NullOpt;
-            }
-            
-            switch (channels)
-            {
-                case 1: Result.Format = EFormat::R32_FLOAT; break;
-                case 2: Result.Format = EFormat::RG32_FLOAT; break;
-                case 3: Result.Format = EFormat::RGB32_FLOAT; break;
-                case 4: Result.Format = EFormat::RGBA32_FLOAT; break;
-                default:
-                    stbi_image_free(data);
-                    LOG_WARN("Unsupported channel count for HDR: {0}", channels);
-                    return Result;
-            }
-            
-            size_t dataSize = static_cast<size_t>(x) * y * channels * sizeof(float);
-            Result.Pixels.assign(reinterpret_cast<uint8*>(data), reinterpret_cast<uint8*>(data) + dataSize);
-            stbi_image_free(data);
-            
-            Result.Dimensions = {x, y};
-            return Result;
+            return DecodeImage<float>(RawFilePath, Size, [&](int* X, int* Y, int* C) { return stbi_loadf(Path, X, Y, C, 0); });
         }
-        
-        if (stbi_is_16_bit(RawFilePath.data()))
+        if (stbi_is_16_bit(Path))
         {
-            uint16* data = stbi_load_16(RawFilePath.data(), &x, &y, &channels, 0);
-            if (data == nullptr)
-            {
-                LOG_WARN("Failed to load 16-bit image: {0}", ClipPathForLabel(RawFilePath));
-                return NullOpt;
-            }
-            
-            switch (channels)
-            {
-                case 1: Result.Format = EFormat::R16_UNORM; break;
-                case 2: Result.Format = EFormat::RG16_UNORM; break;
-                case 4: Result.Format = EFormat::RGBA16_UNORM; break;
-                case 3: 
-                    // RGB16 not commonly supported, convert to RGBA16
-                    {
-                        Result.Format = EFormat::RGBA16_UNORM;
-                        TVector<uint16> rgba16Data(x * y * 4);
-                        SIMD::ExpandRGBToRGBA16(data, rgba16Data.data(), (size_t)x * (size_t)y);
-                        size_t dataSize = rgba16Data.size() * sizeof(uint16);
-                        Result.Pixels.assign(reinterpret_cast<uint8*>(rgba16Data.data()), reinterpret_cast<uint8*>(rgba16Data.data()) + dataSize);
-                    }
-                    break;
-                default:
-                    stbi_image_free(data);
-                    LOG_WARN("Unsupported channel count for 16-bit: {0}", channels);
-                    return NullOpt;
-            }
-            
-            if (channels != 3) // If we didn't do the RGB->RGBA conversion above
-            {
-                size_t dataSize = static_cast<size_t>(x) * y * channels * sizeof(uint16);
-                Result.Pixels.assign(reinterpret_cast<uint8*>(data), reinterpret_cast<uint8*>(data) + dataSize);
-            }
-            
-            stbi_image_free(data);
-            Result.Dimensions = {x, y};
-            return Result;
+            return DecodeImage<uint16>(RawFilePath, Size, [&](int* X, int* Y, int* C) { return stbi_load_16(Path, X, Y, C, 0); });
         }
-        
-        // Standard 8-bit image
-        uint8* data = stbi_load(RawFilePath.data(), &x, &y, &channels, 0);
-        if (data == nullptr)
-        {
-            LOG_WARN("Failed to load 8-bit image: {0}", ClipPathForLabel(RawFilePath));
-            return NullOpt;
-        }
-        
-        bool bIsSRGB = false;
-        
-        
-        switch (channels)
-        {
-            case 1: Result.Format = EFormat::R8_UNORM; break;
-            case 2: Result.Format = EFormat::RG8_UNORM; break;
-            case 4: Result.Format = bIsSRGB ? EFormat::SRGBA8_UNORM : EFormat::RGBA8_UNORM; break;
-            case 3:
-                // RGB8 not commonly supported, convert to RGBA8
-                {
-                    Result.Format = bIsSRGB ? EFormat::SRGBA8_UNORM : EFormat::RGBA8_UNORM;
-                    TVector<uint8> rgba8Data(x * y * 4);
-                    SIMD::ExpandRGBToRGBA8(data, rgba8Data.data(), (size_t)x * (size_t)y);
-                    Result.Pixels = std::move(rgba8Data);
-                }
-                break;
-            default:
-                stbi_image_free(data);
-                LOG_WARN("Unsupported channel count: {0}", channels);
-                return NullOpt;
-        }
-        
-        if (channels != 3) // If we didn't do the RGB -> RGBA conversion above
-        {
-            Result.Pixels.assign(data, data + static_cast<size_t>(x) * y * channels);
-        }
-        
-        Result.Dimensions = FUIntVector2(x, y);
-        
-        if (Size.x > 0 && Size.y > 0)
-        {
-            ResizeImportResult(Result, Size);
-        }
-        
-        stbi_image_free(data);
-        return Result;
+        return DecodeImage<uint8>(RawFilePath, Size, [&](int* X, int* Y, int* C) { return stbi_load(Path, X, Y, C, 0); });
     }
 
     TOptional<FTextureImportResult> ImportTexture(TSpan<const uint8> ImageData, bool bFlipVertical, FUIntVector2 Size)
     {
         LUMINA_MEMORY_SCOPE("Textures");
 
-        FTextureImportResult Result = {};
-        
         stbi_set_flip_vertically_on_load_thread(bFlipVertical);
-        int DataSize = static_cast<int>(ImageData.size());
-        
-        int x, y, channels;
-        
-        if (stbi_is_hdr_from_memory(ImageData.data(), DataSize))
+
+        const uint8* Bytes = ImageData.GetData();
+        const int ByteCount = ImageData.Num();
+        constexpr FStringView MemoryLabel = "memory buffer";
+        if (stbi_is_hdr_from_memory(Bytes, ByteCount))
         {
-            float* Data = stbi_loadf_from_memory(ImageData.data(), DataSize, &x, &y, &channels, 0);
-            if (Data == nullptr)
-            {
-                LOG_WARN("Failed to load HDR image");
-                return NullOpt;
-            }
-            
-            switch (channels)
-            {
-                case 1: Result.Format = EFormat::R32_FLOAT; break;
-                case 2: Result.Format = EFormat::RG32_FLOAT; break;
-                case 3: Result.Format = EFormat::RGB32_FLOAT; break;
-                case 4: Result.Format = EFormat::RGBA32_FLOAT; break;
-                default:
-                    stbi_image_free(Data);
-                    LOG_WARN("Unsupported channel count for HDR: {0}", channels);
-                    return Result;
-            }
-            
-            size_t dataSize = static_cast<size_t>(x) * y * channels * sizeof(float);
-            Result.Pixels.assign(reinterpret_cast<uint8*>(Data), reinterpret_cast<uint8*>(Data) + dataSize);
-            stbi_image_free(Data);
-            
-            Result.Dimensions = {x, y};
-            return Result;
+            return DecodeImage<float>(MemoryLabel, Size, [&](int* X, int* Y, int* C) { return stbi_loadf_from_memory(Bytes, ByteCount, X, Y, C, 0); });
         }
-        
-        if (stbi_is_16_bit_from_memory(ImageData.data(), DataSize))
+        if (stbi_is_16_bit_from_memory(Bytes, ByteCount))
         {
-            uint16* Data = stbi_load_16_from_memory(ImageData.data(), DataSize, &x, &y, &channels, 0);
-            if (Data == nullptr)
-            {
-                LOG_WARN("Failed to load 16-bit image");
-                return NullOpt;
-            }
-            
-            switch (channels)
-            {
-                case 1: Result.Format = EFormat::R16_UNORM; break;
-                case 2: Result.Format = EFormat::RG16_UNORM; break;
-                case 4: Result.Format = EFormat::RGBA16_UNORM; break;
-                case 3: 
-                    // RGB16 not commonly supported, convert to RGBA16
-                    {
-                        Result.Format = EFormat::RGBA16_UNORM;
-                        TVector<uint16> rgba16Data(x * y * 4);
-                        SIMD::ExpandRGBToRGBA16(Data, rgba16Data.data(), (size_t)x * (size_t)y);
-                        size_t dataSize = rgba16Data.size() * sizeof(uint16);
-                        Result.Pixels.assign(reinterpret_cast<uint8*>(rgba16Data.data()), reinterpret_cast<uint8*>(rgba16Data.data()) + dataSize);
-                    }
-                    break;
-                default:
-                    stbi_image_free(Data);
-                    LOG_WARN("Unsupported channel count for 16-bit: {0}", channels);
-                    return NullOpt;
-            }
-            
-            if (channels != 3) // If we didn't do the RGB->RGBA conversion above
-            {
-                size_t dataSize = static_cast<size_t>(x) * y * channels * sizeof(uint16);
-                Result.Pixels.assign(reinterpret_cast<uint8*>(Data), reinterpret_cast<uint8*>(Data) + dataSize);
-            }
-            
-            stbi_image_free(Data);
-            Result.Dimensions = {x, y};
-            return Result;
+            return DecodeImage<uint16>(MemoryLabel, Size, [&](int* X, int* Y, int* C) { return stbi_load_16_from_memory(Bytes, ByteCount, X, Y, C, 0); });
         }
-        
-        // Standard 8-bit image
-        uint8* data = stbi_load_from_memory(ImageData.data(), DataSize, &x, &y, &channels, 0);
-        if (data == nullptr)
-        {
-            LOG_WARN("Failed to load 8-bit image");
-            return NullOpt;
-        }
-        
-        bool bIsSRGB = false;
-        
-        
-        switch (channels)
-        {
-            case 1: Result.Format = EFormat::R8_UNORM; break;
-            case 2: Result.Format = EFormat::RG8_UNORM; break;
-            case 4: Result.Format = bIsSRGB ? EFormat::SRGBA8_UNORM : EFormat::RGBA8_UNORM; break;
-            case 3:
-                // RGB8 not commonly supported, convert to RGBA8
-                {
-                    Result.Format = bIsSRGB ? EFormat::SRGBA8_UNORM : EFormat::RGBA8_UNORM;
-                    TVector<uint8> rgba8Data(x * y * 4);
-                    SIMD::ExpandRGBToRGBA8(data, rgba8Data.data(), (size_t)x * (size_t)y);
-                    Result.Pixels = std::move(rgba8Data);
-                }
-                break;
-            default:
-                stbi_image_free(data);
-                LOG_WARN("Unsupported channel count: {0}", channels);
-                return NullOpt;
-        }
-        
-        if (channels != 3) // If we didn't do the RGB -> RGBA conversion above
-        {
-            Result.Pixels.assign(data, data + static_cast<size_t>(x) * y * channels);
-        }
-        
-        Result.Dimensions = FUIntVector2(x, y);
-        
-        if (Size.x > 0 && Size.y > 0)
-        {
-            ResizeImportResult(Result, Size);
-        }
-        
-        stbi_image_free(data);
-        return Result;
+        return DecodeImage<uint8>(MemoryLabel, Size, [&](int* X, int* Y, int* C) { return stbi_load_from_memory(Bytes, ByteCount, X, Y, C, 0); });
     }
 
     RHI::FManagedTexture CreateTextureFromImport(FStringView RawFilePath, bool bFlipVerticalOnLoad, FUIntVector2 Size)
@@ -418,12 +288,12 @@ namespace Lumina::Import::Textures
         LUMINA_PROFILE_SCOPE();
 
         TOptional<FTextureImportResult> MaybeResult = ImportTexture(RawFilePath, bFlipVerticalOnLoad, Size);
-        if (!MaybeResult.has_value())
+        if (!MaybeResult.IsSet())
         {
             return {};
         }
 
-        const FTextureImportResult& Result = MaybeResult.value();
+        const FTextureImportResult& Result = MaybeResult.GetValue();
 
         const FFixedString DebugName = FFixedString("Import.") + ClipPathForLabel(RawFilePath);
 
@@ -432,9 +302,9 @@ namespace Lumina::Import::Textures
             .Width  = Result.Dimensions.x,
             .Height = Result.Dimensions.y,
             .Format = Result.Format,
-            .DebugName = DebugName.c_str(),
+            .DebugName = *DebugName,
         });
-        RHI::Textures::Upload(Texture, 0, Result.Pixels.data(), Result.Pixels.size(), Result.Dimensions.x);
+        RHI::Textures::Upload(Texture, 0, Result.Pixels.GetData(), Result.Pixels.Num(), Result.Dimensions.x);
 
         return Texture;
     }

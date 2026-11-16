@@ -6,6 +6,7 @@
 #include "Containers/String.h"
 #include "Containers/Vector.h"
 #include "Core/Object/Cast.h"
+#include "Core/Object/ObjectHandleTyped.h"
 #include "Core/Reflection/Type/ObjectReferenceVisitor.h"
 #include "Events/EventProcessor.h"
 #include "Memory/SmartPtr.h"
@@ -13,15 +14,17 @@
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImViewGuizmo.h"
 #include "Transactions/EditorTransaction.h"
-#include "World/World.h"
-#include "World/ECS/Registry.h"
+#include "Transactions/ObjectSnapshotCommand.h"
+#include "World/ECS/Entity.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 
 namespace Lumina
 {
     class CEdNodeGraph;
+    class CPackage;
     class CStruct;
+    class CWorld;
     class FInputViewport;
     class FProperty;
     class FSceneEditorTool;
@@ -137,9 +140,8 @@ namespace Lumina
         virtual void Initialize();
         virtual void Deinitialize(const FUpdateContext& UpdateContext);
         virtual void OnInitialize() = 0;
-        virtual void OnDeinitialize(const FUpdateContext& UpdateContext) = 0;
+        virtual void OnDeinitialize(const FUpdateContext& UpdateContext) {}
         virtual void Update(const FUpdateContext& UpdateContext);
-        virtual void WorldUpdate(const FUpdateContext& UpdateContext) {}
         virtual void EndFrame() {}
         void OnScriptsReloaded(const Scripting::FScriptReload& Reload) override {}
 
@@ -167,9 +169,16 @@ namespace Lumina
         NODISCARD ImGuiID GetPrevDockspaceID() const { return PrevDockspaceID; }
         NODISCARD ImGuiID GetDesiredDockID() const { return DesiredDockID; }
         NODISCARD ImGuiWindowClass* GetWindowClass() { return &ToolWindowsClass; }
-        NODISCARD FFixedString GetToolWindowName(const FString& Name) const { return GetToolWindowName(Name.c_str(), CurrDockspaceID); }
+        NODISCARD FFixedString GetToolWindowName(const FString& Name) const { return GetToolWindowName(*Name, CurrDockspaceID); }
         NODISCARD static FFixedString GetToolWindowName(char const* ToolWindowName, ImGuiID InDockspaceID);
         virtual void InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const;
+
+        // Clears InDockspaceID's children and splits it into a left and right pane, with the right pane taking InRightFraction of the width.
+        static void SplitDockingLayoutLeftRight(ImGuiID InDockspaceID, float InRightFraction, ImGuiID& OutLeftDockID, ImGuiID& OutRightDockID);
+        static void SplitDockingLayoutLeftRight(ImGuiID InDockspaceID, const char* InLeftWindowName, const char* InRightWindowName, float InRightFraction);
+
+        // A muted icon, title and hint centered in the space left in the current window, for a panel with nothing to show.
+        static void DrawEmptyState(const char* Icon, const char* Title, const char* Hint);
 
         NODISCARD CWorld* GetWorld() const { return World.Get(); }
         NODISCARD bool HasWorld() const { return World != nullptr; }
@@ -192,6 +201,10 @@ namespace Lumina
 
         virtual void OnSave() {}
         NODISCARD virtual bool IsUnsavedDocument() { return false; }
+
+        // Names the unsaved items inside the document, for a save prompt to list.
+        NODISCARD virtual TVector<FString> GetUnsavedItemLabels() { return {}; }
+
         NODISCARD virtual bool HasUnsavedFileChanges() { return false; }
         virtual bool SaveFileChanges() { OnSave(); return !HasUnsavedFileChanges(); }
         virtual bool ShouldGenerateThumbnailOnSave() const { return false; }
@@ -202,7 +215,7 @@ namespace Lumina
         NODISCARD FName PeekUndoLabel() const { return TransactionManager.PeekUndoName(); }
         NODISCARD FName PeekRedoLabel() const { return TransactionManager.PeekRedoName(); }
 
-        void RunObjectTransacted(FName Label, CObject* Object, const TFunction<void()>& Mutate);
+        void RunObjectTransacted(FName Label, CObject* Object, const TFunction<void()>& Mutate, const FObjectSnapshotCommand::FSerializer& Serializer = {});
 
         // A property set from outside the tool's panels, answered the way the tool answers its own panel edit.
         virtual void OnExternalPropertyEdit(CObject* Object, FProperty* Property) {}
@@ -229,7 +242,7 @@ namespace Lumina
         NODISCARD bool ShouldSuppressViewportClickInput() const;
 
         // True when this tool, not the running game, drives the viewport camera and its gizmo, grid and focus companions.
-        NODISCARD virtual bool HasEditorCameraControl() const { return HasWorld() && !World->IsGameWorld(); }
+        NODISCARD virtual bool HasEditorCameraControl() const;
 
         virtual void FocusViewportToEntity(ECS::FEntity Entity);
 
@@ -282,7 +295,7 @@ namespace Lumina
 
         void DrawDrawerContent(bool bFocused);
 
-        void RegisterAction(FEditorAction Action) { EditorActions.push_back(std::move(Action)); }
+        void RegisterAction(FEditorAction Action) { EditorActions.Add(Move(Action)); }
         const TVector<FEditorAction>& GetRegisteredActions() const { return EditorActions; }
         void DrawActionMenu(const char* MenuLabel, const char* Category);
 
@@ -311,9 +324,10 @@ namespace Lumina
     protected:
 
         // Play and Simulate run on a transient world that is discarded on stop, so only an editor world is transacted.
-        bool CanTransact() const { return World != nullptr && World->GetWorldType() == EWorldType::Editor; }
+        bool CanTransact() const;
 
-        virtual void BeginTransaction();
+        // Edited names the entities the step changes so only their files are rewritten, or is empty when it may change any of them.
+        virtual void BeginTransaction(TVector<ECS::FEntity> Edited = {});
 
         // Only these entities' transforms, so grabbing the gizmo in a large level does not serialize the registry.
         void BeginTransformTransaction(const TVector<ECS::FEntity>& Entities);

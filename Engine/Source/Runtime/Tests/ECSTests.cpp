@@ -6,9 +6,23 @@
 #include "World/Entity/EntityUtils.h"
 #include "World/Entity/Components/DirtyComponent.h"
 #include "World/Entity/Components/TransformComponent.h"
+#include "World/Entity/Systems/MovedTransforms.h"
 #include "World/Scene/RenderScene/WorldRenderSettings.h"
+#include "World/World.h"
+#include "Core/Object/ObjectCore.h"
+#include "LogCountTestHelpers.h"
 
 using namespace Lumina;
+
+namespace Lumina
+{
+    // Binds a member the way its system's schedule build would, without needing a reflected test system.
+    struct FMovedTransformsTestAccess
+    {
+        static void Bind(FMovedTransforms& Moved, CWorld& World) { FMovedTransforms::GetOps().Bind(&Moved, World); }
+        static bool IsBound(const FMovedTransforms& Moved) { return Moved.Registry != nullptr; }
+    };
+}
 
 namespace
 {
@@ -217,12 +231,12 @@ TEST(ECSTests, ComputeWorldTransform_MatchesThePropagationAcrossADeepRotatedChai
         Local.SetLocation(FVector3(1.0f, 0.5f * (float)i, 0.0f));
         Local.SetRotation(FQuat(Math::Radians(FVector3(0.0f, 15.0f, 0.0f))));
         Registry.Emplace<STransformComponent>(E).LocalTransform = Local;
-        if (!Chain.empty())
+        if (!Chain.IsEmpty())
         {
-            Registry.AttachChild(E, Chain.back());
+            Registry.AttachChild(E, Chain.Last());
         }
         Registry.Emplace<FNeedsTransformUpdate>(E);
-        Chain.push_back(E);
+        Chain.Add(E);
     }
     ECS::Utils::ResolveAllDirtyTransforms(Registry);
 
@@ -233,7 +247,7 @@ TEST(ECSTests, ComputeWorldTransform_MatchesThePropagationAcrossADeepRotatedChai
     TVector<FVector3> Computed;
     for (ECS::FEntity E : Chain)
     {
-        Computed.push_back(ECS::Utils::ComputeWorldTransform(Registry, E).GetLocation());
+        Computed.Add(ECS::Utils::ComputeWorldTransform(Registry, E).GetLocation());
     }
 
     ECS::Utils::ResolveAllDirtyTransforms(Registry);
@@ -320,7 +334,7 @@ TEST(ECSTests, RenderSettings_SaveTogglesButNotDebugViews)
     }
 
     auto View = Loaded.View<SWorldRenderSettings>();
-    ASSERT_EQ(View.Num(), 1u);
+    ASSERT_EQ(View.Num(), 1);
     const SWorldRenderSettings& Read = Loaded.Get<SWorldRenderSettings>(*View.begin());
     EXPECT_FALSE(Read.bDrawBillboards);
     EXPECT_FALSE(Read.bUseLODs);
@@ -419,9 +433,9 @@ TEST(ECSTests, Hierarchy_PreorderKeepsEverySubtreeContiguous)
     Hierarchy.EnsureOrder();
 
     const TVector<ECS::FEntity>& Order = Hierarchy.GetOrder();
-    ASSERT_EQ(Order.size(), 7u);
+    ASSERT_EQ(Order.Num(), 7);
 
-    for (uint32 Slot = 0; Slot < (uint32)Order.size(); ++Slot)
+    for (int32 Slot = 0; Slot < Order.Num(); ++Slot)
     {
         const uint32 Parent = Hierarchy.GetParentSlots()[Slot];
         if (Parent != ECS::FHierarchy::NoSlot)
@@ -436,6 +450,54 @@ TEST(ECSTests, Hierarchy_PreorderKeepsEverySubtreeContiguous)
     EXPECT_EQ(Hierarchy.GetSubtreeSizes()[Hierarchy.GetSlot(A)], 3u);
     EXPECT_EQ(Hierarchy.GetSlot(A) + 1, Hierarchy.GetSlot(A1)) << "siblings keep their list order";
     EXPECT_EQ(Hierarchy.GetSlot(A1) + 1, Hierarchy.GetSlot(A2));
+}
+
+TEST(ECSTests, Hierarchy_ForEachDescendantVisitsParentsFirstAndSiblingsInOrder)
+{
+    ECS::FRegistry Registry{};
+
+    const ECS::FEntity Top = Registry.Create();
+    const ECS::FEntity Before = Registry.Create();
+    const ECS::FEntity BeforeChild = Registry.Create();
+    const ECS::FEntity Root = Registry.Create();
+    const ECS::FEntity After = Registry.Create();
+    const ECS::FEntity AfterChild = Registry.Create();
+    const ECS::FEntity C = Registry.Create();
+    const ECS::FEntity C3 = Registry.Create();
+    const ECS::FEntity C1 = Registry.Create();
+    const ECS::FEntity C2 = Registry.Create();
+    const ECS::FEntity B = Registry.Create();
+    const ECS::FEntity A = Registry.Create();
+    const ECS::FEntity A2 = Registry.Create();
+    const ECS::FEntity A1 = Registry.Create();
+    const ECS::FEntity A1a = Registry.Create();
+
+    Registry.AttachChild(Before, Top);
+    Registry.AttachChild(Root, Top);
+    Registry.AttachChild(After, Top);
+    Registry.AttachChild(BeforeChild, Before);
+    Registry.AttachChild(AfterChild, After);
+
+    // Attached out of creation order and partly at the front, so only the sibling links give the expected order.
+    Registry.AttachChild(C, Root);
+    Registry.AttachChild(B, Root, 0);
+    Registry.AttachChild(A, Root, 0);
+    Registry.AttachChild(A2, A);
+    Registry.AttachChild(A1, A, 0);
+    Registry.AttachChild(A1a, A1);
+    Registry.AttachChild(C1, C);
+    Registry.AttachChild(C2, C);
+    Registry.AttachChild(C3, C);
+
+    TVector<ECS::FEntity> Visited;
+    Registry.GetHierarchy().ForEachDescendant(Root, [&](ECS::FEntity Entity) { Visited.Add(Entity); });
+
+    const TVector<ECS::FEntity> Expected = { A, A1, A1a, A2, B, C, C1, C2, C3 };
+    ASSERT_EQ(Visited.Num(), Expected.Num()) << "Root, its siblings and their children are never visited";
+    for (int32 Index = 0; Index < Expected.Num(); ++Index)
+    {
+        EXPECT_EQ(Visited[Index], Expected[Index]) << "at visit " << Index;
+    }
 }
 
 TEST(ECSTests, Hierarchy_AttachRefusesACycle)
@@ -612,16 +674,16 @@ TEST(ECSTests, MaxLiveIndexSkipsTombstones)
     TVector<ECS::FEntity> Entities;
     for (int32 i = 0; i < 21; ++i)
     {
-        Entities.push_back(Registry.Create());
-        Registry.Emplace<STransformComponent>(Entities.back());
+        Entities.Add(Registry.Create());
+        Registry.Emplace<STransformComponent>(Entities.Last());
     }
 
     const ECS::FSparseSet* Pool = Registry.FindStorage<STransformComponent>().GetSet();
     ASSERT_NE(Pool, nullptr);
-    EXPECT_EQ(Pool->MaxLiveIndex(), Entities.back().GetIndex());
+    EXPECT_EQ(Pool->MaxLiveIndex(), Entities.Last().GetIndex());
 
     // The removed slot stays in the dense array as a tombstone whose index bits link the free list.
-    Registry.Remove<STransformComponent>(Entities.back());
+    Registry.Remove<STransformComponent>(Entities.Last());
     Registry.Remove<STransformComponent>(Entities[7]);
     EXPECT_EQ(Pool->MaxLiveIndex(), Entities[19].GetIndex());
 
@@ -655,7 +717,7 @@ TEST(ECSTests, FilteredMovedConsumerSeesOnlyItsEntities)
     ECS::Utils::DrainMovedTransforms(Registry, Filtered, Some);
     EXPECT_TRUE(Algo::Contains(All, Watched));
     EXPECT_TRUE(Algo::Contains(All, Ignored));
-    ASSERT_EQ(Some.size(), 1u);
+    ASSERT_EQ(Some.Num(), 1);
     EXPECT_EQ(Some[0], Watched);
 
     // Dropping interest stops the next move from reaching it.
@@ -663,9 +725,47 @@ TEST(ECSTests, FilteredMovedConsumerSeesOnlyItsEntities)
     Registry.Get<STransformComponent>(Watched).LocalTransform.SetLocation(FVector3(3.f, 0.f, 0.f));
     Registry.EmplaceOrReplace<FNeedsTransformUpdate>(Watched);
     ECS::Utils::ResolveAllDirtyTransforms(Registry);
-    Some.clear();
+    Some.Reset();
     ECS::Utils::DrainMovedTransforms(Registry, Filtered, Some);
-    EXPECT_TRUE(Some.empty());
+    EXPECT_TRUE(Some.IsEmpty());
+}
+
+TEST(ECSTests, MovedTransformsPastTheConsumerCapWarnOnceAndStayInert)
+{
+    RegisterPendingTypes();
+    TStrongObjectPtr<CWorld> World(NewObject<CWorld>(nullptr, NAME_None, FGuid::New(), OF_Transient));
+    ECS::FRegistry& Registry = World->GetEntityRegistry();
+    constexpr uint32 Cap = ECS::Utils::kMaxMovedTransformConsumers;
+    auto CountFullWarnings = [] { return CountLoggedMessages(ELogLevel::Warn, "All 4 moved-transform consumer slots are taken"); };
+
+    Logging::Flush();
+    Logging::ClearLogQueue();
+    FMovedTransforms Moved[Cap + 2];
+    for (uint32 Index = 0; Index < Cap; ++Index)
+    {
+        FMovedTransformsTestAccess::Bind(Moved[Index], *World);
+        ASSERT_TRUE(FMovedTransformsTestAccess::IsBound(Moved[Index]));
+    }
+    EXPECT_EQ(CountFullWarnings(), 0) << "taking the last free slot refuses nobody";
+
+    FMovedTransforms& Refused = Moved[Cap];
+    FMovedTransformsTestAccess::Bind(Refused, *World);
+    FMovedTransformsTestAccess::Bind(Moved[Cap + 1], *World);
+    EXPECT_FALSE(FMovedTransformsTestAccess::IsBound(Refused));
+    EXPECT_FALSE(FMovedTransformsTestAccess::IsBound(Moved[Cap + 1]));
+    EXPECT_EQ(CountFullWarnings(), 1) << "the first refusal warns and later ones in the same registry stay quiet";
+
+    const ECS::FEntity Entity = Registry.Create();
+    Registry.Emplace<STransformComponent>(Entity).LocalTransform.SetLocation(FVector3(1.f, 0.f, 0.f));
+    Refused.Watch(Entity, true);
+    Registry.Emplace<FNeedsTransformUpdate>(Entity);
+    ECS::Utils::ResolveAllDirtyTransforms(Registry);
+
+    TVector<ECS::FEntity> Out;
+    EXPECT_FALSE(Refused.Drain(Out));
+    EXPECT_TRUE(Out.IsEmpty());
+    EXPECT_TRUE(Moved[0].Drain(Out)) << "the bound consumers still hear the move";
+    EXPECT_TRUE(Algo::Contains(Out, Entity));
 }
 
 // A writer on the gate is offered every flat move, repeats included, and a move it takes skips only its own consumer's list.
@@ -698,7 +798,7 @@ TEST(ECSTests, FlatMoveWriterTakesMovesForItsConsumer)
     Writer.Write = [](void* Context, ECS::FEntity Entity, const FTransform& World)
     {
         FSeen& State = *static_cast<FSeen*>(Context);
-        State.Moves.push_back(Entity);
+        State.Moves.Add(Entity);
         State.Last = World.GetLocation();
         return Entity != State.Refuse;
     };
@@ -712,7 +812,7 @@ TEST(ECSTests, FlatMoveWriterTakesMovesForItsConsumer)
     Registry.Get<STransformComponent>(Taken).SetLocalLocation(FVector3(1.0f, 0.0f, 0.0f));
     Registry.Get<STransformComponent>(Taken).SetLocalLocation(FVector3(2.0f, 0.0f, 0.0f));
     Registry.Get<STransformComponent>(Refused).SetLocalLocation(FVector3(3.0f, 0.0f, 0.0f));
-    EXPECT_EQ(Seen.Moves.size(), 3u);
+    EXPECT_EQ(Seen.Moves.Num(), 3);
     EXPECT_TRUE(Seen.Last == FVector3(3.0f, 0.0f, 0.0f));
 
     TVector<ECS::FEntity> WrittenMoves;
@@ -727,8 +827,8 @@ TEST(ECSTests, FlatMoveWriterTakesMovesForItsConsumer)
     // Cleared, the next move reaches the consumer's list again.
     ECS::Utils::ClearFlatMoveWriter(Registry, &Writer);
     Registry.Get<STransformComponent>(Taken).SetLocalLocation(FVector3(4.0f, 0.0f, 0.0f));
-    WrittenMoves.clear();
+    WrittenMoves.Reset();
     ECS::Utils::DrainMovedTransforms(Registry, Written, WrittenMoves);
     EXPECT_TRUE(Algo::Contains(WrittenMoves, Taken));
-    EXPECT_EQ(Seen.Moves.size(), 3u);
+    EXPECT_EQ(Seen.Moves.Num(), 3);
 }

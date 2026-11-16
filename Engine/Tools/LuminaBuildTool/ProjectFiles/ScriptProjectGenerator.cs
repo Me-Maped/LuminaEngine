@@ -34,7 +34,9 @@ public static class ScriptProjectGenerator
         List<ScriptProject> Discovered = new();
         List<string> PluginsWithScripts = new();
 
+        // A standalone tool loads no scripts, and the Reflector's target enables every plugin to build their generators.
         IEnumerable<PluginDescriptor> Plugins = Targets
+            .Where(Target => Target.PrimaryVariant.Rules.Type != TargetType.Program)
             .SelectMany(Target => Target.PrimaryVariant.EnabledPlugins)
             .DistinctBy(Plugin => Plugin.Name, StringComparer.OrdinalIgnoreCase)
             .OrderBy(Plugin => Plugin.Name, StringComparer.OrdinalIgnoreCase);
@@ -60,7 +62,7 @@ public static class ScriptProjectGenerator
                     : "Plugins/" + Plugin.Name,
                 OutputPath = PathUtils.Combine(Plugin.RootDirectory, "Binaries/DotNet") + "/",
                 IntermediateOutputPath = PathUtils.Combine(Plugin.RootDirectory, "Intermediates/DotNet", Plugin.Name) + "/",
-                Dependencies = Plugin.Dependencies,
+                Dependencies = Plugin.Dependencies.Select(Dependency => Dependency.Name).ToList(),
             });
 
             PluginsWithScripts.Add(Plugin.Name);
@@ -131,7 +133,7 @@ public static class ScriptProjectGenerator
         return Written;
     }
 
-    private static string BuildCsprojXml(
+    internal static string BuildCsprojXml(
         BuildDirectories Directories,
         ScriptProject Project,
         IReadOnlyList<ScriptProject> AllProjects,
@@ -160,6 +162,8 @@ public static class ScriptProjectGenerator
         Xml.AppendLine("  <ItemGroup>");
         Xml.AppendLine("""    <Reference Include="LuminaSharp">""");
         Xml.AppendLine($"      <HintPath>{Escape(LuminaSharp)}</HintPath>");
+        // The runtime pins scripts to the engine's own LuminaSharp, so an IDE build copying it and Roslyn into the output only leaves a stale copy behind.
+        Xml.AppendLine("      <Private>false</Private>");
         Xml.AppendLine("    </Reference>");
 
         // The generator the runtime compile loads; without it partial NativeCall bodies are missing.

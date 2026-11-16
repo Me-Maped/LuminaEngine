@@ -3,6 +3,7 @@
 
 #include "AudioStream.h"
 #include "Audio/AudioDecode.h"
+#include "Audio/Graph/AudioGraphInstance.h"
 #include "Core/Serialization/Archiver.h"
 #include "Log/Log.h"
 #include "Memory/MemoryTracking.h"
@@ -31,7 +32,7 @@ namespace Lumina
 
     void CAudioGraph::ReleaseDecodedWaves()
     {
-        DecodedWaves.clear();
+        DecodedWaves.Reset();
         bWavesDecoded = false;
     }
 
@@ -45,10 +46,10 @@ namespace Lumina
         LUMINA_MEMORY_SCOPE("Audio");
         bWavesDecoded = true;
 
-        DecodedWaves.clear();
-        DecodedWaves.resize(ReferencedWaves.size());
+        DecodedWaves.Reset();
+        DecodedWaves.SetNum(ReferencedWaves.Num());
 
-        for (size_t Index = 0; Index < ReferencedWaves.size(); ++Index)
+        for (int32 Index = 0; Index < ReferencedWaves.Num(); ++Index)
         {
             CAudioStream* Stream = ReferencedWaves[Index].Get();
             if (Stream == nullptr || !Stream->IsValid())
@@ -61,9 +62,9 @@ namespace Lumina
             Audio::FAudioInfo Info;
             TSharedPtr<FAudioGraphWaveResource> Resource = MakeShared<FAudioGraphWaveResource>();
 
-            if (!Audio::DecodePCM(Data->Bytes.data(), Data->Bytes.size(), Info, Resource->Samples))
+            if (!Audio::DecodePCM(Data->Bytes.GetData(), Data->Bytes.Num(), Info, Resource->Samples))
             {
-                LOG_WARN("AudioGraph: failed to decode wave '{}'", Stream->GetName().c_str());
+                LOG_WARN("AudioGraph: failed to decode wave '{}'", *Stream->GetName());
                 continue;
             }
 

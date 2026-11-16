@@ -12,6 +12,7 @@
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Containers/StringFormat.h"
+#include "UI/Tools/Debug/DebugHistoryTimeline.h"
 
 namespace Lumina
 {
@@ -21,23 +22,14 @@ namespace Lumina
         constexpr uint32 kHistoryMax     = 240;     // ~60 s of history
         constexpr double kMB             = double(Constants::kMiB);
 
-        void PushCapped(TVector<float>& History, float Value)
-        {
-            History.push_back(Value);
-            if (History.size() > kHistoryMax)
-            {
-                History.erase(History.begin());
-            }
-        }
-
-        void Timeline(const char* Id, const TVector<float>& History, const char* Unit, float Last)
+        void Timeline(const char* Id, const TRingBuffer<float>& History, const char* Unit, float Last)
         {
             ImGui::TextDisabled("%s", Id + 2); // skip the "##"
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.66f, 0.78f, 0.95f, 1.0f), "%.1f %s", Last, Unit);
-            if (!History.empty())
+            if (!History.IsEmpty())
             {
-                ImGui::PlotLines(Id, History.data(), (int)History.size(), 0, nullptr, 0.0f, FLT_MAX, ImVec2(-1.0f, 46.0f));
+                ImGui::PlotLines(Id, HistorySampleAt, const_cast<TRingBuffer<float>*>(&History), History.Num(), 0, nullptr, 0.0f, FLT_MAX, ImVec2(-1.0f, 46.0f));
             }
         }
     }
@@ -45,11 +37,6 @@ namespace Lumina
     void FScriptDiagnosticsEditorTool::OnInitialize()
     {
         CreateToolWindow("C# Diagnostics", [this](bool bIsFocused) { DrawWindow(bIsFocused); });
-    }
-
-    void FScriptDiagnosticsEditorTool::OnDeinitialize(const FUpdateContext&)
-    {
-        // The managed host is only polled from DrawWindow, so closing the window already stops every cost.
     }
 
     namespace
@@ -69,24 +56,24 @@ namespace Lumina
                 {
                     NativeBase = NativeBase->GetSuperClass();
                 }
-                auto Found = std::find_if(Counts.begin(), Counts.end(), [&](const TPair<const CClass*, int32>& Entry) { return Entry.first == NativeBase; });
+                auto Found = Algo::FindIf(Counts, [&](const TPair<const CClass*, int32>& Entry) { return Entry.Key == NativeBase; });
                 if (Found != Counts.end())
                 {
-                    ++Found->second;
+                    ++Found->Value;
                 }
                 else
                 {
-                    Counts.emplace_back(NativeBase, 1);
+                    Counts.Emplace(NativeBase, 1);
                 }
             }
 
             FString Summary;
             for (const TPair<const CClass*, int32>& Entry : Counts)
             {
-                Summary += Lumina::Format("{}{} {}", Summary.empty() ? "" : ", ", Entry.second,
-                    Entry.first != nullptr ? Entry.first->GetName().c_str() : LOC("unparented"));
+                Summary += Lumina::Format("{}{} {}", Summary.IsEmpty() ? "" : ", ", Entry.Value,
+                    Entry.Key != nullptr ? *Entry.Key->GetName() : "unparented");
             }
-            return Summary.empty() ? FString(LOC("no script classes")) : Summary;
+            return Summary.IsEmpty() ? FString("no script classes") : Summary;
         }
     }
 
@@ -106,9 +93,9 @@ namespace Lumina
                 const double Delta = (double)(New.TotalAllocatedBytes - PrevAllocBytes);
                 AllocRateMBs = (float)((Delta > 0.0 ? Delta : 0.0) / kMB / kScriptRefreshSeconds);
             }
-            PushCapped(HistHeapMB,       (float)(New.ManagedHeapBytes / kMB));
-            PushCapped(HistAllocRateMB,  AllocRateMBs);
-            PushCapped(HistWorkingSetMB, (float)(New.WorkingSetBytes / kMB));
+            PushHistorySample(HistHeapMB,       (float)(New.ManagedHeapBytes / kMB), kHistoryMax);
+            PushHistorySample(HistAllocRateMB,  AllocRateMBs, kHistoryMax);
+            PushHistorySample(HistWorkingSetMB, (float)(New.WorkingSetBytes / kMB), kHistoryMax);
         }
 
         PrevAllocBytes = New.TotalAllocatedBytes;
@@ -150,7 +137,7 @@ namespace Lumina
         }
 
         // ---- Throttled poll -----------------------------------------------------------------------
-        RefreshTimer += (float)GEngine->GetDeltaTime();
+        RefreshTimer += (float)Global::GEngine->GetDeltaTime();
         if (!bFrozen && (RefreshTimer >= kScriptRefreshSeconds || !bAvailable))
         {
             RefreshTimer = 0.0f;
@@ -183,8 +170,8 @@ namespace Lumina
                 Snapshot.AliveScriptAlcCount, Snapshot.OldestAliveGeneration);
         }
         ImGui::SameLine(0.0f, 18.0f);
-        ImGui::TextDisabled(LOC("Gen %d  |  %d type(s): %s"),
-            Snapshot.Generation, Snapshot.LoadedTypeCount, MintedClassSummary.c_str());
+        ImGui::TextDisabled("Gen %d  |  %d type(s): %s",
+            Snapshot.Generation, Snapshot.LoadedTypeCount, *MintedClassSummary);
 
         ImGui::Separator();
 
@@ -202,7 +189,7 @@ namespace Lumina
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(Label);
                 ImGui::TableNextColumn();
-                ImGui::TextUnformatted(Value.c_str());
+                ImGui::TextUnformatted(*Value);
             };
             auto Size = [](int64 Bytes) { return ImGuiX::FormatSize((size_t)(Bytes < 0 ? 0 : Bytes)); };
 
@@ -233,8 +220,8 @@ namespace Lumina
         ImGui::Spacing();
 
         // ---- Timelines ----------------------------------------------------------------------------
-        Timeline("##Managed heap (MB)", HistHeapMB,       "MB",   HistHeapMB.empty()       ? 0.0f : HistHeapMB.back());
+        Timeline("##Managed heap (MB)", HistHeapMB,       "MB",   HistHeapMB.IsEmpty()       ? 0.0f : HistHeapMB.Last());
         Timeline("##Alloc churn (MB/s)", HistAllocRateMB, "MB/s", AllocRateMBs);
-        Timeline("##Working set (MB)",  HistWorkingSetMB, "MB",   HistWorkingSetMB.empty() ? 0.0f : HistWorkingSetMB.back());
+        Timeline("##Working set (MB)",  HistWorkingSetMB, "MB",   HistWorkingSetMB.IsEmpty() ? 0.0f : HistWorkingSetMB.Last());
     }
 }

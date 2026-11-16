@@ -1,5 +1,5 @@
 ﻿#include "BlendSpaceEditorTool.h"
-#include "Localization/Localization.h"
+#include "World/World.h"
 #include "World/ECS/Registry.h"
 
 #include "Animation/TaskSystem/AnimTaskExecutor.h"
@@ -12,7 +12,6 @@
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "UI/Properties/PropertyTable.h"
 #include "UI/Tools/Transactions/EditorTransaction.h"
-#include "UI/Tools/Transactions/ObjectSnapshotCommand.h"
 #include "World/Entity/Components/EnvironmentComponent.h"
 #include "World/Entity/Components/LightComponent.h"
 #include "World/Entity/Components/SkeletalMeshComponent.h"
@@ -37,7 +36,7 @@ namespace Lumina
     static const ImU32 CursorColor      = IM_COL32(120, 255, 150, 255);
 
     FBlendSpaceEditorTool::FBlendSpaceEditorTool(IEditorToolContext* Context, CObject* InAsset)
-        : FAssetEditorTool(Context, InAsset->GetName().c_str(), InAsset, NewObject<CWorld>())
+        : FAssetEditorTool(Context, *InAsset->GetName(), InAsset, NewObject<CWorld>())
     {
     }
 
@@ -74,6 +73,7 @@ namespace Lumina
     void FBlendSpaceEditorTool::SetupWorldForTool()
     {
         FEditorTool::SetupWorldForTool();
+        World->GetRenderSettings().bDrawBillboards = false;
 
         CreateFloorPlane();
 
@@ -134,7 +134,7 @@ namespace Lumina
 
         // A restore rewrites Samples wholesale, so the selection may now be past the end.
         CBlendSpace* BlendSpace = GetAsset<CBlendSpace>();
-        if (SelectedSample >= (int32)BlendSpace->Samples.size())
+        if (SelectedSample >= BlendSpace->Samples.Num())
         {
             SelectedSample = Constants::kIndexNone;
         }
@@ -155,11 +155,6 @@ namespace Lumina
         if (CachedSkeleton.Get() != GetSkeleton())
         {
             RefreshPreviewMesh();
-        }
-
-        if (World->GetRenderer() != nullptr)
-        {
-            World->GetRenderSettings().bDrawBillboards = false;
         }
 
         SyncSampleTable();
@@ -375,7 +370,7 @@ namespace Lumina
         int32 Best = Constants::kIndexNone;
         float BestDistanceSq = GrabRadius * GrabRadius;
 
-        for (int32 i = 0; i < (int32)BlendSpace->Samples.size(); ++i)
+        for (int32 i = 0; i < BlendSpace->Samples.Num(); ++i)
         {
             const ImVec2 Screen = AxisToCanvas(BlendSpace->Samples[i].Position);
             const float DX = CanvasPosition.x - Screen.x;
@@ -398,11 +393,11 @@ namespace Lumina
 
         CBlendSpace* BlendSpace = GetAsset<CBlendSpace>();
 
-        SBlendSpaceSample& Sample = BlendSpace->Samples.emplace_back();
+        SBlendSpaceSample& Sample = BlendSpace->Samples.EmplaceGetRef();
         Sample.Position = AxisPosition;
         Sample.Animation = Clip;
 
-        SelectedSample = (int32)BlendSpace->Samples.size() - 1;
+        SelectedSample = BlendSpace->Samples.Num() - 1;
 
         RefreshAfterStructuralEdit();
         EndAssetTransaction();
@@ -411,7 +406,7 @@ namespace Lumina
     void FBlendSpaceEditorTool::AssignClipToSample(int32 SampleIndex, CAnimation* Clip)
     {
         CBlendSpace* BlendSpace = GetAsset<CBlendSpace>();
-        if (SampleIndex < 0 || SampleIndex >= (int32)BlendSpace->Samples.size())
+        if (SampleIndex < 0 || SampleIndex >= BlendSpace->Samples.Num())
         {
             return;
         }
@@ -451,14 +446,14 @@ namespace Lumina
     void FBlendSpaceEditorTool::RemoveSampleAt(int32 SampleIndex)
     {
         CBlendSpace* BlendSpace = GetAsset<CBlendSpace>();
-        if (SampleIndex < 0 || SampleIndex >= (int32)BlendSpace->Samples.size())
+        if (SampleIndex < 0 || SampleIndex >= BlendSpace->Samples.Num())
         {
             return;
         }
 
         BeginAssetTransaction(LOC("Remove Blend Sample"));
 
-        BlendSpace->Samples.erase(BlendSpace->Samples.begin() + SampleIndex);
+        BlendSpace->Samples.RemoveAt(SampleIndex);
         SelectedSample = Constants::kIndexNone;
 
         RefreshAfterStructuralEdit();
@@ -485,7 +480,7 @@ namespace Lumina
     void FBlendSpaceEditorTool::SyncSampleTable()
     {
         CBlendSpace* BlendSpace = GetAsset<CBlendSpace>();
-        const int32 NumSamples = (int32)BlendSpace->Samples.size();
+        const int32 NumSamples = BlendSpace->Samples.Num();
 
         if (SelectedSample >= NumSamples)
         {
@@ -509,18 +504,6 @@ namespace Lumina
                 SampleTable->MarkDirty();
             }
         }
-    }
-
-    void FBlendSpaceEditorTool::BeginAssetTransaction(FName Name)
-    {
-        FTransactionManager& Manager = GetTransactionManager();
-        Manager.BeginTransaction(Name);
-        Manager.Record(MakeUnique<FObjectSnapshotCommand>(Asset.Get(), Name));
-    }
-
-    void FBlendSpaceEditorTool::EndAssetTransaction()
-    {
-        GetTransactionManager().CommitTransaction();
     }
 
     void FBlendSpaceEditorTool::DrawGridWindow()
@@ -566,7 +549,7 @@ namespace Lumina
             const FString AxisXName = BlendSpace->AxisX.Name.ToString();
 
             char XLabel[80];
-            snprintf(XLabel, sizeof(XLabel), "%s##PreviewX", AxisXName.c_str());
+            snprintf(XLabel, sizeof(XLabel), "%s##PreviewX", *AxisXName);
 
             ImGui::SetNextItemWidth(120.0f);
             if (ImGui::DragFloat(XLabel, &PreviewPosition.x, (BlendSpace->AxisX.Max - BlendSpace->AxisX.Min) * 0.005f,
@@ -580,7 +563,7 @@ namespace Lumina
                 const FString AxisYName = BlendSpace->AxisY.Name.ToString();
 
                 char YLabel[80];
-                snprintf(YLabel, sizeof(YLabel), "%s##PreviewY", AxisYName.c_str());
+                snprintf(YLabel, sizeof(YLabel), "%s##PreviewY", *AxisYName);
 
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(120.0f);
@@ -612,7 +595,7 @@ namespace Lumina
         ImGuiX::TextTooltip(LOCF("How many increments each axis is divided into. Drives the gridlines as well as the snap step."));
 
         ImGui::SameLine();
-        ImGui::TextDisabled(LOC("%d samples"), (int)BlendSpace->Samples.size());
+        ImGui::TextDisabled("%d samples", BlendSpace->Samples.Num());
 
         ImGui::Separator();
 
@@ -668,7 +651,7 @@ namespace Lumina
         }
 
         char Label[64];
-        snprintf(Label, sizeof(Label), "%s  %.0f", BlendSpace->AxisX.Name.c_str(), BlendSpace->AxisX.Min);
+        snprintf(Label, sizeof(Label), "%s  %.0f", *BlendSpace->AxisX.Name, BlendSpace->AxisX.Min);
         DrawList->AddText(ImVec2(CanvasMin.x, CanvasMax.y + 6.0f), IM_COL32(190, 190, 200, 200), Label);
 
         snprintf(Label, sizeof(Label), "%.0f", BlendSpace->AxisX.Max);
@@ -676,7 +659,7 @@ namespace Lumina
 
         if (bTwoAxis)
         {
-            snprintf(Label, sizeof(Label), "%s  %.0f", BlendSpace->AxisY.Name.c_str(), BlendSpace->AxisY.Max);
+            snprintf(Label, sizeof(Label), "%s  %.0f", *BlendSpace->AxisY.Name, BlendSpace->AxisY.Max);
             DrawList->AddText(ImVec2(CanvasMin.x - Margin + 4.0f, CanvasMin.y), IM_COL32(190, 190, 200, 200), Label);
 
             snprintf(Label, sizeof(Label), "%.0f", BlendSpace->AxisY.Min);
@@ -708,7 +691,7 @@ namespace Lumina
             DrawList->AddLine(CursorScreen, SampleScreen, IM_COL32(120, 255, 150, Alpha), 1.0f + 2.0f * Weights.Weights[i]);
         }
 
-        for (int32 i = 0; i < (int32)BlendSpace->Samples.size(); ++i)
+        for (int32 i = 0; i < BlendSpace->Samples.Num(); ++i)
         {
             const SBlendSpaceSample& Sample = BlendSpace->Samples[i];
             const ImVec2 Screen = AxisToCanvas(Sample.Position);
@@ -719,7 +702,7 @@ namespace Lumina
             DrawList->AddCircleFilled(Screen, bSelected ? SampleRadius + 1.5f : SampleRadius, Color);
             DrawList->AddCircle(Screen, bSelected ? SampleRadius + 1.5f : SampleRadius, IM_COL32(10, 10, 14, 220), 0, 1.5f);
 
-            const char* Name = Sample.Animation.IsValid() ? Sample.Animation->GetName().c_str() : LOC("(no clip)");
+            const char* Name = Sample.Animation.IsValid() ? *Sample.Animation->GetName() : "(no clip)";
             DrawList->AddText(ImVec2(Screen.x + 11.0f, Screen.y - 7.0f), IM_COL32(225, 228, 235, 220), Name);
 
             if (bShowWeights)
@@ -768,11 +751,11 @@ namespace Lumina
         if (bTwoAxis)
         {
             snprintf(CursorLabel, sizeof(CursorLabel), "%s %.1f    %s %.1f",
-                AxisXName.c_str(), SmoothedPosition.x, AxisYName.c_str(), SmoothedPosition.y);
+                *AxisXName, SmoothedPosition.x, *AxisYName, SmoothedPosition.y);
         }
         else
         {
-            snprintf(CursorLabel, sizeof(CursorLabel), "%s %.1f", AxisXName.c_str(), SmoothedPosition.x);
+            snprintf(CursorLabel, sizeof(CursorLabel), "%s %.1f", *AxisXName, SmoothedPosition.x);
         }
 
         const ImVec2 LabelSize = ImGui::CalcTextSize(CursorLabel);
@@ -816,7 +799,7 @@ namespace Lumina
                     EndAssetTransaction();
                 }
             }
-            else if (DraggedSample < (int32)BlendSpace->Samples.size() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+            else if (DraggedSample < BlendSpace->Samples.Num() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
             {
                 BlendSpace->Samples[DraggedSample].Position = SnapToGrid(CanvasToAxis(MousePos) - DragGrabOffset);
                 BlendSpace->RebuildTopology();
@@ -980,8 +963,8 @@ namespace Lumina
         ImGui::DockBuilderSplitNode(InDockspaceID, ImGuiDir_Right, 0.26f, &RightID, &CenterID);
         ImGui::DockBuilderSplitNode(CenterID, ImGuiDir_Down, 0.45f, &BottomID, &CenterID);
 
-        ImGui::DockBuilderDockWindow(GetToolWindowName(ViewportWindowName).c_str(), CenterID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(BlendSpaceGridWindowName).c_str(), BottomID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(BlendSpaceDetailsWindowName).c_str(), RightID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(ViewportWindowName), CenterID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(BlendSpaceGridWindowName), BottomID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(BlendSpaceDetailsWindowName), RightID);
     }
 }

@@ -17,16 +17,7 @@ namespace Lumina::Paths
 
     RUNTIME_API bool Exists(FStringView Filename);
 
-    /** Pulls the "scheme://" prefix from a virtual path. */
-    RUNTIME_API FString GetVirtualPathPrefix(const FString& VirtualPath);
-
     RUNTIME_API bool CreateDirectories(FStringView Path);
-
-    /** Path-based comparison only; no FS query. */
-    RUNTIME_API bool IsUnderDirectory(const FString& ParentDirectory, const FString& Directory);
-
-    /** e.g. ("/a/b/c.txt", "/a/") -> "b/c.txt". */
-    RUNTIME_API FString MakeRelativeTo(const FString& Path, const FString& BasePath);
 
     RUNTIME_API void ReplaceFilename(FString& Path, const FString& NewFilename);
 
@@ -53,18 +44,22 @@ namespace Lumina::Paths
     RUNTIME_API void Normalize(FFixedString& Path);
     RUNTIME_API FFixedString Normalize(FStringView Path);
 
-    /** Binary file name for a module: <prefix><Name>-<Config><ext>, e.g. libFoo-Development.so. */
+    // Builds <prefix><Name>-<Config><ext>, such as libFoo-Development.so.
     RUNTIME_API FFixedString MakeModuleFileName(FStringView ModuleName);
 
-    /** The engine's game application, which a package ships and a standalone launch runs. */
+    // The engine's game application, which a package ships and a standalone launch runs.
     RUNTIME_API FFixedString MakeGameApplicationName();
 
     // The dedicated server build of the engine application, which packaging stages as a separate executable.
     RUNTIME_API FFixedString MakeServerApplicationName();
 
-    /** Module file name as a Game target builds it, which is not what an editor process is named. */
+    // Module file name as a Game target builds it, which is not what an editor process is named.
     RUNTIME_API FFixedString MakeGameModuleFileName(FStringView ModuleName);
 
+    // Drops trailing separators but keeps a bare root whole.
+    RUNTIME_API FStringView TrimTrailingSeparators(FStringView Path);
+
+    // Case and separator insensitive, and a trailing separator does not count.
     RUNTIME_API bool PathsEqual(FStringView A, FStringView B);
 
     RUNTIME_API FString Parent(FStringView Path, bool bRemoveTrailingSlash = true);
@@ -77,8 +72,8 @@ namespace Lumina::Paths
     {
         typename T::value_type;
     } && (
-        requires(T s) { { s.c_str() } -> std::convertible_to<const typename T::value_type*>; } ||
-        requires(T s) { { s.data() } -> std::convertible_to<const typename T::value_type*>; }
+        requires(T s) { { *s } -> std::convertible_to<const typename T::value_type*>; } ||
+        requires(T s) { { s.GetData() } -> std::convertible_to<const typename T::value_type*>; }
     );
     
     template <typename... Paths>
@@ -88,22 +83,22 @@ namespace Lumina::Paths
 
         auto AppendPath = [&Result, bFirst = true](FStringView Path) mutable
         {
-            if (Path.empty())
+            if (Path.IsEmpty())
             {
                 return;
             }
     
-            if (!bFirst && !Result.empty() && Result.back() != '/')
+            if (!bFirst && !Result.IsEmpty() && Result.Last() != '/')
             {
                 Result += '/';
             }
     
-            if (!bFirst && !Path.empty() && Path.front() == '/')
+            if (!bFirst && !Path.IsEmpty() && Path[0] == '/')
             {
-                Path = Path.substr(1);
+                Path = Path.Mid(1);
             }
         
-            Result.append(Path.data(), Path.length());
+            Result.Append(Path.GetData(), Path.Len());
             bFirst = false;
         };
 
@@ -116,10 +111,10 @@ namespace Lumina::Paths
     template<ValidStringType StringType>
     NODISCARD StringType DirName(const StringType& String)
     {
-        size_t LastSlash = String.find_last_of("/\\");
-        if (LastSlash != FString::npos)
+        int32 LastSlash = String.FindLastOf("/\\");
+        if (LastSlash != Constants::kIndexNone)
         {
-            return String.substr(0, LastSlash);
+            return String.Mid(0, LastSlash);
         }
         return String;
     }

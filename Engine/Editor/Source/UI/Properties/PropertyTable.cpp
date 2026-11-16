@@ -10,7 +10,6 @@
 #include "Core/Object/Class.h"
 #include "Core/Object/InstancedStruct.h"
 #include "Core/Object/ObjectHandleTyped.h"
-#include "Core/Object/ObjectIterator.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
 #include "Core/Reflection/Type/Properties/ArrayProperty.h"
 #include "Core/Reflection/Type/Properties/ClassProperty.h"
@@ -60,7 +59,7 @@ namespace Lumina::PropertyTableInternal
 
         void Parse(FProperty* Source);
         bool Evaluate(void* ContainerPtr) const;
-        bool IsBound() const { return !Terms.empty(); }
+        bool IsBound() const { return !Terms.IsEmpty(); }
         bool ShouldHide() const { return bHides; }
 
     private:
@@ -208,9 +207,9 @@ namespace Lumina::PropertyTableInternal
         int32 GetElementCount() const;
         bool AllowResize() const;
         bool AllowReorder() const;
-        void QueueMoveElement(int64 Index, int64 Target);
-        void QueueInsertElement(int64 Index);
-        void QueueRemoveElement(int64 Index);
+        void QueueMoveElement(int32 Index, int32 Target);
+        void QueueInsertElement(int32 Index);
+        void QueueRemoveElement(int32 Index);
 
     private:
 
@@ -253,7 +252,7 @@ namespace Lumina::PropertyTableInternal
 
         FMapProperty* GetMapProperty() const { return MapProperty; }
         bool AllowResize() const;
-        void QueueRemoveEntry(int64 Index);
+        void QueueRemoveEntry(int32 Index);
 
     private:
 
@@ -289,7 +288,7 @@ namespace Lumina::PropertyTableInternal
     {
     public:
 
-        FMapEntryRow(FMapPropertyRow* InMapRow, int64 InIndex, const FPropertyChangedEventCallbacks& InCallbacks);
+        FMapEntryRow(FMapPropertyRow* InMapRow, int32 InIndex, const FPropertyChangedEventCallbacks& InCallbacks);
 
         void Update() override;
         void DrawHeader(const FPropertyDrawArgs& Args) override;
@@ -313,7 +312,7 @@ namespace Lumina::PropertyTableInternal
         TSharedPtr<FPropertyHandle>             KeyHandle;
         TSharedPtr<IPropertyTypeCustomization>  KeyCustomization;
         TUniquePtr<FPropertyRow>                ValueRow;
-        int64                                   EntryIndex = 0;
+        int32                                   EntryIndex = 0;
         EPropertyChangeOp                       KeyChangeOp = EPropertyChangeOp::None;
         bool                                    bKeyEditSessionActive = false;
     };
@@ -502,10 +501,6 @@ namespace Lumina::PropertyTableInternal
         {
             Ops->PreEdit(Callbacks.Instance, Event);
         }
-        if (Callbacks.PreChangeCallback)
-        {
-            Callbacks.PreChangeCallback(Event);
-        }
 
         Apply();
 
@@ -576,18 +571,18 @@ namespace Lumina::PropertyTableInternal
     TVector<FName> SplitCategoryPath(FStringView Path)
     {
         TVector<FName> Segments;
-        size_t Start = 0;
-        while (Start <= Path.size())
+        int32 Start = 0;
+        while (Start <= Path.Len())
         {
-            size_t Sep = Path.find('|', Start);
-            if (Sep == FStringView::npos)
+            int32 Sep = Path.Find('|', Start);
+            if (Sep == Constants::kIndexNone)
             {
-                Sep = Path.size();
+                Sep = Path.Len();
             }
             if (Sep > Start)
             {
                 // Through FStringView, since FName(const char*, uint32) is a base plus a number, not a length.
-                Segments.push_back(FName(Path.substr(Start, Sep - Start)));
+                Segments.Emplace(Path.Mid(Start, Sep - Start));
             }
             Start = Sep + 1;
         }
@@ -596,13 +591,13 @@ namespace Lumina::PropertyTableInternal
 
     FStringView TrimWhitespace(FStringView In)
     {
-        while (!In.empty() && (In.front() == ' ' || In.front() == '\t'))
+        while (!In.IsEmpty() && (In[0] == ' ' || In[0] == '\t'))
         {
-            In.remove_prefix(1);
+            In.RemovePrefix(1);
         }
-        while (!In.empty() && (In.back() == ' ' || In.back() == '\t'))
+        while (!In.IsEmpty() && (In.Last() == ' ' || In.Last() == '\t'))
         {
-            In.remove_suffix(1);
+            In.RemoveSuffix(1);
         }
         return In;
     }
@@ -668,13 +663,13 @@ namespace Lumina::PropertyTableInternal
 
             for (const TPair<FName, uint64>& Entry : Enum->Names)
             {
-                const FStringView Name(Entry.first.c_str());
-                const size_t Scope = Name.rfind("::");
+                const FStringView Name(*Entry.Key);
+                const int32 Scope = Name.FindLast("::");
                 const bool bMatches = Name == Literal
-                    || (Scope != FStringView::npos && Name.substr(Scope + 2) == Literal);
+                    || (Scope != Constants::kIndexNone && Name.Mid(Scope + 2) == Literal);
                 if (bMatches)
                 {
-                    OutValue = static_cast<int64>(Entry.second);
+                    OutValue = static_cast<int64>(Entry.Value);
                     return true;
                 }
             }
@@ -692,10 +687,10 @@ namespace Lumina::PropertyTableInternal
             return true;
         }
 
-        const FString Text(Literal.data(), Literal.size());
+        const FString Text(Literal.GetData(), Literal.Len());
         char* End = nullptr;
-        const long long Parsed = strtoll(Text.c_str(), &End, 10);
-        if (End == Text.c_str())
+        const long long Parsed = strtoll(*Text, &End, 10);
+        if (End == *Text)
         {
             return false;
         }
@@ -800,7 +795,7 @@ namespace Lumina::PropertyTableInternal
 
     void ClearPropertyClipboard()
     {
-        GPropertyClipboardBytes.clear();
+        GPropertyClipboardBytes.Reset();
         GPropertyClipboardSource = nullptr;
     }
 
@@ -828,15 +823,15 @@ namespace Lumina::PropertyTableInternal
         }
 
         const FStringView Tooltip = Property->GetMetadata("ToolTip");
-        if (Tooltip.empty())
+        if (Tooltip.IsEmpty())
         {
-            ImGuiX::WrappedTooltip_Internal(LocalizedPropertyName(Property));
+            ImGuiX::WrappedTooltip_Internal(FStringView(*Name, Name.Len()));
             return;
         }
         if (bLabelClipped)
         {
-            const FString Both = FString(LocalizedPropertyName(Property)) + "\n\n" + FString(Tooltip.data(), Tooltip.size());
-            ImGuiX::WrappedTooltip_Internal(FStringView(Both.c_str(), Both.size()));
+            const FString Both = FString(*Name) + "\n\n" + FString(Tooltip.GetData(), Tooltip.Len());
+            ImGuiX::WrappedTooltip_Internal(FStringView(*Both, Both.Len()));
             return;
         }
         ImGuiX::WrappedTooltip_Internal(Tooltip);
@@ -861,18 +856,18 @@ namespace Lumina::PropertyTableInternal
             : FString(PropertyTypePlainNames[(size_t)Property->GetType()]);
 
         FString Text;
-        if (bLabelClipped && !Label.empty())
+        if (bLabelClipped && !Label.IsEmpty())
         {
-            Text += FString(Label.data(), Label.size()) + "\n\n";
+            Text += FString(Label.GetData(), Label.Len()) + "\n\n";
         }
-        Text += Lumina::Format("Element {} of {} ({})", Handle->Index, Array->GetPropertyDisplayName().c_str(), TypeName.c_str());
+        Text += Lumina::Format("Element {} of {} ({})", Handle->Index, *Array->GetPropertyDisplayName(), *TypeName);
 
         const FStringView ArrayTooltip = Array->GetMetadata("ToolTip");
-        if (!ArrayTooltip.empty())
+        if (!ArrayTooltip.IsEmpty())
         {
-            Text += "\n\n" + FString(ArrayTooltip.data(), ArrayTooltip.size());
+            Text += "\n\n" + FString(ArrayTooltip.GetData(), ArrayTooltip.Len());
         }
-        ImGuiX::WrappedTooltip_Internal(FStringView(Text.c_str(), Text.size()));
+        ImGuiX::WrappedTooltip_Internal(FStringView(*Text, Text.Len()));
     }
 
     // A label too long for its cell ends in an ellipsis rather than being cut mid-letter, and reports that it did.
@@ -949,7 +944,7 @@ namespace Lumina::PropertyTableInternal
         case EPropertyTypeFlags::Enum:
         {
             // An enum can register its own drawing by name, the way a struct does.
-            FPropertyCustomizationRegistry* Registry = GEngine->GetDevelopmentToolsUI()->GetPropertyCustomizationRegistry();
+            FPropertyCustomizationRegistry* Registry = Global::GEngine->GetDevelopmentToolsUI()->GetPropertyCustomizationRegistry();
             TSharedPtr<IPropertyTypeCustomization> Registered = Registry->GetPropertyCustomizationForType(static_cast<FEnumProperty*>(Prop)->GetEnum()->GetName());
             return Registered ? Registered : FEnumPropertyCustomization::MakeInstance();
         }
@@ -979,7 +974,7 @@ namespace Lumina::PropertyTableInternal
         return ElementButtonWidth * 2.0f + ImGui::GetStyle().ItemSpacing.x;
     }
 
-    TSharedPtr<FPropertyHandle> MakeMapValueHandle(FMapPropertyRow* MapRow, int64 Index)
+    TSharedPtr<FPropertyHandle> MakeMapValueHandle(FMapPropertyRow* MapRow, int32 Index)
     {
         FMapProperty* Map = MapRow->GetMapProperty();
         void* Container = MapRow->GetPropertyHandle()->GetValuePtr();
@@ -989,7 +984,7 @@ namespace Lumina::PropertyTableInternal
 
     const char* InstancedStructLabel(const CStruct* Type)
     {
-        return StructIdentity(Type).c_str();
+        return *StructIdentity(Type);
     }
 
     // Whether Candidate lists Interface among the interfaces its C# type implements.
@@ -1000,16 +995,16 @@ namespace Lumina::PropertyTableInternal
             return false;
         }
         const FString& Listed = Candidate->GetMeta("Implements");
-        const FStringView All(Listed.c_str(), Listed.size());
-        size_t Start = 0;
-        while (Start <= All.size())
+        const FStringView All(*Listed, Listed.Len());
+        int32 Start = 0;
+        while (Start <= All.Len())
         {
-            size_t End = Start;
-            while (End < All.size() && All[End] != ';')
+            int32 End = Start;
+            while (End < All.Len() && All[End] != ';')
             {
                 ++End;
             }
-            if (All.substr(Start, End - Start) == Interface)
+            if (All.Mid(Start, End - Start) == Interface)
             {
                 return true;
             }
@@ -1027,14 +1022,10 @@ namespace Lumina::PropertyTableInternal
         TVector<CStruct*> Candidates;
         if (ImGuiX::IsSearchableComboOpen(StrId))
         {
-            for (TObjectIterator<CStruct> It; It; ++It)
+            Candidates = GatherInstancableStructSubtypes(Base, true);
+            if (!Implements.IsEmpty())
             {
-                CStruct* Candidate = *It;
-                if (IsInstancableStructType(Candidate) && (Base == nullptr || Candidate->IsChildOf(Base))
-                    && (Implements.empty() || ImplementsInterface(Candidate, Implements)))
-                {
-                    Candidates.push_back(Candidate);
-                }
+                Candidates.RemoveAll([Implements](CStruct* Candidate) { return !ImplementsInterface(Candidate, Implements); });
             }
 
             Algo::Sort(Candidates, [](CStruct* A, CStruct* B)
@@ -1044,11 +1035,11 @@ namespace Lumina::PropertyTableInternal
         }
 
         int32 CurrentIndex = 0;
-        for (size_t i = 0; i < Candidates.size(); ++i)
+        for (int32 i = 0; i < Candidates.Num(); ++i)
         {
             if (Candidates[i] == Current)
             {
-                CurrentIndex = static_cast<int32>(i + 1);
+                CurrentIndex = i + 1;
                 break;
             }
         }
@@ -1056,7 +1047,7 @@ namespace Lumina::PropertyTableInternal
         const char* Preview = Current ? InstancedStructLabel(Current) : LOC("None");
 
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
-        const int32 Picked = ImGuiX::SearchableCombo(StrId, Preview, static_cast<int32>(Candidates.size()) + 1, CurrentIndex,
+        const int32 Picked = ImGuiX::SearchableCombo(StrId, Preview, Candidates.Num() + 1, CurrentIndex,
             [&Candidates](int32 Index) -> FFixedString
             {
                 return (Index == 0) ? FFixedString(LOC("None")) : FFixedString(InstancedStructLabel(Candidates[Index - 1]));
@@ -1081,31 +1072,31 @@ namespace Lumina::PropertyTableInternal
 
     void FPropertyEditCondition::Parse(FProperty* Source)
     {
-        Terms.clear();
+        Terms.Reset();
         bRequireAll = true;
         bHides = false;
 
         const FCStringView Expression = Source->GetMetadata("EditCondition");
-        if (Expression.empty())
+        if (Expression.IsEmpty())
         {
             return;
         }
 
         const FStringView Full = Expression;
         TVector<FStringView> TermViews;
-        size_t Start = 0;
-        while (Start <= Full.size())
+        int32 Start = 0;
+        while (Start <= Full.Len())
         {
-            const size_t And = Full.find("&&", Start);
-            const size_t Or  = Full.find("||", Start);
-            const size_t Sep = And < Or ? And : Or;
-            if (Sep == FStringView::npos)
+            const int32 And = Full.Find("&&", Start);
+            const int32 Or  = Full.Find("||", Start);
+            const int32 Sep = And == Constants::kIndexNone ? Or : (Or == Constants::kIndexNone ? And : Math::Min(And, Or));
+            if (Sep == Constants::kIndexNone)
             {
-                TermViews.push_back(Full.substr(Start));
+                TermViews.Add(Full.Mid(Start));
                 break;
             }
             bRequireAll &= (Sep == And);
-            TermViews.push_back(Full.substr(Start, Sep - Start));
+            TermViews.Add(Full.Mid(Start, Sep - Start));
             Start = Sep + 2;
         }
 
@@ -1113,33 +1104,33 @@ namespace Lumina::PropertyTableInternal
         {
             FTerm Term;
             FStringView Text = TrimWhitespace(TermView);
-            if (!Text.empty() && Text.front() == '!' && (Text.size() < 2 || Text[1] != '='))
+            if (!Text.IsEmpty() && Text[0] == '!' && (Text.Len() < 2 || Text[1] != '='))
             {
                 Term.bNegated = true;
-                Text.remove_prefix(1);
+                Text.RemovePrefix(1);
             }
 
             FStringView NameView = Text;
             FStringView LiteralView;
-            const size_t Equals    = Text.find("==");
-            const size_t NotEquals = Text.find("!=");
-            if (Equals != FStringView::npos || NotEquals != FStringView::npos)
+            const int32 Equals    = Text.Find("==");
+            const int32 NotEquals = Text.Find("!=");
+            if (Equals != Constants::kIndexNone || NotEquals != Constants::kIndexNone)
             {
-                const size_t Sep = Equals < NotEquals ? Equals : NotEquals;
+                const int32 Sep = Equals != Constants::kIndexNone ? Equals : NotEquals;
                 Term.Operator = Sep == Equals ? EOperator::Equals : EOperator::NotEquals;
-                NameView = Text.substr(0, Sep);
+                NameView = Text.Mid(0, Sep);
 
-                LiteralView = TrimWhitespace(Text.substr(Sep + 2));
-                if (LiteralView.size() >= 2 && LiteralView.front() == '"' && LiteralView.back() == '"')
+                LiteralView = TrimWhitespace(Text.Mid(Sep + 2));
+                if (LiteralView.Len() >= 2 && LiteralView[0] == '"' && LiteralView.Last() == '"')
                 {
-                    LiteralView = LiteralView.substr(1, LiteralView.size() - 2);
+                    LiteralView = LiteralView.Mid(1, LiteralView.Len() - 2);
                 }
             }
 
             NameView = TrimWhitespace(NameView);
-            if (NameView.empty())
+            if (NameView.IsEmpty())
             {
-                Terms.clear();
+                Terms.Reset();
                 return;
             }
 
@@ -1147,7 +1138,7 @@ namespace Lumina::PropertyTableInternal
             Term.Property = Owner != nullptr ? Owner->GetProperty(FName(NameView)) : nullptr;
             if (Term.Property == nullptr || Term.Property == Source)
             {
-                Terms.clear();
+                Terms.Reset();
                 return;
             }
 
@@ -1156,7 +1147,7 @@ namespace Lumina::PropertyTableInternal
                 Term.bLiteralResolved = TryResolveConditionLiteral(Term.Property, LiteralView, Term.Expected);
             }
 
-            Terms.push_back(Term);
+            Terms.Add(Term);
         }
 
         bHides = Source->HasEditorFlag(EPropertyEditorFlags::EditConditionHides);
@@ -1164,7 +1155,7 @@ namespace Lumina::PropertyTableInternal
 
     bool FPropertyEditCondition::Evaluate(void* ContainerPtr) const
     {
-        if (Terms.empty() || ContainerPtr == nullptr)
+        if (Terms.IsEmpty() || ContainerPtr == nullptr)
         {
             return true;
         }
@@ -1243,13 +1234,13 @@ namespace Lumina::PropertyTableInternal
         TUniquePtr<FCategoryPropertyRow> NewRow = MakeUnique<FCategoryPropertyRow>(InCategory, Callbacks);
         NewRow->ParentRow = this;
         FPropertyRow* Row = NewRow.get();
-        Children.push_back(Move(NewRow));
+        Children.Add(Move(NewRow));
         return Row;
     }
 
     void FPropertyRow::AddPropertyRow(const TSharedPtr<FPropertyHandle>& InPropHandle)
     {
-        Children.push_back(CreatePropertyRow(InPropHandle, this, Callbacks));
+        Children.Add(CreatePropertyRow(InPropHandle, this, Callbacks));
     }
 
     void FPropertyRow::BuildMemberRows(CStruct* Type, void* Instance, void* DefaultInstance)
@@ -1275,7 +1266,7 @@ namespace Lumina::PropertyTableInternal
                 FirstCategory = Category;
                 bFirst = false;
             }
-            else if (FStringView(Category.c_str(), Category.size()) != FStringView(FirstCategory.c_str(), FirstCategory.size()))
+            else if (FStringView(*Category, Category.Len()) != FStringView(*FirstCategory, FirstCategory.Len()))
             {
                 bSingleCategory = false;
                 break;
@@ -1293,7 +1284,7 @@ namespace Lumina::PropertyTableInternal
             if (!bSingleCategory && Member->HasMetadata("Category"))
             {
                 const FCStringView Path = Member->GetMetadata("Category");
-                for (const FName& Segment : SplitCategoryPath(FStringView(Path.c_str(), Path.size())))
+                for (const FName& Segment : SplitCategoryPath(FStringView(*Path, Path.Len())))
                 {
                     Target = Target->FindOrCreateCategoryChild(Segment);
                 }
@@ -1347,10 +1338,10 @@ namespace Lumina::PropertyTableInternal
 
     void FPropertyRow::RestoreExpansion(const FRowExpansionState& In, const FString& Path)
     {
-        if (auto Found = In.find(Path); Found != In.end())
+        if (auto Found = In.Find(Path); Found != nullptr)
         {
-            bExpanded = Found->second;
-            bExpandedSaved = Found->second;
+            bExpanded = (*Found);
+            bExpandedSaved = (*Found);
         }
         for (const TUniquePtr<FPropertyRow>& Child : Children)
         {
@@ -1360,7 +1351,7 @@ namespace Lumina::PropertyTableInternal
 
     void FPropertyRow::DestroyChildren()
     {
-        Children.clear();
+        Children.Reset();
     }
 
     void FPropertyRow::UpdateRow(bool bIncludeCollapsedChildren)
@@ -1415,7 +1406,7 @@ namespace Lumina::PropertyTableInternal
         static const FDelegateHandle ClearOnReload = FCoreDelegates::OnScriptsWillReload.AddLambda([] { ClearPropertyClipboard(); });
         (void)ClearOnReload;
 
-        GPropertyClipboardBytes.clear();
+        GPropertyClipboardBytes.Reset();
 
         // The same serialization CopyPropertiesTo uses, so object references survive as GUIDs.
         FMemoryWriter Writer(GPropertyClipboardBytes);
@@ -1523,7 +1514,7 @@ namespace Lumina::PropertyTableInternal
         {
             // Synced here as well as in UpdateRow, since a paste or a hook earlier this frame can move the value.
             SyncChildren();
-            if (!Children.empty())
+            if (!Children.IsEmpty())
             {
                 ImGui::BeginDisabled(IsReadOnly());
                 DrawChildren(Offset + ChildIndentStep, Args);
@@ -1578,7 +1569,7 @@ namespace Lumina::PropertyTableInternal
         }
 
         // Skipped while Shift is held, so the copy chord does not also open the menu.
-        const bool bCanExpand = !Children.empty();
+        const bool bCanExpand = !Children.IsEmpty();
         if (bShiftHeld || (!State.bHasProperty && !bCanExpand) || !ImGui::BeginPopupContextItem("##PropCtx"))
         {
             return;
@@ -1706,7 +1697,8 @@ namespace Lumina::PropertyTableInternal
         {
             return FStringView();
         }
-        return FStringView(LocalizedPropertyName(PropertyHandle->Property));
+        const FCStringView Display = PropertyHandle->Property->GetPropertyDisplayName();
+        return FStringView(*Display, Display.Len());
     }
 
     FStringView FPropertyRow::GetFilterSourceLabel() const
@@ -1740,49 +1732,8 @@ namespace Lumina::PropertyTableInternal
         const bool bRestoreExpansion = !bFilterActive && bFilterStateActive;
         bFilterStateActive = bFilterActive;
 
-        bool bSelfMatches = false;
-        if (bFilterActive && !bAncestorMatches)
-        {
-            const FStringView Label = GetFilterLabel();
-            // Copy immediately. Numbered FName::c_str() uses a 4-slot thread-local buffer, so holding
-            // several of those views across later c_str() calls aliases them onto the same bytes.
-            TVector<FString> OwnedFields;
-            const auto AddField = [&OwnedFields](FStringView Field)
-            {
-                if (!Field.empty())
-                {
-                    OwnedFields.emplace_back(Field.data(), Field.size());
-                }
-            };
-            // Categories stay visible through descendant matches, including a query that combines a
-            // category's original spelling with a property's translated label (or the reverse).
-            AddField(Label);
-            AddField(GetFilterSourceLabel());
-            AddField(GetFilterInternalName());
-            for (FStringView Field : SearchContext)
-            {
-                AddField(Field);
-            }
-            for (const FPropertyRow* Ancestor = ParentRow; Ancestor != nullptr; Ancestor = Ancestor->ParentRow)
-            {
-                if (Ancestor->IsCategory())
-                {
-                    AddField(Ancestor->GetFilterSourceLabel());
-                    AddField(Ancestor->GetFilterLabel());
-                }
-            }
-            TVector<FStringView> Fields;
-            Fields.reserve(OwnedFields.size());
-            for (const FString& Field : OwnedFields)
-            {
-                Fields.emplace_back(Field.c_str(), Field.size());
-            }
-            bSelfMatches = !Label.empty() && ImGuiX::PassSearchFilter(Filter, TSpan<const FStringView>(Fields));
-        }
-
-        // A matching property's content belongs to that result, including unnamed map entries.
-        // Categories still use the normal descendant/alias matching rules.
-        const bool bShowSubtree = bFilterActive && (bAncestorMatches || (bSelfMatches && !IsCategory()));
+        const FStringView Label = GetFilterLabel();
+        const bool bSelfMatches = bFilterActive && !Label.IsEmpty() && ImGuiX::PassSearchFilter(Filter, Label);
 
         // Not short-circuited, since every descendant needs its own flag updated.
         bool bDescendantMatches = false;
@@ -1852,7 +1803,7 @@ namespace Lumina::PropertyTableInternal
     void FPropertyRow::DrawExtraControlsSection()
     {
         FArrayPropertyRow* ArrayRow = static_cast<FArrayPropertyRow*>(ParentRow);
-        const int64 Index = PropertyHandle->Index;
+        const int32 Index = PropertyHandle->Index;
         const bool bAllowResize = ArrayRow->AllowResize();
         const bool bAllowReorder = ArrayRow->AllowReorder();
         const bool bCanMoveUp = bAllowReorder && Index > 0;
@@ -1928,11 +1879,11 @@ namespace Lumina::PropertyTableInternal
         bool bClipped = false;
         if (IsArrayElement())
         {
-            ImGui::Text("%lld", static_cast<long long>(PropertyHandle->Index));
+            ImGui::Text("%d", PropertyHandle->Index);
         }
         else
         {
-            bClipped = DrawHeaderLabel(LocalizedPropertyName(PropertyHandle->Property));
+            bClipped = DrawHeaderLabel(*PropertyHandle->Property->GetPropertyDisplayName());
         }
 
         DrawRowTooltip(PropertyHandle.get(), PropertyHandle->Property, bClipped);
@@ -1959,10 +1910,10 @@ namespace Lumina::PropertyTableInternal
         if (IsArrayElement())
         {
             char Buf[32];
-            snprintf(Buf, sizeof(Buf), "%lld", static_cast<long long>(PropertyHandle->Index));
+            snprintf(Buf, sizeof(Buf), "%d", PropertyHandle->Index);
             return ImGui::CalcTextSize(Buf).x;
         }
-        return ImGui::CalcTextSize(LocalizedPropertyName(PropertyHandle->Property)).x;
+        return ImGui::CalcTextSize(*PropertyHandle->Property->GetPropertyDisplayName()).x;
     }
 
     FArrayPropertyRow::FArrayPropertyRow(const TSharedPtr<FPropertyHandle>& InPropHandle, FPropertyRow* InParentRow, const FPropertyChangedEventCallbacks& InCallbacks)
@@ -1976,7 +1927,7 @@ namespace Lumina::PropertyTableInternal
     {
         ChangeOp = EPropertyChangeOp::None;
 
-        if (!PendingMutations.empty())
+        if (!PendingMutations.IsEmpty())
         {
             // Started fires before the mutation, so an undo snapshot captures the array as it was.
             DispatchChange(EPropertyChangeOp::Started);
@@ -1985,19 +1936,19 @@ namespace Lumina::PropertyTableInternal
             {
                 Mutation();
             }
-            PendingMutations.clear();
+            PendingMutations.Reset();
             RebuildChildren();
             DispatchChange(EPropertyChangeOp::Finished);
         }
 
         // Game code can resize the array and a scroll leaves rows far behind, so the window is clamped before this frame draws.
         const int32 Count = GetElementCount();
-        const int32 WindowEnd = WindowBegin + (int32)Children.size();
-        if (Children.empty() || WindowEnd > Count)
+        const int32 WindowEnd = WindowBegin + Children.Num();
+        if (Children.IsEmpty() || WindowEnd > Count)
         {
             SetWindow(0, Math::Min(Count, ComplexArrayDisplayLimit));
         }
-        else if ((int32)Children.size() > MaxLiveElementRows && IsInnerFixedHeight())
+        else if (Children.Num() > MaxLiveElementRows && IsInnerFixedHeight())
         {
             SetWindow(Math::Max(0, LastVisibleBegin - ElementRowMargin), Math::Min(Count, LastVisibleEnd + ElementRowMargin));
         }
@@ -2005,21 +1956,21 @@ namespace Lumina::PropertyTableInternal
 
     void FArrayPropertyRow::QueueMutation(TFunction<void()> Mutation)
     {
-        PendingMutations.push_back(Move(Mutation));
+        PendingMutations.Add(Move(Mutation));
     }
 
     void FArrayPropertyRow::CaptureElementStates()
     {
         // Live rows hold the newest state, while elements outside the window keep whatever was saved for them.
-        const int32 Needed = Math::Max(GetElementCount(), WindowBegin + (int32)Children.size());
-        if ((int32)ElementStates.size() < Needed)
+        const int32 Needed = Math::Max(GetElementCount(), WindowBegin + Children.Num());
+        if (ElementStates.Num() < Needed)
         {
-            ElementStates.resize(Needed);
+            ElementStates.SetNum(Needed);
         }
-        for (int32 i = 0; i < (int32)Children.size(); ++i)
+        for (int32 i = 0; i < Children.Num(); ++i)
         {
             FRowExpansionState& State = ElementStates[WindowBegin + i];
-            State.clear();
+            State.Reset();
             Children[i]->CaptureExpansion(State);
         }
     }
@@ -2037,7 +1988,7 @@ namespace Lumina::PropertyTableInternal
     {
         bool bClipped = false;
         const ImGuiTreeNodeFlags Flags = GetElementCount() > 0 ? 0 : ImGuiTreeNodeFlags_Leaf;
-        bExpanded = DrawRowFoldout(LocalizedPropertyName(ArrayProperty), bExpanded, Flags, bClipped, nullptr, ArrayProperty->GetPropertyDisplayName().c_str());
+        bExpanded = DrawRowFoldout(*ArrayProperty->GetPropertyDisplayName(), bExpanded, Flags, bClipped);
         DrawPropertyTooltip(ArrayProperty, bClipped);
     }
 
@@ -2048,7 +1999,7 @@ namespace Lumina::PropertyTableInternal
 
     float FArrayPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(LocalizedPropertyNameId(ArrayProperty), nullptr, true).x;
+        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(*ArrayProperty->GetPropertyDisplayName()).x;
     }
 
     bool FArrayPropertyRow::IsInnerFixedHeight() const
@@ -2142,13 +2093,13 @@ namespace Lumina::PropertyTableInternal
     int32 FArrayPropertyRow::GetElementCount() const
     {
         const void* Array = PropertyHandle->GetValuePtr();
-        return Array != nullptr ? (int32)ArrayProperty->GetNum(Array) : 0;
+        return Array != nullptr ? ArrayProperty->Num(Array) : 0;
     }
 
     void FArrayPropertyRow::SetExpandedRecursive(bool bExpand)
     {
         // Saved states would override the choice on every element created afterwards.
-        ElementStates.clear();
+        ElementStates.Reset();
         ElementExpansion = bExpand;
         FPropertyRow::SetExpandedRecursive(bExpand);
     }
@@ -2160,61 +2111,61 @@ namespace Lumina::PropertyTableInternal
             GetPropertyHandle()->GetValuePtr(),
             GetPropertyHandle()->GetDefaultValuePtr(),
             ArrayProperty->GetInternalProperty(),
-            static_cast<int64>(Index));
+            Index);
         TUniquePtr<FPropertyRow> NewRow = CreatePropertyRow(ElementPropHandle, this, Callbacks);
         NewRow->SetIsArrayElement(true);
-        if (ElementExpansion.has_value())
+        if (ElementExpansion.IsSet())
         {
             NewRow->SetExpandedRecursive(*ElementExpansion);
         }
-        if (Index < (int32)ElementStates.size())
+        if (Index < ElementStates.Num())
         {
             NewRow->RestoreExpansion(ElementStates[Index]);
         }
         return NewRow;
     }
 
-    void FArrayPropertyRow::QueueMoveElement(int64 Index, int64 Target)
+    void FArrayPropertyRow::QueueMoveElement(int32 Index, int32 Target)
     {
         QueueMutation([this, Index, Target]
         {
             void* Array = PropertyHandle->GetValuePtr();
-            const int64 Num = GetElementCount();
+            const int32 Num = GetElementCount();
             if (Array == nullptr || Index < 0 || Index >= Num || Target < 0 || Target >= Num)
             {
                 return;
             }
             ArrayProperty->Swap(Array, Index, Target);
-            if (Index < (int64)ElementStates.size() && Target < (int64)ElementStates.size())
+            if (Index < ElementStates.Num() && Target < ElementStates.Num())
             {
-                std::swap(ElementStates[Index], ElementStates[Target]);
+                ElementStates.Swap(Index, Target);
             }
         });
     }
 
-    void FArrayPropertyRow::QueueInsertElement(int64 Index)
+    void FArrayPropertyRow::QueueInsertElement(int32 Index)
     {
         QueueMutation([this, Index]
         {
             void* Array = PropertyHandle->GetValuePtr();
-            const int64 Num = GetElementCount();
+            const int32 Num = GetElementCount();
             if (Array == nullptr || Index < 0 || Index > Num)
             {
                 return;
             }
-            ArrayProperty->PushBack(Array, nullptr);
-            for (int64 i = Num; i > Index; --i)
+            ArrayProperty->Add(Array, nullptr);
+            for (int32 i = Num; i > Index; --i)
             {
                 ArrayProperty->Swap(Array, i, i - 1);
             }
-            if (Index <= (int64)ElementStates.size())
+            if (Index <= ElementStates.Num())
             {
-                ElementStates.insert(ElementStates.begin() + Index, FRowExpansionState());
+                ElementStates.Insert(FRowExpansionState(), Index);
             }
         });
     }
 
-    void FArrayPropertyRow::QueueRemoveElement(int64 Index)
+    void FArrayPropertyRow::QueueRemoveElement(int32 Index)
     {
         QueueMutation([this, Index]
         {
@@ -2224,9 +2175,9 @@ namespace Lumina::PropertyTableInternal
                 return;
             }
             ArrayProperty->RemoveAt(Array, Index);
-            if (Index < (int64)ElementStates.size())
+            if (Index < ElementStates.Num())
             {
-                ElementStates.erase(ElementStates.begin() + Index);
+                ElementStates.RemoveAt(Index);
             }
         });
     }
@@ -2234,14 +2185,14 @@ namespace Lumina::PropertyTableInternal
     void FArrayPropertyRow::SetWindow(int32 Begin, int32 End)
     {
         const int32 OldBegin = WindowBegin;
-        const int32 OldEnd = WindowBegin + (int32)Children.size();
+        const int32 OldEnd = WindowBegin + Children.Num();
 
         // Rows inside both windows move across, so one drawn earlier this frame stays alive.
         TVector<TUniquePtr<FPropertyRow>> Rows;
-        Rows.reserve(Math::Max(0, End - Begin));
+        Rows.Reserve(Math::Max(0, End - Begin));
         for (int32 i = Begin; i < End; ++i)
         {
-            Rows.push_back(i >= OldBegin && i < OldEnd ? Move(Children[i - OldBegin]) : CreateElementRow(i));
+            Rows.Add(i >= OldBegin && i < OldEnd ? Move(Children[i - OldBegin]) : CreateElementRow(i));
         }
         Children = Move(Rows);
         WindowBegin = Begin;
@@ -2249,7 +2200,7 @@ namespace Lumina::PropertyTableInternal
 
     void FArrayPropertyRow::CoverElements(int32 Begin, int32 End)
     {
-        const int32 WindowEnd = WindowBegin + (int32)Children.size();
+        const int32 WindowEnd = WindowBegin + Children.Num();
         if (Begin >= WindowBegin && End <= WindowEnd)
         {
             return;
@@ -2257,7 +2208,7 @@ namespace Lumina::PropertyTableInternal
 
         int32 NewBegin = Math::Min(Begin, WindowBegin);
         int32 NewEnd = Math::Max(End, WindowEnd);
-        if (Children.empty() || NewEnd - NewBegin > MaxLiveElementRows)
+        if (Children.IsEmpty() || NewEnd - NewBegin > MaxLiveElementRows)
         {
             NewBegin = Begin;
             NewEnd = End;
@@ -2295,7 +2246,7 @@ namespace Lumina::PropertyTableInternal
             {
                 if (void* Array = PropertyHandle->GetValuePtr())
                 {
-                    ArrayProperty->PushBack(Array, nullptr);
+                    ArrayProperty->Add(Array, nullptr);
                 }
             });
         }
@@ -2306,8 +2257,8 @@ namespace Lumina::PropertyTableInternal
             {
                 if (void* Array = PropertyHandle->GetValuePtr())
                 {
-                    ArrayProperty->Clear(Array);
-                    ElementStates.clear();
+                    ArrayProperty->Reset(Array);
+                    ElementStates.Reset();
                 }
             });
         }
@@ -2324,7 +2275,7 @@ namespace Lumina::PropertyTableInternal
     {
         ChangeOp = EPropertyChangeOp::None;
 
-        if (PendingMutations.empty())
+        if (PendingMutations.IsEmpty())
         {
             return;
         }
@@ -2334,56 +2285,56 @@ namespace Lumina::PropertyTableInternal
         {
             Mutation();
         }
-        PendingMutations.clear();
+        PendingMutations.Reset();
         RebuildChildren();
         DispatchChange(EPropertyChangeOp::Finished);
     }
 
     void FMapPropertyRow::QueueMutation(TFunction<void()> Mutation)
     {
-        PendingMutations.push_back(Move(Mutation));
+        PendingMutations.Add(Move(Mutation));
     }
 
-    void FMapPropertyRow::QueueRemoveEntry(int64 Index)
+    void FMapPropertyRow::QueueRemoveEntry(int32 Index)
     {
         QueueMutation([this, Index]
         {
             void* Container = PropertyHandle->GetValuePtr();
-            if (Container == nullptr || Index < 0 || static_cast<size_t>(Index) >= MapProperty->GetNum(Container))
+            if (Container == nullptr || Index < 0 || Index >= MapProperty->Num(Container))
             {
                 return;
             }
 
             // Copied out first, since the key it names lives in the slot the removal destroys.
             FMapKeyScratch Key(MapProperty);
-            MapProperty->GetKeyProperty()->CopyCompleteValue(Key.Get(), MapProperty->GetKeyAt(Container, static_cast<size_t>(Index)));
-            MapProperty->RemoveByKey(Container, Key.Get());
+            MapProperty->GetKeyProperty()->CopyCompleteValue(Key.Get(), MapProperty->GetKeyAt(Container, Index));
+            MapProperty->Remove(Container, Key.Get());
         });
     }
 
     void FMapPropertyRow::DrawHeader(const FPropertyDrawArgs& Args)
     {
         bool bClipped = false;
-        const ImGuiTreeNodeFlags Flags = Children.empty() ? ImGuiTreeNodeFlags_Leaf : 0;
-        bExpanded = DrawRowFoldout(LocalizedPropertyName(MapProperty), bExpanded, Flags, bClipped, nullptr, MapProperty->GetPropertyDisplayName().c_str());
+        const ImGuiTreeNodeFlags Flags = Children.IsEmpty() ? ImGuiTreeNodeFlags_Leaf : 0;
+        bExpanded = DrawRowFoldout(*MapProperty->GetPropertyDisplayName(), bExpanded, Flags, bClipped);
         DrawPropertyTooltip(MapProperty, bClipped);
     }
 
     void FMapPropertyRow::DrawEditor(const FPropertyDrawArgs& Args)
     {
-        ImGui::TextColored(EditorColors::TextMuted(), LOC("%llu Entries"), static_cast<unsigned long long>(Children.size()));
+        ImGui::TextColored(EditorColors::TextMuted(), "%d Entries", Children.Num());
     }
 
     float FMapPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(LocalizedPropertyNameId(MapProperty), nullptr, true).x;
+        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(*MapProperty->GetPropertyDisplayName()).x;
     }
 
     void FMapPropertyRow::SyncChildren()
     {
         void* Container = PropertyHandle->GetValuePtr();
-        const size_t Count = Container != nullptr ? MapProperty->GetNum(Container) : 0;
-        if (Container != BuiltMap || Count != Children.size())
+        const int32 Count = Container != nullptr ? MapProperty->Num(Container) : 0;
+        if (Container != BuiltMap || Count != Children.Num())
         {
             RebuildChildren();
         }
@@ -2400,11 +2351,11 @@ namespace Lumina::PropertyTableInternal
             return;
         }
 
-        const size_t Count = MapProperty->GetNum(Container);
-        Children.reserve(Count);
-        for (size_t i = 0; i < Count; ++i)
+        const int32 Count = MapProperty->Num(Container);
+        Children.Reserve(Count);
+        for (int32 i = 0; i < Count; ++i)
         {
-            Children.push_back(MakeUnique<FMapEntryRow>(this, static_cast<int64>(i), Callbacks));
+            Children.Add(MakeUnique<FMapEntryRow>(this, i, Callbacks));
         }
     }
 
@@ -2433,7 +2384,7 @@ namespace Lumina::PropertyTableInternal
                 {
                     // A colliding default key is a no-op, since Insert is insert-or-assign.
                     FMapKeyScratch Key(MapProperty);
-                    MapProperty->Insert(Container, Key.Get(), nullptr);
+                    MapProperty->Add(Container, Key.Get(), nullptr);
                 }
             });
         }
@@ -2444,7 +2395,7 @@ namespace Lumina::PropertyTableInternal
             {
                 if (void* Container = PropertyHandle->GetValuePtr())
                 {
-                    MapProperty->Clear(Container);
+                    MapProperty->Reset(Container);
                 }
             });
         }
@@ -2465,7 +2416,7 @@ namespace Lumina::PropertyTableInternal
         Memory::Free(Memory);
     }
 
-    FMapEntryRow::FMapEntryRow(FMapPropertyRow* InMapRow, int64 InIndex, const FPropertyChangedEventCallbacks& InCallbacks)
+    FMapEntryRow::FMapEntryRow(FMapPropertyRow* InMapRow, int32 InIndex, const FPropertyChangedEventCallbacks& InCallbacks)
         : FPropertyRow(MakeMapValueHandle(InMapRow, InIndex), InMapRow, InCallbacks)
         , MapRow(InMapRow)
         , Map(InMapRow->GetMapProperty())
@@ -2485,7 +2436,7 @@ namespace Lumina::PropertyTableInternal
         }
         else
         {
-            Children.push_back(Move(Row));
+            Children.Add(Move(Row));
         }
     }
 
@@ -2504,10 +2455,10 @@ namespace Lumina::PropertyTableInternal
         {
             return false;
         }
-        const size_t Count = Map->GetNum(MapContainer);
-        for (size_t j = 0; j < Count; ++j)
+        const int32 Count = Map->Num(MapContainer);
+        for (int32 j = 0; j < Count; ++j)
         {
-            if (static_cast<int64>(j) == EntryIndex)
+            if (j == EntryIndex)
             {
                 continue;
             }
@@ -2606,7 +2557,7 @@ namespace Lumina::PropertyTableInternal
         : FPropertyRow(InPropHandle, InParentRow, InCallbacks)
         , StructProperty(static_cast<FStructProperty*>(InPropHandle->Property))
     {
-        FPropertyCustomizationRegistry* Registry = GEngine->GetDevelopmentToolsUI()->GetPropertyCustomizationRegistry();
+        FPropertyCustomizationRegistry* Registry = Global::GEngine->GetDevelopmentToolsUI()->GetPropertyCustomizationRegistry();
         Customization = Registry->GetPropertyCustomizationForType(StructProperty->GetStruct()->GetName());
         
         if (StructProperty->HasEditorFlag(EPropertyEditorFlags::DefaultCollapsed))
@@ -2635,21 +2586,21 @@ namespace Lumina::PropertyTableInternal
     {
         if (!IsArrayElement())
         {
-            return FFixedString(LocalizedPropertyName(StructProperty));
+            return FFixedString(*StructProperty->GetPropertyDisplayName());
         }
 
         char Index[32];
-        snprintf(Index, sizeof(Index), "[%lld]", static_cast<long long>(PropertyHandle->Index));
+        snprintf(Index, sizeof(Index), "[%d]", PropertyHandle->Index);
         FFixedString Label(Index);
         const FArrayPropertyRow* ArrayRow = static_cast<const FArrayPropertyRow*>(ParentRow);
         FProperty* ArrayProperty = ArrayRow->GetPropertyHandle()->Property;
         FCStringView TitleName = ArrayProperty->GetMetadata("TitleProperty");
-        if (TitleName.empty())
+        if (TitleName.IsEmpty())
         {
             TitleName = "Name";
         }
 
-        FProperty* TitleProperty = StructProperty->GetStruct()->GetProperty(FName(FStringView(TitleName.c_str(), TitleName.size())));
+        FProperty* TitleProperty = StructProperty->GetStruct()->GetProperty(FName(FStringView(*TitleName, TitleName.Len())));
         void* StructValue = PropertyHandle->GetValuePtr();
         if (TitleProperty == nullptr || StructValue == nullptr)
         {
@@ -2660,11 +2611,11 @@ namespace Lumina::PropertyTableInternal
         if (TitleProperty->GetType() == EPropertyTypeFlags::Name)
         {
             const FName* Value = TitleProperty->GetValuePtr<FName>(StructValue);
-            Title = Value->IsNone() ? nullptr : Value->c_str();
+            Title = Value->IsNone() ? nullptr : *(*Value);
         }
         else if (TitleProperty->GetType() == EPropertyTypeFlags::String)
         {
-            Title = TitleProperty->GetValuePtr<FString>(StructValue)->c_str();
+            Title = *(*TitleProperty->GetValuePtr<FString>(StructValue));
         }
 
         if (Title != nullptr && Title[0] != 0)
@@ -2683,13 +2634,13 @@ namespace Lumina::PropertyTableInternal
         bool bClipped = false;
         if (Customization)
         {
-            bClipped = DrawHeaderLabel(Label.c_str());
+            bClipped = DrawHeaderLabel(*Label);
         }
         else
         {
-            bExpanded = DrawRowFoldout(Label.c_str(), bExpanded, 0, bClipped, this);
+            bExpanded = DrawRowFoldout(*Label, bExpanded, 0, bClipped, this);
         }
-        DrawRowTooltip(PropertyHandle.get(), StructProperty, bClipped, FStringView(Label.c_str(), Label.size()));
+        DrawRowTooltip(PropertyHandle.get(), StructProperty, bClipped, FStringView(*Label, Label.Len()));
     }
 
     void FStructPropertyRow::DrawEditor(const FPropertyDrawArgs& Args)
@@ -2705,7 +2656,7 @@ namespace Lumina::PropertyTableInternal
     float FStructPropertyRow::GetMeasuredHeaderTextWidth() const
     {
         const FFixedString Label = GetHeaderLabel();
-        const float LabelWidth = ImGui::CalcTextSize(Label.c_str()).x;
+        const float LabelWidth = ImGui::CalcTextSize(*Label).x;
         return Customization ? LabelWidth : ImGui::GetTreeNodeToLabelSpacing() + LabelWidth;
     }
 
@@ -2763,7 +2714,7 @@ namespace Lumina::PropertyTableInternal
     void FInstancedStructPropertyRow::DrawHeader(const FPropertyDrawArgs& Args)
     {
         bool bClipped = false;
-        bExpanded = DrawRowFoldout(LocalizedPropertyName(InstancedStructProperty), bExpanded, 0, bClipped, nullptr, InstancedStructProperty->GetPropertyDisplayName().c_str());
+        bExpanded = DrawRowFoldout(*InstancedStructProperty->GetPropertyDisplayName(), bExpanded, 0, bClipped);
         DrawRowTooltip(PropertyHandle.get(), InstancedStructProperty, bClipped);
     }
 
@@ -2782,7 +2733,7 @@ namespace Lumina::PropertyTableInternal
         CStruct* Current = Instance->GetScriptStruct();
         const FCStringView Implements = InstancedStructProperty->GetMetadata("Implements");
         CStruct* Picked = DrawInstancedStructTypePicker("##instancedstructpicker", InstancedStructProperty->GetMetaStruct(),
-            FStringView(Implements.data(), Implements.size()), Current, bChanged);
+            FStringView(Implements.GetData(), Implements.Len()), Current, bChanged);
 
         if (bChanged && Picked != Current)
         {
@@ -2798,7 +2749,7 @@ namespace Lumina::PropertyTableInternal
 
     float FInstancedStructPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(InstancedStructProperty->GetPropertyDisplayName().c_str()).x;
+        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(*InstancedStructProperty->GetPropertyDisplayName()).x;
     }
 
     void FInstancedStructPropertyRow::RebuildChildren()
@@ -2834,7 +2785,7 @@ namespace Lumina::PropertyTableInternal
     void FOptionalPropertyRow::SyncChildren()
     {
         void* ContainerPtr = PropertyHandle->GetValuePtr();
-        void* Payload = ContainerPtr != nullptr && OptionalProperty->HasValue(ContainerPtr) ? OptionalProperty->GetValue(ContainerPtr) : nullptr;
+        void* Payload = ContainerPtr != nullptr && OptionalProperty->IsSet(ContainerPtr) ? OptionalProperty->GetValue(ContainerPtr) : nullptr;
         if (Payload != BuiltPayload)
         {
             RebuildChildren();
@@ -2843,7 +2794,7 @@ namespace Lumina::PropertyTableInternal
 
     void FOptionalPropertyRow::DrawHeader(const FPropertyDrawArgs& Args)
     {
-        const bool bClipped = DrawHeaderLabel(OptionalProperty->GetPropertyDisplayName().c_str());
+        const bool bClipped = DrawHeaderLabel(*OptionalProperty->GetPropertyDisplayName());
         DrawRowTooltip(PropertyHandle.get(), OptionalProperty, bClipped);
     }
 
@@ -2854,7 +2805,7 @@ namespace Lumina::PropertyTableInternal
         {
             return;
         }
-        bool bEngaged = OptionalProperty->HasValue(ContainerPtr);
+        bool bEngaged = OptionalProperty->IsSet(ContainerPtr);
 
         ImGui::BeginDisabled(Args.bReadOnly || IsReadOnly());
         if (ImGui::Checkbox("##OptionalSet", &bEngaged))
@@ -2880,7 +2831,7 @@ namespace Lumina::PropertyTableInternal
 
     float FOptionalPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::CalcTextSize(OptionalProperty->GetPropertyDisplayName().c_str()).x;
+        return ImGui::CalcTextSize(*OptionalProperty->GetPropertyDisplayName()).x;
     }
 
     void FOptionalPropertyRow::RebuildChildren()
@@ -2890,7 +2841,7 @@ namespace Lumina::PropertyTableInternal
 
         void* ContainerPtr = GetPropertyHandle()->GetValuePtr();
         void* DefaultContainerPtr = GetPropertyHandle()->GetDefaultValuePtr();
-        if (ContainerPtr == nullptr || !OptionalProperty->HasValue(ContainerPtr))
+        if (ContainerPtr == nullptr || !OptionalProperty->IsSet(ContainerPtr))
         {
             return;
         }
@@ -2903,7 +2854,7 @@ namespace Lumina::PropertyTableInternal
 
         // The payload is the child's container, and the default only counts when the default is engaged too.
         void* DefaultPayload = nullptr;
-        if (DefaultContainerPtr != nullptr && OptionalProperty->HasValue(DefaultContainerPtr))
+        if (DefaultContainerPtr != nullptr && OptionalProperty->IsSet(DefaultContainerPtr))
         {
             DefaultPayload = OptionalProperty->GetValue(DefaultContainerPtr);
         }
@@ -2919,10 +2870,7 @@ namespace Lumina::PropertyTableInternal
 
     FStringView FCategoryPropertyRow::GetFilterLabel() const
     {
-        // What the filter matches has to be what the header shows, or a search typed in the active
-        // language would miss every section. The view points into the table or the interned name, so
-        // it stays valid as long as the old one did.
-        return FLocalization::Get().TranslateView(FStringView(Category.c_str()), FStringView("category"));
+        return FStringView(*Category);
     }
 
     void FCategoryPropertyRow::DrawHeader(const FPropertyDrawArgs& Args)
@@ -2937,18 +2885,18 @@ namespace Lumina::PropertyTableInternal
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorColors::U32(EditorColors::RowBgHovered()));
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextPrimary());
         bool bClipped = false;
-        bExpanded = CollapsingHeaderEllipsis(LOC_CTX(Category.c_str(), "category"), ImGuiTreeNodeFlags_DefaultOpen, bClipped, nullptr, Category.c_str());
+        bExpanded = CollapsingHeaderEllipsis(*Category, ImGuiTreeNodeFlags_DefaultOpen, bClipped);
         ImGui::PopStyleColor(4);
 
         if (bClipped && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::WrappedTooltip_Internal(FStringView(LOC_VIEW_CTX(Category.c_str(), "category")));
+            ImGuiX::WrappedTooltip_Internal(FStringView(*Category));
         }
     }
 
     float FCategoryPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(LOC_CTX(Category.c_str(), "category")).x;
+        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(*Category).x;
     }
 
 }
@@ -3033,7 +2981,7 @@ namespace Lumina
             ImGui::TableSetupColumn("##Header", ImGuiTableColumnFlags_WidthFixed, HeaderColumnWidth);
             ImGui::TableSetupColumn("##Editor", ImGuiTableColumnFlags_WidthStretch);
 
-            const bool bFoldSoleCategory = Categories.size() == 1 && !OwnerHeading.IsNone() && Categories.front()->GetCategoryName() == OwnerHeading;
+            const bool bFoldSoleCategory = Categories.Num() == 1 && !OwnerHeading.IsNone() && Categories[0]->GetCategoryName() == OwnerHeading;
             for (const TUniquePtr<PropertyTableInternal::FCategoryPropertyRow>& Row : Categories)
             {
                 // UpdateRow drains queued array mutations, so skipping it strands an edit made before the search.
@@ -3097,11 +3045,6 @@ namespace Lumina
         }
         Bind(InObject, StructType, InDefaultObject);
         DropRows();
-    }
-
-    void FPropertyTable::SetPreEditCallback(FPropertyChangedEventFn Callback)
-    {
-        Callbacks.PreChangeCallback = Move(Callback);
     }
 
     void FPropertyTable::SetPostEditCallback(FPropertyChangedEventFn Callback)
@@ -3179,10 +3122,10 @@ namespace Lumina
 
     void FPropertyTable::SetSearchText(FStringView Text)
     {
-        const size_t Count = Math::Min(Text.size(), sizeof(PropertyFilter.InputBuf) - 1);
+        const int32 Count = Math::Min(Text.Len(), static_cast<int32>(sizeof(PropertyFilter.InputBuf) - 1));
         if (Count > 0)
         {
-            Memory::Memcpy(PropertyFilter.InputBuf, Text.data(), Count);
+            Memory::Memcpy(PropertyFilter.InputBuf, Text.GetData(), Count);
         }
         PropertyFilter.InputBuf[Count] = 0;
         PropertyFilter.Build();
@@ -3192,10 +3135,9 @@ namespace Lumina
     {
         EnsureTreeBuilt();
 
-        // A customization draws its own table, so it is always shown rather than vanishing under a search.
         if (Customization != nullptr)
         {
-            return true;
+            return Customization->ApplySearch(GetCustomizationHandle(), FStringView(PropertyFilter.InputBuf));
         }
 
         UpdateRows();
@@ -3213,6 +3155,14 @@ namespace Lumina
             }
         }
         return false;
+    }
+
+    bool FPropertyTable::MatchesSearch(FStringView Text, FStringView Title)
+    {
+        // A title match shows the table in full, since that is what searching for it means.
+        const bool bTitleMatches = ImGuiX::PassSearchFilter(Text, Title);
+        SetSearchText(bTitleMatches ? FStringView() : Text);
+        return bTitleMatches || PrepareAndTestFilter();
     }
 
     void FPropertyTable::OnScriptsReloaded(const Scripting::FScriptReload& Reload)
@@ -3246,7 +3196,7 @@ namespace Lumina
 
     void FPropertyTable::DropRows()
     {
-        Categories.clear();
+        Categories.Reset();
         Customization = nullptr;
         CustomizationHandle = nullptr;
         bCustomizationEditActive = false;
@@ -3260,7 +3210,7 @@ namespace Lumina
             return;
         }
 
-        FPropertyCustomizationRegistry* Registry = GEngine->GetDevelopmentToolsUI()->GetPropertyCustomizationRegistry();
+        FPropertyCustomizationRegistry* Registry = Global::GEngine->GetDevelopmentToolsUI()->GetPropertyCustomizationRegistry();
         Customization = Struct != nullptr ? Registry->GetPropertyCustomizationForType(Struct->GetName()) : nullptr;
         if (Customization == nullptr)
         {
@@ -3271,7 +3221,7 @@ namespace Lumina
 
     void FPropertyTable::RebuildTree()
     {
-        Categories.clear();
+        Categories.Reset();
         if (Struct == nullptr || Object == nullptr)
         {
             return;
@@ -3286,7 +3236,7 @@ namespace Lumina
 
             const FCStringView Path = Property->HasMetadata("Category") ? Property->GetMetadata("Category") : FCStringView("General");
             PropertyTableInternal::FPropertyRow* Target = nullptr;
-            for (const FName& Segment : PropertyTableInternal::SplitCategoryPath(FStringView(Path.c_str(), Path.size())))
+            for (const FName& Segment : PropertyTableInternal::SplitCategoryPath(FStringView(*Path, Path.Len())))
             {
                 Target = Target == nullptr ? FindOrCreateCategoryRow(Segment) : Target->FindOrCreateCategoryChild(Segment);
             }
@@ -3324,12 +3274,19 @@ namespace Lumina
         }
     }
 
-    void FPropertyTable::DrawCustomization(const FPropertyDrawArgs& Args)
+    const TSharedPtr<FPropertyHandle>& FPropertyTable::GetCustomizationHandle()
     {
         if (CustomizationHandle == nullptr)
         {
             CustomizationHandle = MakeShared<FPropertyHandle>(Object, nullptr);
         }
+        return CustomizationHandle;
+    }
+
+    void FPropertyTable::DrawCustomization(const FPropertyDrawArgs& Args)
+    {
+        // Applied every draw, since a cleared or title-matched search never reaches PrepareAndTestFilter.
+        Customization->ApplySearch(GetCustomizationHandle(), FStringView(PropertyFilter.InputBuf));
 
         const EPropertyChangeOp Op = Customization->UpdateAndDraw(CustomizationHandle, Args);
         PropertyTableInternal::DispatchPropertyChange(Op, bCustomizationEditActive, Callbacks, nullptr, nullptr, [this]
@@ -3348,15 +3305,15 @@ namespace Lumina
             }
         }
 
-        Categories.push_back(MakeUnique<PropertyTableInternal::FCategoryPropertyRow>(CategoryName, Callbacks));
-        return Categories.back().get();
+        Categories.Add(MakeUnique<PropertyTableInternal::FCategoryPropertyRow>(CategoryName, Callbacks));
+        return Categories.Last().get();
     }
 
     TSharedPtr<IPropertyTypeCustomization> MakeInlinePropertyCustomization(FProperty* Prop)
     {
         if (Prop->GetType() == EPropertyTypeFlags::Struct)
         {
-            FPropertyCustomizationRegistry* Registry = GEngine->GetDevelopmentToolsUI()->GetPropertyCustomizationRegistry();
+            FPropertyCustomizationRegistry* Registry = Global::GEngine->GetDevelopmentToolsUI()->GetPropertyCustomizationRegistry();
             return Registry->GetPropertyCustomizationForType(static_cast<FStructProperty*>(Prop)->GetStruct()->GetName());
         }
         return PropertyTableInternal::MakeLeafPropertyCustomization(Prop);

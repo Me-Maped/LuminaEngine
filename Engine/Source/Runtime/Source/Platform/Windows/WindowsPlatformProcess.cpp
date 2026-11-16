@@ -8,6 +8,7 @@
 #include "Platform/Process/PlatformProcess.h"
 #include "Localization/Localization.h"
 #include "Core/Threading/Thread.h"
+#include "Core/Module/ModuleManager.h"
 // The lean-and-mean macro is already defined workspace-wide, so guarding on it would skip the include.
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -33,8 +34,6 @@ namespace Lumina::Platform
 {
     namespace
     {
-        TVector<FString> GDLLSearchPaths;
-
         struct FScopedComApartment
         {
             const HRESULT Result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
@@ -62,25 +61,25 @@ namespace Lumina::Platform
             const char* Cursor = Filter;
             while (*Cursor != '\0')
             {
-                Storage.emplace_back(UTF8_TO_TCHAR(Cursor));
+                Storage.Emplace(UTF8_TO_TCHAR(Cursor));
                 Cursor += strlen(Cursor) + 1;
-                Storage.emplace_back(UTF8_TO_TCHAR(Cursor));
+                Storage.Emplace(UTF8_TO_TCHAR(Cursor));
                 Cursor += strlen(Cursor) + 1;
             }
 
-            FileTypes.reserve(Storage.size() / 2);
-            for (size_t Index = 0; Index < Storage.size(); Index += 2)
+            FileTypes.Reserve(Storage.Num() / 2);
+            for (int32 Index = 0; Index < Storage.Num(); Index += 2)
             {
-                FileTypes.push_back({ Storage[Index].c_str(), Storage[Index + 1].c_str() });
+                FileTypes.Emplace(*Storage[Index], *Storage[Index + 1]);
             }
         }
 
-        // GDLLSearchPaths only locates the file asked for, not the imports the loader resolves first.
+        // The module manager's search paths only locate the file asked for, not the imports the loader resolves first.
         void RegisterLoaderDirectory(const FString& Directory)
         {
             FWString Wide = StringUtils::ToWideString(Directory);
 
-            if (::AddDllDirectory(Wide.c_str()) == nullptr)
+            if (::AddDllDirectory(*Wide) == nullptr)
             {
                 LOG_WARN("AddDllDirectory failed for '{0}' (error {1})", Directory, (uint32)GetLastError());
             }
@@ -95,14 +94,14 @@ namespace Lumina::Platform
                 | LOAD_LIBRARY_SEARCH_USER_DIRS
                 | LOAD_LIBRARY_SEARCH_SYSTEM32;
 
-            if (HMODULE Handle = LoadLibraryExW(Wide.c_str(), nullptr, SearchFlags))
+            if (HMODULE Handle = LoadLibraryExW(*Wide, nullptr, SearchFlags))
             {
                 return Handle;
             }
 
             const DWORD SearchError = GetLastError();
 
-            if (HMODULE Handle = LoadLibraryW(Wide.c_str()))
+            if (HMODULE Handle = LoadLibraryW(*Wide))
             {
                 return Handle;
             }
@@ -117,11 +116,7 @@ namespace Lumina::Platform
 
     void* GetDLLHandle(const TCHAR* Filename)
     {
-        FWString WideString = Filename;
-        TVector<FString> SearchPaths = GDLLSearchPaths;
-
-        
-        return LoadLibraryWithSearchPaths(StringUtils::FromWideString(WideString), SearchPaths);
+        return LoadLibraryWithSearchPaths(StringUtils::FromWideString(Filename), FModuleManager::Get().GetDLLSearchPaths());
     }
 
     bool FreeDLLHandle(void* DLLHandle)
@@ -129,23 +124,12 @@ namespace Lumina::Platform
         return FreeLibrary((HMODULE)DLLHandle);
     }
 
-    void* GetDLLExport(void* DLLHandle, const char* ProcName)
-    {
-        return (void*)::GetProcAddress((HMODULE)DLLHandle, ProcName);
-    }
-
     void AddDLLDirectory(const FString& Directory)
     {
-        for (const FString& Existing : GDLLSearchPaths)
+        if (FModuleManager::Get().AddDLLSearchPath(Directory))
         {
-            if (Existing == Directory)
-            {
-                return;
-            }
+            RegisterLoaderDirectory(Directory);
         }
-
-        GDLLSearchPaths.push_back(Directory);
-        RegisterLoaderDirectory(Directory);
     }
 
     void PushDLLDirectory(const TCHAR* Directory)
@@ -157,123 +141,32 @@ namespace Lumina::Platform
         // SetDllDirectory is ignored once search flags are passed, so both have to agree.
         RegisterLoaderDirectory(Narrow);
 
-        GDLLSearchPaths.push_back(Narrow);
+        FModuleManager::Get().AddDLLSearchPath(Narrow);
 
         LOG_INFO("Pushing DLL Search Path: {0}", Narrow);
     }
 
-    void PopDLLDirectory()
-    {
-        GDLLSearchPaths.pop_back();
-
-        if (GDLLSearchPaths.empty())
-        {
-            SetDllDirectory(L"");
-        }
-        else
-        {
-            SetDllDirectory(StringUtils::ToWideString(GDLLSearchPaths.back()).c_str());
-        }
-    }
-
-    uint32 GetCurrentProcessID()
-    {
-        return 0;
-    }
-
-    uint32 GetCurrentCoreNumber()
-    {
-        return ::GetCurrentProcessorNumber();
-    }
-
-    const FCpuTopology& GetCpuTopology()
-    {
-        static const FCpuTopology Topo = []
-        {
-            FCpuTopology T;
-            for (ECpuCoreType& C : T.CoreTypes) C = ECpuCoreType::Unknown;
-
-            DWORD Len = 0;
-            GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &Len);
-
-            TVector<uint8> Buffer(Len);
-            const bool bOk = Len != 0
-                && GetLogicalProcessorInformationEx(RelationProcessorCore,
-                       reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(Buffer.data()), &Len);
-
-            if (!bOk)
-            {
-                // With no topology, treat every logical core as a performance core.
-                const DWORD N = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-                T.NumLogicalCores = N < 256 ? N : 256;
-                T.NumPerformance  = T.NumLogicalCores;
-                for (uint32 i = 0; i < T.NumLogicalCores; ++i) T.CoreTypes[i] = ECpuCoreType::Performance;
-                return T;
-            }
-
-            // A higher efficiency class is the more performant core, so the max class is the P-cores.
-            uint8 EffClass[256];
-            memset(EffClass, 0xFF, sizeof(EffClass));
-            uint8 MaxClass = 0;
-
-            uint8* Cursor = Buffer.data();
-            uint8* End    = Buffer.data() + Len;
-            while (Cursor < End)
-            {
-                auto* Info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(Cursor);
-                if (Info->Relationship == RelationProcessorCore)
-                {
-                    const PROCESSOR_RELATIONSHIP& PR = Info->Processor;
-                    if (PR.EfficiencyClass > MaxClass) MaxClass = PR.EfficiencyClass;
-                    for (WORD g = 0; g < PR.GroupCount; ++g)
-                    {
-                        const KAFFINITY Mask = PR.GroupMask[g].Mask;
-                        for (uint32 Bit = 0; Bit < sizeof(KAFFINITY) * 8; ++Bit)
-                        {
-                            if ((Mask & (static_cast<KAFFINITY>(1) << Bit)) == 0) continue;
-                            const uint32 Logical = static_cast<uint32>(PR.GroupMask[g].Group) * 64u + Bit;
-                            if (Logical < 256) EffClass[Logical] = PR.EfficiencyClass;
-                        }
-                    }
-                }
-                Cursor += Info->Size;
-            }
-
-            // The top class is the P-cores and anything below it is an E-core.
-            for (uint32 i = 0; i < 256; ++i)
-            {
-                if (EffClass[i] == 0xFF) continue;
-                ++T.NumLogicalCores;
-                if (EffClass[i] >= MaxClass) { T.CoreTypes[i] = ECpuCoreType::Performance; ++T.NumPerformance; }
-                else                         { T.CoreTypes[i] = ECpuCoreType::Efficiency;  ++T.NumEfficiency;  }
-            }
-            T.bHybrid = T.NumEfficiency > 0;
-            return T;
-        }();
-        return Topo;
-    }
-
     FString GetEnvVariable(FStringView Variable)
     {
-        const auto WideName = StringCast<WIDECHAR>(Variable.data(), static_cast<int32>(Variable.size()));
+        const auto WideName = StringCast<WIDECHAR>(Variable.GetData(), Variable.Len());
 
         TVector<wchar_t, 512> Buffer(512);
         for (;;)
         {
-            const DWORD Length = ::GetEnvironmentVariableW(WideName.Get(), Buffer.data(), static_cast<DWORD>(Buffer.size()));
+            const DWORD Length = ::GetEnvironmentVariableW(WideName.Get(), Buffer.GetData(), static_cast<DWORD>(Buffer.Num()));
             if (Length == 0)
             {
                 return {};
             }
 
-            if (Length < Buffer.size())
+            if (Length < static_cast<DWORD>(Buffer.Num()))
             {
-                const auto Narrow = StringCast<ANSICHAR>(Buffer.data(), static_cast<int32>(Length));
+                const auto Narrow = StringCast<ANSICHAR>(Buffer.GetData(), static_cast<int32>(Length));
                 return FString(Narrow.Get(), Narrow.Length());
             }
 
             // An overflowed call reports the size including the terminator, so resizing to it always fits.
-            Buffer.resize(Length);
+            Buffer.SetNum(Length);
         }
     }
 
@@ -306,14 +199,14 @@ namespace Lumina::Platform
     bool SetEnvVariable(const FString& Name, const FString& Value)
     {
         // An empty or '='-bearing name trips the CRT invalid-parameter handler, which aborts in debug.
-        if (Name.empty() || Name.find('=') != FString::npos)
+        if (Name.IsEmpty() || Name.Find('=') != Constants::kIndexNone)
         {
             LOG_WARN("Refusing to set environment variable with invalid name '{}'", Name);
             return false;
         }
 
-        const auto WideName = StringCast<WIDECHAR>(Name.c_str(), static_cast<int32>(Name.size()));
-        const auto WideValue = StringCast<WIDECHAR>(Value.c_str(), static_cast<int32>(Value.size()));
+        const auto WideName = StringCast<WIDECHAR>(*Name, Name.Len());
+        const auto WideValue = StringCast<WIDECHAR>(*Value, Value.Len());
 
         // The CRT block backs getenv in third-party code, the Win32 block is what a spawned child inherits.
         const bool bCrtOk = _wputenv_s(WideName.Get(), WideValue.Get()) == 0;
@@ -337,25 +230,25 @@ namespace Lumina::Platform
         }
 
         FWString URLString(URL);
-        if (URLString.size() >= 2 && URLString.front() == L'"' && URLString.back() == L'"')
+        if (URLString.Len() >= 2 && URLString[0] == L'"' && URLString.Last() == L'"')
         {
-            URLString = URLString.substr(1, URLString.size() - 2);
+            URLString = URLString.Mid(1, URLString.Len() - 2);
         }
-        if (URLString.empty())
+        if (URLString.IsEmpty())
         {
             return ERROR_INVALID_PARAMETER;
         }
         Algo::Replace(URLString, '/', '\\');
 
-        if (URLString.find(L'\\') == FWString::npos)
+        if (URLString.Find(L'\\') == Constants::kIndexNone)
         {
-            const DWORD Required = SearchPathW(nullptr, URLString.c_str(), L".exe", 0, nullptr, nullptr);
+            const DWORD Required = SearchPathW(nullptr, *URLString, L".exe", 0, nullptr, nullptr);
             if (Required == 0)
             {
                 return static_cast<int>(GetLastError());
             }
             TVector<wchar_t> Resolved(Required);
-            const DWORD Written = SearchPathW(nullptr, URLString.c_str(), L".exe", Required, Resolved.data(), nullptr);
+            const DWORD Written = SearchPathW(nullptr, *URLString, L".exe", Required, Resolved.GetData(), nullptr);
             if (Written == 0)
             {
                 return static_cast<int>(GetLastError());
@@ -364,7 +257,7 @@ namespace Lumina::Platform
             {
                 return ERROR_INSUFFICIENT_BUFFER;
             }
-            URLString.assign(Resolved.data(), Written);
+            URLString = FWString(Resolved.GetData(), static_cast<int32>(Written));
         }
 
         FWString CommandLine = L"\"";
@@ -391,11 +284,11 @@ namespace Lumina::Platform
 
         // CreateProcessW modifies the command line string, so make a writable buffer
         TVector<wchar_t> cmdBuffer(CommandLine.begin(), CommandLine.end());
-        cmdBuffer.push_back(L'\0');
+        cmdBuffer.Add(L'\0');
 
         BOOL result = CreateProcessW(
-            URLString.c_str(),
-            cmdBuffer.data(),         // lpCommandLine
+            *URLString,
+            cmdBuffer.GetData(),         // lpCommandLine
             nullptr,                  // lpProcessAttributes
             nullptr,                  // lpThreadAttributes
             FALSE,                    // bInheritHandles
@@ -441,13 +334,13 @@ namespace Lumina::Platform
         }
 
         TVector<wchar_t> CmdBuffer(CmdLine.begin(), CmdLine.end());
-        CmdBuffer.push_back(L'\0');
+        CmdBuffer.Add(L'\0');
 
         STARTUPINFOW StartupInfo{};
         StartupInfo.cb = sizeof(StartupInfo);
         PROCESS_INFORMATION ProcessInfo{};
 
-        if (!CreateProcessW(nullptr, CmdBuffer.data(), nullptr, nullptr, FALSE, 0, nullptr, WorkingDirectory, &StartupInfo, &ProcessInfo))
+        if (!CreateProcessW(nullptr, CmdBuffer.GetData(), nullptr, nullptr, FALSE, 0, nullptr, WorkingDirectory, &StartupInfo, &ProcessInfo))
         {
             return Result;
         }
@@ -502,7 +395,7 @@ namespace Lumina::Platform
         const FWString WidePath = StringUtils::ToWideString(Path);
 
         // Shared for reading, which is how a second process learns who holds it.
-        const HANDLE File = CreateFileW(WidePath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        const HANDLE File = CreateFileW(*WidePath, GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (File == INVALID_HANDLE_VALUE)
         {
             if (GetLastError() != ERROR_SHARING_VIOLATION)
@@ -511,7 +404,7 @@ namespace Lumina::Platform
                 return true;
             }
 
-            const HANDLE Reader = CreateFileW(WidePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            const HANDLE Reader = CreateFileW(*WidePath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (Reader != INVALID_HANDLE_VALUE)
             {
                 char Buffer[16] = {};
@@ -599,7 +492,7 @@ namespace Lumina::Platform
     }
 
     int RunProcessAndWaitCapture(const TCHAR* Executable, const TCHAR* Params, const TCHAR* WorkingDirectory, const TFunction<void(FStringView)>& LineCallback,
-                                 uint32 TimeoutMilliseconds)
+                                 uint32 TimeoutMilliseconds, const FThreadStop* Stop)
     {
         if (!Executable)
         {
@@ -617,7 +510,7 @@ namespace Lumina::Platform
         }
 
         TVector<wchar_t> CmdBuffer(CmdLine.begin(), CmdLine.end());
-        CmdBuffer.push_back(L'\0');
+        CmdBuffer.Add(L'\0');
 
         // Write end is inheritable for both stdout+stderr; stderr merged inline for build log.
         SECURITY_ATTRIBUTES sa{};
@@ -646,8 +539,8 @@ namespace Lumina::Platform
         // Only the pipe is handed down, since a child that inherits a server's listening socket keeps its port bound after we exit.
         SIZE_T AttributeBytes = 0;
         InitializeProcThreadAttributeList(nullptr, 1, 0, &AttributeBytes);
-        TVector<uint8> AttributeStorage(AttributeBytes);
-        si.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(AttributeStorage.data());
+        TVector<uint8> AttributeStorage(static_cast<int32>(AttributeBytes));
+        si.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(AttributeStorage.GetData());
         HANDLE InheritedHandles[] = { WriteEnd };
         const bool bAttributeList = InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &AttributeBytes) != FALSE;
         const bool bHandleList = bAttributeList
@@ -665,12 +558,15 @@ namespace Lumina::Platform
 
         PROCESS_INFORMATION pi{};
 
+        // Killing a batch file's cmd.exe leaves the tools it started running, so the child starts suspended and joins its own job first.
+        const HANDLE Job = CreateJobObjectW(nullptr, nullptr);
+
         // The editor is not a console app and output is captured, so suppress the popup.
-        const DWORD CreationFlags = CREATE_NO_WINDOW | (bHandleList ? EXTENDED_STARTUPINFO_PRESENT : 0);
+        const DWORD CreationFlags = CREATE_NO_WINDOW | CREATE_SUSPENDED | (bHandleList ? EXTENDED_STARTUPINFO_PRESENT : 0);
 
         BOOL ok = CreateProcessW(
             nullptr,
-            CmdBuffer.data(),
+            CmdBuffer.GetData(),
             nullptr,
             nullptr,
             TRUE,                     // bInheritHandles must be TRUE for pipe
@@ -691,22 +587,18 @@ namespace Lumina::Platform
         if (!ok)
         {
             CloseHandle(ReadEnd);
+            if (Job != nullptr)
+            {
+                CloseHandle(Job);
+            }
             return -1;
         }
 
-        // Killing a stuck child closes its end of the pipe, which is what lets the blocking read below return.
-        FThread Watchdog;
-        if (TimeoutMilliseconds > 0)
-        {
-            const HANDLE Process = pi.hProcess;
-            Watchdog = FThread([Process, TimeoutMilliseconds]()
-            {
-                if (WaitForSingleObject(Process, TimeoutMilliseconds) == WAIT_TIMEOUT)
-                {
-                    TerminateProcess(Process, (UINT)ProcessTimedOutExitCode);
-                }
-            });
-        }
+        const bool bInJob = Job != nullptr && AssignProcessToJobObject(Job, pi.hProcess);
+        ResumeThread(pi.hThread);
+
+        const ULONGLONG Deadline = TimeoutMilliseconds > 0 ? GetTickCount64() + TimeoutMilliseconds : 0;
+        bool bKilled = false;
 
         FString Pending;
         TVector<char> ReadBuf(64 * 1024);
@@ -715,6 +607,24 @@ namespace Lumina::Platform
         // Done once the child exits and the pipe drains, since a grandchild like mspdbsrv can hold the write end open for minutes.
         for (;;)
         {
+            if (!bKilled && WaitForSingleObject(pi.hProcess, 0) == WAIT_TIMEOUT)
+            {
+                const bool bTimedOut = Deadline != 0 && GetTickCount64() >= Deadline;
+                if (bTimedOut || (Stop != nullptr && Stop->ShouldStop()))
+                {
+                    const UINT KillCode = bTimedOut ? (UINT)ProcessTimedOutExitCode : 1u;
+                    if (bInJob)
+                    {
+                        TerminateJobObject(Job, KillCode);
+                    }
+                    else
+                    {
+                        TerminateProcess(pi.hProcess, KillCode);
+                    }
+                    bKilled = true;
+                }
+            }
+
             DWORD Available = 0;
             if (!PeekNamedPipe(ReadEnd, nullptr, 0, nullptr, &Available, nullptr))
             {
@@ -729,23 +639,23 @@ namespace Lumina::Platform
                 }
                 continue;
             }
-            const DWORD ToRead = Available < (DWORD)ReadBuf.size() ? Available : (DWORD)ReadBuf.size();
-            if (!ReadFile(ReadEnd, ReadBuf.data(), ToRead, &BytesRead, nullptr) || BytesRead == 0)
+            const DWORD ToRead = Available < (DWORD)ReadBuf.Num() ? Available : (DWORD)ReadBuf.Num();
+            if (!ReadFile(ReadEnd, ReadBuf.GetData(), ToRead, &BytesRead, nullptr) || BytesRead == 0)
             {
                 break;
             }
-            Pending.append(ReadBuf.data(), BytesRead);
+            Pending.Append(ReadBuf.GetData(), static_cast<int32>(BytesRead));
 
-            size_t Cursor = 0;
+            int32 Cursor = 0;
             for (;;)
             {
-                const size_t NewlineIdx = Pending.find('\n', Cursor);
-                if (NewlineIdx == FString::npos)
+                const int32 NewlineIdx = Pending.Find('\n', Cursor);
+                if (NewlineIdx == Constants::kIndexNone)
                 {
                     break;
                 }
 
-                size_t LineEnd = NewlineIdx;
+                int32 LineEnd = NewlineIdx;
                 // Strip trailing CR for CRLF lines.
                 if (LineEnd > Cursor && Pending[LineEnd - 1] == '\r')
                 {
@@ -754,35 +664,35 @@ namespace Lumina::Platform
 
                 if (LineCallback)
                 {
-                    LineCallback(FStringView(Pending.data() + Cursor, LineEnd - Cursor));
+                    LineCallback(FStringView(Pending.GetData() + Cursor, LineEnd - Cursor));
                 }
                 Cursor = NewlineIdx + 1;
             }
 
             if (Cursor > 0)
             {
-                Pending.erase(0, Cursor);
+                Pending.RemoveAt(0, Cursor);
             }
         }
 
         // Final partial line (no trailing newline).
-        if (!Pending.empty() && LineCallback)
+        if (!Pending.IsEmpty() && LineCallback)
         {
-            LineCallback(FStringView(Pending.data(), Pending.size()));
+            LineCallback(Pending.View());
         }
 
         CloseHandle(ReadEnd);
 
         WaitForSingleObject(pi.hProcess, INFINITE);
-        if (Watchdog.Joinable())
-        {
-            Watchdog.Join();
-        }
         DWORD ExitCode = 1;
         GetExitCodeProcess(pi.hProcess, &ExitCode);
 
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
+        if (Job != nullptr)
+        {
+            CloseHandle(Job);
+        }
 
         return (int)ExitCode;
     }
@@ -804,7 +714,7 @@ namespace Lumina::Platform
         }
 
         TVector<wchar_t> CmdBuffer(CmdLine.begin(), CmdLine.end());
-        CmdBuffer.push_back(L'\0');
+        CmdBuffer.Add(L'\0');
 
         STARTUPINFOW si{};
         si.cb = sizeof(si);
@@ -815,7 +725,7 @@ namespace Lumina::Platform
 
         BOOL ok = CreateProcessW(
             nullptr,
-            CmdBuffer.data(),
+            CmdBuffer.GetData(),
             nullptr,
             nullptr,
             FALSE,
@@ -993,7 +903,7 @@ namespace Lumina::Platform
     void* LoadLibraryWithSearchPaths(const FString& Filename, const TVector<FString>& SearchPaths)
     {
         FWString Wide = StringUtils::ToWideString(Filename);
-        if (void* Handle = GetModuleHandleW(Wide.c_str()))
+        if (void* Handle = GetModuleHandleW(*Wide))
         {
             return Handle;
         }
@@ -1076,9 +986,9 @@ namespace Lumina::Platform
         TVector<FWString> StringStorage;
 
         BuildDialogFilters(Filter, StringStorage, fileTypes);
-        if (!fileTypes.empty())
+        if (!fileTypes.IsEmpty())
         {
-            FileDialog->SetFileTypes(static_cast<UINT>(fileTypes.size()), fileTypes.data());
+            FileDialog->SetFileTypes(static_cast<UINT>(fileTypes.Num()), fileTypes.GetData());
         }
         bool bResult = false;
         if (SUCCEEDED(FileDialog->Show(nullptr)))
@@ -1091,7 +1001,7 @@ namespace Lumina::Platform
                 {
                     FWString wPath = pszPath;
 
-                    OutFile = TCHAR_TO_UTF8(wPath.c_str());
+                    OutFile = TCHAR_TO_UTF8(*wPath);
                     Algo::Replace(OutFile, '\\', '/');
 
                     CoTaskMemFree(pszPath);
@@ -1109,7 +1019,7 @@ namespace Lumina::Platform
 
     bool OpenFileDialogueMulti(TVector<FFixedString>& OutFiles, const char* Title, const char* Filter, const char* InitialDir)
     {
-        OutFiles.clear();
+        OutFiles.Reset();
         FScopedComApartment Apartment;
         if (FAILED(Apartment.Result))
         {
@@ -1155,9 +1065,9 @@ namespace Lumina::Platform
 
         BuildDialogFilters(Filter, Storage, FileTypes);
 
-        if (!FileTypes.empty())
+        if (!FileTypes.IsEmpty())
         {
-            Dialog->SetFileTypes(static_cast<UINT>(FileTypes.size()), FileTypes.data());
+            Dialog->SetFileTypes(static_cast<UINT>(FileTypes.Num()), FileTypes.GetData());
         }
 
         if (SUCCEEDED(Dialog->Show(nullptr)))
@@ -1179,9 +1089,9 @@ namespace Lumina::Platform
                     PWSTR Raw = nullptr;
                     if (SUCCEEDED(Item->GetDisplayName(SIGDN_FILESYSPATH, &Raw)))
                     {
-                        FFixedString Path = TCHAR_TO_UTF8(FWString(Raw).c_str());
+                        FFixedString Path = TCHAR_TO_UTF8(*FWString(Raw));
                         Algo::Replace(Path, '\\', '/');
-                        OutFiles.push_back(Path);
+                        OutFiles.Add(Path);
                         CoTaskMemFree(Raw);
                     }
 
@@ -1194,7 +1104,7 @@ namespace Lumina::Platform
 
         Dialog->Release();
 
-        return !OutFiles.empty();
+        return !OutFiles.IsEmpty();
     }
 
     void ShowFileInExplorer(const TCHAR* Path)
@@ -1212,7 +1122,7 @@ namespace Lumina::Platform
         Args += Normalized;
         Args += L"\"";
 
-        ShellExecuteW(nullptr, L"open", L"explorer.exe", Args.c_str(), nullptr, SW_SHOWNORMAL);
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", *Args, nullptr, SW_SHOWNORMAL);
     }
 
     void ShowFolderInExplorer(const TCHAR* Directory)
@@ -1225,7 +1135,7 @@ namespace Lumina::Platform
         FWString Normalized(Directory);
         Algo::Replace(Normalized, L'/', L'\\');
 
-        ShellExecuteW(nullptr, L"open", Normalized.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        ShellExecuteW(nullptr, L"open", *Normalized, nullptr, nullptr, SW_SHOWNORMAL);
     }
 
     namespace
@@ -1233,7 +1143,7 @@ namespace Lumina::Platform
         // ShellExecute reports anything above 32 as launched, which is how a missing editor is detected.
         bool LaunchCodeEditor(const wchar_t* Program, const FWString& Arguments)
         {
-            const HINSTANCE Result = ShellExecuteW(nullptr, L"open", Program, Arguments.c_str(), nullptr, SW_SHOWNORMAL);
+            const HINSTANCE Result = ShellExecuteW(nullptr, L"open", Program, *Arguments, nullptr, SW_SHOWNORMAL);
             return reinterpret_cast<INT_PTR>(Result) > 32;
         }
     }
@@ -1264,7 +1174,7 @@ namespace Lumina::Platform
         }
 
         // Whatever is registered for the extension, which lands on the file but not the line.
-        ShellExecuteW(nullptr, L"open", Normalized.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        ShellExecuteW(nullptr, L"open", *Normalized, nullptr, nullptr, SW_SHOWNORMAL);
     }
 
     void OpenTerminalAt(const TCHAR* Directory)
@@ -1282,7 +1192,7 @@ namespace Lumina::Platform
             nullptr,
             L"open",
             L"wt.exe",
-            (FWString(L"-d \"") + Normalized + L"\"").c_str(),
+            *(FWString(L"-d \"") + Normalized + L"\""),
             nullptr,
             SW_SHOWNORMAL);
 
@@ -1294,7 +1204,7 @@ namespace Lumina::Platform
                 L"open",
                 L"cmd.exe",
                 nullptr,
-                Normalized.c_str(),
+                *Normalized,
                 SW_SHOWNORMAL);
         }
     }

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Containers/Algorithm.h"
 #include "Containers/Name.h"
 #include "Containers/Vector.h"
 #include "Core/Math/Scalar.h"
@@ -41,6 +40,15 @@ namespace Lumina
     };
 
     RUNTIME_API const char* ToString(EAudioGraphType Type);
+
+    // Floor against zero/negative input, so Log never sees a non-positive value.
+    inline constexpr float kAudioGraphMinLevel = 1.0e-6f;
+
+    // Twenty over the natural log of ten, so decibels come from Math::Log.
+    inline constexpr float kAudioGraphDecibelsPerNeper = 8.6858896f;
+
+    FORCEINLINE float LinearToDecibels(float Linear) { return kAudioGraphDecibelsPerNeper * Math::Log(Math::Max(Linear, kAudioGraphMinLevel)); }
+    FORCEINLINE float DecibelsToLinear(float Decibels) { return Math::Pow(10.0f, Decibels * 0.05f); }
 
     /** How a node choosing among several options picks the next one. */
     REFLECT()
@@ -94,7 +102,7 @@ namespace Lumina
         float Value = 0.0f;
     };
 
-    /** Events fired inside one block, in ascending frame order. */
+    // Events fired inside one block, in ascending frame order.
     struct FAudioGraphTriggerBuffer
     {
         // Inline rather than heap, because the audio thread must not allocate to fire an event.
@@ -118,21 +126,21 @@ namespace Lumina
         uint32 operator[](uint32 Index) const { return Frames[Index]; }
     };
 
-    /** Fully decoded PCM for one wave the graph references, owned by the instance that plays it. */
+    // Fully decoded PCM for one wave the graph references, owned by the instance that plays it.
     struct FAudioGraphWaveResource
     {
-        /** Interleaved float samples at the source file's rate and channel count. */
+        // Interleaved float samples at the source file's rate and channel count.
         TVector<float> Samples;
 
         uint32 SampleRate  = 0;
         uint32 NumChannels = 0;
         uint64 NumFrames   = 0;
 
-        bool IsValid() const { return NumChannels > 0 && NumFrames > 0 && !Samples.empty(); }
+        bool IsValid() const { return NumChannels > 0 && NumFrames > 0 && !Samples.IsEmpty(); }
     };
 
 
-    /** Walks a trigger buffer alongside a per sample loop, one Consume call per frame. */
+    // Walks a trigger buffer alongside a per sample loop, one Consume call per frame.
     struct FAudioGraphTriggerCursor
     {
         uint32 Index = 0;
@@ -151,12 +159,10 @@ namespace Lumina
         }
     };
 
-    /** Ramps a block rate float across the block, so a parameter edit cannot click. */
+    // Ramps a block rate float across the block, so a parameter edit cannot click.
     class FAudioGraphSmoothedFloat
     {
     public:
-
-        void Reset() { bPrimed = false; Value = 0.0f; Step = 0.0f; Target = 0.0f; }
 
         void Begin(float InTarget, uint32 NumFrames)
         {
@@ -180,7 +186,7 @@ namespace Lumina
             return Current;
         }
 
-        /** Snaps to the target, so rounding across the ramp cannot drift. */
+        // Snaps to the target, so rounding across the ramp cannot drift.
         void End() { Value = Target; Step = 0.0f; }
 
         float GetValue() const { return Value; }
@@ -254,22 +260,16 @@ namespace Lumina
         // Allocates, so call it while the operator is being built.
         void Initialize(uint32 MaxDelayFrames)
         {
-            Buffer.assign((size_t)MaxDelayFrames + 2, 0.0f);
+            Buffer.Init(0.0f, IntCastChecked<int32>(static_cast<int64>(MaxDelayFrames) + 2));
             WriteIndex = 0;
         }
 
-        void Clear()
-        {
-            Algo::Fill(Buffer, 0.0f);
-            WriteIndex = 0;
-        }
-
-        float GetMaxDelay() const { return Buffer.size() > 2 ? (float)(Buffer.size() - 2) : 0.0f; }
+        float GetMaxDelay() const { return Buffer.Num() > 2 ? (float)(Buffer.Num() - 2) : 0.0f; }
 
         // Delay counts frames back from the next write and may be fractional.
         FORCEINLINE float Read(float Delay) const
         {
-            const size_t Capacity = Buffer.size();
+            const int32 Capacity = Buffer.Num();
 
             float Position = (float)WriteIndex - Delay;
             while (Position < 0.0f)
@@ -277,8 +277,8 @@ namespace Lumina
                 Position += (float)Capacity;
             }
 
-            const size_t Index = (size_t)Position % Capacity;
-            const size_t Next  = (Index + 1) % Capacity;
+            const int32 Index = static_cast<int32>(Position) % Capacity;
+            const int32 Next  = (Index + 1) % Capacity;
             const float  Alpha = Math::Fract(Position);
             return Buffer[Index] + (Buffer[Next] - Buffer[Index]) * Alpha;
         }
@@ -286,28 +286,28 @@ namespace Lumina
         FORCEINLINE void Write(float Sample)
         {
             Buffer[WriteIndex] = Sample;
-            WriteIndex = (WriteIndex + 1) % Buffer.size();
+            WriteIndex = (WriteIndex + 1) % Buffer.Num();
         }
 
-        bool IsEmpty() const { return Buffer.empty(); }
+        bool IsEmpty() const { return Buffer.IsEmpty(); }
 
     private:
 
         TVector<float> Buffer;
-        size_t         WriteIndex = 0;
+        int32          WriteIndex = 0;
     };
 
-    /** Per-block state handed to every operator's Execute. */
+    // Per-block state handed to every operator's Execute.
     struct FAudioGraphBlockContext
     {
-        /** Frames to process this call, never more than kAudioGraphBlockFrames. */
+        // Frames to process this call, never more than kAudioGraphBlockFrames.
         uint32 NumFrames = kAudioGraphBlockFrames;
 
         uint32 SampleRate = 48000;
 
         float InverseSampleRate = 1.0f / 48000.0f;
 
-        /** Seconds of audio this instance rendered before the block started. */
+        // Seconds of audio this instance rendered before the block started.
         double BlockStartTime = 0.0;
     };
 }

@@ -84,6 +84,7 @@ namespace Lumina
     {
         GENERATED_BODY()
 
+        // Only the first 16 wheels are simulated and posed, and any more are dropped with a warning.
         PROPERTY(Editable, Category = "Vehicle")
         TVector<SVehicleWheel> Wheels;
 
@@ -169,6 +170,9 @@ namespace Lumina
         PROPERTY(ReadOnly, Category = "Vehicle|State")
         int32 GroundedWheels = 0;
 
+        // Set once a Wheels overflow past the physics wheel limit has been logged, so it only warns once.
+        bool bExcessWheelsWarned = false;
+
         FUNCTION()
         bool IsGrounded() const { return GroundedWheels > 0; }
 
@@ -185,7 +189,7 @@ namespace Lumina
         void AddWheel(FVector3 Position, float Radius, float SuspensionTravel, bool bSteer, bool bDrive, bool bInHandbrake = false,
                       uint32 Visual = 0xFFFFFFFF)
         {
-            SVehicleWheel& Wheel = Wheels.emplace_back();
+            SVehicleWheel& Wheel = Wheels.EmplaceGetRef();
             Wheel.Position         = Position;
             Wheel.Radius           = Radius;
             Wheel.SuspensionTravel = SuspensionTravel;

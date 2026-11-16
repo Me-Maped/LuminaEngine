@@ -3,10 +3,15 @@
 #include "SocketAttachmentSystem.h"
 #include "AnimationSystem.h"
 #include "EntityScriptSystem.h"
+#include "MovementComponentSystem.h"
+#include "ProjectileSystem.h"
+#include "PathFollowSystem.h"
+#include "BuoyancySystem.h"
+#include "RagdollSystem.h"
 
+#include "Animation/BindPose.h"
 #include "Animation/SkeletalMeshUtils.h"
 #include "Assets/AssetTypes/Mesh/StaticMesh/StaticMesh.h"
-#include "TaskSystem/TaskSystem.h"
 #include "World/Entity/Components/EntityTags.h"
 #include "World/Entity/Components/SkeletalMeshComponent.h"
 #include "World/Entity/Components/SocketAttachmentComponent.h"
@@ -15,7 +20,7 @@
 
 namespace Lumina
 {
-    namespace
+    namespace SocketAttachmentSystemInternal
     {
         constexpr uint32 kSocketParallelGrain = 128;
 
@@ -33,9 +38,7 @@ namespace Lumina
             {
                 return false;
             }
-            const FMatrix4 BindGlobal = Skeleton.HasBindGlobalMatrices()
-                ? Skeleton.BindGlobalMatrices[Bone]
-                : Math::Inverse(Skeleton.GetBone(Bone).InvBindMatrix);
+            const FMatrix4 BindGlobal = AnimPose::GetBindGlobalMatrix(&Skeleton, Bone);
             Entry.Bone = Bone;
             Entry.Post = BindGlobal * SocketOffset * Attachment.RelativeTransform.GetMatrix();
             return true;
@@ -54,35 +57,36 @@ namespace Lumina
         }
     }
 
-    void SSocketAttachmentSystem::Configure()
+    void CSocketAttachmentSystem::Configure()
     {
         RequireUpdate(EUpdateStage::PrePhysics);
         RequireUpdate(EUpdateStage::Paused);
-        RunsAfter<SAnimationSystem, SEntityScriptSystem>();
-        Writes<STransformComponent>();
-        Reads<SSocketAttachmentComponent, SSkeletalMeshComponent, SStaticMeshComponent, SystemResource::Hierarchy>();
+        // Last of the transform writers before physics, so an attachment follows its parent's final pose for the frame.
+        RunsAfter<CAnimationSystem, CEntityScriptSystem, CMovementComponentSystem, CProjectileSystem, CPathFollowSystem, CBuoyancySystem, CRagdollSystem>();
+
+        // Only the attachments, since the parent lookups match almost every mesh.
+        ExcludeFromHasWork(SkeletalParents, StaticParents);
     }
 
-    void SSocketAttachmentSystem::OnUpdate(const SSystemContext& Context)
+    void CSocketAttachmentSystem::OnUpdate(const SSystemContext& Context)
     {
+        using namespace SocketAttachmentSystemInternal;
 
-        LUMINA_PROFILE_SCOPE();
-
-        auto View = Context.CreateView<SSocketAttachmentComponent, STransformComponent>(ECS::TExclude<SDisabledTag>{});
+        const auto View = Attachments.View();
 
         // Sized before the fan-out so every worker writes only its own entities' slots; any included pool bounds the view.
-        const ECS::FSparseSet* Driver = View.GetDriver();
-        const uint32 MaxIndex = Driver != nullptr ? Driver->MaxLiveIndex() : 0u;
-        if (Cache.size() <= MaxIndex)
+        const uint32 MaxIndex = View.MaxLiveIndex();
+        if (static_cast<uint32>(Cache.Num()) <= MaxIndex)
         {
-            Cache.resize(MaxIndex + 1);
+            Cache.SetNum(MaxIndex + 1);
         }
 
         // Editing a socket in the editor changes nothing the cache keys on, so a paused world resolves every update.
         const bool bAlwaysResolve = Context.GetUpdateStage() == EUpdateStage::Paused;
 
-        const auto Attach = [&](ECS::FEntity Entity, const SSocketAttachmentComponent& Attachment, STransformComponent& Transform)
+        const auto Attach = [&](ECS::FEntity Entity, const SSocketAttachmentComponent& Attachment, ECS::TMut<STransformComponent> TransformMut)
         {
+            const STransformComponent& Transform = TransformMut.Get();
             const ECS::FEntity Parent = Context.GetHierarchy().GetParent(Entity);
             if (Parent == ECS::NullEntity)
             {
@@ -97,7 +101,7 @@ namespace Lumina
             }
 
             FMatrix4 SocketTransform;
-            if (const SSkeletalMeshComponent* SkeletalMesh = Context.TryGet<SSkeletalMeshComponent>(Parent))
+            if (const SSkeletalMeshComponent* SkeletalMesh = SkeletalParents.TryGet<SSkeletalMeshComponent>(Parent))
             {
                 const FSkeletonResource* Skeleton = SkeletalUtils::GetSkeleton(*SkeletalMesh);
                 if (Skeleton == nullptr)
@@ -121,7 +125,7 @@ namespace Lumina
                 }
 
                 // An unchanged pose, with nobody else having moved the child, leaves nothing to do.
-                const bool bPosed = (int32)SkeletalMesh->BoneTransforms.size() == Skeleton->GetNumBones();
+                const bool bPosed = SkeletalMesh->BoneTransforms.Num() == Skeleton->GetNumBones();
                 const bool bPoseUnchanged = Entry.PoseSerial == SkeletalMesh->PoseSerial && !SkeletalMesh->bRenderBonesDirty;
                 if (Entry.bWritten && bPoseUnchanged && SameTransform(Transform.LocalTransform, Entry.LastLocal))
                 {
@@ -130,7 +134,7 @@ namespace Lumina
                 Entry.PoseSerial = SkeletalMesh->PoseSerial;
                 SocketTransform = bPosed ? SkeletalMesh->BoneTransforms[Entry.Bone] * Entry.Post : Entry.Post;
             }
-            else if (const SStaticMeshComponent* StaticMesh = Context.TryGet<SStaticMeshComponent>(Parent))
+            else if (const SStaticMeshComponent* StaticMesh = StaticParents.TryGet<SStaticMeshComponent>(Parent))
             {
                 const void* Source = StaticMesh->StaticMesh.Get();
                 const bool bStale = bAlwaysResolve || !Entry.bResolved || Entry.Parent != Parent || Entry.Source != Source
@@ -159,13 +163,13 @@ namespace Lumina
             const FTransform NewLocal(SocketTransform);
             if (NewLocal != Transform.LocalTransform)
             {
-                Transform.SetLocalTransform(NewLocal);
+                TransformMut->SetLocalTransform(NewLocal);
             }
             Entry.LastLocal = Transform.LocalTransform;
             Entry.bWritten  = true;
         };
 
         // Each attachment writes only its own transform and cache slot, and SetLocalTransform is safe from any thread for disjoint entities.
-        Context.ParallelForEachView(View, Attach, kSocketParallelGrain, kSocketParallelGrain * 2);
+        Attachments.ParallelForEach(Attach, kSocketParallelGrain);
     }
 }

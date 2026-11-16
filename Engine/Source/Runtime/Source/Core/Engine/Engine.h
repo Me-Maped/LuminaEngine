@@ -6,10 +6,7 @@
 #include "Core/Engine/EngineURL.h"
 #include "Memory/SmartPtr.h"
 #include "Core/Object/ObjectHandleTyped.h"
-#include "Core/Object/ObjectReinstancer.h"
-#include "Networking/INetworkTransport.h"
-#include "Assets/AssetRegistry/CookRoot.h"
-#include "Tools/UI/DevelopmentToolUI.h"
+#include "Networking/NetworkTypes.h"
 
 
 namespace Lumina
@@ -22,6 +19,10 @@ namespace Lumina
     class FApplication;
     class FWindow;
     class CWorld;
+    class INetworkTransport;
+    class IDevelopmentToolUI;
+    struct FCookRoot;
+    enum class EInputLayer : int32;
 }
 
 namespace Lumina
@@ -34,8 +35,8 @@ namespace Lumina
     {
     public:
         
-        FEngine() = default;
-        virtual ~FEngine() = default;
+        RUNTIME_API FEngine();
+        RUNTIME_API virtual ~FEngine();
         
         FEngine(const FEngine&) = delete;
         FEngine(FEngine&&) = delete;
@@ -52,7 +53,7 @@ namespace Lumina
         RUNTIME_API bool Update(bool bApplicationWantsExit);
         RUNTIME_API virtual void OnUpdateStage(const FUpdateContext& Context);
 
-        RUNTIME_API static FUIntVector2 GetEngineViewportSize();
+        RUNTIME_API FUIntVector2 GetEngineViewportSize() const;
 
         RUNTIME_API void SetEngineViewportSize(const FUIntVector2& InSize);
         
@@ -82,7 +83,7 @@ namespace Lumina
         
         NODISCARD RUNTIME_API double GetDeltaTime() const { return UpdateContext.DeltaTime; }
         
-        NODISCARD RUNTIME_API bool HasLoadedProject() const { return !ProjectName.empty(); }
+        NODISCARD RUNTIME_API bool HasLoadedProject() const { return !ProjectName.IsEmpty(); }
 
         RUNTIME_API const FUpdateContext& GetUpdateContext() const { return UpdateContext; }
 
@@ -98,6 +99,9 @@ namespace Lumina
         NODISCARD RUNTIME_API FFixedString GetProjectContentDirectory() const;
         NODISCARD RUNTIME_API FFixedString GetProjectScriptsDirectory() const;
         NODISCARD RUNTIME_API FFixedString GetProjectShadersDirectory() const;
+
+        // The project Icon setting as LoadWindowIcon reads it, a mounted path as is and anything else under the project.
+        NODISCARD RUNTIME_API FFixedString GetProjectIconPath() const;
 
         // Union of project + enabled-plugin cook roots; legacy GameStartupMap auto-converts
         // to a single root when no explicit roots exist. Cooker iterates this for BFS seeds.
@@ -158,6 +162,7 @@ namespace Lumina
 
         // The game's name, followed by engine and frame details in any build but Shipping.
         void RefreshWindowTitle(double AverageFrameSeconds = 0.0);
+        void ApplyProjectIcon();
         double                        TitleSampleStart = 0.0;
         uint32                        TitleSampleFrames = 0;
 
@@ -201,7 +206,10 @@ namespace Lumina
         int32                   UserFrameRateLimit = -1;
 
         static constexpr uint32 kCacheTrimDelayFrames = 120;
+        static constexpr size_t kGameThreadTrimSpansPerFrame = 8;
         uint32                  CacheTrimCountdown = 0;
+        // Caps a trim request at the game thread's cache size when it arrived, so refills during play cannot keep it trimming.
+        size_t                  GameThreadTrimSpansLeft = 0;
 
         // Deferred OpenLevel/Host/Connect, drained at FrameStart.
         FURL                    PendingOpenURL;
@@ -239,12 +247,30 @@ namespace Lumina
         bool                    bCloseRequested = false;
         bool                    bEngineReadyToClose = false;
         bool                    bStartCookedRuntime = false;
+
+    private:
+
+        struct FBootTimer;
+        struct FStartupProject;
+
+        FStartupProject ResolveStartupProject(FBootTimer& Boot);
+        bool MountStartupFilesystems(FStartupProject& Startup, FBootTimer& Boot);
+        void InitializeCoreSystems(FBootTimer& Boot);
+        void InitializeRendererAndParallelSubsystems(FBootTimer& Boot);
+        void InitializeReflectionAndWorld(FBootTimer& Boot);
+        void InitializeEditorTools(FBootTimer& Boot);
+        void InitializeUserInterface(FBootTimer& Boot);
+        bool FinishBoot(bool bStartupSucceeded, FBootTimer& Boot);
+        bool LoadProjectModule();
+
+        FUIntVector2 EngineViewportSize = FUIntVector2(0, 0);
     };
     
-    RUNTIME_API extern FEngine* GEngine;
+    namespace Global
+    {
+        RUNTIME_API extern FEngine* GEngine;
 
-    // True for a packaged dedicated-server process (-server): no window, no RHI, no audio, no UI.
-    // Set in LuminaMain before the window/engine exist. Always false in WITH_EDITOR builds; the
-    // in-editor dedicated server is gated per-world by NetMode, not by this flag.
-    RUNTIME_API extern bool GIsHeadless;
+        // Set by LuminaMain for a dedicated server process, which runs without window, RHI, audio or UI.
+        RUNTIME_API extern bool GIsHeadless;
+    }
 }

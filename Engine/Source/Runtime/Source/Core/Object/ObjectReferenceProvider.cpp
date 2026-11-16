@@ -2,19 +2,11 @@
 
 #include "ObjectReferenceProvider.h"
 
+#include "ObjectArray.h"
 #include "Containers/Vector.h"
 
 namespace Lumina
 {
-    namespace
-    {
-        TVector<IObjectReferenceProvider*>& Registered()
-        {
-            static TVector<IObjectReferenceProvider*> Instance;
-            return Instance;
-        }
-    }
-
     void FObjectReferenceProviders::Register(IObjectReferenceProvider* Provider)
     {
         if (Provider == nullptr)
@@ -22,7 +14,7 @@ namespace Lumina
             return;
         }
 
-        TVector<IObjectReferenceProvider*>& All = Registered();
+        TVector<IObjectReferenceProvider*>& All = Object::Internal::GetReferenceProviders();
         for (IObjectReferenceProvider* Existing : All)
         {
             if (Existing == Provider)
@@ -30,18 +22,18 @@ namespace Lumina
                 return;
             }
         }
-        All.push_back(Provider);
+        All.Add(Provider);
     }
 
     void FObjectReferenceProviders::Unregister(IObjectReferenceProvider* Provider)
     {
-        TVector<IObjectReferenceProvider*>& All = Registered();
-        for (size_t Index = 0; Index < All.size(); ++Index)
+        TVector<IObjectReferenceProvider*>& All = Object::Internal::GetReferenceProviders();
+        for (int32 Index = 0; Index < All.Num(); ++Index)
         {
             if (All[Index] == Provider)
             {
-                All[Index] = All.back();
-                All.pop_back();
+                All[Index] = All.Last();
+                All.Pop();
                 return;
             }
         }
@@ -50,7 +42,7 @@ namespace Lumina
     int32 FObjectReferenceProviders::ForEach(TFunctionRef<void(IObjectReferenceProvider&)> Func)
     {
         int32 Visited = 0;
-        for (IObjectReferenceProvider* Provider : Registered())
+        for (IObjectReferenceProvider* Provider : Object::Internal::GetReferenceProviders())
         {
             if (Provider != nullptr)
             {

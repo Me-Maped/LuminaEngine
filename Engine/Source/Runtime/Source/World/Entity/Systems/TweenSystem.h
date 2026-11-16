@@ -1,19 +1,25 @@
 #pragma once
 #include "EntitySystem.h"
+#include "World/Subsystems/TweenManager.h"
 #include "TweenSystem.generated.h"
 
 namespace Lumina
 {
-    // Serial by default, since a tween setter or its finished callback can touch anything.
+    // A tween setter or its finished callback can touch anything, so the tick itself runs at the flush.
     REFLECT()
-    class STweenSystem : public CEntitySystem
+    class CTweenSystem : public CEntitySystem
     {
         GENERATED_BODY()
     public:
 
         void Configure() override;
 
+        void OnStartup(const SExclusiveContext& Context) override;
         void OnUpdate(const SSystemContext& Context) override;
         bool HasWork(const SSystemContext& Context) override;
+
+    private:
+
+        TResMut<FTweenManager> Tweens;
     };
 }

@@ -22,24 +22,6 @@ namespace
             CParticleEmitter::StaticClass()->Link();
         }
     };
-
-    void UnloadPackage(CPackage* Package)
-    {
-        TVector<CObject*> Objects;
-        GetObjectsWithPackage(Package, Objects);
-        for (CObject* Object : Objects)
-        {
-            if (Object != Package)
-            {
-                Object->ConditionalBeginDestroy();
-            }
-        }
-        Package->ExportTable.clear();
-        Package->ImportTable.clear();
-
-        // The root set holds the package's only strong reference, so unrooting is what destroys it.
-        Package->RemoveFromRoot();
-    }
 }
 
 // An editor save leaves the bytecode to the artifact cache, while the emitter in memory keeps simulating with it.
@@ -60,7 +42,7 @@ TEST_F(ParticleArtifact, EditorSaveLeavesBinariesOutOfTheAsset)
     ASSERT_TRUE(CPackage::SavePackage(Package, Path));
     EXPECT_EQ(Emitter->ComputeShaderBinaries, Binaries);
 
-    UnloadPackage(Package);
+    Package->Unload();
 
     CPackage* Loaded = CPackage::LoadPackage(Path);
     ASSERT_NE(Loaded, nullptr);
@@ -68,7 +50,7 @@ TEST_F(ParticleArtifact, EditorSaveLeavesBinariesOutOfTheAsset)
 
     CParticleEmitter* Read = Cast<CParticleEmitter>(FindObject<CObject>(Guid));
     ASSERT_NE(Read, nullptr);
-    EXPECT_TRUE(Read->ComputeShaderBinaries.empty());
+    EXPECT_TRUE(Read->ComputeShaderBinaries.IsEmpty());
     EXPECT_EQ(Read->CompiledCodeHash, 0x1234u);
 }
 
@@ -88,7 +70,7 @@ TEST_F(ParticleArtifact, MissingCacheEntryLeavesTheEmitterWaitingForACompile)
     Emitter->MaxParticles          = 64;
 
     ASSERT_TRUE(CPackage::SavePackage(Package, Path));
-    UnloadPackage(Package);
+    Package->Unload();
 
     CPackage* Loaded = CPackage::LoadPackage(Path);
     ASSERT_NE(Loaded, nullptr);

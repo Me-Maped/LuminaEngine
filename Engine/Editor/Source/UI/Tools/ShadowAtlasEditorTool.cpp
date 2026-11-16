@@ -17,10 +17,6 @@ namespace Lumina
         });
     }
 
-    void FShadowAtlasEditorTool::OnDeinitialize(const FUpdateContext& UpdateContext)
-    {
-    }
-
     void FShadowAtlasEditorTool::DrawHelpMenu()
     {
         DrawHelpTextRow(LOC("Atlas"),
@@ -58,9 +54,9 @@ namespace Lumina
     void FShadowAtlasEditorTool::DrawAtlasWindow(bool bIsFocused)
     {
         CWorld* TargetWorld = nullptr;
-        if (GWorldManager != nullptr)
+        if (Global::GWorldManager != nullptr)
         {
-            const auto& Contexts = GWorldManager->GetContexts();
+            const auto& Contexts = Global::GWorldManager->GetContexts();
             const auto EditorItr = Algo::FindIf(Contexts, [](const TUniquePtr<FWorldContext>& Context)
             {
                 return Context && Context->Type == EWorldType::Editor && Context->World.IsValid();
@@ -120,9 +116,9 @@ namespace Lumina
 
         const float UsedPct = AtlasPixels > 0 ? (float)((double)UsedPixels / (double)AtlasPixels * 100.0) : 0.0f;
 
-        ImGui::Text(LOC("Atlas: %u x %u"), Cfg.AtlasResolution, Cfg.AtlasResolution);
-        ImGui::Text(LOC("Tiles allocated: %u   Utilization: %.1f%% (%llu / %llu px)"),
-            (uint32)Tiles.size(), UsedPct, (unsigned long long)UsedPixels, (unsigned long long)AtlasPixels);
+        ImGui::Text("Atlas: %u x %u", Cfg.AtlasResolution, Cfg.AtlasResolution);
+        ImGui::Text("Tiles allocated: %u   Utilization: %.1f%% (%llu / %llu px)",
+            (uint32)Tiles.Num(), UsedPct, (unsigned long long)UsedPixels, (unsigned long long)AtlasPixels);
 
         // Counts only power-of-two buckets the allocator can produce, keeping the UI compact.
         ImGui::Spacing();
@@ -202,7 +198,7 @@ namespace Lumina
         int32 HoveredTile = -1;
         const ImVec2 Mouse = ImGui::GetMousePos();
 
-        for (int32 i = 0; i < (int32)Tiles.size(); ++i)
+        for (int32 i = 0; i < Tiles.Num(); ++i)
         {
             const FShadowTile& Tile = Tiles[i];
             const uint32 TileSize = (uint32)(Tile.UVScale.x * (float)Cfg.AtlasResolution + 0.5f);
@@ -257,7 +253,7 @@ namespace Lumina
         const FShadowAtlasConfig& Cfg = Atlas.GetConfig();
         const TVector<FShadowTile>& Tiles = Atlas.GetAllocatedTiles();
 
-        if (Tiles.empty())
+        if (Tiles.IsEmpty())
         {
             ImGui::TextDisabled(LOC("No tiles allocated."));
             return;
@@ -279,7 +275,7 @@ namespace Lumina
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
-        for (int32 i = 0; i < (int32)Tiles.size(); ++i)
+        for (int32 i = 0; i < Tiles.Num(); ++i)
         {
             const FShadowTile& Tile = Tiles[i];
             const uint32 TileSize = (uint32)(Tile.UVScale.x * (float)Cfg.AtlasResolution + 0.5f);

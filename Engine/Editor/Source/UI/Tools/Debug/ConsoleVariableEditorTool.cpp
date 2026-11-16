@@ -12,7 +12,7 @@ namespace Lumina
     {
         const char* TypeLabel(const CVarValueType& Value)
         {
-            return visit([]<typename T0>(T0&&) -> const char*
+            return Visit([]<typename T0>(T0&&) -> const char*
             {
                 using T = std::decay_t<T0>;
                 if constexpr (std::is_same_v<T, bool>)         return "bool";
@@ -25,7 +25,7 @@ namespace Lumina
 
         ImVec4 TypeColor(const CVarValueType& Value)
         {
-            return visit([]<typename T0>(T0&&) -> ImVec4
+            return Visit([]<typename T0>(T0&&) -> ImVec4
             {
                 using T = std::decay_t<T0>;
                 if constexpr (std::is_same_v<T, bool>)         return ImVec4(0.55f, 0.85f, 0.55f, 1.0f);
@@ -45,10 +45,6 @@ namespace Lumina
         });
     }
 
-    void FConsoleVariableEditorTool::OnDeinitialize(const FUpdateContext& UpdateContext)
-    {
-    }
-
     void FConsoleVariableEditorTool::DrawHelpMenu()
     {
         DrawHelpTextRow(LOC("What this is"),
@@ -65,7 +61,7 @@ namespace Lumina
 
     bool FConsoleVariableEditorTool::PassesFilter(FStringView Name, FStringView Hint) const
     {
-        if (SearchFilter.empty())
+        if (SearchFilter.IsEmpty())
         {
             return true;
         }
@@ -79,21 +75,18 @@ namespace Lumina
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
 
         const FConsoleRegistry& Registry = FConsoleRegistry::Get();
-        const uint32 NumVars = (uint32)Registry.GetAll().size();
-        const uint32 NumCmds = (uint32)Registry.GetAllCommands().size();
+        const uint32 NumVars = (uint32)Registry.GetAll().Num();
+        const uint32 NumCmds = (uint32)Registry.GetAllCommands().Num();
 
         const FFixedString Counts = FormatAs<FFixedString>("{} variables, {} commands", NumVars, NumCmds);
-        const float CountsWidth = ImGui::CalcTextSize(Counts.c_str()).x;
+        const float CountsWidth = ImGui::CalcTextSize(*Counts).x;
 
         ImGui::SetNextItemWidth(Math::Max(ImGui::GetContentRegionAvail().x - CountsWidth - ImGui::GetStyle().ItemSpacing.x, 120.0f));
-        if (ImGui::InputTextWithHint("##Search", LOC_ICON(LE_ICON_MAGNIFY, "Filter by name or description..."), SearchBuffer, IM_ARRAYSIZE(SearchBuffer)))
-        {
-            SearchFilter = SearchBuffer;
-        }
+        ImGuiX::InputText("##Search", SearchFilter, ImGuiInputTextFlags_None, LE_ICON_MAGNIFY " Filter by name or description...");
 
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("%s", Counts.c_str());
+        ImGui::TextDisabled("%s", *Counts);
 
         if (ImGui::BeginTabBar("##CVarTabs", ImGuiTabBarFlags_None))
         {
@@ -121,12 +114,12 @@ namespace Lumina
         const FConsoleRegistry::FConsoleContainer& Container = Registry.GetAll();
 
         TVector<const FConsoleVariable*> Visible;
-        Visible.reserve(Container.size());
+        Visible.Reserve(Container.Num());
         for (const auto& [Name, Var] : Container)
         {
             if (PassesFilter(Var.Name, Var.Hint))
             {
-                Visible.push_back(&Var);
+                Visible.Add(&Var);
             }
         }
 
@@ -158,11 +151,11 @@ namespace Lumina
         for (const FConsoleVariable* Var : Visible)
         {
             ImGui::TableNextRow();
-            ImGui::PushID(Var->Name.data());
+            ImGui::PushID(Var->Name.GetData());
 
             ImGui::TableSetColumnIndex(0);
             ImGui::AlignTextToFramePadding();
-            ImGui::TextColored(ImVec4(0.85f, 1.00f, 0.85f, 1.0f), "%.*s", (int)Var->Name.size(), Var->Name.data());
+            ImGui::TextColored(ImVec4(0.85f, 1.00f, 0.85f, 1.0f), "%.*s", Var->Name.Len(), Var->Name.GetData());
 
             ImGui::TableSetColumnIndex(1);
             ImGui::AlignTextToFramePadding();
@@ -171,7 +164,7 @@ namespace Lumina
             ImGui::TableSetColumnIndex(2);
             ImGui::SetNextItemWidth(-1);
 
-            visit([&]<typename T0>(T0& Value)
+            Visit([&]<typename T0>(T0& Value)
             {
                 using T = std::decay_t<T0>;
 
@@ -188,7 +181,7 @@ namespace Lumina
                     int32 Edit = Value;
                     if (ImGui::DragInt("##Val", &Edit))
                     {
-                        Registry.SetValueFromString(Var->Name, Format("{}", Edit).c_str());
+                        Registry.SetValueFromString(Var->Name, *Format("{}", Edit));
                     }
                 }
                 else if constexpr (std::is_same_v<T, float>)
@@ -196,31 +189,16 @@ namespace Lumina
                     float Edit = Value;
                     if (ImGui::DragFloat("##Val", &Edit, 0.1f, 0.0f, 0.0f, "%.3f"))
                     {
-                        Registry.SetValueFromString(Var->Name, Format("{}", Edit).c_str());
+                        Registry.SetValueFromString(Var->Name, *Format("{}", Edit));
                     }
                 }
                 else if constexpr (std::is_same_v<T, FStringView>)
                 {
-                    FString Key(Var->Name.data(), Var->Name.size());
-                    FString& Buffer = StringEditBuffers[Key];
-                    if (!ImGui::IsItemActive())
+                    // ImGui keeps the in-progress text itself and writes it back only on Enter.
+                    FString Edit(Value);
+                    if (ImGuiX::InputText("##Val", Edit, ImGuiInputTextFlags_EnterReturnsTrue))
                     {
-                        Buffer.assign(Value.data(), Value.size());
-                    }
-
-                    char Tmp[512];
-                    size_t Copy = std::min<size_t>(sizeof(Tmp) - 1, Buffer.size());
-                    std::memcpy(Tmp, Buffer.data(), Copy);
-                    Tmp[Copy] = '\0';
-
-                    if (ImGui::InputText("##Val", Tmp, sizeof(Tmp), ImGuiInputTextFlags_EnterReturnsTrue))
-                    {
-                        Buffer = Tmp;
-                        Registry.SetValueFromString(Var->Name, FStringView(Buffer.data(), Buffer.size()));
-                    }
-                    else
-                    {
-                        Buffer = Tmp;
+                        Registry.SetValueFromString(Var->Name, Edit);
                     }
                 }
             }, *Var->ValuePtr);
@@ -228,7 +206,7 @@ namespace Lumina
             ImGui::TableSetColumnIndex(3);
             if (!(*Var->ValuePtr == Var->DefaultValue) && ImGui::Button(LOC("Reset"), ImVec2(-FLT_MIN, 0.0f)))
             {
-                visit([&]<typename T0>(const T0& DefaultValue)
+                Visit([&]<typename T0>(const T0& DefaultValue)
                 {
                     using T = std::decay_t<T0>;
 
@@ -238,7 +216,7 @@ namespace Lumina
                     }
                     else if constexpr (std::is_same_v<T, int32> || std::is_same_v<T, float>)
                     {
-                        Registry.SetValueFromString(Var->Name, Format("{}", DefaultValue).c_str());
+                        Registry.SetValueFromString(Var->Name, *Format("{}", DefaultValue));
                     }
                     else if constexpr (std::is_same_v<T, FStringView>)
                     {
@@ -249,10 +227,10 @@ namespace Lumina
 
             ImGui::TableSetColumnIndex(4);
             ImGui::AlignTextToFramePadding();
-            ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.65f, 1.0f), "%.*s", (int)Var->Hint.size(), Var->Hint.data());
+            ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.65f, 1.0f), "%.*s", Var->Hint.Len(), Var->Hint.GetData());
             if (ImGui::IsItemHovered() && ImGui::GetItemRectMax().x > ImGui::GetWindowPos().x + ImGui::GetWindowWidth())
             {
-                ImGui::SetTooltip("%.*s", (int)Var->Hint.size(), Var->Hint.data());
+                ImGui::SetTooltip("%.*s", Var->Hint.Len(), Var->Hint.GetData());
             }
 
             ImGui::PopID();
@@ -267,12 +245,12 @@ namespace Lumina
         const FConsoleRegistry::FCommandContainer& Container = Registry.GetAllCommands();
 
         TVector<const FConsoleCommand*> Visible;
-        Visible.reserve(Container.size());
+        Visible.Reserve(Container.Num());
         for (const auto& [Name, Cmd] : Container)
         {
             if (PassesFilter(Cmd.Name, Cmd.Hint))
             {
-                Visible.push_back(&Cmd);
+                Visible.Add(&Cmd);
             }
         }
 
@@ -302,11 +280,11 @@ namespace Lumina
         for (const FConsoleCommand* Cmd : Visible)
         {
             ImGui::TableNextRow();
-            ImGui::PushID(Cmd->Name.data());
+            ImGui::PushID(Cmd->Name.GetData());
 
             ImGui::TableSetColumnIndex(0);
             ImGui::AlignTextToFramePadding();
-            ImGui::TextColored(ImVec4(0.85f, 1.00f, 0.85f, 1.0f), "%.*s", (int)Cmd->Name.size(), Cmd->Name.data());
+            ImGui::TextColored(ImVec4(0.85f, 1.00f, 0.85f, 1.0f), "%.*s", Cmd->Name.Len(), Cmd->Name.GetData());
 
             ImGui::TableSetColumnIndex(1);
             if (ImGui::Button(LOC_ICON_ID(LE_ICON_PLAY, "Execute"), ImVec2(-FLT_MIN, 0.0f)))
@@ -316,7 +294,7 @@ namespace Lumina
 
             ImGui::TableSetColumnIndex(2);
             ImGui::AlignTextToFramePadding();
-            ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.65f, 1.0f), "%.*s", (int)Cmd->Hint.size(), Cmd->Hint.data());
+            ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.65f, 1.0f), "%.*s", Cmd->Hint.Len(), Cmd->Hint.GetData());
 
             ImGui::PopID();
         }

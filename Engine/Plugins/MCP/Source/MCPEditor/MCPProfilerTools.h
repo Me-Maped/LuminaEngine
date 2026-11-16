@@ -1,8 +1,13 @@
 #pragma once
 
+#include "Agent/AgentTool.h"
+#include "Containers/HashTable.h"
 #include "Containers/String.h"
 #include "Containers/Vector.h"
 #include "Core/Object/ObjectMacros.h"
+#include "Core/Threading/Sync.h"
+#include "Core/Threading/Thread.h"
+#include "Memory/SmartPtr.h"
 
 #include "MCPProfilerTools.generated.h"
 
@@ -13,46 +18,36 @@ namespace Lumina
     {
         GENERATED_BODY()
 
-        // How long to record while the editor keeps running.
+        // How long to record while the editor keeps running, up to 60.
         PROPERTY()
         float Seconds = 5.0f;
+
+        // Lifts the frame rate cap while recording, so the frame time shows the real cost rather than the cap.
+        PROPERTY()
+        bool bUncapFrameRate = true;
+
+        // False returns at once with only CaptureFile set; read the results later with profiler.report.
+        PROPERTY()
+        bool bWait = true;
 
         // How many of the costliest CPU zones and GPU passes to report.
         PROPERTY()
         int32 Top = 20;
 
-        // Only zones whose name contains this, case-insensitive. Empty keeps them all.
+        // Only zones whose name contains this, case-insensitive.
         PROPERTY()
         FString Filter;
 
-        // Time spent in each zone minus its children, which finds the zone doing the work rather than the one calling it.
+        // Rank by time in each zone minus its children, which finds the zone doing the work rather than its caller.
         PROPERTY()
         bool bSelfTime = false;
-
-        // Lifts the frame rate cap for the capture and puts it back after, so the frame time shows the real cost rather than the cap.
-        PROPERTY()
-        bool bUncapFrameRate = true;
     };
 
     REFLECT()
-    struct MCPEDITOR_API SProfilerStartParams
+    enum class EProfilerReportMode : uint8
     {
-        GENERATED_BODY()
-
-        PROPERTY()
-        float Seconds = 5.0f;
-
-        PROPERTY()
-        bool bUncapFrameRate = true;
-    };
-
-    REFLECT()
-    struct MCPEDITOR_API SProfilerStartResult
-    {
-        GENERATED_BODY()
-
-        PROPERTY()
-        FString CaptureFile;
+        Zones,
+        Hitches,
     };
 
     REFLECT()
@@ -61,6 +56,14 @@ namespace Lumina
         GENERATED_BODY()
 
         PROPERTY()
+        EProfilerReportMode Mode = EProfilerReportMode::Zones;
+
+        // Hitches only. The trace to read. Empty reads the last capture.
+        PROPERTY()
+        FString CaptureFile;
+
+        // Zones only, as are Filter and bSelfTime. See profiler.capture.
+        PROPERTY()
         int32 Top = 20;
 
         PROPERTY()
@@ -68,6 +71,18 @@ namespace Lumina
 
         PROPERTY()
         bool bSelfTime = false;
+
+        // Hitches only. Frames longer than this are hitches. Zero picks twice the median, and at least 8 ms over it.
+        PROPERTY()
+        float ThresholdMs = 0.0f;
+
+        // Hitches only.
+        PROPERTY()
+        int32 MaxHitches = 8;
+
+        // Hitches only. Zones to list per hitch, ranked by self time.
+        PROPERTY()
+        int32 TopZones = 10;
     };
 
     REFLECT()
@@ -131,27 +146,6 @@ namespace Lumina
     };
 
     REFLECT()
-    struct MCPEDITOR_API SProfilerHitchParams
-    {
-        GENERATED_BODY()
-
-        // The trace to read. Empty reads the one the last profiler capture wrote.
-        PROPERTY()
-        FString CaptureFile;
-
-        // Frames longer than this count as hitches. Zero picks twice the median frame, and at least 8 ms over it.
-        PROPERTY()
-        float ThresholdMs = 0.0f;
-
-        PROPERTY()
-        int32 MaxHitches = 8;
-
-        // How many zones to list per hitch, ranked by the time spent in each zone itself.
-        PROPERTY()
-        int32 TopZones = 10;
-    };
-
-    REFLECT()
     struct MCPEDITOR_API SProfilerHitchZone
     {
         GENERATED_BODY()
@@ -196,6 +190,7 @@ namespace Lumina
         PROPERTY()
         FString CaptureFile;
 
+        // Leaves out the last frame, whose span to the next frame's start was never recorded.
         PROPERTY()
         int32 Frames = 0;
 
@@ -216,9 +211,80 @@ namespace Lumina
         TVector<SProfilerHitch> Hitches;
     };
 
+    REFLECT()
+    struct MCPEDITOR_API SProfilerReportResult
+    {
+        GENERATED_BODY()
+
+        // Filled in Zones mode.
+        PROPERTY()
+        SProfilerCaptureResult Zones;
+
+        // Filled in Hitches mode.
+        PROPERTY()
+        SProfilerHitchResult Hitches;
+    };
+
     namespace MCP
     {
-        // Records Tracy captures of the running editor and reports where the frame goes.
+        // One capture at a time runs on its own thread, so the scene it measures can still be driven through other tools.
+        struct FProfilerCaptureJob
+        {
+            FString File;
+            FString Failure;
+            int32 Seconds = 0;
+            bool bCaptured = false;
+            FThread Worker;
+        };
+
+        // Owned by FMCPEditorModule, which shuts it down before the DLL unloads.
+        struct FProfilerToolsState
+        {
+            FMutex Mutex;
+            TUniquePtr<FProfilerCaptureJob> Job;
+            FString LastCaptureFile;
+
+            void Shutdown();
+        };
+
+        struct FProfilerZoneTotals
+        {
+            double TotalNs = 0.0;
+            double MaxNs = 0.0;
+            int64 Count = 0;
+        };
+
+        MCPEDITOR_API TVector<FStringView> SplitProfilerFields(FStringView Line);
+
+        // Adds one tracy-csvexport line to the totals, skipping the line while bHeaderPending is set and clearing it.
+        MCPEDITOR_API void AddTracyZoneLine(FStringView Line, bool bGpuRows, bool& bHeaderPending, THashMap<FString, FProfilerZoneTotals>& Out);
+
+        MCPEDITOR_API TVector<SProfilerZone> RankProfilerZones(const THashMap<FString, FProfilerZoneTotals>& Zones, int32 Frames, int32 Top, const FString& Filter);
+
+        // One zone event from an unwrapped export, with its name interned.
+        struct FProfilerZoneEvent
+        {
+            int64 Start = 0;
+            int64 Duration = 0;
+            int64 Self = 0;
+            int32 Name = 0;
+            int32 Thread = 0;
+        };
+
+        struct FProfilerZoneEvents
+        {
+            THashMap<FString, int32> NameIds;
+            TVector<FString> Names;
+            TVector<FProfilerZoneEvent> Events;
+            bool bHeaderPending = true;
+        };
+
+        // Adds one line of a tracy-csvexport -u run, skipping the header line and rows with too few fields.
+        MCPEDITOR_API void AddTracyEventLine(FStringView Line, FProfilerZoneEvents& Out);
+
+        // Fills everything but CaptureFile, which the error messages name.
+        MCPEDITOR_API Agent::FToolResult AnalyzeProfilerHitches(FProfilerZoneEvents& Zones, const SProfilerReportParams& In, SProfilerHitchResult& Out);
+
         void RegisterProfilerTools(FStringView Owner);
     }
 }

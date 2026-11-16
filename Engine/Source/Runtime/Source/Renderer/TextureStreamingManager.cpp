@@ -36,6 +36,29 @@ namespace Lumina
         // Short enough to reclaim promptly, long enough that a mip boundary is not crossed repeatedly.
         constexpr uint16 kDemoteDeadBandFrames = 30;
 
+        // Only mips with a bulk ref, since anything else has no way back once its bytes are gone.
+        void ReleaseMipsBelow(FTextureResource& Resource, uint32 FirstMip)
+        {
+            const uint32 NumLayers = Math::Max(Resource.GetNumLayers(), 1u);
+            for (uint32 Layer = 0; Layer < NumLayers; ++Layer)
+            {
+                for (uint32 Mip = 0; Mip < FirstMip; ++Mip)
+                {
+                    const uint32 Index = Resource.MipIndex(Layer, Mip);
+                    if (Index >= static_cast<uint32>(Resource.Mips.Num()))
+                    {
+                        continue;
+                    }
+
+                    FTextureResource::FMip& MipData = Resource.Mips[Index];
+                    if (MipData.BulkRef.IsValid())
+                    {
+                        MipData.Pixels.Reset();
+                        MipData.Pixels.Shrink();
+                    }
+                }
+            }
+        }
     }
 
     void FTextureStreamingManager::Initialize()
@@ -75,11 +98,10 @@ namespace Lumina
 
         FScopeLock Lock(Mutex);
 
-        auto It = TextureToIndex.find(Texture);
-        if (It != TextureToIndex.end())
+        if (FStreamingTexture* Found = Find(Texture))
         {
             // Refreshes the cached sizes rather than adding a second entry that double-counts.
-            FStreamingTexture& Existing = Textures[It->second];
+            FStreamingTexture& Existing = *Found;
             ResidentBytesTotal -= Existing.ResidentBytes;
             Existing.ResidentBytes = Resource.CalcResidentSizeBytes();
             Existing.FullBytes     = Resource.CalcFullSizeBytes();
@@ -99,8 +121,8 @@ namespace Lumina
 
         ResidentBytesTotal += Entry.ResidentBytes;
 
-        TextureToIndex.insert_or_assign(Texture, (uint32)Textures.size());
-        Textures.push_back(Move(Entry));
+        TextureToIndex.Add(Entry.Texture.GetHandle(), (uint32)Textures.Num());
+        Textures.Add(Move(Entry));
     }
 
     void FTextureStreamingManager::UnregisterTexture(CTexture* Texture)
@@ -112,35 +134,33 @@ namespace Lumina
 
         FScopeLock Lock(Mutex);
 
-        auto It = TextureToIndex.find(Texture);
-        if (It == TextureToIndex.end())
+        const FObjectHandle Handle = Object::Internal::GetHandleByObject(Texture);
+        auto It = TextureToIndex.Find(Handle);
+        if (It == nullptr)
         {
             return;
         }
 
-        const uint32 Index = It->second;
+        const uint32 Index = (*It);
         ResidentBytesTotal -= Textures[Index].ResidentBytes;
 
         // Swap-and-pop, fixing up the index of whatever moved into the hole.
-        const uint32 LastIndex = (uint32)Textures.size() - 1;
+        const uint32 LastIndex = (uint32)Textures.Num() - 1;
         if (Index != LastIndex)
         {
             Textures[Index] = Move(Textures[LastIndex]);
-            if (CTexture* Moved = Textures[Index].Texture.Get())
-            {
-                TextureToIndex.insert_or_assign(Moved, Index);
-            }
+            TextureToIndex.Add(Textures[Index].Texture.GetHandle(), Index);
         }
-        Textures.pop_back();
-        TextureToIndex.erase(Texture);
+        Textures.Pop();
+        TextureToIndex.Remove(Handle);
 
-        // The worker's weak pointer will have gone null, and canceling mid-read means synchronizing.
+        // A load in flight keeps only its package pinned and is dropped on completion, since canceling mid-read means synchronizing.
     }
 
     FTextureStreamingManager::FStreamingTexture* FTextureStreamingManager::Find(CTexture* Texture)
     {
-        auto It = TextureToIndex.find(Texture);
-        return It == TextureToIndex.end() ? nullptr : &Textures[It->second];
+        auto It = TextureToIndex.Find(Object::Internal::GetHandleByObject(Texture));
+        return It == nullptr ? nullptr : &Textures[(*It)];
     }
 
     void FTextureStreamingManager::Pin(CTexture* Texture)
@@ -195,8 +215,8 @@ namespace Lumina
         FScopeLock Lock(Mutex);
 
         // Valid but empty is what drives the decay-to-tail branch in ComputeWantedMips.
-        SlotToEntry.clear();
-        for (uint32 i = 0; i < (uint32)Textures.size(); ++i)
+        SlotToEntry.Reset();
+        for (int32 i = 0; i < Textures.Num(); ++i)
         {
             FStreamingTexture& Entry = Textures[i];
             Entry.FeedbackMask   = 0u;
@@ -215,7 +235,7 @@ namespace Lumina
                 Entry.bFeedbackValid = false;
                 continue;
             }
-            SlotToEntry.insert_or_assign(Slot, i);
+            SlotToEntry.Add(Slot, i);
         }
 
         // Costs materials that drew times their distinct textures, a few thousand lookups in a heavy scene.
@@ -233,14 +253,14 @@ namespace Lumina
             const uint32 NumIDs = Materials.CopySlotTextureIDs(MaterialSlot, TextureIDs, MAX_TEXTURES);
             for (uint32 i = 0; i < NumIDs; ++i)
             {
-                auto It = SlotToEntry.find(TextureIDs[i]);
-                if (It == SlotToEntry.end())
+                auto It = SlotToEntry.Find(TextureIDs[i]);
+                if (It == nullptr)
                 {
                     continue;
                 }
 
                 // Two materials sharing a texture at different scales must both be satisfied.
-                FStreamingTexture& Entry = Textures[It->second];
+                FStreamingTexture& Entry = Textures[(*It)];
                 Entry.FeedbackMask     |= Mask;
                 Entry.LastFeedbackFrame = FrameCounter;
             }
@@ -279,25 +299,25 @@ namespace Lumina
         IssuePromotions();
 
         // A hitch is a shape over time, and these say whether the cost was host uploads or something else.
-        LUMINA_PROFILE_VALUE("Streaming/UploadBudgetLeftKiB", (int64)(FrameUploadBudget / Constants::kKiB));
-        LUMINA_PROFILE_VALUE("Streaming/ResidentMiB", (int64)(ResidentBytesTotal / Constants::kMiB));
-        LUMINA_PROFILE_VALUE("Streaming/LoadsInFlight", (int64)PendingLoads.size());
-        LUMINA_PROFILE_VALUE("Streaming/LoadStagingKiB", (int64)(PendingLoadBytes / Constants::kKiB));
-        LUMINA_PROFILE_VALUE("Streaming/ResidencyChanges", (int64)(PromotedLastFrame + DemotedLastFrame));
+        LUMINA_PROFILE_VALUE("Streaming/UploadBudgetLeftKiB", FrameUploadBudget / Constants::kKiB);
+        LUMINA_PROFILE_VALUE("Streaming/ResidentMiB", ResidentBytesTotal / Constants::kMiB);
+        LUMINA_PROFILE_VALUE("Streaming/LoadsInFlight", PendingLoads.Num());
+        LUMINA_PROFILE_VALUE("Streaming/LoadStagingKiB", PendingLoadBytes / Constants::kKiB);
+        LUMINA_PROFILE_VALUE("Streaming/ResidencyChanges", PromotedLastFrame + DemotedLastFrame);
     }
 
     void FTextureStreamingManager::TickResidencyFills()
     {
         LUMINA_PROFILE_SECTION("Streaming::TickResidencyFills");
 
-        const SIZE_T Count = Textures.size();
+        const int32 Count = Textures.Num();
         if (Count == 0)
         {
             return;
         }
 
         // Fairness only, since the guarantee that a fill cannot stall is the floor below, not this.
-        for (SIZE_T i = 0; i < Count; ++i)
+        for (int32 i = 0; i < Count; ++i)
         {
             FStreamingTexture& Entry = Textures[(FillCursor + i) % Count];
 
@@ -420,13 +440,13 @@ namespace Lumina
         const uint64 FrameNow = FrameCounter;
 
         TVector<TPair<float, uint32>>& Order = BudgetOrderScratch;
-        Order.clear();
-        Order.reserve(Textures.size());
-        for (uint32 i = 0; i < (uint32)Textures.size(); ++i)
+        Order.Reset();
+        Order.Reserve(Textures.Num());
+        for (int32 i = 0; i < Textures.Num(); ++i)
         {
             if (Textures[i].PinCount == 0 && Textures[i].Texture.Get() != nullptr)
             {
-                Order.emplace_back(RetentionPriority(Textures[i], FrameNow), i);
+                Order.Emplace(RetentionPriority(Textures[i], FrameNow), i);
             }
         }
 
@@ -434,21 +454,21 @@ namespace Lumina
         Algo::Sort(Order,
             [](const TPair<float, uint32>& A, const TPair<float, uint32>& B)
             {
-                return A.first != B.first ? A.first < B.first : A.second < B.second;
+                return A.Key != B.Key ? A.Key < B.Key : A.Value < B.Value;
             });
 
         // Compacted as textures reach their floor, so a later pass never revisits one that cannot shed.
         const auto ShedPass = [this, &Total, Budget](TVector<TPair<float, uint32>>& Candidates, bool bOnlyUnresident)
         {
-            SIZE_T Live = Candidates.size();
+            int32 Live = Candidates.Num();
             while (Total > Budget && Live > 0)
             {
-                SIZE_T Write = 0;
+                int32 Write = 0;
                 bool bDroppedAny = false;
 
-                for (SIZE_T i = 0; i < Live; ++i)
+                for (int32 i = 0; i < Live; ++i)
                 {
-                    FStreamingTexture& Entry   = Textures[Candidates[i].second];
+                    FStreamingTexture& Entry   = Textures[Candidates[i].Value];
                     const CTexture*    Texture = Entry.Texture.Get();
                     if (Texture == nullptr)
                     {
@@ -488,7 +508,8 @@ namespace Lumina
 
         // Declining promotions fits the pool without touching anything resident, so it is tried before any demotion.
         TVector<TPair<float, uint32>>& Unresident = BudgetUnresidentScratch;
-        Unresident.assign(Order.begin(), Order.end());
+        Unresident.Reset();
+        Unresident.Append(Order.begin(), Order.end());
         ShedPass(Unresident, /*bOnlyUnresident*/ true);
         ShedPass(Order, /*bOnlyUnresident*/ false);
 
@@ -557,26 +578,7 @@ namespace Lumina
             ++TotalDemotions;
 
             // Only below the new resident level, since anything at or above it is what the image now holds.
-            FTextureResource& Resource = Texture->GetTextureResource();
-            const uint32 NumLayers = Math::Max(Resource.GetNumLayers(), 1u);
-            for (uint32 Layer = 0; Layer < NumLayers; ++Layer)
-            {
-                for (uint32 Mip = 0; Mip < Entry.BudgetedFirstMip; ++Mip)
-                {
-                    const uint32 Index = Resource.MipIndex(Layer, Mip);
-                    if (Index >= Resource.Mips.size())
-                    {
-                        continue;
-                    }
-
-                    FTextureResource::FMip& MipData = Resource.Mips[Index];
-                    if (MipData.BulkRef.IsValid())
-                    {
-                        MipData.Pixels.clear();
-                        MipData.Pixels.shrink_to_fit();
-                    }
-                }
-            }
+            ReleaseMipsBelow(Texture->GetTextureResource(), Entry.BudgetedFirstMip);
         }
     }
 
@@ -599,13 +601,13 @@ namespace Lumina
                 for (uint32 Mip = TargetFirstMip; Mip < SourceFirstMip; ++Mip)
                 {
                     const uint32 MipIndex = Resource.MipIndex(Layer, Mip);
-                    if (MipIndex >= Resource.Mips.size())
+                    if (MipIndex >= static_cast<uint32>(Resource.Mips.Num()))
                     {
                         continue;
                     }
 
                     const FTextureResource::FMip& MipData = Resource.Mips[MipIndex];
-                    Bytes += !MipData.Pixels.empty() ? (uint64)MipData.Pixels.size()
+                    Bytes += !MipData.Pixels.IsEmpty() ? (uint64)MipData.Pixels.Num()
                                                      : (uint64)Math::Max<int64>(MipData.BulkRef.Size, 0);
                 }
             }
@@ -614,15 +616,15 @@ namespace Lumina
 
         // Priority is the mip deficit weighted by how big the thing is on screen.
         TVector<TPair<float, uint32>>& Candidates = PromotionScratch;
-        Candidates.clear();
-        Candidates.reserve(Textures.size());
+        Candidates.Reset();
+        Candidates.Reserve(Textures.Num());
 
-        for (uint32 i = 0; i < (uint32)Textures.size(); ++i)
+        for (int32 i = 0; i < Textures.Num(); ++i)
         {
             FStreamingTexture& Entry   = Textures[i];
             CTexture*          Texture = Entry.Texture.Get();
 
-            if (Texture == nullptr || Entry.bLoadInFlight || Texture->GetPackage() == nullptr)
+            if (Texture == nullptr || Entry.bLoadInFlight || Texture->GetPackage() == nullptr || Texture->IsResidencyBlocked())
             {
                 continue;
             }
@@ -633,13 +635,13 @@ namespace Lumina
 
                 // A pin is an explicit request such as an open editor tab, not a hint.
                 const float Score = (Entry.PinCount > 0 ? 1.0e9f : 0.0f) + (float)Deficit;
-                Candidates.emplace_back(Score, i);
+                Candidates.Emplace(Score, i);
             }
         }
 
         // Scored once here rather than inside the comparator, which resolved the weak pointer per compare.
         Algo::Sort(Candidates,
-            [](const TPair<float, uint32>& A, const TPair<float, uint32>& B) { return A.first > B.first; });
+            [](const TPair<float, uint32>& A, const TPair<float, uint32>& B) { return A.Key > B.Key; });
 
         const uint64 Budget = GetBudgetBytes();
         bPromotionBlockedByPool = false;
@@ -651,8 +653,8 @@ namespace Lumina
 
         for (const TPair<float, uint32>& Candidate : Candidates)
         {
-            const uint32 Index = Candidate.second;
-            if ((int32)PendingLoads.size() >= MaxInFlight)
+            const uint32 Index = Candidate.Value;
+            if (PendingLoads.Num() >= MaxInFlight)
             {
                 break;
             }
@@ -673,7 +675,7 @@ namespace Lumina
             }
 
             // Skip rather than break, since priority order means an oversized texture must not stall smaller ones.
-            if (!PendingLoads.empty() && PendingLoadBytes + StagingBytes > MaxStagingBytes)
+            if (!PendingLoads.IsEmpty() && PendingLoadBytes + StagingBytes > MaxStagingBytes)
             {
                 continue;
             }
@@ -687,91 +689,88 @@ namespace Lumina
                 continue;
             }
 
-            TUniquePtr<FPendingLoad> Load = MakeUnique<FPendingLoad>();
-            Load->Texture        = Texture;
+            TUniquePtr<FPendingLoad> Load = MakeUnique<FPendingLoad>(Texture, TargetFirstMip, CurrentFirstMip, LayerCount);
             Load->GrowthBytes    = GrowthBytes;
             PendingGrowth       += GrowthBytes;
-            Load->TargetFirstMip = (uint8)TargetFirstMip;
-            Load->SourceFirstMip = (uint8)CurrentFirstMip;
-            Load->LayerCount     = LayerCount;
             Load->StagingBytes   = StagingBytes;
-            Load->MipBytes.resize((SIZE_T)Load->LayerCount * Load->MipSpan());
-            Load->MipRefs.resize((SIZE_T)Load->LayerCount * Load->MipSpan());
-
-            // Every layer, since Mips is layer-major and the promotion is refused unless all are populated.
-            {
-                const FTextureResource& Resource = Texture->GetTextureResource();
-
-                // Snapshotted with the refs, so a save landing before the worker reads is caught rather than read through.
-                if (const CPackage* RefPackage = Texture->GetPackage())
-                {
-                    Load->BulkGeneration = RefPackage->GetBulkGeneration();
-                }
-
-                for (uint32 Layer = 0; Layer < Load->LayerCount; ++Layer)
-                {
-                    for (uint32 Mip = Load->TargetFirstMip; Mip < Load->SourceFirstMip; ++Mip)
-                    {
-                        const uint32 MipIndex = Resource.MipIndex(Layer, Mip);
-                        if (MipIndex >= Resource.Mips.size())
-                        {
-                            continue;   // no ref and no bytes, so the worker fails the load on this slice
-                        }
-
-                        const FTextureResource::FMip& MipData = Resource.Mips[MipIndex];
-                        const uint32 Slice = Load->SliceIndex(Layer, Mip);
-
-                        // Also the correct fallback when a failed save left the ref pointing into an unwritten region.
-                        if (!MipData.Pixels.empty())
-                        {
-                            Load->MipBytes[Slice] = MipData.Pixels;
-                        }
-                        else
-                        {
-                            Load->MipRefs[Slice] = MipData.BulkRef;
-                        }
-                    }
-                }
-            }
 
             FPendingLoad* Raw = Load.get();
-            PendingLoads.push_back(Move(Load));
+            PendingLoads.Add(Move(Load));
             PendingLoadBytes += StagingBytes;
             Entry.bLoadInFlight = true;
 
             // Only the disk read is off-thread, and the residency change it feeds runs on the game thread.
-            Task::AsyncTask(1, 1, [Raw](uint32, uint32, uint32)
+            Jobs::Spawn(Jobs::EJobPriority::Background, [](FPendingLoad* InFlight) -> Jobs::TTask<void>
             {
-                LUMINA_PROFILE_SECTION("Texture Stream Read");
-                LUMINA_MEMORY_SCOPE("Texture Streaming");
-
-                // The texture's weak pointer already says whether any of this is still worth doing.
-                CTexture* Target  = Raw->Texture.Get();
-                CPackage* Package = Target ? Target->GetPackage() : nullptr;
-                if (Target == nullptr || Package == nullptr)
-                {
-                    Raw->bFailed = true;
-                    Raw->bComplete.store(true, std::memory_order_release);
-                    return;
-                }
-
-                for (SIZE_T Slice = 0; Slice < Raw->MipBytes.size() && !Raw->bFailed; ++Slice)
-                {
-                    if (!Raw->MipBytes[Slice].empty())
-                    {
-                        continue;   // handed over already resident
-                    }
-
-                    if (!Raw->MipRefs[Slice].IsValid()
-                     || !Package->ReadBulkData(Raw->MipRefs[Slice], Raw->MipBytes[Slice], Raw->BulkGeneration))
-                    {
-                        Raw->bFailed = true;
-                    }
-                }
-
-                Raw->bComplete.store(true, std::memory_order_release);
-            }, ETaskPriority::Background);
+                InFlight->Read();
+                co_return;
+            }, Raw);
         }
+    }
+
+    FTextureStreamingManager::FPendingLoad::FPendingLoad(CTexture* InTexture, uint32 InTargetFirstMip, uint32 InSourceFirstMip, uint32 InLayerCount)
+        : Texture(InTexture)
+        , Package(InTexture->GetPackage())
+        , TargetFirstMip((uint8)InTargetFirstMip)
+        , SourceFirstMip((uint8)InSourceFirstMip)
+        , LayerCount(InLayerCount)
+    {
+        MipBytes.SetNum(IntCastChecked<int32>(static_cast<int64>(LayerCount) * MipSpan()));
+        MipRefs.SetNum(IntCastChecked<int32>(static_cast<int64>(LayerCount) * MipSpan()));
+
+        // Snapshotted with the refs, so a save landing before the worker reads is caught rather than read through.
+        if (Package)
+        {
+            BulkGeneration = Package->GetBulkGeneration();
+        }
+
+        // Every layer, since Mips is layer-major and the promotion is refused unless all are populated.
+        const FTextureResource& Resource = InTexture->GetTextureResource();
+        for (uint32 Layer = 0; Layer < LayerCount; ++Layer)
+        {
+            for (uint32 Mip = TargetFirstMip; Mip < SourceFirstMip; ++Mip)
+            {
+                const uint32 MipIndex = Resource.MipIndex(Layer, Mip);
+                if (MipIndex >= static_cast<uint32>(Resource.Mips.Num()))
+                {
+                    continue;   // no ref and no bytes, so the worker fails the load on this slice
+                }
+
+                const FTextureResource::FMip& MipData = Resource.Mips[MipIndex];
+                const uint32 Slice = SliceIndex(Layer, Mip);
+
+                // Also the correct fallback when a failed save left the ref pointing into an unwritten region.
+                if (!MipData.Pixels.IsEmpty())
+                {
+                    MipBytes[Slice] = MipData.Pixels;
+                }
+                else
+                {
+                    MipRefs[Slice] = MipData.BulkRef;
+                }
+            }
+        }
+    }
+
+    void FTextureStreamingManager::FPendingLoad::Read()
+    {
+        LUMINA_PROFILE_SECTION("Texture Stream Read");
+        LUMINA_MEMORY_SCOPE("Texture Streaming");
+
+        // A destroyed package still reads safely here and fails on its removed file, which the game thread then drops.
+        bFailed = !Package;
+
+        for (int32 Slice = 0; Slice < MipBytes.Num() && !bFailed; ++Slice)
+        {
+            if (!MipBytes[Slice].IsEmpty())
+            {
+                continue;   // handed over already resident
+            }
+
+            bFailed = !MipRefs[Slice].IsValid() || !Package->ReadBulkData(MipRefs[Slice], MipBytes[Slice], BulkGeneration);
+        }
+
+        bComplete.store(true, std::memory_order_release);
     }
 
     void FTextureStreamingManager::ProcessCompletedLoads()
@@ -787,7 +786,7 @@ namespace Lumina
             : FrameResidencyChanges;
         uint32 PromotionsApplied = 0;
 
-        for (size_t i = 0; i < PendingLoads.size(); )
+        for (int32 i = 0; i < PendingLoads.Num(); )
         {
             FPendingLoad& Load = *PendingLoads[i];
 
@@ -828,14 +827,14 @@ namespace Lumina
 
                         // Tallied before the move below empties them.
                         const uint64 BytesRead = Algo::Accumulate(Load.MipBytes, uint64(0),
-                            [](const TVector<uint8>& Bytes) { return Bytes.size(); });
+                            [](const TVector<uint8>& Bytes) { return Bytes.Num(); });
 
                         for (uint32 Layer = 0; Layer < Load.LayerCount; ++Layer)
                         {
                             for (uint32 Mip = Load.TargetFirstMip; Mip < Load.SourceFirstMip; ++Mip)
                             {
                                 const uint32 Index = Resource.MipIndex(Layer, Mip);
-                                if (Index < Resource.Mips.size())
+                                if (Index < static_cast<uint32>(Resource.Mips.Num()))
                                 {
                                     Resource.Mips[Index].Pixels = Move(Load.MipBytes[Load.SliceIndex(Layer, Mip)]);
                                 }
@@ -855,6 +854,10 @@ namespace Lumina
 
                             // Applying only STAGES an image, and the host uploads are metered as they happen.
                         }
+                        else
+                        {
+                            ReleaseMipsBelow(Resource, NowFirstMip);
+                        }
                     }
                     else if (Load.bFailed)
                     {
@@ -866,8 +869,8 @@ namespace Lumina
             }
 
             PendingLoadBytes -= Math::Min(PendingLoadBytes, Load.StagingBytes);
-            PendingLoads[i] = Move(PendingLoads.back());
-            PendingLoads.pop_back();
+            PendingLoads[i] = Move(PendingLoads.Last());
+            PendingLoads.Pop();
         }
     }
 
@@ -878,8 +881,8 @@ namespace Lumina
         FStats Stats;
         Stats.BudgetBytes         = GetBudgetBytes();
         Stats.ResidentBytes       = ResidentBytesTotal;
-        Stats.NumTextures         = (uint32)Textures.size();
-        Stats.NumLoadsInFlight    = (uint32)PendingLoads.size();
+        Stats.NumTextures         = (uint32)Textures.Num();
+        Stats.NumLoadsInFlight    = (uint32)PendingLoads.Num();
         Stats.NumPromotedLastFrame = PromotedLastFrame;
         Stats.NumDemotedLastFrame  = DemotedLastFrame;
 
@@ -905,8 +908,8 @@ namespace Lumina
     {
         FScopeLock Lock(Mutex);
 
-        OutTextures.clear();
-        OutTextures.reserve(Textures.size());
+        OutTextures.Reset();
+        OutTextures.Reserve(Textures.Num());
 
         for (const FStreamingTexture& Entry : Textures)
         {
@@ -937,7 +940,7 @@ namespace Lumina
             // Catches a streamer freeing GPU images while leaking their CPU copies.
             for (const FTextureResource::FMip& Mip : Resource.Mips)
             {
-                Row.CpuBytes += Mip.Pixels.size();
+                Row.CpuBytes += Mip.Pixels.Num();
             }
 
             Row.PinCount         = Entry.PinCount;
@@ -951,11 +954,11 @@ namespace Lumina
                 Row.PackagePath = Package->GetName().ToString();
             }
 
-            OutTextures.push_back(Move(Row));
+            OutTextures.Add(Move(Row));
         }
 
-        OutPending.clear();
-        OutPending.reserve(PendingLoads.size());
+        OutPending.Reset();
+        OutPending.Reserve(PendingLoads.Num());
 
         for (const TUniquePtr<FPendingLoad>& Load : PendingLoads)
         {
@@ -971,10 +974,10 @@ namespace Lumina
 
             for (const TVector<uint8>& Bytes : Load->MipBytes)
             {
-                Row.Bytes += Bytes.size();
+                Row.Bytes += Bytes.Num();
             }
 
-            OutPending.push_back(Move(Row));
+            OutPending.Add(Move(Row));
         }
     }
 }

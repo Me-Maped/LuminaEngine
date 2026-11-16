@@ -10,7 +10,7 @@ namespace Lumina
     static const char* CurveDetailsWindowName = "Details";
 
     FCurveAssetEditorTool::FCurveAssetEditorTool(IEditorToolContext* Context, CObject* InAsset)
-        : FAssetEditorTool(Context, InAsset->GetName().c_str(), InAsset)
+        : FAssetEditorTool(Context, *InAsset->GetName(), InAsset)
     {
     }
 
@@ -55,6 +55,7 @@ namespace Lumina
     void FCurveAssetEditorTool::OnPostUndoRedo()
     {
         FAssetEditorTool::OnPostUndoRedo();
+        CurveWidget.SelectNone();
         if (CCurveAsset* CurveAsset = GetAsset<CCurveAsset>())
         {
             CurveAsset->Curve.SortKeys();
@@ -70,7 +71,7 @@ namespace Lumina
         ImGuiID RightDockID = 0;
         ImGui::DockBuilderSplitNode(InDockspaceID, ImGuiDir_Right, 0.25f, &RightDockID, &LeftDockID);
 
-        ImGui::DockBuilderDockWindow(GetToolWindowName(CurveWindowName).c_str(), LeftDockID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(CurveDetailsWindowName).c_str(), RightDockID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(CurveWindowName), LeftDockID);
+        ImGui::DockBuilderDockWindow(*GetToolWindowName(CurveDetailsWindowName), RightDockID);
     }
 }

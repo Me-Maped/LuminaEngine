@@ -25,13 +25,13 @@ namespace Lumina
     // Trailing path segment for a compact label ("/Game/Maps/Main" -> "Main").
     static FFixedString SoftLeafName(FStringView PathView)
     {
-        if (PathView.empty())
+        if (PathView.IsEmpty())
         {
             return FFixedString(LOC("<None>"));
         }
-        size_t Slash = PathView.find_last_of('/');
-        FStringView Leaf = (Slash == FStringView::npos) ? PathView : PathView.substr(Slash + 1);
-        return FFixedString(Leaf.data(), Leaf.size());
+        int32 Slash = PathView.FindLastOf('/');
+        FStringView Leaf = (Slash == Constants::kIndexNone) ? PathView : PathView.Mid(Slash + 1);
+        return FFixedString(Leaf.GetData(), Leaf.Len());
     }
 
     EPropertyChangeOp FSoftObjectPropertyCustomization::DrawProperty(const TSharedPtr<FPropertyHandle>& Property, const FPropertyDrawArgs& Args)
@@ -42,8 +42,8 @@ namespace Lumina
         bool bWasChanged = false;
 
         const FStringView PathView = Path.GetPath();
-        const bool bHasPath = !PathView.empty();
-        const FName PathName = bHasPath ? FName(FString(PathView.data(), PathView.size())) : NAME_None;
+        const bool bHasPath = !PathView.IsEmpty();
+        const FName PathName = bHasPath ? FName(FString(PathView.GetData(), PathView.Len())) : NAME_None;
 
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
         ImGui::PushID(this);
@@ -61,14 +61,14 @@ namespace Lumina
                     ButtonTexture = ImGuiX::ToImTextureRef(Thumbnail->LoadedImage);
                 }
             }
-            if (!ButtonTexture.has_value())
+            if (!ButtonTexture.IsSet())
             {
                 ButtonTexture = ImGuiX::ToImTextureRef(Paths::GetEngineResourceDirectory() + "/Textures/File.png");
             }
 
             const FFixedString Leaf = SoftLeafName(PathView);
             ImGui::BeginDisabled(!bHasPath);
-            ImGui::ImageButton(Leaf.c_str(), ButtonTexture.value(), ImVec2(64, 64));
+            ImGui::ImageButton(*Leaf, ButtonTexture.GetValue(), ImVec2(64, 64));
             ImGui::EndDisabled();
 
             // Binds to a dragged asset of the property's class by path, with no load.
@@ -79,7 +79,7 @@ namespace Lumina
                     if (Dropped->GetPackage())
                     {
                         const FString DroppedPath = Dropped->GetPackage()->GetName().ToString();
-                        Path.SetPath(FStringView(DroppedPath.c_str(), DroppedPath.size()));
+                        Path.SetPath(FStringView(*DroppedPath, DroppedPath.Len()));
                         bWasChanged = true;
                     }
                 }
@@ -89,9 +89,9 @@ namespace Lumina
             // Opening loads the asset, which nothing else on this row does.
             if (bHasPath && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
-                if (const FAssetData* Asset = FAssetRegistry::Get().GetAssetByPath(PathView))
+                if (const FAssetDataPtr Asset = FAssetRegistry::Get().GetAssetByPath(PathView))
                 {
-                    static_cast<FEditorUI*>(GEditorEngine->GetDevelopmentToolsUI())->OpenAssetEditor(Asset->AssetGUID);
+                    static_cast<FEditorUI*>(Global::GEditorEngine->GetDevelopmentToolsUI())->OpenAssetEditor(Asset->AssetGUID);
                 }
             }
 
@@ -104,7 +104,7 @@ namespace Lumina
 
             ImGui::SetNextItemWidth(TextWidgetWidth);
 
-            FFixedString PathString = bHasPath ? FFixedString(PathView.data(), PathView.size()) : FFixedString(LOC("<None>"));
+            FFixedString PathString = bHasPath ? FFixedString(PathView.GetData(), PathView.Len()) : FFixedString("<None>");
             ImGui::PushStyleColor(ImGuiCol_Text, bHasPath ? ImVec4(0.6f, 0.6f, 0.6f, 1.0f) : ImVec4(1.0f, 0.19f, 0.19f, 1.0f));
             ImGuiX::InputText("##SoftObjectPathText", PathString, ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_ReadOnly);
             ImGuiX::TextTooltip("{}", PathString);
@@ -128,21 +128,15 @@ namespace Lumina
 
                 if (ImGui::BeginChild("##OptList", ComboDropDownSize, false, ImGuiChildFlags_NavFlattened))
                 {
-                    TVector<FAssetData*> Assets = FAssetRegistry::Get().FindByPredicate([&](const FAssetData& Data)
-                    {
-                        CClass* DataClass = FindObject<CClass>(Data.AssetClass);
-                        return DataClass && PropertyClass && DataClass->IsChildOf(PropertyClass);
-                    });
-
                     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4, 4));
                     if (ImGui::BeginTable("##AssetTable", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInner))
                     {
                         ImGui::TableSetupColumn("##Thumb", ImGuiTableColumnFlags_WidthFixed, 42.0f);
                         ImGui::TableSetupColumn("##Name", ImGuiTableColumnFlags_WidthStretch);
 
-                        for (const FAssetData* Asset : Assets)
+                        for (const FAssetDataPtr& Asset : AssetsOfClass.Get(PropertyClass))
                         {
-                            if (!ImGuiX::PassSearchFilter(SearchFilter, { Asset->AssetName.c_str(), Asset->Path.c_str(), Asset->AssetClass.c_str() }))
+                            if (!ImGuiX::PassSearchFilter(SearchFilter, *Asset->AssetName))
                             {
                                 continue;
                             }
@@ -152,7 +146,7 @@ namespace Lumina
                                 continue;
                             }
 
-                            ImGui::PushID(Asset);
+                            ImGui::PushID(Asset.Get());
                             ImGui::TableNextRow(ImGuiTableRowFlags_None, 42.0f);
                             ImGui::TableSetColumnIndex(0);
 
@@ -162,7 +156,7 @@ namespace Lumina
                             ImGuiX::TextTooltip("{}", Asset->Path);
                             ImGui::SameLine();
 
-                            if (FPackageThumbnail* Thumbnail = CThumbnailManager::Get().GetThumbnailForPackage(FName(Asset->Path.c_str())))
+                            if (FPackageThumbnail* Thumbnail = CThumbnailManager::Get().GetThumbnailForPackage(FName(*Asset->Path)))
                             {
                                 ImGui::Image(ImGuiX::ToImTextureRef(Thumbnail->LoadedImage), ImVec2(42, 42));
                             }
@@ -172,11 +166,11 @@ namespace Lumina
                             }
 
                             ImGui::TableSetColumnIndex(1);
-                            ImGui::TextUnformatted(Asset->AssetName.c_str());
+                            ImGui::TextUnformatted(*Asset->AssetName);
 
                             if (bSelected)
                             {
-                                Path.SetPath(FStringView(Asset->Path.c_str(), Asset->Path.size()));
+                                Path.SetPath(FStringView(*Asset->Path, Asset->Path.Len()));
                                 ImGui::CloseCurrentPopup();
                                 bWasChanged = true;
                             }
@@ -192,22 +186,30 @@ namespace Lumina
                 ImGui::EndCombo();
             }
 
-            ImGui::BeginDisabled(!bHasPath);
-            if (ImGui::Button(LE_ICON_CONTENT_COPY "##Copy", AssetPickerFilter::kButtonSize))
+            // Binds by path like the list above, so taking the selection never loads the asset.
+            const FAssetDataPtr BrowserSelection = AssetPickerFilter::GetSelectedAssetOfClass(PropertyClass);
+            if (AssetPickerFilter::DrawUseSelectedButton(BrowserSelection != nullptr, "Select a compatible asset in the Content Browser to use it here."))
             {
-                ImGui::SetClipboardText(PathString.c_str());
+                Path.SetPath(FStringView(*BrowserSelection->Path, BrowserSelection->Path.Len()));
+                bWasChanged = true;
             }
             ImGui::SameLine();
 
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.25f, 0.25f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f, 0.15f, 0.15f, 1.0f));
-            if (ImGui::Button(LE_ICON_CLOSE_CIRCLE "##Clear", AssetPickerFilter::kButtonSize))
+            AssetPickerFilter::DrawBrowseButton(PathView);
+            ImGui::SameLine();
+
+            ImGui::BeginDisabled(!bHasPath);
+            if (ImGui::Button(LE_ICON_CONTENT_COPY "##Copy", AssetPickerFilter::kButtonSize))
+            {
+                ImGui::SetClipboardText(*PathString);
+            }
+            ImGui::SameLine();
+
+            if (AssetPickerFilter::DrawClearButton("Clear the reference."))
             {
                 Path.Reset();
                 bWasChanged = true;
             }
-            ImGui::PopStyleColor(3);
             ImGui::EndDisabled();
 
             ImGui::EndGroup();

@@ -211,7 +211,8 @@ namespace Lumina::Localization
 
     bool HaveCompatibleFormatArguments(FStringView Source, FStringView Translation)
     {
-        const std::string_view S(Source.data(), Source.size()), T(Translation.data(), Translation.size());
+        const std::string_view S(Source.GetData() != nullptr ? Source.GetData() : "", static_cast<size_t>(Source.Len()));
+        const std::string_view T(Translation.GetData() != nullptr ? Translation.GetData() : "", static_cast<size_t>(Translation.Len()));
         const FPrintfSignature SP = ParsePrintf(S);
         const FPrintfSignature TP = ParsePrintf(T, !SP.Active() && Contains(S, '%'));
         if (SP.Active())

@@ -5,11 +5,12 @@
 #include "Containers/Vector.h"
 #include "Core/LuminaMacros.h"
 #include "Core/Threading/Sync.h"
+#include "World/Entity/Systems/SystemResources.h"
 
 namespace Lumina
 {
-    // Per-world scheduler for latent coroutine waits and script waits, ticked once a frame by SCoroutineSystem.
-    class RUNTIME_API FCoroutineManager
+    // Per-world scheduler for latent coroutine waits and script waits, ticked once a frame by CCoroutineSystem.
+    class RUNTIME_API FCoroutineManager : public ECS::FResource
     {
     public:
 
@@ -58,6 +59,7 @@ namespace Lumina
 
         mutable FMutex                          WaitLock;
         TVector<FWait>                          Waits;
+        TVector<FWait>                          TickingWaits;
 
         mutable FMutex                          TrackLock;
         TVector<CoroDetail::FCoroutineState*>   Tracked;

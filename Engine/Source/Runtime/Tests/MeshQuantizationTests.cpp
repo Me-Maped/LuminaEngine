@@ -3,6 +3,8 @@
 #include "Core/Math/Math.h"
 #include "Renderer/MeshData.h"
 #include "Renderer/MeshQuantization.h"
+#include "Core/Serialization/MemoryArchiver.h"
+#include "Core/Versioning/CoreVersion.h"
 
 // Round-trip stays inside half a grid step and decode is bit-reproducible; Common.slang must match.
 
@@ -18,7 +20,7 @@ namespace
 
     FRoundTrip RoundTrip(const TVector<FVector3>& Positions)
     {
-        const FMeshPositionGrid Grid = ComputeMeshPositionGrid(Positions.data(), Positions.size());
+        const FMeshPositionGrid Grid = ComputeMeshPositionGrid(Positions.GetData(), Positions.Num());
 
         FRoundTrip Result;
         Result.Step = PositionGridScale(Grid.Exponent);
@@ -38,7 +40,7 @@ namespace
     TVector<FVector3> MakePatch(FVector3 Origin, float Extent)
     {
         TVector<FVector3> Out;
-        Out.reserve(MESHLET_MAX_VERTICES);
+        Out.Reserve(MESHLET_MAX_VERTICES);
 
         for (uint32 i = 0; i < MESHLET_MAX_VERTICES; ++i)
         {
@@ -47,9 +49,9 @@ namespace
             const float V = (float)((i / 4) % 4) / 3.0f;
             const float W = (float)((i / 16) % 4) / 3.0f;
 
-            Out.push_back(FVector3(Origin.x + (U - 0.5f) * Extent,
-                                   Origin.y + (V - 0.5f) * Extent,
-                                   Origin.z + (W - 0.5f) * Extent));
+            Out.Emplace(Origin.x + (U - 0.5f) * Extent,
+                        Origin.y + (V - 0.5f) * Extent,
+                        Origin.z + (W - 0.5f) * Extent);
         }
         return Out;
     }
@@ -118,7 +120,7 @@ TEST(MeshQuantization, EmptyMeshIsSafe)
 TEST(MeshQuantization, DecodeIsBitwiseReproducible)
 {
     const TVector<FVector3> Positions = MakePatch(FVector3(17.0f, -4.0f, 9.5f), 3.0f);
-    const FMeshPositionGrid Grid = ComputeMeshPositionGrid(Positions.data(), Positions.size());
+    const FMeshPositionGrid Grid = ComputeMeshPositionGrid(Positions.GetData(), Positions.Num());
 
     for (const FVector3& P : Positions)
     {
@@ -154,7 +156,7 @@ TEST(MeshQuantization, StructLayoutsMatchTheGPUMirrors)
     EXPECT_EQ(sizeof(FMeshVertexAttributes), 12u);
     EXPECT_EQ(sizeof(FMeshVertexPosition), 8u);
     EXPECT_EQ(sizeof(FMeshletSkinnedVertex), 36u);
-    EXPECT_EQ(sizeof(FMeshletHeaderGPU), 176u);
+    EXPECT_EQ(sizeof(FMeshletHeaderGPU), 192u);
 }
 
 // The shader unpacks the last word with the MESHLET_* shifts, so the bitfield order is part of the format.
@@ -206,19 +208,19 @@ TEST(MeshQuantization, LegacyStaticVerticesFoldIntoSharedVertices)
     TVector<FLegacyMeshletVertex> Legacy;
     for (const auto& Triangle : MeshletCorners)
     {
-        LegacyMeshlets.push_back(MakeLegacyMeshlet((uint32)Legacy.size(), 3u));
+        LegacyMeshlets.Add(MakeLegacyMeshlet((uint32)Legacy.Num(), 3u));
         for (uint32 Corner : Triangle)
         {
-            Legacy.push_back(MakeLegacyVertex(Corners[Corner]));
+            Legacy.Add(MakeLegacyVertex(Corners[Corner]));
         }
     }
 
     FMeshletData Data;
     ConvertLegacyMeshletData(Data, LegacyMeshlets, Legacy, {});
 
-    EXPECT_EQ(Data.VertexPositions.size(), 4u);
-    EXPECT_TRUE(Data.VertexColors.empty());
-    EXPECT_TRUE(Data.VertexUV1s.empty());
+    EXPECT_EQ(Data.VertexPositions.Num(), 4);
+    EXPECT_TRUE(Data.VertexColors.IsEmpty());
+    EXPECT_TRUE(Data.VertexUV1s.IsEmpty());
     for (uint32 m = 0; m < 2u; ++m)
     {
         EXPECT_EQ(Data.Meshlets[m].VertexCount, 3u);
@@ -247,13 +249,13 @@ TEST(MeshQuantization, LegacySkinnedVerticesMoveOntoTheGrid)
         V.Base         = MakeLegacyVertex(Corner);
         V.JointIndices = 0x00010203u;
         V.JointWeights = 0x000000FFu;
-        Legacy.push_back(V);
+        Legacy.Add(V);
     }
 
     FMeshletData Data;
     ConvertLegacyMeshletData(Data, LegacyMeshlets, {}, Legacy);
 
-    ASSERT_EQ(Data.MeshletSkinnedVertices.size(), 3u);
+    ASSERT_EQ(Data.MeshletSkinnedVertices.Num(), 3);
     EXPECT_EQ(Data.Meshlets[0].BaseVertex, 0u);
     for (uint32 Local = 0; Local < 3u; ++Local)
     {
@@ -263,4 +265,47 @@ TEST(MeshQuantization, LegacySkinnedVerticesMoveOntoTheGrid)
         EXPECT_NEAR(P.z, Corners[Local].z, 1e-5f);
         EXPECT_EQ(Data.MeshletSkinnedVertices[Local].JointIndices, 0x00010203u);
     }
+}
+
+// A file from before the four bit LOD field kept its short refs flag one bit lower, and the array is bulk copied, so the fix is a pass over it.
+TEST(MeshQuantization, LegacyMeshletWordRepacksOnLoad)
+{
+    constexpr uint32 kLegacyShortShift = 17u;
+    FMeshletData Written;
+    FMeshlet& M = Written.Meshlets.EmplaceGetRef();
+    M.VertexCount   = 4u;
+    M.TriangleCount = 2u;
+    M.LODIndex      = 5u;
+    {
+        uint32 Words[4];
+        memcpy(Words, &M, sizeof(Words));
+        Words[3] = (Words[3] & ((1u << MESHLET_LOD_SHIFT) - 1u)) | (5u << MESHLET_LOD_SHIFT) | (1u << kLegacyShortShift);
+        memcpy(&M, Words, sizeof(Words));
+    }
+    Written.MeshletVertexRefs.Append({ 0x00010000u, 0x00030002u });
+    Written.VertexPositions.SetNum(4);
+    Written.VertexAttributes.SetNum(4);
+    Written.MeshletTriangles.Append({ 0x00020100u, 0x00020301u });
+    Written.MeshletSpheres.SetNum(1);
+    Written.MeshletCones.SetNum(1);
+
+    TVector<uint8> Bytes;
+    {
+        FMemoryWriter Writer(Bytes);
+        Writer.SetFileVersion((int32)ELuminaEngineVersion::MESH_CLUSTER_LOD - 1);
+        Writer << Written;
+    }
+
+    FMeshletData Read;
+    FMemoryReader Reader(Bytes);
+    Reader.SetFileVersion((int32)ELuminaEngineVersion::MESH_CLUSTER_LOD - 1);
+    Reader << Read;
+
+    ASSERT_EQ(Read.Meshlets.Num(), 1);
+    EXPECT_EQ(Read.Meshlets[0].VertexCount, 4u);
+    EXPECT_EQ(Read.Meshlets[0].TriangleCount, 2u);
+    EXPECT_EQ(Read.Meshlets[0].LODIndex, 5u);
+    EXPECT_TRUE(Read.Meshlets[0].HasShortVertexRefs());
+    EXPECT_EQ(Read.Meshlets[0].bVoxel, 0u);
+    EXPECT_EQ(GetStaticVertexIndex(Read, Read.Meshlets[0], 3u), 3u);
 }

@@ -66,13 +66,13 @@ namespace Lumina
 
         void CloneScripts(const TVector<TStrongObjectPtr<CEntityScript>>& Source, TVector<TStrongObjectPtr<CEntityScript>>& Out)
         {
-            Out.clear();
-            Out.reserve(Source.size());
+            Out.Reset();
+            Out.Reserve(Source.Num());
             for (const TStrongObjectPtr<CEntityScript>& Held : Source)
             {
                 if (CEntityScript* Clone = CloneScript(Held.Get()))
                 {
-                    Out.push_back(Clone);
+                    Out.Add(Clone);
                 }
             }
         }
@@ -87,7 +87,7 @@ namespace Lumina
     // A component dies with its entity, which is how a script destroyed by another script's update is noticed.
     SEntityScriptComponent::~SEntityScriptComponent()
     {
-        if (!Scripts.empty())
+        if (!Scripts.IsEmpty())
         {
             EntityScripts::NoteStructureChange();
         }
@@ -121,24 +121,69 @@ namespace Lumina
         std::atomic<uint32> GStructureEpoch{0};
         static_assert(sizeof(std::atomic<uint32>) == sizeof(uint32) && std::atomic<uint32>::is_always_lock_free);
 
-        // Set on whichever thread runs a chunk of the parallel pass, where a structural change breaks the promise.
-        thread_local bool GInParallelScriptPass = false;
-
         void BumpStructureEpoch()
         {
             GStructureEpoch.fetch_add(1u, std::memory_order_relaxed);
         }
 
-        void ReportParallelStructureChange()
+#if !defined(LE_SHIPPING)
+        // Owned by the registry being ticked, so each world reports a class once.
+        struct FParallelPromiseReports
         {
-            static std::atomic<bool> bReported{false};
-            if (!bReported.exchange(true, std::memory_order_relaxed))
+            FMutex                  Mutex;
+            THashSet<const CClass*> Classes;
+        };
+
+        // The script running in a parallel chunk is Scripts[*Cursor], the cursor being one a managed batch advances, or 0 when null.
+        struct FParallelScriptRun
+        {
+            FParallelPromiseReports* Reports = nullptr;
+            CEntityScript* const*    Scripts = nullptr;
+            const int32*             Cursor  = nullptr;
+        };
+
+        thread_local FParallelScriptRun* GParallelScriptRun = nullptr;
+
+        // Returns the running script whose class has not been reported yet, or null.
+        const CEntityScript* FirstBrokenPromise(ECS::FEntity Touched)
+        {
+            const FParallelScriptRun* Run = GParallelScriptRun;
+            if (Run == nullptr || Run->Scripts == nullptr)
             {
-                LOG_ERROR("A ParallelUpdate script attached, detached, spawned or destroyed something during the parallel pass. "
-                    "ParallelUpdate promises a script touches only its own entity, so the rest of that pass ran serially.");
+                return nullptr;
             }
+            const CEntityScript* Script = Run->Scripts[Run->Cursor != nullptr ? *Run->Cursor : 0];
+            if (!Touched.IsNull() && Touched == Script->GetOwningEntity())
+            {
+                return nullptr;
+            }
+            FScopeLock Lock(Run->Reports->Mutex);
+            return Run->Reports->Classes.TryAdd(Script->GetClass()) ? Script : nullptr;
+        }
+#endif
+    }
+
+#if !defined(LE_SHIPPING)
+    void EntityScripts::CheckParallelAccess(ECS::FEntity Entity, const char* Call)
+    {
+        if (const CEntityScript* Script = FirstBrokenPromise(Entity))
+        {
+            LOG_ERROR("ParallelUpdate script {} called {} on entity {}, which is not its own, during the parallel pass. "
+                "ParallelUpdate promises a script touches only its own entity, so this is a data race.",
+                Script->GetClass()->GetName(), Call, Entity.GetPacked());
         }
     }
+
+    void EntityScripts::CheckParallelStructureChange(const char* Call)
+    {
+        if (const CEntityScript* Script = FirstBrokenPromise(ECS::NullEntity))
+        {
+            LOG_ERROR("ParallelUpdate script {} made a structural change through {} during the parallel pass. "
+                "ParallelUpdate promises a script touches only its own entity, so this is a data race.",
+                Script->GetClass()->GetName(), Call);
+        }
+    }
+#endif
 
     // A script destroyed outright, not detached, must still stop a batch that has it queued.
     CEntityScript::~CEntityScript()
@@ -184,8 +229,8 @@ namespace Lumina
             const FComponentOps* Ops = Component != nullptr ? Component->GetComponentOps() : nullptr;
             if (Ops == nullptr)
             {
-                LOG_WARN("{}.{} names {}, which is not a component, so it is left unbound.", GetClass()->GetName().c_str(),
-                    Property->GetPropertyName().c_str(), Component != nullptr ? Component->GetName().c_str() : "nothing");
+                LOG_WARN("{}.{} names {}, which is not a component, so it is left unbound.", *GetClass()->GetName(),
+                    *Property->GetPropertyName(), Component != nullptr ? *Component->GetName() : "nothing");
                 continue;
             }
 
@@ -198,6 +243,21 @@ namespace Lumina
     {
         bFaulted = true;
         BumpStructureEpoch();
+    }
+
+    void CEntityScript::SetUpdatePriority(int32 InPriority)
+    {
+        if (UpdatePriority == InPriority)
+        {
+            return;
+        }
+        UpdatePriority = InPriority;
+
+        // The claim rebuild is what sorts an entity's scripts, so an attached script's change has to trigger one.
+        if (IsAttached())
+        {
+            EntityScripts::NoteStructureChange();
+        }
     }
 
     namespace
@@ -242,9 +302,9 @@ namespace Lumina
 
         uint32 RpcIdOf(const CClass* Class, const FFunction& Function)
         {
-            uint32 Hash = HashInto(2166136261u, Class->GetName().c_str());
+            uint32 Hash = HashInto(2166136261u, *Class->GetName());
             Hash = HashInto(Hash, ".");
-            return HashInto(Hash, Function.GetFunctionName().c_str());
+            return HashInto(Hash, *Function.GetFunctionName());
         }
 
         ERpcTarget TargetOf(const FFunction& Function)
@@ -257,54 +317,68 @@ namespace Lumina
             return EnumHasAnyFlags(Flags, EFunctionFlags::RpcOwner) ? ERpcTarget::Owner : ERpcTarget::Broadcast;
         }
 
-        // A frame big enough for the function's parameters, aligned the way FFunction expects.
-        struct FCallFrame
+        struct FRpcRoute
         {
-            explicit FCallFrame(const FFunction& InFunction)
-                : Function(InFunction)
-                , Storage(InFunction.GetParmsSize() / sizeof(std::max_align_t) + 1)
-            {
-                Function.InitializeFrame(Data());
-            }
-
-            ~FCallFrame()
-            {
-                Function.DestructFrame(Data());
-            }
-            FCallFrame(const FCallFrame&) = delete;
-            FCallFrame& operator=(const FCallFrame&) = delete;
-            FCallFrame(FCallFrame&&) = delete;
-            FCallFrame& operator=(FCallFrame&&) = delete;
-
-            void* Data() { return Storage.data(); }
-
-            const FFunction& Function;
-            TVector<std::max_align_t> Storage;
+            const FFunction* Function = nullptr;
+            FProperty* SyncField = nullptr;
+            bool bCorrection = false;
         };
+
+        FRpcRoute FindRpcRoute(const CEntityScript* Script, uint32 RpcId)
+        {
+            const CClass* Class = Script->GetClass();
+            for (const FFunction* Function : Class->GetFunctions())
+            {
+                if (Function->IsRpc() && RpcIdOf(Class, *Function) == RpcId)
+                {
+                    return { Function, nullptr, false };
+                }
+            }
+
+            TVector<FProperty*> Fields;
+            Class->GetNetReplicatedProperties(Fields);
+            for (FProperty* Field : Fields)
+            {
+                if (!CEntityScript::IsSyncFromOwner(Field))
+                {
+                    continue;
+                }
+                if (RpcId == Script->SyncFieldId(Field, true))
+                {
+                    return { nullptr, Field, true };
+                }
+                if (RpcId == Script->SyncFieldId(Field, false))
+                {
+                    return { nullptr, Field, false };
+                }
+            }
+
+            return {};
+        }
 
         // One value of a property outside any container, for a write that has not been accepted yet.
         struct FValueBuffer
         {
             explicit FValueBuffer(const FProperty& InField)
                 : Field(InField)
-                , Storage(InField.GetElementSize() / sizeof(std::max_align_t) + 1)
+                , Storage(Memory::MallocOrThrow(InField.GetElementSize(), FFunction::kFrameAlignment))
             {
-                Field.ConstructValue(Data());
+                Memory::Memzero(Storage, Field.GetElementSize());
+                Field.ConstructValue(Storage);
             }
 
             ~FValueBuffer()
             {
-                Field.DestructValue(Data());
+                Field.DestructValue(Storage);
+                Memory::Free(Storage);
             }
-            FValueBuffer(const FValueBuffer&) = delete;
-            FValueBuffer& operator=(const FValueBuffer&) = delete;
-            FValueBuffer(FValueBuffer&&) = delete;
-            FValueBuffer& operator=(FValueBuffer&&) = delete;
 
-            void* Data() { return Storage.data(); }
+            LE_NO_COPYMOVE(FValueBuffer);
+
+            void* Data() const { return Storage; }
 
             const FProperty& Field;
-            TVector<std::max_align_t> Storage;
+            void* Storage;
         };
 
         // Only entity ids are bound, so names, objects and assets travel inline and a relayed call reads the same on every peer.
@@ -319,16 +393,16 @@ namespace Lumina
         const FFunction* FindNamedFunction(const CEntityScript* Script, const FProperty* Field, FStringView Key)
         {
             const FCStringView Name = Field->GetMetadata(Key);
-            if (Name.empty())
+            if (Name.IsEmpty())
             {
                 return nullptr;
             }
-            const FFunction* Function = Script->GetClass()->FindFunction(FName(FString(Name.data(), Name.size()).c_str()));
+            const FFunction* Function = Script->GetClass()->FindFunction(FName(*FString(Name.GetData(), Name.Len())));
             if (Function == nullptr)
             {
                 LOG_WARN("{}.{} names {} function '{}', which is not a reflected function of the script.",
-                    Script->GetClass()->GetName().c_str(), Field->GetPropertyName().c_str(), FString(Key.data(), Key.size()).c_str(),
-                    FString(Name.data(), Name.size()).c_str());
+                    *Script->GetClass()->GetName(), *Field->GetPropertyName(), *FString(Key.GetData(), Key.Len()),
+                    *FString(Name.GetData(), Name.Len()));
             }
             return Function;
         }
@@ -395,8 +469,8 @@ namespace Lumina
         {
             return nullptr;
         }
-        const size_t Size = std::max<size_t>(Typed->GetParmsSize(), 1);
-        void* Frame = Memory::Malloc(Size, alignof(std::max_align_t));
+        const size_t Size = Math::Max<size_t>(Typed->GetParmsSize(), 1);
+        void* Frame = Memory::Malloc(Size, FFunction::kFrameAlignment);
         Memory::Memzero(Frame, Size);
         Typed->InitializeFrame(Frame);
         return Frame;
@@ -410,6 +484,17 @@ namespace Lumina
             return;
         }
         SendRpcFrame(*Typed, Frame);
+        Typed->DestructFrame(Frame);
+        Memory::Free(Frame);
+    }
+
+    void CEntityScript::DiscardRpcFrame(void* Function, void* Frame)
+    {
+        const FFunction* Typed = static_cast<const FFunction*>(Function);
+        if (Typed == nullptr || Frame == nullptr)
+        {
+            return;
+        }
         Typed->DestructFrame(Frame);
         Memory::Free(Frame);
     }
@@ -469,7 +554,7 @@ namespace Lumina
         FNetArchive Writer(Payload);
         BindCallArchive(Writer, OwningWorld);
         const TSpan<FProperty* const> Arguments = Function.GetArguments();
-        for (size_t Index = 0; Index < Arguments.size(); ++Index)
+        for (int32 Index = 0; Index < Arguments.Num(); ++Index)
         {
             Arguments[Index]->NetSerialize(Writer, const_cast<void*>(Values[Index]));
         }
@@ -477,18 +562,18 @@ namespace Lumina
 
         const bool bUnreliable = EnumHasAnyFlags(Function.GetFunctionFlags(), EFunctionFlags::NetUnreliable);
         const uint8 Flags = static_cast<uint8>(bUnreliable ? ENetFlags::Unreliable : ENetFlags::None);
-        Net->SendScriptRpc(this, RpcIdOf(GetClass(), Function), TargetOf(Function), Flags, Payload.data(), static_cast<uint32>(Payload.size()));
+        Net->SendScriptRpc(this, RpcIdOf(GetClass(), Function), TargetOf(Function), Flags, Payload.GetData(), static_cast<uint32>(Payload.Num()));
     }
 
     void CEntityScript::SendRpcFrame(const FFunction& Function, const void* Frame)
     {
         const TSpan<FProperty* const> Arguments = Function.GetArguments();
-        TVector<const void*> Values(Arguments.size());
-        for (size_t Index = 0; Index < Arguments.size(); ++Index)
+        TVector<const void*> Values(Arguments.Num());
+        for (int32 Index = 0; Index < Arguments.Num(); ++Index)
         {
             Values[Index] = Arguments[Index]->GetValuePtr<void>(Frame);
         }
-        SendRpc(Function, Values.data());
+        SendRpc(Function, Values.GetData());
     }
 
     bool CEntityScript::RouteRpcValues(const char* FunctionName, const void* const* Values, uint32 NumValues)
@@ -497,7 +582,7 @@ namespace Lumina
         if (Function == nullptr || !Function->IsRpc())
         {
             GArrivingRpc = false;
-            LOG_ERROR("NET_RPC in {}::{} needs the function declared FUNCTION(Rpc = Broadcast, Host or Owner).", GetClass()->GetName().c_str(), FunctionName);
+            LOG_ERROR("NET_RPC in {}::{} needs the function declared FUNCTION(Rpc = Broadcast, Host or Owner).", *GetClass()->GetName(), FunctionName);
             return false;
         }
 
@@ -507,9 +592,9 @@ namespace Lumina
             return false;
         }
 
-        if (Function->GetArguments().size() != NumValues)
+        if (static_cast<uint32>(Function->GetArguments().Num()) != NumValues)
         {
-            LOG_ERROR("NET_RPC in {}::{} has to pass all {} parameters, in order.", GetClass()->GetName().c_str(), FunctionName, Function->GetArguments().size());
+            LOG_ERROR("NET_RPC in {}::{} has to pass all {} parameters, in order.", *GetClass()->GetName(), FunctionName, Function->GetArguments().Num());
             return false;
         }
 
@@ -519,13 +604,11 @@ namespace Lumina
 
     void CEntityScript::ReceiveRpc(uint32 RpcId, uint32 CallerId, const uint8* Payload, uint32 PayloadSize)
     {
-        INetworkRuntime* Net = GetNetworkRuntime();
-        for (const FFunction* Function : GetClass()->GetFunctions())
+        const FRpcRoute Route = FindRpcRoute(this, RpcId);
+        if (Route.Function != nullptr)
         {
-            if (!Function->IsRpc() || RpcIdOf(GetClass(), *Function) != RpcId)
-            {
-                continue;
-            }
+            const FFunction* Function = Route.Function;
+            INetworkRuntime* Net = GetNetworkRuntime();
 
             // Owner-only calls are refused unless they came from the entity's owner or from the host.
             if (EnumHasAnyFlags(Function->GetFunctionFlags(), EFunctionFlags::NetOwnerOnly) && CallerId != 0
@@ -534,43 +617,54 @@ namespace Lumina
                 return;
             }
 
-            FCallFrame Frame(*Function);
+            FFunctionFrame Frame(*Function);
             FNetArchive Reader(Payload, PayloadSize);
             BindCallArchive(Reader, OwningWorld);
             for (FProperty* Argument : Function->GetArguments())
             {
-                Argument->NetSerialize(Reader, Argument->GetValuePtr<void>(Frame.Data()));
+                Argument->NetSerialize(Reader, Argument->GetValuePtr<void>(Frame.GetMemory()));
             }
             if (Reader.HasError())
             {
-                LOG_WARN("[Net] RPC {}::{} arrived truncated.", GetClass()->GetName().c_str(), Function->GetFunctionName().c_str());
+                LOG_WARN("[Net] RPC {}::{} arrived truncated.", *GetClass()->GetName(), *Function->GetFunctionName());
                 return;
             }
 
             FReceiveScope Scope(CallerId);
             GArrivingRpc = true;
-            Function->Invoke(this, Frame.Data());
+            Frame.Invoke(this);
             GArrivingRpc = false;
             return;
         }
 
-        TVector<FProperty*> Fields;
-        GetClass()->GetNetReplicatedProperties(Fields);
-        for (FProperty* Field : Fields)
+        if (Route.SyncField != nullptr)
         {
-            if (!IsSyncFromOwner(Field))
-            {
-                continue;
-            }
-            const bool bCorrection = RpcId == SyncFieldId(Field, true);
-            if (bCorrection || RpcId == SyncFieldId(Field, false))
-            {
-                ReceiveSync(Field, bCorrection, CallerId, Payload, PayloadSize);
-                return;
-            }
+            ReceiveSync(Route.SyncField, Route.bCorrection, CallerId, Payload, PayloadSize);
+            return;
         }
 
-        LOG_WARN("[Net] {} has no RPC or Sync field with id {}; the peers are running different builds.", GetClass()->GetName().c_str(), RpcId);
+        LOG_WARN("[Net] {} has no RPC or Sync field with id {}; the peers are running different builds.", *GetClass()->GetName(), RpcId);
+    }
+
+    bool NetScripts::FindRpcTarget(const CEntityScript* Script, uint32 RpcId, ERpcTarget& OutTarget)
+    {
+        if (Script == nullptr)
+        {
+            return false;
+        }
+
+        const FRpcRoute Route = FindRpcRoute(Script, RpcId);
+        if (Route.Function != nullptr)
+        {
+            OutTarget = TargetOf(*Route.Function);
+            return true;
+        }
+        if (Route.SyncField != nullptr)
+        {
+            OutTarget = Route.bCorrection ? ERpcTarget::Owner : ERpcTarget::Host;
+            return true;
+        }
+        return false;
     }
 
     void CEntityScript::ReceiveSync(FProperty* Field, bool bCorrection, uint32 CallerId, const uint8* Payload, uint32 PayloadSize)
@@ -620,7 +714,7 @@ namespace Lumina
 
     void CEntityScript::ApplySync(FProperty* Field, const void* Value)
     {
-        const char* Name = Field->GetPropertyName().c_str();
+        const char* Name = *Field->GetPropertyName();
         const uint32 NameSize = static_cast<uint32>(strlen(Name) + 1);
         NetScripts::DispatchSyncChanging(this, Name, NameSize);
         Field->CopyCompleteValue(Field->GetValuePtr<void>(this), Value);
@@ -629,16 +723,16 @@ namespace Lumina
 
     uint32 CEntityScript::SyncFieldId(const FProperty* Field, bool bCorrection) const
     {
-        uint32 Hash = HashInto(2166136261u, GetClass()->GetName().c_str());
+        uint32 Hash = HashInto(2166136261u, *GetClass()->GetName());
         Hash = HashInto(Hash, ".");
-        Hash = HashInto(Hash, Field->GetPropertyName().c_str());
+        Hash = HashInto(Hash, *Field->GetPropertyName());
         return HashInto(Hash, bCorrection ? "#correct" : "#sync");
     }
 
     bool CEntityScript::IsSyncFromOwner(const FProperty* Field)
     {
         const FCStringView Sync = Field->GetMetadata("Sync");
-        return FStringView(Sync.data(), Sync.size()).find("FromOwner") != FStringView::npos;
+        return FStringView(Sync.GetData(), Sync.Len()).Find("FromOwner") != Constants::kIndexNone;
     }
 
     void CEntityScript::NotifySyncChanged(const FProperty* Field, const void* OldValue)
@@ -650,22 +744,22 @@ namespace Lumina
         }
 
         const TSpan<FProperty* const> Arguments = Function->GetArguments();
-        const bool bCallable = Arguments.empty()
-            || (Arguments.size() == 2 && Arguments[0]->HasSameValueType(Field) && Arguments[1]->HasSameValueType(Field));
+        const bool bCallable = Arguments.IsEmpty()
+            || (Arguments.Num() == 2 && Arguments[0]->HasSameValueType(Field) && Arguments[1]->HasSameValueType(Field));
         if (!bCallable)
         {
-            LOG_WARN("{}::{} is a change handler, so it takes nothing or (Old, New) of {}'s type.", GetClass()->GetName().c_str(),
-                Function->GetFunctionName().c_str(), Field->GetPropertyName().c_str());
+            LOG_WARN("{}::{} is a change handler, so it takes nothing or (Old, New) of {}'s type.", *GetClass()->GetName(),
+                *Function->GetFunctionName(), *Field->GetPropertyName());
             return;
         }
 
-        FCallFrame Frame(*Function);
-        if (Arguments.size() == 2)
+        FFunctionFrame Frame(*Function);
+        if (Arguments.Num() == 2)
         {
-            Arguments[0]->CopyCompleteValue(Arguments[0]->GetValuePtr<void>(Frame.Data()), OldValue);
-            Arguments[1]->CopyCompleteValue(Arguments[1]->GetValuePtr<void>(Frame.Data()), Field->GetValuePtr<void>(this));
+            Arguments[0]->CopyCompleteValue(Arguments[0]->GetValuePtr<void>(Frame.GetMemory()), OldValue);
+            Arguments[1]->CopyCompleteValue(Arguments[1]->GetValuePtr<void>(Frame.GetMemory()), Field->GetValuePtr<void>(this));
         }
-        Function->Invoke(this, Frame.Data());
+        Frame.Invoke(this);
     }
 
     bool CEntityScript::ValidateSync(const FProperty* Field, const void* Proposed)
@@ -678,21 +772,21 @@ namespace Lumina
 
         const TSpan<FProperty* const> Arguments = Function->GetArguments();
         const FProperty* Return = Function->GetReturnParam();
-        if (Arguments.size() != 1 || !Arguments[0]->HasSameValueType(Field) || Return == nullptr || Return->GetType() != EPropertyTypeFlags::Bool)
+        if (Arguments.Num() != 1 || !Arguments[0]->HasSameValueType(Field) || Return == nullptr || Return->GetType() != EPropertyTypeFlags::Bool)
         {
-            LOG_WARN("{}::{} validates a Sync field, so it takes the proposed value and returns bool.", GetClass()->GetName().c_str(), Function->GetFunctionName().c_str());
+            LOG_WARN("{}::{} validates a Sync field, so it takes the proposed value and returns bool.", *GetClass()->GetName(), *Function->GetFunctionName());
             return true;
         }
 
-        FCallFrame Frame(*Function);
-        Arguments[0]->CopyCompleteValue(Arguments[0]->GetValuePtr<void>(Frame.Data()), Proposed);
-        Function->Invoke(this, Frame.Data());
-        return *Return->GetValuePtr<bool>(Frame.Data());
+        FFunctionFrame Frame(*Function);
+        Arguments[0]->CopyCompleteValue(Arguments[0]->GetValuePtr<void>(Frame.GetMemory()), Proposed);
+        Frame.Invoke(this);
+        return *Return->GetValuePtr<bool>(Frame.GetMemory());
     }
 
     void CEntityScript::QuantizeSync(const FProperty* Field)
     {
-        const double Step = Field->GetMetadataNumber("Quantize").value_or(0.0);
+        const double Step = Field->GetMetadataNumber("Quantize").Get(0.0);
         if (Step <= 0.0)
         {
             return;
@@ -729,7 +823,7 @@ namespace Lumina
         const_cast<FProperty*>(Field)->NetSerialize(Writer, Field->GetValuePtr<void>(this));
         Writer.AlignToByte();
         Net->SendScriptRpc(this, SyncFieldId(Field, bCorrection), bCorrection ? ERpcTarget::Owner : ERpcTarget::Host,
-            static_cast<uint8>(ENetFlags::None), Payload.data(), static_cast<uint32>(Payload.size()));
+            static_cast<uint8>(ENetFlags::None), Payload.GetData(), static_cast<uint32>(Payload.Num()));
     }
 
     FPropertySnapshot& CEntityScript::EnsureSyncSnapshot()
@@ -761,7 +855,7 @@ namespace Lumina
         const bool bHost = IsHost();
         const bool bOwner = !bHost && IsOwner();
         bool bDirty = false;
-        for (size_t Index = 0; Index < SyncSnapshot->Num(); ++Index)
+        for (int32 Index = 0; Index < SyncSnapshot->Num(); ++Index)
         {
             FProperty* Field = SyncSnapshot->Field(Index);
             const bool bWriter = bHost || (bOwner && IsSyncFromOwner(Field));
@@ -808,10 +902,10 @@ namespace Lumina
         {
             const char* Name = Names + Start;
             Start += static_cast<uint32>(strlen(Name) + 1);
-            for (size_t Index = 0; Index < SyncSnapshot->Num(); ++Index)
+            for (int32 Index = 0; Index < SyncSnapshot->Num(); ++Index)
             {
                 FProperty* Field = SyncSnapshot->Field(Index);
-                if (strcmp(Field->GetPropertyName().c_str(), Name) != 0)
+                if (strcmp(*Field->GetPropertyName(), Name) != 0)
                 {
                     continue;
                 }
@@ -901,8 +995,11 @@ namespace Lumina
             const bool bLengthPrefixed =
                 Ar.GetFileVersion() >= (int32)ELuminaEngineVersion::ENTITY_SCRIPT_LENGTH_PREFIX;
 
-            Scripts.clear();
-            Pending.clear();
+            Scripts.Reset();
+            Pending.Reset();
+
+            // Reading in place swaps the scripts a cached claim points at, and the old ones may outlive this.
+            EntityScripts::NoteStructureChange();
             for (int32 Index = 0; Index < Count; ++Index)
             {
                 FName ClassName;
@@ -930,7 +1027,7 @@ namespace Lumina
                     if (!bLengthPrefixed)
                     {
                         LOG_WARN("SEntityScriptComponent: script class '{}' could not be resolved and this "
-                                 "file has no per-script length, so the rest were dropped.", ClassName.c_str());
+                                 "file has no per-script length, so the rest were dropped.", *ClassName);
                         break;
                     }
 
@@ -939,14 +1036,14 @@ namespace Lumina
                     Held.TypeName = ClassName;
                     if (Held.Data.Cut(Ar, ScriptSize))
                     {
-                        Pending.push_back(Move(Held));
+                        Pending.Add(Move(Held));
                         LOG_WARN("SEntityScriptComponent: script class '{}' is not loaded; holding it until a "
-                                 "script reload can restore it.", ClassName.c_str());
+                                 "script reload can restore it.", *ClassName);
                     }
                     else
                     {
                         LOG_WARN("SEntityScriptComponent: script class '{}' is not loaded and this archive cannot "
-                                 "hold it; dropped.", ClassName.c_str());
+                                 "hold it; dropped.", *ClassName);
                     }
                     Ar.Seek(DataStart + ScriptSize);
                     continue;
@@ -960,7 +1057,7 @@ namespace Lumina
                     Ar.Seek(DataStart + ScriptSize);
                 }
 
-                Scripts.push_back(Script);
+                Scripts.Add(Script);
             }
 
             if (Ar.GetFileVersion() >= (int32)ELuminaEngineVersion::PORTABLE_HELD_SCRIPTS)
@@ -971,10 +1068,10 @@ namespace Lumina
                 {
                     if (CEntityScript* Script = RestoreHeldScript(Value))
                     {
-                        Scripts.push_back(Script);
+                        Scripts.Add(Script);
                         continue;
                     }
-                    Pending.push_back(Move(Value));
+                    Pending.Add(Move(Value));
                 }
             }
             return true;
@@ -989,14 +1086,8 @@ namespace Lumina
 
         using FScriptSnapshot = TVector<TStrongObjectPtr<CEntityScript>>;
 
-        // Counted by the PrePhysics pass, which visits every script, so a world with none in the later phase skips that walk.
-        struct FScriptPhaseCensus
-        {
-            uint32 PostPhysicsScripts = 0;
-        };
-
         // Runs OnUpdate for a run of C# scripts in one crossing and returns how many ran before the epoch moved.
-        DotNet::TManagedExport<int32 (*)(void* const*, int32, float, const uint32*)> GDispatchUpdates("DispatchEntityScriptUpdates");
+        DotNet::TManagedExport<int32 (*)(void* const*, int32, float, const uint32*, int32*)> GDispatchUpdates("DispatchEntityScriptUpdates");
 
         // Whether a class's OnUpdate is a C# override, which is what the batch can run without the native shim.
         bool HasManagedUpdate(const CClass* Class)
@@ -1026,12 +1117,12 @@ namespace Lumina
         // Cut on entity boundaries, so every script of one entity runs on one thread in its usual order.
         void BuildEntityChunks(const TVector<ECS::FEntity>& Entities, TVector<uint32>& OutStarts)
         {
-            OutStarts.clear();
-            const uint32 Num = (uint32)Entities.size();
+            OutStarts.Reset();
+            const uint32 Num = (uint32)Entities.Num();
             uint32 Start = 0;
             while (Start < Num)
             {
-                OutStarts.push_back(Start);
+                OutStarts.Add(Start);
                 uint32 End = Start + kParallelChunkScripts < Num ? Start + kParallelChunkScripts : Num;
                 while (End < Num && Entities[End] == Entities[End - 1])
                 {
@@ -1039,7 +1130,7 @@ namespace Lumina
                 }
                 Start = End;
             }
-            OutStarts.push_back(Num);
+            OutStarts.Add(Num);
         }
 
         template<typename TFunc>
@@ -1053,7 +1144,7 @@ namespace Lumina
                 }
                 return;
             }
-            Task::ParallelFor(NumChunks, RunChunk, 1);
+            Jobs::ParallelFor(NumChunks, RunChunk, 1);
         }
 
         // Phase, opt-in and override are class data, so a run of one class resolves them once.
@@ -1067,10 +1158,20 @@ namespace Lumina
             void See(const CEntityScript* Script);
         };
 
+        // Which cached claim a pass reads. The first two match EScriptUpdatePhase, and a fixed step ticks scripts of every phase.
+        enum class EClaimPass : uint8
+        {
+            PrePhysics,
+            PostPhysics,
+            Fixed,
+            Num,
+        };
+
         enum class EClaimResult : uint8
         {
-            Skipped,
+            Serial,
             Claimed,
+            Idle,
             NeedsInstance,
         };
 
@@ -1079,23 +1180,130 @@ namespace Lumina
             TVector<void*>          Handles;
             TVector<CEntityScript*> Scripts;
             TVector<ECS::FEntity>   Entities;
-            uint32                  PostPhysics = 0;
-            uint32                  Ran         = 0;
+            bool                    bNeedsInstance = false;
         };
 
-        // Above this many entities the claim and the run share one pass, cut into chunks of this size.
+        // Above this many entities the claim is cut into chunks of this size and spread across the workers.
         constexpr uint32 kParallelClaimMinEntities = 2048;
         constexpr uint32 kParallelClaimChunk       = 512;
+
+        // Everything a claim was built from, so an unchanged key means the same entities would claim the same scripts.
+        struct FClaimKey
+        {
+            uint32 StructureEpoch   = 0;
+            uint32 HandleGeneration = 0;
+            uint32 PoolLayouts[3]   = {};
+            int32  PoolSizes[3]     = {};
+
+            NODISCARD bool operator==(const FClaimKey&) const = default;
+        };
+
+        // One pass's claim, kept across ticks while its key holds. Raw script pointers are safe, as freeing one moves the epoch.
+        struct FClaim
+        {
+            FClaimKey               Key;
+            bool                    bComplete = false;
+            bool                    bLeased   = false;
+
+            // The scripted entities in walk order, each marked handled when it was claimed or has nothing to run this pass.
+            TVector<ECS::FEntity>   Entities;
+            TVector<uint8>          Handled;
+            uint32                  NumSerial = 0;
+
+            // One entry per claimed script in entity order, with a null handle for a script that is called directly.
+            TVector<void*>          Handles;
+            TVector<CEntityScript*> Scripts;
+            TVector<ECS::FEntity>   ScriptEntities;
+            TVector<FClaimChunk>    Chunks;
+        };
+
+        struct FScriptClaims
+        {
+            FClaim Passes[(uint8)EClaimPass::Num];
+        };
+
+        // A nested tick of the same registry claims into its own storage rather than rebuilding the claim the outer pass walks.
+        class FClaimLease
+        {
+        public:
+
+            FClaimLease(ECS::FRegistry& Registry, EClaimPass Pass)
+            {
+                FClaim& Cached = Registry.Ctx().GetOrEmplace<FScriptClaims>().Passes[(uint8)Pass];
+                if (!Cached.bLeased)
+                {
+                    Cached.bLeased = true;
+                    Leased = &Cached;
+                }
+            }
+
+            ~FClaimLease()
+            {
+                if (Leased != nullptr)
+                {
+                    Leased->bLeased = false;
+                }
+            }
+
+            LE_NO_COPYMOVE(FClaimLease);
+
+            FClaim& Get() { return (Leased != nullptr) ? *Leased : Local; }
+
+        private:
+
+            FClaim* Leased = nullptr;
+            FClaim  Local;
+        };
+
+#if defined(LE_SHIPPING)
+        void PrepareParallelPass(ECS::FRegistry&) {}
+        void WatchParallelRun(CEntityScript* const*, const int32*) {}
 
         class FParallelScriptPassScope
         {
         public:
 
-            FParallelScriptPassScope()  { GInParallelScriptPass = true; }
-            ~FParallelScriptPassScope() { GInParallelScriptPass = false; }
+            explicit FParallelScriptPassScope(ECS::FRegistry&) {}
 
             LE_NO_COPYMOVE(FParallelScriptPassScope);
         };
+#else
+        // On the ticking thread before the fan-out, since a worker only finds the reports.
+        void PrepareParallelPass(ECS::FRegistry& Registry)
+        {
+            if (Registry.Ctx().Find<TUniquePtr<FParallelPromiseReports>>() == nullptr)
+            {
+                Registry.Ctx().Emplace<TUniquePtr<FParallelPromiseReports>>(MakeUnique<FParallelPromiseReports>());
+            }
+        }
+
+        void WatchParallelRun(CEntityScript* const* Scripts, const int32* Cursor)
+        {
+            if (GParallelScriptRun != nullptr)
+            {
+                GParallelScriptRun->Scripts = Scripts;
+                GParallelScriptRun->Cursor  = Cursor;
+            }
+        }
+
+        class FParallelScriptPassScope
+        {
+        public:
+
+            explicit FParallelScriptPassScope(ECS::FRegistry& Registry)
+            {
+                Run.Reports = Registry.Ctx().Find<TUniquePtr<FParallelPromiseReports>>()->Get();
+                GParallelScriptRun = &Run;
+            }
+            ~FParallelScriptPassScope() { GParallelScriptRun = nullptr; }
+
+            LE_NO_COPYMOVE(FParallelScriptPassScope);
+
+        private:
+
+            FParallelScriptRun Run;
+        };
+#endif
 
         // Whatever a parallel run did not get to goes the checked serial way, finishing an interrupted entity first.
         template<typename TRunScript, typename TRunEntity>
@@ -1127,16 +1335,17 @@ namespace Lumina
 
         // RunSpan returns how many scripts of its span ran before a structural change stopped it.
         template<typename TRunSpan, typename TRunScript, typename TRunEntity>
-        void RunInEntityChunks(TVector<uint32>& ChunkStarts, TVector<uint32>& ChunkRan, const TVector<ECS::FEntity>& Entities,
+        void RunInEntityChunks(ECS::FRegistry& Registry, TVector<uint32>& ChunkStarts, TVector<uint32>& ChunkRan, const TVector<ECS::FEntity>& Entities,
             const TVector<CEntityScript*>& Scripts, TRunSpan&& RunSpan, TRunScript&& RunScript, TRunEntity&& RunEntity)
         {
             BuildEntityChunks(Entities, ChunkStarts);
-            const uint32 NumChunks = (uint32)ChunkStarts.size() - 1;
-            ChunkRan.assign(NumChunks, 0);
+            const uint32 NumChunks = (uint32)ChunkStarts.Num() - 1;
+            ChunkRan.Init(0, NumChunks);
 
-            RunChunks((uint32)Scripts.size(), NumChunks, [&](uint32 Chunk)
+            PrepareParallelPass(Registry);
+            RunChunks((uint32)Scripts.Num(), NumChunks, [&](uint32 Chunk)
             {
-                FParallelScriptPassScope PassScope;
+                FParallelScriptPassScope PassScope(Registry);
                 ChunkRan[Chunk] = RunSpan(ChunkStarts[Chunk], ChunkStarts[Chunk + 1]);
             });
 
@@ -1149,7 +1358,6 @@ namespace Lumina
         // Both tick passes rebuild these every call, so they are parked per thread rather than reallocated.
         struct FTickScratch
         {
-            TVector<ECS::FEntity> Entities;
             FScriptSnapshot       Scripts;
 
             // Unpinned, since freeing a queued script means detaching or destroying it, and either one moves the epoch.
@@ -1157,14 +1365,8 @@ namespace Lumina
             TVector<ECS::FEntity>   BatchEntities;
             TVector<CEntityScript*> BatchScripts;
 
-            // One entry per script in entity order, with a null handle for a script that is called directly.
-            TVector<uint8>          Claimed;
-            TVector<void*>          ParallelHandles;
-            TVector<CEntityScript*> ParallelScripts;
-            TVector<ECS::FEntity>   ParallelEntities;
             TVector<uint32>         ChunkStarts;
             TVector<uint32>         ChunkRan;
-            TVector<FClaimChunk>    ClaimChunks;
         };
 
         // A nested tick falls back to its own storage rather than walking the outer pass's buffers.
@@ -1197,7 +1399,7 @@ namespace Lumina
 
         void SnapshotScripts(ECS::FRegistry& Registry, ECS::FEntity Entity, FScriptSnapshot& Out)
         {
-            Out.clear();
+            Out.Reset();
 
             // try_get on a dead entity indexes the sparse set out of bounds rather than returning null.
             if (Entity == ECS::NullEntity || !Registry.IsValid(Entity))
@@ -1211,12 +1413,12 @@ namespace Lumina
                 return;
             }
 
-            Out.reserve(Component->Scripts.size());
+            Out.Reserve(Component->Scripts.Num());
             for (const TStrongObjectPtr<CEntityScript>& Held : Component->Scripts)
             {
                 if (Held.Get() != nullptr)
                 {
-                    Out.push_back(Held);
+                    Out.Add(Held);
                 }
             }
         }
@@ -1261,7 +1463,7 @@ namespace Lumina
         // A loaded prefab owns a registry without being a world, so its scripts need sweeping too. A script attached mid-pass readies next tick.
         void SnapshotScriptedEntities(ECS::FRegistry& Registry, TVector<ECS::FEntity>& Out)
         {
-            Out.clear();
+            Out.Reset();
 
             // With nothing excluded and no holes the view is the pool itself, copied back to front in its walk order.
             const auto Pool     = Registry.FindStorage<SEntityScriptComponent>();
@@ -1271,19 +1473,19 @@ namespace Lumina
             {
                 const ECS::FEntity* Dense = Pool->GetDenseData();
                 const size_t        Num   = Pool->GetDenseSize();
-                Out.resize(Num);
-                for (size_t Index = 0; Index < Num; ++Index)
+                Out.SetNum(IntCastChecked<int32>(Num));
+                for (int32 Index = 0, Limit = IntCastChecked<int32>(Num); Index < Limit; ++Index)
                 {
                     Out[Index] = Dense[Num - 1u - Index];
                 }
                 return;
             }
 
-            auto View = Registry.View<SEntityScriptComponent>(ECS::TExclude<SDisabledTag, SScriptDisabledTag>{});
-            Out.reserve(View.Num());
+            auto View = Registry.View<SEntityScriptComponent, ECS::Without<SDisabledTag>, ECS::Without<SScriptDisabledTag>>();
+            Out.Reserve(View.Num());
             for (ECS::FEntity Entity : View)
             {
-                Out.push_back(Entity);
+                Out.Add(Entity);
             }
         }
 
@@ -1302,7 +1504,7 @@ namespace Lumina
                 Scriptable::GetOrCreateInstance(Script);
             }
 
-            LUMINA_PROFILE_SECTION_NAMED(Script->GetClass()->GetName().c_str());
+            LUMINA_PROFILE_SECTION_NAMED(*Script->GetClass()->GetName());
             Script->BindComponentRefs();
             Script->OnAttach();
             return true;
@@ -1312,8 +1514,11 @@ namespace Lumina
         {
             Script->MarkReady();
 
+            // Readiness decides what ticks, so a cached claim has to see it.
+            BumpStructureEpoch();
+
             // Once per script, so naming it by class costs nothing per frame and splits the script system's time.
-            LUMINA_PROFILE_SECTION_NAMED(Script->GetClass()->GetName().c_str());
+            LUMINA_PROFILE_SECTION_NAMED(*Script->GetClass()->GetName());
 
             // Before OnReady, so a UI script's document, bound values and elements are already there.
             UIScripts::Open(Script);
@@ -1351,7 +1556,7 @@ namespace Lumina
         template <typename TPredicate>
         void GatherPending(ECS::FRegistry& Registry, TVector<ECS::FEntity>& Scratch, TVector<FTreePosition>& Out, TPredicate&& IsPending)
         {
-            Out.clear();
+            Out.Reset();
             SnapshotScriptedEntities(Registry, Scratch);
 
             const ECS::FHierarchy& Hierarchy = Registry.GetHierarchy();
@@ -1380,7 +1585,7 @@ namespace Lumina
                     bOrdered = true;
                 }
 
-                FTreePosition& Position = Out.emplace_back();
+                FTreePosition& Position = Out.EmplaceGetRef();
                 Position.Entity = Entity;
                 Position.Root   = Entity.GetIndex();
                 const uint32 Slot = Hierarchy.GetSlot(Entity);
@@ -1402,7 +1607,8 @@ namespace Lumina
 
             // A callback that spawns scripted entities queues another round, so they join this frame in the same order.
             constexpr int32 kMaxRounds = 8;
-            for (int32 Round = 0; Round < kMaxRounds; ++Round)
+            int32 Round = 0;
+            for (; Round < kMaxRounds; ++Round)
             {
                 bool bAnyWork = false;
 
@@ -1457,7 +1663,17 @@ namespace Lumina
                     break;
                 }
             }
-            Scripts.clear();
+
+            if (Round == kMaxRounds)
+            {
+                GatherPending(Registry, Scratch, Pending, [](const CEntityScript* Script) { return NeedsAttach(Script) || NeedsReady(Script); });
+                if (!Pending.IsEmpty())
+                {
+                    LOG_WARN_ONCE("Entity scripts spawned past the {} lifecycle rounds a frame allows, so the {} still pending run OnAttach or OnReady out of tree order or a frame late",
+                                  kMaxRounds, Pending.Num());
+                }
+            }
+            Scripts.Reset();
         }
 
         void FClassFacts::See(const CEntityScript* Script)
@@ -1471,56 +1687,67 @@ namespace Lumina
             }
         }
 
-        // Queues the entity's ticking scripts when all of them promised to touch nothing else and owe no lifecycle.
-        EClaimResult ClaimEntity(ECS::FRegistry& Registry, ECS::FEntity Entity, EScriptUpdatePhase Phase, bool bDrainLifecycle,
-                                 bool bMayCreateInstances, FClassFacts& Facts, TVector<void*>& OutHandles,
-                                 TVector<CEntityScript*>& OutScripts, TVector<ECS::FEntity>& OutEntities, uint32& OutPostPhysics)
+        NODISCARD bool TicksIn(const CEntityScript* Script, const FClassFacts& Facts, EClaimPass Pass)
         {
-            const SEntityScriptComponent* Component = (Entity != ECS::NullEntity && Registry.IsValid(Entity))
+            return Script->ShouldTick() && (Pass == EClaimPass::Fixed || Facts.Phase == static_cast<EScriptUpdatePhase>(Pass));
+        }
+
+        // Queues the entity's ticking scripts when all of them promised to touch nothing else and owe no lifecycle.
+        EClaimResult ClaimEntity(ECS::FRegistry& Registry, ECS::FEntity Entity, EClaimPass Pass, bool bMayCreateInstances, FClassFacts& Facts,
+                                 TVector<void*>& OutHandles, TVector<CEntityScript*>& OutScripts, TVector<ECS::FEntity>& OutEntities)
+        {
+            SEntityScriptComponent* Component = (Entity != ECS::NullEntity && Registry.IsValid(Entity))
                 ? Registry.TryGet<SEntityScriptComponent>(Entity) : nullptr;
             if (Component == nullptr)
             {
-                return EClaimResult::Skipped;
+                return EClaimResult::Idle;
             }
 
-            bool   bAnyTicking     = false;
-            uint32 PostPhysicsHere = 0;
+            // Every priority change moves the epoch, so sorting here orders the claimed span and every later walk of the list.
+            Algo::StableSort(Component->Scripts, [](const TStrongObjectPtr<CEntityScript>& A, const TStrongObjectPtr<CEntityScript>& B)
+            {
+                return (A.Get() != nullptr ? A->GetUpdatePriority() : 0) < (B.Get() != nullptr ? B->GetUpdatePriority() : 0);
+            });
+
+            // Attach and OnReady are owed whatever the script's phase, and only the PrePhysics pass runs them.
+            const bool bDrainLifecycle = Pass == EClaimPass::PrePhysics;
+            bool bAnyTicking = false;
             for (const TStrongObjectPtr<CEntityScript>& Held : Component->Scripts)
             {
                 const CEntityScript* Script = Held.Get();
                 if (Script == nullptr || (bDrainLifecycle && (Script->GetOwningEntity() == ECS::NullEntity || (!Script->IsFaulted() && !Script->IsReady()))))
                 {
-                    return EClaimResult::Skipped;
+                    return EClaimResult::Serial;
                 }
                 Facts.See(Script);
-                PostPhysicsHere += (Facts.Phase == EScriptUpdatePhase::PostPhysics) ? 1u : 0u;
-                if (!Script->ShouldTick() || Facts.Phase != Phase)
+                if (!TicksIn(Script, Facts, Pass))
                 {
                     continue;
                 }
                 if (!Facts.bParallel)
                 {
-                    return EClaimResult::Skipped;
+                    return EClaimResult::Serial;
                 }
                 bAnyTicking = true;
             }
             if (!bAnyTicking)
             {
-                return EClaimResult::Skipped;
+                return EClaimResult::Idle;
             }
 
-            const size_t Start = OutScripts.size();
+            const int32 Start = OutScripts.Num();
             for (const TStrongObjectPtr<CEntityScript>& Held : Component->Scripts)
             {
                 CEntityScript* Script = Held.Get();
                 Facts.See(Script);
-                if (!Script->ShouldTick() || Facts.Phase != Phase)
+                if (!TicksIn(Script, Facts, Pass))
                 {
                     continue;
                 }
 
+                // A fixed step crosses per script, so it never batches through a managed handle.
                 void* Handle = nullptr;
-                if (Facts.bManaged)
+                if (Facts.bManaged && Pass != EClaimPass::Fixed)
                 {
                     const uint32 Generation = ManagedInstances::GetHandleGeneration();
                     Handle = Script->CachedHandleGeneration == Generation ? Script->CachedManagedHandle : nullptr;
@@ -1529,9 +1756,9 @@ namespace Lumina
                         // Creating one runs a managed constructor, which only the serial pass may do.
                         if (!bMayCreateInstances)
                         {
-                            OutHandles.resize(Start);
-                            OutScripts.resize(Start);
-                            OutEntities.resize(Start);
+                            OutHandles.SetNum(Start);
+                            OutScripts.SetNum(Start);
+                            OutEntities.SetNum(Start);
                             return EClaimResult::NeedsInstance;
                         }
                         Handle = Scriptable::GetOrCreateInstance(Script);
@@ -1540,18 +1767,16 @@ namespace Lumina
                     }
                     if (Handle == nullptr)
                     {
-                        OutHandles.resize(Start);
-                        OutScripts.resize(Start);
-                        OutEntities.resize(Start);
-                        return EClaimResult::Skipped;
+                        OutHandles.SetNum(Start);
+                        OutScripts.SetNum(Start);
+                        OutEntities.SetNum(Start);
+                        return EClaimResult::Serial;
                     }
                 }
-                OutHandles.push_back(Handle);
-                OutScripts.push_back(Script);
-                OutEntities.push_back(Entity);
+                OutHandles.Add(Handle);
+                OutScripts.Add(Script);
+                OutEntities.Add(Entity);
             }
-
-            OutPostPhysics += PostPhysicsHere;
             return EClaimResult::Claimed;
         }
 
@@ -1562,12 +1787,14 @@ namespace Lumina
             const uint32* EpochAddress = reinterpret_cast<const uint32*>(&GStructureEpoch);
 
             uint32 Index = 0;
+            int32 Cursor = 0;
             while (Index < Count && GStructureEpoch.load(std::memory_order_relaxed) == ClaimEpoch)
             {
                 if (Handles[Index] == nullptr)
                 {
                     CEntityScript* Script = Scripts[Index];
-                    LUMINA_PROFILE_SECTION_NAMED(Script->GetClass()->GetName().c_str());
+                    LUMINA_PROFILE_SECTION_NAMED(*Script->GetClass()->GetName());
+                    WatchParallelRun(Scripts + Index, nullptr);
                     Script->OnUpdate(DeltaTime);
                     ++Index;
                     continue;
@@ -1582,8 +1809,9 @@ namespace Lumina
                 {
                     ++RunEnd;
                 }
-                LUMINA_PROFILE_SECTION_NAMED(Scripts[Index]->GetClass()->GetName().c_str());
-                const uint32 Ran = (uint32)Dispatch(const_cast<void**>(Handles) + Index, (int32)(RunEnd - Index), DeltaTime, EpochAddress);
+                LUMINA_PROFILE_SECTION_NAMED(*Scripts[Index]->GetClass()->GetName());
+                WatchParallelRun(Scripts + Index, &Cursor);
+                const uint32 Ran = (uint32)Dispatch(const_cast<void**>(Handles) + Index, (int32)(RunEnd - Index), DeltaTime, EpochAddress, &Cursor);
                 Index += Ran;
                 if (Index < RunEnd)
                 {
@@ -1593,22 +1821,101 @@ namespace Lumina
             return Index;
         }
 
-        // Claims every entity whose ticking scripts promised to touch nothing else, creating managed instances as needed.
-        uint32 ClaimEntitiesSerial(ECS::FRegistry& Registry, const TVector<ECS::FEntity>& Entities, EScriptUpdatePhase Phase,
-                                   bool bDrainLifecycle, FTickScratch& Scratch)
+        // A pool's membership cannot change without its live count or its layout epoch moving, since every removal bumps the layout.
+        FClaimKey MakeClaimKey(const ECS::FRegistry& Registry)
         {
-            const uint32 NumEntities = (uint32)Entities.size();
-            uint32      PostPhysics = 0;
-            FClassFacts Facts;
-            for (uint32 EntityIndex = 0; EntityIndex < NumEntities; ++EntityIndex)
+            FClaimKey Key;
+            Key.StructureEpoch   = GStructureEpoch.load(std::memory_order_relaxed);
+            Key.HandleGeneration = ManagedInstances::GetHandleGeneration();
+
+            const ECS::FSparseSet* Pools[] = { Registry.FindStorage<SEntityScriptComponent>().GetSet(),
+                Registry.FindStorage<SDisabledTag>().GetSet(), Registry.FindStorage<SScriptDisabledTag>().GetSet() };
+            for (int32 Index = 0; Index < (int32)std::size(Pools); ++Index)
             {
-                if (ClaimEntity(Registry, Entities[EntityIndex], Phase, bDrainLifecycle, true, Facts,
-                                Scratch.ParallelHandles, Scratch.ParallelScripts, Scratch.ParallelEntities, PostPhysics) == EClaimResult::Claimed)
+                Key.PoolLayouts[Index] = Pools[Index] != nullptr ? *Pools[Index]->GetLayoutEpoch() : 0u;
+                Key.PoolSizes[Index]   = Pools[Index] != nullptr ? Pools[Index]->Num() : 0;
+            }
+            return Key;
+        }
+
+        // Claims every entity whose ticking scripts promised to touch nothing else, walking them again only once the key moves.
+        void RefreshClaim(ECS::FRegistry& Registry, FClaim& Claim, EClaimPass Pass)
+        {
+            const FClaimKey Key = MakeClaimKey(Registry);
+            if (Claim.bComplete && Claim.Key == Key)
+            {
+                return;
+            }
+
+            LUMINA_PROFILE_SECTION("Claim Entity Scripts");
+            Claim.Key = Key;
+            SnapshotScriptedEntities(Registry, Claim.Entities);
+            const uint32 NumEntities = (uint32)Claim.Entities.Num();
+            Claim.Handled.Init(0, NumEntities);
+            Claim.Handles.Reset();
+            Claim.Scripts.Reset();
+            Claim.ScriptEntities.Reset();
+
+            auto ClaimRange = [&](uint32 Begin, uint32 End, bool bCreate, TVector<void*>& Handles, TVector<CEntityScript*>& Scripts, TVector<ECS::FEntity>& Entities)
+            {
+                FClassFacts Facts;
+                bool bNeedsInstance = false;
+                for (uint32 EntityIndex = Begin; EntityIndex < End; ++EntityIndex)
                 {
-                    Scratch.Claimed[EntityIndex] = 1;
+                    const EClaimResult Result = ClaimEntity(Registry, Claim.Entities[EntityIndex], Pass, bCreate, Facts, Handles, Scripts, Entities);
+                    Claim.Handled[EntityIndex] = (Result == EClaimResult::Claimed || Result == EClaimResult::Idle) ? 1u : 0u;
+                    bNeedsInstance |= Result == EClaimResult::NeedsInstance;
+                }
+                return bNeedsInstance;
+            };
+
+            bool bNeedsInstance = false;
+            const uint32 NumThreads = Jobs::IsRuntimeRunning() ? Jobs::GetNumThreadSlots() : 0u;
+            if (NumEntities >= kParallelClaimMinEntities && NumThreads > 1)
+            {
+                // An entity still owed a managed instance stays serial, as creating one runs a managed constructor.
+                const uint32 NumChunks = (NumEntities + kParallelClaimChunk - 1) / kParallelClaimChunk;
+                if ((uint32)Claim.Chunks.Num() < NumChunks)
+                {
+                    Claim.Chunks.SetNum(NumChunks);
+                }
+                Jobs::ParallelFor(NumChunks, [&](uint32 Chunk)
+                {
+                    FClaimChunk& Out = Claim.Chunks[Chunk];
+                    Out.Handles.Reset();
+                    Out.Scripts.Reset();
+                    Out.Entities.Reset();
+                    Out.bNeedsInstance = ClaimRange(Chunk * kParallelClaimChunk, Math::Min(NumEntities, (Chunk + 1) * kParallelClaimChunk), false,
+                                                    Out.Handles, Out.Scripts, Out.Entities);
+                }, 1);
+
+                for (uint32 Chunk = 0; Chunk < NumChunks; ++Chunk)
+                {
+                    const FClaimChunk& In = Claim.Chunks[Chunk];
+                    Claim.Handles.Append(In.Handles.GetData(), In.Handles.Num());
+                    Claim.Scripts.Append(In.Scripts.GetData(), In.Scripts.Num());
+                    Claim.ScriptEntities.Append(In.Entities.GetData(), In.Entities.Num());
+                    bNeedsInstance |= In.bNeedsInstance;
                 }
             }
-            return PostPhysics;
+            else
+            {
+                bNeedsInstance = ClaimRange(0, NumEntities, true, Claim.Handles, Claim.Scripts, Claim.ScriptEntities);
+            }
+
+            // A managed constructor run while claiming may have changed things, which leaves every claim suspect.
+            if (GStructureEpoch.load(std::memory_order_relaxed) != Key.StructureEpoch)
+            {
+                Claim.Handled.Init(0, NumEntities);
+                Claim.Handles.Reset();
+                Claim.Scripts.Reset();
+                Claim.ScriptEntities.Reset();
+                bNeedsInstance = true;
+            }
+
+            // Incomplete, so the next refresh claims again once the serial pass has created the missing instances.
+            Claim.bComplete = !bNeedsInstance;
+            Claim.NumSerial = (uint32)Algo::Count(Claim.Handled.begin(), Claim.Handled.end(), (uint8)0);
         }
     }
 
@@ -1707,13 +2014,13 @@ namespace Lumina
             if (ScriptClass == nullptr || !ScriptClass->IsChildOf(CEntityScript::StaticClass()))
             {
                 LOG_WARN("EntityScripts::Attach: '{}' is not a CEntityScript.",
-                    ScriptClass ? ScriptClass->GetName().c_str() : "(null)");
+                    ScriptClass ? *ScriptClass->GetName() : "(null)");
                 return nullptr;
             }
 
             if (ScriptClass->IsAbstract())
             {
-                LOG_WARN("EntityScripts::Attach: '{}' is abstract, so attach one of its subclasses instead.", ScriptClass->GetName().c_str());
+                LOG_WARN("EntityScripts::Attach: '{}' is abstract, so attach one of its subclasses instead.", *ScriptClass->GetName());
                 return nullptr;
             }
 
@@ -1734,12 +2041,12 @@ namespace Lumina
             Script->SetOwner(Entity, WorldPtr != nullptr ? *WorldPtr : nullptr);
 
             SEntityScriptComponent& Component = Registry.GetOrEmplace<SEntityScriptComponent>(Entity);
-            Component.Scripts.push_back(Script);
+            Component.Scripts.Add(Script);
             NoteStructureChange();
 
             // By the first tick every sibling script added the same frame exists, so OnReady can reference them.
             {
-                LUMINA_PROFILE_SECTION_NAMED(Script->GetClass()->GetName().c_str());
+                LUMINA_PROFILE_SECTION_NAMED(*Script->GetClass()->GetName());
                 Script->BindComponentRefs();
                 Script->OnAttach();
             }
@@ -1748,26 +2055,19 @@ namespace Lumina
 
         void NoteStructureChange()
         {
-            if (GInParallelScriptPass)
-            {
-                ReportParallelStructureChange();
-            }
+            CheckParallelStructureChange("attaching, detaching or destroying a script");
             BumpStructureEpoch();
         }
 
         void Tick(ECS::FRegistry& Registry, float DeltaTime, EScriptUpdatePhase Phase)
         {
-            if (Phase == EScriptUpdatePhase::PostPhysics)
-            {
-                const FScriptPhaseCensus* Census = Registry.Ctx().Find<FScriptPhaseCensus>();
-                if (Census != nullptr && Census->PostPhysicsScripts == 0)
-                {
-                    return;
-                }
-            }
-
             // Scripts build meshes one at a time, so their builds are held and run together when the tick ends.
             FMeshBuildBatchScope MeshBatch(Registry);
+
+            const EClaimPass Pass = static_cast<EClaimPass>(Phase);
+            FClaimLease Lease(Registry, Pass);
+            FClaim& Claim = Lease.Get();
+            RefreshClaim(Registry, Claim, Pass);
 
             // Attach and OnReady are phase-independent, so a PostPhysics script is built in the same pass.
             const bool bDrainLifecycle = Phase == EScriptUpdatePhase::PrePhysics;
@@ -1776,22 +2076,24 @@ namespace Lumina
             CWorld** WorldPtr = Registry.Ctx().Find<CWorld*>();
             CWorld* World = WorldPtr != nullptr ? *WorldPtr : nullptr;
 
-            if (bDrainLifecycle)
+            // Only an entity the claim left serial can owe a lifecycle callback.
+            if (bDrainLifecycle && Claim.NumSerial > 0)
             {
                 DrainLifecycle(Registry, World);
+                RefreshClaim(Registry, Claim, Pass);
             }
 
-            FTickScratchGuard      ScratchGuard;
-            FTickScratch&          Scratch       = ScratchGuard.Get();
-            TVector<ECS::FEntity>& Entities      = Scratch.Entities;
-            FScriptSnapshot&       Scripts       = Scratch.Scripts;
-            TVector<void*>&        BatchHandles  = Scratch.BatchHandles;
-            TVector<ECS::FEntity>& BatchEntities = Scratch.BatchEntities;
-            TVector<CEntityScript*>& BatchScripts = Scratch.BatchScripts;
+            if (Claim.NumSerial == 0 && Claim.Scripts.IsEmpty())
+            {
+                return;
+            }
 
-            SnapshotScriptedEntities(Registry, Entities);
-
-            uint32 PostPhysicsScripts = 0;
+            FTickScratchGuard        ScratchGuard;
+            FTickScratch&            Scratch       = ScratchGuard.Get();
+            FScriptSnapshot&         Scripts       = Scratch.Scripts;
+            TVector<void*>&          BatchHandles  = Scratch.BatchHandles;
+            TVector<ECS::FEntity>&   BatchEntities = Scratch.BatchEntities;
+            TVector<CEntityScript*>& BatchScripts  = Scratch.BatchScripts;
 
             // The unbatched path, which re-checks attachment after every callback exactly as it always has.
             auto RunEntity = [&](ECS::FEntity Entity)
@@ -1810,7 +2112,6 @@ namespace Lumina
                     }
 
                     const EScriptUpdatePhase ScriptUpdatePhase = ScriptPhase(Script);
-                    PostPhysicsScripts += (ScriptUpdatePhase == EScriptUpdatePhase::PostPhysics) ? 1u : 0u;
 
                     // The ordered drain has run by now, so this only catches a script that arrived after its last round.
                     if (bDrainLifecycle && Script->GetOwningEntity() == ECS::NullEntity)
@@ -1847,7 +2148,7 @@ namespace Lumina
                     if (Script->ShouldTick() && ScriptUpdatePhase == Phase)
                     {
                         // Named by class, so a capture splits the script system's time by script and not just in total.
-                        LUMINA_PROFILE_SECTION_NAMED(Script->GetClass()->GetName().c_str());
+                        LUMINA_PROFILE_SECTION_NAMED(*Script->GetClass()->GetName());
                         Script->OnUpdate(DeltaTime);
                         bUserCodeRan = true;
                     }
@@ -1903,14 +2204,12 @@ namespace Lumina
                     }
                 }
 
-                const size_t Start = BatchHandles.size();
+                const int32 Start = BatchHandles.Num();
                 const uint32 EpochBefore = GStructureEpoch.load(std::memory_order_relaxed);
-                uint32 PostPhysicsHere = 0;
                 for (const TStrongObjectPtr<CEntityScript>& Held : Component->Scripts)
                 {
                     CEntityScript* Script = Held.Get();
                     const EScriptUpdatePhase ScriptUpdatePhase = Script->GetClass() == CachedClass ? CachedPhase : ScriptPhase(Script);
-                    PostPhysicsHere += (ScriptUpdatePhase == EScriptUpdatePhase::PostPhysics) ? 1u : 0u;
                     if (!Script->ShouldTick() || ScriptUpdatePhase != Phase)
                     {
                         continue;
@@ -1927,16 +2226,15 @@ namespace Lumina
                     }
                     if (Handle == nullptr || GStructureEpoch.load(std::memory_order_relaxed) != EpochBefore)
                     {
-                        BatchHandles.resize(Start);
-                        BatchEntities.resize(Start);
-                        BatchScripts.resize(Start);
+                        BatchHandles.SetNum(Start);
+                        BatchEntities.SetNum(Start);
+                        BatchScripts.SetNum(Start);
                         return false;
                     }
-                    BatchHandles.push_back(Handle);
-                    BatchEntities.push_back(Entity);
-                    BatchScripts.push_back(Script);
+                    BatchHandles.Add(Handle);
+                    BatchEntities.Add(Entity);
+                    BatchScripts.Add(Script);
                 }
-                PostPhysicsScripts += PostPhysicsHere;
                 return true;
             };
 
@@ -1944,33 +2242,33 @@ namespace Lumina
             uint32 QueuedEpoch = 0;
 
             // Dispatches the first FlushCount entries; a structural change sends everything still queued down the checked path.
-            auto FlushBatch = [&](size_t FlushCount)
+            auto FlushBatch = [&](int32 FlushCount)
             {
-                const size_t Total = BatchHandles.size();
+                const int32 Total = BatchHandles.Num();
                 if (FlushCount == 0 || Total == 0)
                 {
                     return;
                 }
 
-                size_t Ran = 0;
+                int32 Ran = 0;
                 auto* Dispatch = GDispatchUpdates.Get();
                 if (Dispatch != nullptr && GStructureEpoch.load(std::memory_order_relaxed) == QueuedEpoch)
                 {
-                    const CClass* Class = BatchScripts.front()->GetClass();
-                    LUMINA_PROFILE_SECTION_NAMED(Class->GetName().c_str());
-                    Ran = (size_t)Dispatch(BatchHandles.data(), (int32)FlushCount, DeltaTime, reinterpret_cast<const uint32*>(&GStructureEpoch));
+                    const CClass* Class = BatchScripts[0]->GetClass();
+                    LUMINA_PROFILE_SECTION_NAMED(*Class->GetName());
+                    Ran = Dispatch(BatchHandles.GetData(), FlushCount, DeltaTime, reinterpret_cast<const uint32*>(&GStructureEpoch), nullptr);
                 }
 
                 if (Ran == FlushCount && GStructureEpoch.load(std::memory_order_relaxed) == QueuedEpoch)
                 {
-                    BatchHandles.erase(BatchHandles.begin(), BatchHandles.begin() + (ptrdiff_t)FlushCount);
-                    BatchEntities.erase(BatchEntities.begin(), BatchEntities.begin() + (ptrdiff_t)FlushCount);
-                    BatchScripts.erase(BatchScripts.begin(), BatchScripts.begin() + (ptrdiff_t)FlushCount);
+                    BatchHandles.RemoveAt(0, FlushCount);
+                    BatchEntities.RemoveAt(0, FlushCount);
+                    BatchScripts.RemoveAt(0, FlushCount);
                     return;
                 }
 
                 // Something attached, detached, destroyed or faulted, so the rest goes the checked way.
-                size_t Index = Ran;
+                int32 Index = Ran;
                 if (Ran > 0)
                 {
                     const ECS::FEntity Interrupted = BatchEntities[Ran - 1];
@@ -1979,7 +2277,7 @@ namespace Lumina
                         CEntityScript* Script = BatchScripts[Index];
                         if (IsStillAttached(Registry, Interrupted, Script) && Script->ShouldTick() && ScriptPhase(Script) == Phase)
                         {
-                            LUMINA_PROFILE_SECTION_NAMED(Script->GetClass()->GetName().c_str());
+                            LUMINA_PROFILE_SECTION_NAMED(*Script->GetClass()->GetName());
                             Script->OnUpdate(DeltaTime);
                         }
                     }
@@ -1993,109 +2291,39 @@ namespace Lumina
                     }
                 }
 
-                BatchHandles.clear();
-                BatchEntities.clear();
-                BatchScripts.clear();
+                BatchHandles.Reset();
+                BatchEntities.Reset();
+                BatchScripts.Reset();
             };
-
-            // Entities whose ticking scripts all promised to touch nothing else run first, spread across the workers.
-            TVector<uint8>&          Claimed          = Scratch.Claimed;
-            TVector<void*>&          ParallelHandles  = Scratch.ParallelHandles;
-            TVector<CEntityScript*>& ParallelScripts  = Scratch.ParallelScripts;
-            TVector<ECS::FEntity>&   ParallelEntities = Scratch.ParallelEntities;
-            Claimed.assign(Entities.size(), 0);
-            ParallelHandles.clear();
-            ParallelScripts.clear();
-            ParallelEntities.clear();
-
-            const uint32 ClaimEpoch = GStructureEpoch.load(std::memory_order_relaxed);
 
             auto RunInterrupted = [&](ECS::FEntity Entity, CEntityScript* Script)
             {
                 if (IsStillAttached(Registry, Entity, Script) && Script->ShouldTick() && ScriptPhase(Script) == Phase)
                 {
-                    LUMINA_PROFILE_SECTION_NAMED(Script->GetClass()->GetName().c_str());
+                    LUMINA_PROFILE_SECTION_NAMED(*Script->GetClass()->GetName());
                     Script->OnUpdate(DeltaTime);
                 }
             };
 
-            const uint32 NumThreads = (GTaskSystem != nullptr) ? GTaskSystem->GetNumTaskThreads() : 0u;
-            if ((uint32)Entities.size() >= kParallelClaimMinEntities && NumThreads > 1)
+            // Entities whose ticking scripts all promised to touch nothing else run first, spread across the workers.
+            if (!Claim.Scripts.IsEmpty())
             {
                 LUMINA_PROFILE_SECTION("Parallel Entity Scripts");
-
-                // Each chunk claims its own entities and runs them at once, which no other chunk reads.
-                const uint32 NumEntities = (uint32)Entities.size();
-                const uint32 NumChunks   = (NumEntities + kParallelClaimChunk - 1) / kParallelClaimChunk;
-                if ((uint32)Scratch.ClaimChunks.size() < NumChunks)
+                RunInEntityChunks(Registry, Scratch.ChunkStarts, Scratch.ChunkRan, Claim.ScriptEntities, Claim.Scripts, [&](uint32 Begin, uint32 End)
                 {
-                    Scratch.ClaimChunks.resize(NumChunks);
-                }
-
-                Task::ParallelFor(NumChunks, [&](uint32 Chunk)
-                {
-                    FParallelScriptPassScope PassScope;
-                    FClaimChunk& Out = Scratch.ClaimChunks[Chunk];
-                    Out.Handles.clear();
-                    Out.Scripts.clear();
-                    Out.Entities.clear();
-                    Out.PostPhysics = 0;
-                    Out.Ran         = 0;
-
-                    FClassFacts  Facts;
-                    const uint32 End = Math::Min(NumEntities, (Chunk + 1) * kParallelClaimChunk);
-                    for (uint32 EntityIndex = Chunk * kParallelClaimChunk; EntityIndex < End; ++EntityIndex)
-                    {
-                        // An entity still owed a managed instance runs on the serial path, which may create one.
-                        const EClaimResult Result = ClaimEntity(Registry, Entities[EntityIndex], Phase, bDrainLifecycle, false,
-                                                                Facts, Out.Handles, Out.Scripts, Out.Entities, Out.PostPhysics);
-                        Claimed[EntityIndex] = Result == EClaimResult::Claimed ? 1u : 0u;
-                    }
-
-                    Out.Ran = RunClaimedSpan(Out.Handles.data(), Out.Scripts.data(), (uint32)Out.Scripts.size(), DeltaTime, ClaimEpoch);
-                }, 1);
-
-                for (uint32 Chunk = 0; Chunk < NumChunks; ++Chunk)
-                {
-                    const FClaimChunk& In = Scratch.ClaimChunks[Chunk];
-                    PostPhysicsScripts += In.PostPhysics;
-                    FinishRemainder(In.Entities, In.Scripts, 0u, In.Ran, (uint32)In.Scripts.size(), RunInterrupted, RunEntity);
-                }
-            }
-            else
-            {
-                uint32 ClaimedPostPhysics = ClaimEntitiesSerial(Registry, Entities, Phase, bDrainLifecycle, Scratch);
-
-                // A managed constructor run while claiming may have changed things, which leaves every claim suspect.
-                if (GStructureEpoch.load(std::memory_order_relaxed) != ClaimEpoch)
-                {
-                    Claimed.assign(Entities.size(), 0);
-                    ParallelHandles.clear();
-                    ParallelScripts.clear();
-                    ParallelEntities.clear();
-                    ClaimedPostPhysics = 0;
-                }
-                PostPhysicsScripts += ClaimedPostPhysics;
-
-                if (!ParallelScripts.empty())
-                {
-                    LUMINA_PROFILE_SECTION("Parallel Entity Scripts");
-                    RunInEntityChunks(Scratch.ChunkStarts, Scratch.ChunkRan, ParallelEntities, ParallelScripts, [&](uint32 Begin, uint32 End)
-                    {
-                        return RunClaimedSpan(ParallelHandles.data() + Begin, ParallelScripts.data() + Begin, End - Begin, DeltaTime, ClaimEpoch);
-                    }, RunInterrupted, RunEntity);
-                }
+                    return RunClaimedSpan(Claim.Handles.GetData() + Begin, Claim.Scripts.GetData() + Begin, End - Begin, DeltaTime, Claim.Key.StructureEpoch);
+                }, RunInterrupted, RunEntity);
             }
 
             const bool bProfilerAttached = TracyIsConnected;
-            for (size_t EntityIndex = 0; EntityIndex < Entities.size(); ++EntityIndex)
+            for (int32 EntityIndex = 0; Claim.NumSerial > 0 && EntityIndex < Claim.Entities.Num(); ++EntityIndex)
             {
-                if (Claimed[EntityIndex] != 0)
+                if (Claim.Handled[EntityIndex] != 0)
                 {
                     continue;
                 }
-                const ECS::FEntity Entity = Entities[EntityIndex];
-                const size_t QueuedBefore = BatchHandles.size();
+                const ECS::FEntity Entity = Claim.Entities[EntityIndex];
+                const int32 QueuedBefore = BatchHandles.Num();
                 if (QueuedBefore == 0)
                 {
                     QueuedEpoch = GStructureEpoch.load(std::memory_order_relaxed);
@@ -2104,41 +2332,37 @@ namespace Lumina
                 if (TryQueueEntity(Entity))
                 {
                     // A connected profiler still splits the time by class, so a run never mixes two.
-                    if (bProfilerAttached && QueuedBefore > 0 && BatchHandles.size() > QueuedBefore
-                        && BatchScripts[QueuedBefore]->GetClass() != BatchScripts.front()->GetClass())
+                    if (bProfilerAttached && QueuedBefore > 0 && BatchHandles.Num() > QueuedBefore
+                        && BatchScripts[QueuedBefore]->GetClass() != BatchScripts[0]->GetClass())
                     {
                         FlushBatch(QueuedBefore);
                     }
                     continue;
                 }
 
-                FlushBatch(BatchHandles.size());
+                FlushBatch(BatchHandles.Num());
                 RunEntity(Entity);
             }
-            FlushBatch(BatchHandles.size());
+            FlushBatch(BatchHandles.Num());
 
             // Parked storage would otherwise hold the last entity's scripts alive until the next tick.
-            Scripts.clear();
-
-            if (bDrainLifecycle)
-            {
-                FScriptPhaseCensus* Census = Registry.Ctx().Find<FScriptPhaseCensus>();
-                if (Census == nullptr)
-                {
-                    Census = &Registry.Ctx().Emplace<FScriptPhaseCensus>();
-                }
-                Census->PostPhysicsScripts = PostPhysicsScripts;
-            }
+            Scripts.Reset();
         }
 
         void TickFixed(ECS::FRegistry& Registry, float FixedDeltaTime)
         {
-            FTickScratchGuard      ScratchGuard;
-            FTickScratch&          Scratch  = ScratchGuard.Get();
-            TVector<ECS::FEntity>& Entities = Scratch.Entities;
-            FScriptSnapshot&       Scripts  = Scratch.Scripts;
+            // The same split as Tick, without the managed batching, since a fixed step crosses per script either way.
+            FClaimLease Lease(Registry, EClaimPass::Fixed);
+            FClaim& Claim = Lease.Get();
+            RefreshClaim(Registry, Claim, EClaimPass::Fixed);
+            if (Claim.NumSerial == 0 && Claim.Scripts.IsEmpty())
+            {
+                return;
+            }
 
-            SnapshotScriptedEntities(Registry, Entities);
+            FTickScratchGuard ScratchGuard;
+            FTickScratch&     Scratch = ScratchGuard.Get();
+            FScriptSnapshot&  Scripts = Scratch.Scripts;
 
             auto RunEntity = [&](ECS::FEntity Entity)
             {
@@ -2154,81 +2378,16 @@ namespace Lumina
                 }
             };
 
-            // The same split as Tick, without the managed batching, since a fixed step crosses per script either way.
-            TVector<uint8>&          Claimed          = Scratch.Claimed;
-            TVector<CEntityScript*>& ParallelScripts  = Scratch.ParallelScripts;
-            TVector<ECS::FEntity>&   ParallelEntities = Scratch.ParallelEntities;
-            Claimed.assign(Entities.size(), 0);
-            ParallelScripts.clear();
-            ParallelEntities.clear();
-
-            const uint32 ClaimEpoch = GStructureEpoch.load(std::memory_order_relaxed);
-            {
-                const CClass* ClassSeen     = nullptr;
-                bool          bSeenParallel = false;
-
-                for (size_t EntityIndex = 0; EntityIndex < Entities.size(); ++EntityIndex)
-                {
-                    const ECS::FEntity Entity = Entities[EntityIndex];
-                    const SEntityScriptComponent* Component = (Entity != ECS::NullEntity && Registry.IsValid(Entity))
-                        ? Registry.TryGet<SEntityScriptComponent>(Entity) : nullptr;
-                    if (Component == nullptr)
-                    {
-                        continue;
-                    }
-
-                    bool bEligible   = true;
-                    bool bAnyTicking = false;
-                    for (const TStrongObjectPtr<CEntityScript>& Held : Component->Scripts)
-                    {
-                        const CEntityScript* Script = Held.Get();
-                        if (Script == nullptr)
-                        {
-                            bEligible = false;
-                            break;
-                        }
-                        if (!Script->ShouldTick())
-                        {
-                            continue;
-                        }
-                        if (Script->GetClass() != ClassSeen)
-                        {
-                            ClassSeen     = Script->GetClass();
-                            bSeenParallel = IsParallelUpdate(ClassSeen);
-                        }
-                        if (!bSeenParallel)
-                        {
-                            bEligible = false;
-                            break;
-                        }
-                        bAnyTicking = true;
-                    }
-                    if (!bEligible || !bAnyTicking)
-                    {
-                        continue;
-                    }
-
-                    for (const TStrongObjectPtr<CEntityScript>& Held : Component->Scripts)
-                    {
-                        if (Held->ShouldTick())
-                        {
-                            ParallelScripts.push_back(Held.Get());
-                            ParallelEntities.push_back(Entity);
-                        }
-                    }
-                    Claimed[EntityIndex] = 1;
-                }
-            }
-
-            if (!ParallelScripts.empty())
+            if (!Claim.Scripts.IsEmpty())
             {
                 LUMINA_PROFILE_SECTION("Parallel Entity Scripts Fixed");
-                RunInEntityChunks(Scratch.ChunkStarts, Scratch.ChunkRan, ParallelEntities, ParallelScripts, [&](uint32 Begin, uint32 End)
+                RunInEntityChunks(Registry, Scratch.ChunkStarts, Scratch.ChunkRan, Claim.ScriptEntities, Claim.Scripts, [&](uint32 Begin, uint32 End)
                 {
                     uint32 Index = Begin;
-                    for (; Index < End && GStructureEpoch.load(std::memory_order_relaxed) == ClaimEpoch; ++Index)
+                    for (; Index < End && GStructureEpoch.load(std::memory_order_relaxed) == Claim.Key.StructureEpoch; ++Index)
                     {
-                        ParallelScripts[Index]->OnFixedUpdate(FixedDeltaTime);
+                        WatchParallelRun(Claim.Scripts.GetData() + Index, nullptr);
+                        Claim.Scripts[Index]->OnFixedUpdate(FixedDeltaTime);
                     }
                     return Index - Begin;
                 }, [&](ECS::FEntity Entity, CEntityScript* Script)
@@ -2240,16 +2399,16 @@ namespace Lumina
                 }, RunEntity);
             }
 
-            for (size_t EntityIndex = 0; EntityIndex < Entities.size(); ++EntityIndex)
+            for (int32 EntityIndex = 0; EntityIndex < Claim.Entities.Num(); ++EntityIndex)
             {
-                if (Claimed[EntityIndex] == 0)
+                if (Claim.Handled[EntityIndex] == 0)
                 {
-                    RunEntity(Entities[EntityIndex]);
+                    RunEntity(Claim.Entities[EntityIndex]);
                 }
             }
 
             // Parked storage would otherwise hold the last entity's scripts alive until the next tick.
-            Scripts.clear();
+            Scripts.Reset();
         }
 
         CEntityScript* Find(ECS::FRegistry& Registry, ECS::FEntity Entity, const CClass* ScriptClass)
@@ -2291,7 +2450,7 @@ namespace Lumina
                 CEntityScript* Script = Held.Get();
                 if (Script != nullptr && Script->GetClass() != nullptr && Script->GetClass()->IsChildOf(ScriptClass))
                 {
-                    Out.push_back(Script);
+                    Out.Add(Script);
                 }
             }
         }
@@ -2322,7 +2481,7 @@ namespace Lumina
             {
                 if (It->Get() == Script)
                 {
-                    Component->Scripts.erase(It);
+                    Component->Scripts.RemoveAt(static_cast<int32>(It - Component->Scripts.begin()));
                     return true;
                 }
             }
@@ -2361,7 +2520,7 @@ namespace Lumina
                 const TVector<SInputAction>& Actions = FInputActionMap::Get().GetAllActions();
                 for (int32 i : ChangedActionIndices)
                 {
-                    if (i < Count && i < (int32)Actions.size())
+                    if (i < Count && i < Actions.Num())
                     {
                         Script->OnAction(Actions[i].Name, States[i]);
                     }
@@ -2375,7 +2534,7 @@ namespace Lumina
         {
             FScriptSnapshot Scripts;
             SnapshotScripts(Registry, Entity, Scripts);
-            if (Scripts.empty())
+            if (Scripts.IsEmpty())
             {
                 return;
             }
@@ -2393,7 +2552,7 @@ namespace Lumina
             
             if (SEntityScriptComponent* Component = Registry.TryGet<SEntityScriptComponent>(Entity))
             {
-                Component->Scripts.clear();
+                Component->Scripts.Reset();
             }
         }
 
@@ -2403,13 +2562,13 @@ namespace Lumina
             for (ECS::FEntity Entity : Registry.View<SEntityScriptComponent>())
             {
                 SEntityScriptComponent& Component = Registry.Get<SEntityScriptComponent>(Entity);
-                Restored += (int32)Component.Pending.RemoveAllBy([&Component](const SHeldValue& Held)
+                Restored += Component.Pending.RemoveAll([&Component](const SHeldValue& Held)
                 {
                     CEntityScript* Script = RestoreHeldScript(Held);
                     if (Script != nullptr)
                     {
-                        Component.Scripts.push_back(Script);
-                        LOG_INFO("SEntityScriptComponent: restored held script '{}' now that its class is loaded.", Held.TypeName.c_str());
+                        Component.Scripts.Add(Script);
+                        LOG_INFO("SEntityScriptComponent: restored held script '{}' now that its class is loaded.", *Held.TypeName);
                     }
                     return Script != nullptr;
                 });
@@ -2430,21 +2589,21 @@ namespace Lumina
                 for (ECS::FEntity Entity : Registry.View<SEntityScriptComponent>())
                 {
                     SEntityScriptComponent& Component = Registry.Get<SEntityScriptComponent>(Entity);
-                    Component.Scripts.erase(Algo::RemoveIf(Component.Scripts, [&](TStrongObjectPtr<CEntityScript>& Script)
+                    Component.Scripts.RemoveAll([&](TStrongObjectPtr<CEntityScript>& Script)
                     {
                         CClass* Class = Script.Get() != nullptr ? Script->GetClass() : nullptr;
                         if (Class == nullptr || !Class->IsSuperseded())
                         {
                             return false;
                         }
-                        SHeldValue& Held = Component.Pending.emplace_back();
+                        SHeldValue& Held = Component.Pending.EmplaceGetRef();
                         Held.TypeName = Class->GetName();
                         Held.Data.Capture(*Class, Script.Get());
-                        Released.push_back(Move(Script));
+                        Released.Add(Move(Script));
                         return true;
-                    }), Component.Scripts.end());
+                    });
                 }
-                if (Released.empty())
+                if (Released.IsEmpty())
                 {
                     return;
                 }
@@ -2455,7 +2614,7 @@ namespace Lumina
                 {
                     UIScripts::Close(Script.Get());
                 }
-                LOG_WARN("SEntityScriptComponent: {} script(s) of a removed class are held until it comes back.", Released.size());
+                LOG_WARN("SEntityScriptComponent: {} script(s) of a removed class are held until it comes back.", Released.Num());
             }
 
             void RestoreHeldValues(ECS::FRegistry& Registry)
@@ -2469,7 +2628,10 @@ namespace Lumina
 
         void NotifyScriptsReloaded(EScriptReloadReason Reason, int32 Generation)
         {
-            if (GWorldManager == nullptr)
+            // A reload may change a class's phase or promise in place, which every cached claim was built on.
+            NoteStructureChange();
+
+            if (Global::GWorldManager == nullptr)
             {
                 return;
             }
@@ -2482,7 +2644,7 @@ namespace Lumina
                 RestoreHeldValues(Prefab->VariantDelta);
             }
 
-            GWorldManager->ForEachWorld([&](CWorld& World)
+            Global::GWorldManager->ForEachWorld([&](CWorld& World)
             {
                 ECS::FRegistry& Registry = World.GetEntityRegistry();
 
@@ -2491,10 +2653,10 @@ namespace Lumina
 
                 TVector<ECS::FEntity> Entities;
                 auto View = Registry.View<SEntityScriptComponent>();
-                Entities.reserve(View.Num());
+                Entities.Reserve(View.Num());
                 for (ECS::FEntity Entity : View)
                 {
-                    Entities.push_back(Entity);
+                    Entities.Add(Entity);
                 }
 
                 SScriptReloadContext Context;
@@ -2532,10 +2694,10 @@ namespace Lumina
             // Disabled entities are included, since a disabled script still ran OnAttach and is owed its OnDetach.
             TVector<ECS::FEntity> Entities;
             auto View = Registry.View<SEntityScriptComponent>();
-            Entities.reserve(View.Num());
+            Entities.Reserve(View.Num());
             for (ECS::FEntity Entity : View)
             {
-                Entities.push_back(Entity);
+                Entities.Add(Entity);
             }
 
             for (ECS::FEntity Entity : Entities)

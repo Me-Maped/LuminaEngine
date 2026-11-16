@@ -4,6 +4,9 @@
 #include "Core/Object/ObjectCore.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
 #include "Core/Serialization/MemoryArchiver.h"
+#include "Log/Log.h"
+#include "LogCountTestHelpers.h"
+#include "Memory/Memcpy.h"
 #include "SaveGame/SaveGameArchive.h"
 #include "SaveGame/SaveGameComponent.h"
 #include "SaveGame/SaveGameEvents.h"
@@ -110,7 +113,7 @@ namespace LuminaSaveGameTests
         {
             if (!SaveGame::IsLevelEntity(Registry, Entity))
             {
-                Out.push_back(Entity);
+                Out.Add(Entity);
             }
         }
         return Out;
@@ -206,7 +209,7 @@ TEST(SaveGame, WorldRoundTripIntoAFreshLevel)
     EXPECT_EQ(R.Get<SSaveGameTestComponent>(Loaded.Machine).Coins, 5);
 
     const TVector<ECS::FEntity> Pickups = Respawned(R);
-    ASSERT_EQ(Pickups.size(), 1u);
+    ASSERT_EQ(Pickups.Num(), 1);
     const ECS::FEntity Pickup = Pickups[0];
     EXPECT_EQ(R.Get<SNameComponent>(Pickup).Name, FName("Pickup"));
     EXPECT_EQ(R.Get<SSaveGameTestComponent>(Pickup).Target, Loaded.Chest);
@@ -230,7 +233,7 @@ TEST(SaveGame, RestoringInPlaceReplacesRuntimeSpawnsInsteadOfDoublingThem)
     ASSERT_TRUE(Restore(R, Bytes));
 
     EXPECT_EQ(R.Get<SSaveGameTestComponent>(Session.Chest).Coins, 50);
-    EXPECT_EQ(Respawned(R).size(), 1u);
+    EXPECT_EQ(Respawned(R).Num(), 1);
 
     uint32 Gems = 0;
     for (ECS::FEntity Entity : R.View<SNameComponent>())
@@ -238,6 +241,79 @@ TEST(SaveGame, RestoringInPlaceReplacesRuntimeSpawnsInsteadOfDoublingThem)
         Gems += R.Get<SNameComponent>(Entity).Name == FName("Gem") ? 1u : 0u;
     }
     EXPECT_EQ(Gems, 1u);
+}
+
+TEST(SaveGame, SameNamedRuntimeRootsKeepTheirDataWhenALaterOneReusesAnEarlierSlot)
+{
+    FLevel Session = LoadLevel();
+    ECS::FRegistry& R = Session.Registry();
+    const ECS::FEntity Doomed = Spawn(R, "Barrel");
+    const ECS::FEntity First  = Spawn(R, "Barrel");
+    R.Destroy(Doomed);
+    const ECS::FEntity Second = Spawn(R, "Barrel");
+    ASSERT_LT(Second.GetIndex(), First.GetIndex());
+    R.Emplace<SSaveGameTestComponent>(First).Coins  = 1;
+    R.Emplace<SSaveGameTestComponent>(Second).Coins = 2;
+    const TVector<uint8> Bytes = Capture(R);
+
+    FLevel Loaded = LoadLevel();
+    ECS::FRegistry& L = Loaded.Registry();
+    const ECS::FEntity LoadedFirst  = Spawn(L, "Barrel");
+    const ECS::FEntity LoadedSecond = Spawn(L, "Barrel");
+    ASSERT_TRUE(Restore(L, Bytes));
+
+    EXPECT_EQ(L.Get<SSaveGameTestComponent>(LoadedFirst).Coins, 1);
+    EXPECT_EQ(L.Get<SSaveGameTestComponent>(LoadedSecond).Coins, 2);
+}
+
+TEST(SaveGame, ManySameNamedRuntimeRootsEachRestoreIntoTheirOwnOriginal)
+{
+    constexpr int32 CrowdSize = 300;
+    FLevel Session = LoadLevel();
+    ECS::FRegistry& R = Session.Registry();
+    TVector<ECS::FEntity> Crowd;
+    for (int32 Index = 0; Index < CrowdSize; ++Index)
+    {
+        Crowd.Add(Spawn(R, "Zombie"));
+    }
+    // Freed slots are reused by later spawns, so index order no longer matches creation order.
+    for (int32 Index = 0; Index < CrowdSize; Index += 3)
+    {
+        R.Destroy(Crowd[Index]);
+    }
+    TVector<ECS::FEntity> Survivors;
+    for (int32 Index = 0; Index < CrowdSize; ++Index)
+    {
+        if (Index % 3 != 0)
+        {
+            Survivors.Add(Crowd[Index]);
+        }
+    }
+    for (int32 Index = 0; Index < CrowdSize / 3; ++Index)
+    {
+        Survivors.Add(Spawn(R, "Zombie"));
+    }
+    for (int32 Index = 0; Index < Survivors.Num(); ++Index)
+    {
+        R.Emplace<SSaveGameTestComponent>(Survivors[Index]).Coins = Index + 1;
+    }
+    const TVector<uint8> Bytes = Capture(R);
+
+    FLevel Loaded = LoadLevel();
+    ECS::FRegistry& L = Loaded.Registry();
+    TVector<ECS::FEntity> LoadedCrowd;
+    for (int32 Index = 0; Index < Survivors.Num(); ++Index)
+    {
+        LoadedCrowd.Add(Spawn(L, "Zombie"));
+    }
+    ASSERT_TRUE(Restore(L, Bytes));
+
+    for (int32 Index = 0; Index < LoadedCrowd.Num(); ++Index)
+    {
+        const SSaveGameTestComponent* Restored = L.TryGet<SSaveGameTestComponent>(LoadedCrowd[Index]);
+        ASSERT_NE(Restored, nullptr) << "Zombie " << Index;
+        EXPECT_EQ(Restored->Coins, Index + 1) << "Zombie " << Index;
+    }
 }
 
 TEST(SaveGame, ADamagedWorldStateFailsWithoutTouchingTheWorld)
@@ -251,6 +327,53 @@ TEST(SaveGame, ADamagedWorldStateFailsWithoutTouchingTheWorld)
     EXPECT_FALSE(Restore(Loaded.Registry(), Bytes));
     EXPECT_TRUE(Loaded.Registry().IsValid(Loaded.Crate));
     EXPECT_EQ(Loaded.Registry().Get<SSaveGameTestComponent>(Loaded.Chest).Coins, 1);
+}
+
+TEST(SaveGame, ARespawnedComponentThatNoLongerExistsWarnsAndTheRestOfTheRecordStillReads)
+{
+    RegisterPendingTypes();
+    CWorld* World = NewObject<CWorld>(nullptr, FName("SaveGameRespawnMissingComponentTest"), FGuid::New(), OF_Transient);
+    ECS::FRegistry& R = World->GetEntityRegistry();
+    R.GetSignals<STransformComponent>().OnConstruct.Connect<&BindTransform>();
+
+    const ECS::FEntity Orphan = Spawn(R, "Orphan");
+    R.Emplace<SSaveGameComponent>(Orphan);
+    R.Emplace<SSaveGameTestComponent>(Orphan).Coins = 42;
+
+    TVector<uint8> Bytes = Capture(R);
+
+    // The struct name appears twice for a respawn root, so only the first occurrence is renamed.
+    const FString Needle("SSaveGameTestComponent");
+    const FString Replacement("SSaveGameGoneComponent");
+    ASSERT_EQ(Needle.Len(), Replacement.Len());
+    int32 FoundAt = Constants::kIndexNone;
+    for (int32 Index = 0; Index + Needle.Len() <= Bytes.Num(); ++Index)
+    {
+        if (Memory::Memcmp(Bytes.GetData() + Index, Needle.GetData(), Needle.Len()) == 0)
+        {
+            FoundAt = Index;
+            break;
+        }
+    }
+    ASSERT_NE(FoundAt, Constants::kIndexNone);
+    Memory::Memcpy(Bytes.GetData() + FoundAt, Replacement.GetData(), Replacement.Len());
+
+    CWorld* Fresh = NewObject<CWorld>(nullptr, FName("SaveGameRespawnMissingComponentTestFresh"), FGuid::New(), OF_Transient);
+    ECS::FRegistry& FR = Fresh->GetEntityRegistry();
+    FR.GetSignals<STransformComponent>().OnConstruct.Connect<&BindTransform>();
+
+    Logging::ClearLogQueue();
+    ASSERT_TRUE(Restore(FR, Bytes));
+    EXPECT_EQ(CountLoggedMessages(ELogLevel::Warn, "SSaveGameGoneComponent", "is gone"), 1);
+
+    const TVector<ECS::FEntity> Pickups = Respawned(FR);
+    ASSERT_EQ(Pickups.Num(), 1);
+    const ECS::FEntity Restored = Pickups[0];
+    EXPECT_EQ(FR.Get<SNameComponent>(Restored).Name, FName("Orphan"));
+    EXPECT_NE(FR.TryGet<STransformComponent>(Restored), nullptr);
+    const SSaveGameTestComponent* Recreated = FR.TryGet<SSaveGameTestComponent>(Restored);
+    ASSERT_NE(Recreated, nullptr);
+    EXPECT_EQ(Recreated->Coins, 0) << "the coin count was in the corrupted dump, not the SaveGameOnly block that recreated the component";
 }
 
 TEST(SaveGame, SaveGameObjectRoundTripsWithItsWorlds)
@@ -300,7 +423,7 @@ TEST(SaveGame, BytesThatAreNotASaveAreRefused)
     CSaveGameTest* Game = NewObject<CSaveGameTest>(nullptr, NAME_None, FGuid::New(), OF_Transient);
     TVector<uint8> Bytes;
     ASSERT_TRUE(CSaveGameLibrary::SaveGameToBytes(Game, Bytes));
-    Bytes.resize(Bytes.size() / 2);
+    Bytes.SetNum(Bytes.Num() / 2);
     EXPECT_EQ(CSaveGameLibrary::LoadGameFromBytes(Bytes), nullptr);
 }
 
@@ -308,13 +431,13 @@ TEST(SaveGame, SlotNamesStayInsideTheSaveDirectory)
 {
     const FString Directory = CSaveGameLibrary::GetSaveGameDirectory(0);
     const FString Path = CSaveGameLibrary::GetSlotFilePath("../../Windows/evil:name", 0);
-    ASSERT_GT(Path.size(), Directory.size() + 1);
-    EXPECT_EQ(Path.substr(0, Directory.size() + 1), Directory + "/");
-    const FString FileName = Path.substr(Directory.size() + 1);
-    EXPECT_EQ(FileName.find('/'), FString::npos);
-    EXPECT_EQ(FileName.find('\\'), FString::npos);
-    EXPECT_EQ(FileName.find(':'), FString::npos);
-    EXPECT_TRUE(CSaveGameLibrary::GetSlotFilePath("...", 0).empty());
+    ASSERT_GT(Path.Len(), Directory.Len() + 1);
+    EXPECT_EQ(Path.Mid(0, Directory.Len() + 1), Directory + "/");
+    const FString FileName = Path.Mid(Directory.Len() + 1);
+    EXPECT_EQ(FileName.Find('/'), Constants::kIndexNone);
+    EXPECT_EQ(FileName.Find('\\'), Constants::kIndexNone);
+    EXPECT_EQ(FileName.Find(':'), Constants::kIndexNone);
+    EXPECT_TRUE(CSaveGameLibrary::GetSlotFilePath("...", 0).IsEmpty());
     EXPECT_NE(CSaveGameLibrary::GetSaveGameDirectory(2), Directory);
 }
 
@@ -332,23 +455,24 @@ namespace LuminaSaveGameTests
         FLevel                 Level = LoadLevel();
         FEventLog              Log;
         CSaveGameTestSystem*   Listener = nullptr;
-        SSaveGameSystem*       Saver = nullptr;
+        CSaveGameSystem*       Saver = nullptr;
 
         FRunningWorld()
         {
             Listener = NewObject<CSaveGameTestSystem>(nullptr, NAME_None, FGuid::New(), OF_Transient);
-            Saver = NewObject<SSaveGameSystem>(nullptr, NAME_None, FGuid::New(), OF_Transient);
+            Saver = NewObject<CSaveGameSystem>(nullptr, NAME_None, FGuid::New(), OF_Transient);
             for (CEntitySystem* System : { (CEntitySystem*)Listener, (CEntitySystem*)Saver })
             {
                 System->SetOwningWorld(Level.World);
-                Level.World->Systems.push_back(System);
-                System->OnStartup(FWorldTestAccess::SystemContext(*Level.World));
+                System->ConfigureSystem();
+                Level.World->Systems.Add(System);
+                System->OnStartup(SExclusiveContext(FWorldTestAccess::SystemContext(*Level.World)));
             }
         }
 
         ~FRunningWorld()
         {
-            Saver->OnTeardown(FWorldTestAccess::SystemContext(*Level.World));
+            Saver->OnTeardown(SExclusiveContext(FWorldTestAccess::SystemContext(*Level.World)));
         }
 
         // Requests commit at a sync point before the system can see them, and the completions it sends at the next.
@@ -362,7 +486,7 @@ namespace LuminaSaveGameTests
             Level.World->FlushCommands();
             for (const SSaveGameCompletedEvent& Event : ECS::ReadEvents(Level.World->GetEvents(), Log.Reader))
             {
-                Log.Completed.push_back(Event);
+                Log.Completed.Add(Event);
             }
         }
     };
@@ -387,7 +511,7 @@ TEST(SaveGame, RequestsRunAtTheSystemUpdateAndReportThroughEventsAndSystems)
     EXPECT_EQ(Session.Listener->SavingCount, 1);
     EXPECT_EQ(Session.Listener->LastSaveGame, Game);
     EXPECT_EQ(WizardScript(Session.Level)->SavingCount, 1);
-    ASSERT_EQ(Session.Log.Completed.size(), 1u);
+    ASSERT_EQ(Session.Log.Completed.Num(), 1);
     EXPECT_TRUE(Session.Log.Completed[0].bSucceeded);
     EXPECT_EQ(Session.Log.Completed[0].Action, ESaveGameAction::Save);
     EXPECT_TRUE(CSaveGameLibrary::DoesSaveGameExist(Slot, 0));
@@ -395,7 +519,7 @@ TEST(SaveGame, RequestsRunAtTheSystemUpdateAndReportThroughEventsAndSystems)
     FRunningWorld Fresh;
     Fresh.Level.World->GetSaveGames()->RequestLoadGame(Slot, 0);
     Fresh.EndFrame();
-    ASSERT_EQ(Fresh.Log.Completed.size(), 1u);
+    ASSERT_EQ(Fresh.Log.Completed.Num(), 1);
     const SSaveGameCompletedEvent& Loaded = Fresh.Log.Completed[0];
     EXPECT_TRUE(Loaded.bSucceeded);
     EXPECT_EQ(Loaded.Action, ESaveGameAction::Load);
@@ -410,6 +534,6 @@ TEST(SaveGame, RequestsRunAtTheSystemUpdateAndReportThroughEventsAndSystems)
 
     Fresh.Level.World->GetSaveGames()->RequestLoadGame(Slot, 0);
     Fresh.EndFrame();
-    ASSERT_EQ(Fresh.Log.Completed.size(), 2u);
+    ASSERT_EQ(Fresh.Log.Completed.Num(), 2);
     EXPECT_FALSE(Fresh.Log.Completed[1].bSucceeded);
 }

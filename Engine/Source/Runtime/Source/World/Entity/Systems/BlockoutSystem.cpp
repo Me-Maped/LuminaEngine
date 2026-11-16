@@ -10,31 +10,31 @@
 
 namespace Lumina
 {
-    namespace
+    namespace BlockoutSystemInternal
     {
         constexpr uint32 kParallelThreshold = 8;
 
         void ApplyMaterial(SBlockoutComponent& Shape, SDynamicMeshComponent& Mesh)
         {
-            if (Mesh.MaterialOverrides.empty())
+            if (Mesh.MaterialOverrides.IsEmpty())
             {
-                Mesh.MaterialOverrides.resize(1);
+                Mesh.MaterialOverrides.SetNum(1);
             }
             Mesh.MaterialOverrides[0] = Shape.Material;
             Shape.BuiltMaterial = Shape.Material.Get();
         }
     }
 
-    void SBlockoutSystem::Configure()
+    void CBlockoutSystem::Configure()
     {
         RequireUpdate(EUpdateStage::FrameStart);
         RequireUpdate(EUpdateStage::Paused);
-        Writes<SBlockoutComponent, SDynamicMeshComponent>();
-        Reads<SDynamicMeshColliderComponent>();
     }
 
-    bool SBlockoutSystem::Rebuild(SBlockoutComponent& Shape, SDynamicMeshComponent& Mesh, bool bKeepCPUData)
+    bool CBlockoutSystem::Rebuild(SBlockoutComponent& Shape, SDynamicMeshComponent& Mesh, bool bKeepCPUData)
     {
+        using BlockoutSystemInternal::ApplyMaterial;
+
         FBlockoutMeshData Data;
         BlockoutMesh::Build(Shape, Data);
 
@@ -52,57 +52,77 @@ namespace Lumina
 
         Mesh.bKeepCPUMeshletData = bKeepCPUData;
         Mesh.ClearMesh();
-        Mesh.SetPositionsData(reinterpret_cast<const float*>(Data.Positions.data()), (int32)Data.Positions.size() * 3);
-        Mesh.SetNormalsData(reinterpret_cast<const float*>(Data.Normals.data()), (int32)Data.Normals.size() * 3);
-        Mesh.SetUVsData(reinterpret_cast<const float*>(Data.UVs.data()), (int32)Data.UVs.size() * 2);
-        Mesh.SetIndicesData(Data.Indices.data(), (int32)Data.Indices.size());
+        Mesh.SetPositionsData(reinterpret_cast<const float*>(Data.Positions.GetData()), Data.Positions.Num() * 3);
+        Mesh.SetNormalsData(reinterpret_cast<const float*>(Data.Normals.GetData()), Data.Normals.Num() * 3);
+        Mesh.SetUVsData(reinterpret_cast<const float*>(Data.UVs.GetData()), Data.UVs.Num() * 2);
+        Mesh.SetIndicesData(Data.Indices.GetData(), Data.Indices.Num());
 
         return Mesh.Commit();
     }
 
-    void SBlockoutSystem::OnUpdate(const SSystemContext& Context)
+    void CBlockoutSystem::GatherDirty()
     {
-        LUMINA_PROFILE_SCOPE();
+        DirtyScratch.Reset();
+        MaterialScratch.Reset();
+        DirtyLookup.BeginPass(ChangedShapes.View(), NewColliders.View());
 
+        const auto MarkDirty = [&](ECS::FEntity Entity)
+        {
+            DirtyScratch.Add(Entity);
+            DirtyLookup.ByEntityIndex[Entity.GetIndex()] = { Entity, DirtyLookup.Stamp };
+        };
 
-        TVector<ECS::FEntity> Dirty;
-        for (auto&& [Entity, Shape, Mesh] : Context.CreateView<SBlockoutComponent, SDynamicMeshComponent>().Each())
+        ChangedShapes.ForEach([&](ECS::FEntity Entity, const SBlockoutComponent& Shape, const SDynamicMeshComponent& Mesh)
         {
             // A collider added after the build has no meshlet streams to read, so the mesh owes it a rebuild.
-            const bool bColliderStarved = !Mesh.bKeepCPUMeshletData
-                                       && Context.TryGet<SDynamicMeshColliderComponent>(Entity) != nullptr;
+            const bool bColliderStarved = !Mesh.bKeepCPUMeshletData && NewColliders.TryGet<SDynamicMeshColliderComponent>(Entity) != nullptr;
 
             if (!Shape.bBuilt || bColliderStarved || Shape.BuiltHash != BlockoutMesh::HashParameters(Shape))
             {
-                Dirty.push_back(Entity);
-                continue;
+                MarkDirty(Entity);
             }
-
-            if (Shape.BuiltMaterial != Shape.Material.Get())
+            else if (Shape.BuiltMaterial != Shape.Material.Get())
             {
-                ApplyMaterial(Shape, Mesh);
-                Mesh.RefreshResolvedMaterials();
+                MaterialScratch.Add(Entity);
             }
+        });
+
+        NewColliders.ForEach([&](ECS::FEntity Entity, const SBlockoutComponent&, const SDynamicMeshComponent& Mesh)
+        {
+            if (!Mesh.bKeepCPUMeshletData && DirtyLookup.Find(Entity) == nullptr)
+            {
+                MarkDirty(Entity);
+            }
+        });
+    }
+
+    void CBlockoutSystem::OnUpdate(const SSystemContext& Context)
+    {
+        using namespace BlockoutSystemInternal;
+
+        GatherDirty();
+
+        for (ECS::FEntity Entity : MaterialScratch)
+        {
+            SDynamicMeshComponent& Mesh = Builds.Get<SDynamicMeshComponent>(Entity);
+            ApplyMaterial(Builds.Get<SBlockoutComponent>(Entity), Mesh);
+            Mesh.MarkRenderStateDirty();
         }
 
-        if (Dirty.empty())
+        if (DirtyScratch.IsEmpty())
         {
             return;
         }
 
-        ECS::FRegistry& Registry = Context.GetRegistry();
-
         const auto RebuildOne = [&](uint32 Index)
         {
-            const ECS::FEntity Entity = Dirty[Index];
-            SBlockoutComponent& Shape = Registry.Get<SBlockoutComponent>(Entity);
-            SDynamicMeshComponent& Mesh = Registry.Get<SDynamicMeshComponent>(Entity);
+            const ECS::FEntity Entity = DirtyScratch[Index];
 
             // The collider builds from the CPU meshlet streams, so only a collided shape pays to keep them.
-            const bool bKeepCPUData = Registry.TryGet<SDynamicMeshColliderComponent>(Entity) != nullptr;
-            Rebuild(Shape, Mesh, bKeepCPUData);
+            const bool bKeepCPUData = NewColliders.TryGet<SDynamicMeshColliderComponent>(Entity) != nullptr;
+            Rebuild(Builds.Get<SBlockoutComponent>(Entity), Builds.Get<SDynamicMeshComponent>(Entity), bKeepCPUData);
         };
 
-        Task::ParallelForOrSerial((uint32)Dirty.size(), kParallelThreshold, RebuildOne, 1);
+        Jobs::ParallelForOrSerial((uint32)DirtyScratch.Num(), kParallelThreshold, RebuildOne, 1);
     }
 }

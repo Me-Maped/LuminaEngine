@@ -1,8 +1,10 @@
-﻿#include "Platform/Time/PlatformTime.h"
-#include "RuntimePCH.h"
+﻿#include "RuntimePCH.h"
 #include "NavMesh.h"
 
 #include "Config/NavigationSettings.h"
+#include "Log/Log.h"
+#include "Memory/Memcpy.h"
+#include "Platform/Time/PlatformTime.h"
 #include "TaskSystem/TaskSystem.h"
 
 // Real Recast/Detour path is gated on LUMINA_HAS_RECAST; otherwise compiles as a no-op shell.
@@ -10,10 +12,8 @@
     #include <DetourNavMesh.h>
     #include <DetourNavMeshQuery.h>
     #include <DetourCommon.h>
-#include "Log/Log.h"
 
-// A module compiling without the define sees a narrower dtPolyRef than Detour's own sources, and the
-// layout mismatch corrupts memory rather than failing to link.
+// Compiling without the define gives a narrower dtPolyRef than Detour's sources, and the mismatch corrupts memory rather than failing to link.
 static_assert(sizeof(dtPolyRef) == 8, "Recast must be built with DT_POLYREF64; see Recast.Build.cs.");
 #endif
 
@@ -35,51 +35,52 @@ namespace Lumina
             }
         }
 
-        // Mirrors the block walk in dtCreateNavMeshData and dtNavMesh::addTile.
+        // Mirrors the block walk in dtCreateNavMeshData and dtNavMesh::addTile, which widen the header and vert blocks to 8 under DT_POLYREF64.
+        int32 TileLinkOffset(const dtMeshHeader* H)
+        {
+            return Math::AlignUp((int32)sizeof(dtMeshHeader), 8)
+                 + Math::AlignUp((int32)sizeof(float) * 3 * H->vertCount, 8)
+                 + Math::AlignUp((int32)sizeof(dtPoly) * H->polyCount, 4);
+        }
+
         int32 ExpectedTileBlobSize(const dtMeshHeader* H)
         {
-            auto A4 = [](int32 x) { return (x + 3) & ~3; };
-#ifdef DT_POLYREF64
-            auto A8 = [](int32 x) { return (x + 7) & ~7; };
-            const int32 HeaderSize = A8((int32)sizeof(dtMeshHeader));
-            const int32 VertsSize  = A8((int32)sizeof(float) * 3 * H->vertCount);
-#else
-            const int32 HeaderSize = A4((int32)sizeof(dtMeshHeader));
-            const int32 VertsSize  = A4((int32)sizeof(float) * 3 * H->vertCount);
-#endif
-            return HeaderSize + VertsSize
-                 + A4((int32)sizeof(dtPoly)               * H->polyCount)
-                 + A4((int32)sizeof(dtLink)               * H->maxLinkCount)
-                 + A4((int32)sizeof(dtPolyDetail)         * H->detailMeshCount)
-                 + A4((int32)sizeof(float) * 3            * H->detailVertCount)
-                 + A4(4                                   * H->detailTriCount)
-                 + A4((int32)sizeof(dtBVNode)             * H->bvNodeCount)
-                 + A4((int32)sizeof(dtOffMeshConnection)  * H->offMeshConCount);
+            return TileLinkOffset(H)
+                 + Math::AlignUp((int32)sizeof(dtLink)               * H->maxLinkCount, 4)
+                 + Math::AlignUp((int32)sizeof(dtPolyDetail)         * H->detailMeshCount, 4)
+                 + Math::AlignUp((int32)sizeof(float) * 3            * H->detailVertCount, 4)
+                 + Math::AlignUp(4                                   * H->detailTriCount, 4)
+                 + Math::AlignUp((int32)sizeof(dtBVNode)             * H->bvNodeCount, 4)
+                 + Math::AlignUp((int32)sizeof(dtOffMeshConnection)  * H->offMeshConCount, 4);
+        }
+
+        float NextSlotRandom01(void* SlotRng)
+        {
+            return static_cast<FRandomStream*>(SlotRng)->NextFloat();
         }
 
         // Detour frees a tile's data itself, so a blob is copied into its allocator before it is handed over.
         uint8* CopyForDetour(const TVector<uint8>& Blob)
         {
-            uint8* Owned = (uint8*)dtAlloc((int)Blob.size(), DT_ALLOC_PERM);
+            uint8* Owned = (uint8*)dtAlloc(Blob.Num(), DT_ALLOC_PERM);
             if (Owned != nullptr)
             {
-                memcpy(Owned, Blob.data(), Blob.size());
+                Memory::Memcpy(Owned, Blob.GetData(), Blob.Num());
             }
             return Owned;
         }
 
-        // addTile only checks magic and version, and neither changes when the ref width or the block
-        // alignment does, so a stale blob would otherwise be read at the wrong offsets.
+        // addTile only checks magic and version, which don't change with ref width or block alignment, so a stale blob would be read at the wrong offsets.
         bool ValidateTileBlob(const TVector<uint8>& Blob, int32 TileX, int32 TileY)
         {
-            if (Blob.size() < sizeof(dtMeshHeader))
+            if (static_cast<size_t>(Blob.Num()) < sizeof(dtMeshHeader))
             {
                 LOG_ERROR("NavMesh tile ({}, {}): blob is {} bytes, smaller than a tile header. Re-bake required.",
-                    TileX, TileY, (int32)Blob.size());
+                    TileX, TileY, Blob.Num());
                 return false;
             }
 
-            const dtMeshHeader* H = reinterpret_cast<const dtMeshHeader*>(Blob.data());
+            const dtMeshHeader* H = reinterpret_cast<const dtMeshHeader*>(Blob.GetData());
             if (H->magic != DT_NAVMESH_MAGIC || H->version != DT_NAVMESH_VERSION)
             {
                 LOG_ERROR("NavMesh tile ({}, {}): bad magic/version. Re-bake required.", TileX, TileY);
@@ -87,11 +88,11 @@ namespace Lumina
             }
 
             const int32 Expected = ExpectedTileBlobSize(H);
-            if ((int32)Blob.size() != Expected)
+            if (Blob.Num() != Expected)
             {
                 LOG_ERROR("NavMesh tile ({}, {}): blob is {} bytes but its header describes {}. This is navmesh data "
                           "baked against a different Detour layout (poly ref width or block alignment). Re-bake required.",
-                    TileX, TileY, (int32)Blob.size(), Expected);
+                    TileX, TileY, Blob.Num(), Expected);
                 return false;
             }
             return true;
@@ -144,12 +145,12 @@ namespace Lumina
 
         // Plans over tile clusters, then has Detour search two segments ahead and keeps one, so its node pool never sees the whole distance.
         template <typename TYield>
-        ECorridor FindLongCorridor(const dtNavMesh& Mesh, const FNavClusterGraph& Clusters, dtNavMeshQuery& Query, const dtQueryFilter& Filter,
-                                   dtPolyRef StartRef, dtPolyRef EndRef, const float* StartPos, const float* EndPos, float SegmentLength,
+        ECorridor FindLongCorridor(const dtNavMesh& Mesh, const FNavClusterGraph& Clusters, dtNavMeshQuery& Query, FNavClusterGraph::FSearchScratch& Scratch,
+                                   const dtQueryFilter& Filter, dtPolyRef StartRef, dtPolyRef EndRef, const float* StartPos, const float* EndPos, float SegmentLength,
                                    dtPolyRef* Path, int32& PathLen, int32 MaxPath, dtStatus& OutStatus, const std::atomic<uint32>& Abandon, TYield&& YieldToSwap)
         {
-            TVector<FNavClusterGraph::FStep> Route;
-            const FNavClusterGraph::ERoute Planned = Clusters.FindRoute(Mesh, Filter, StartRef, EndRef, Unpack(StartPos), Unpack(EndPos), Abandon, Route);
+            const TVector<FNavClusterGraph::FStep>& Route = Scratch.Route;
+            const FNavClusterGraph::ERoute Planned = Clusters.FindRoute(Mesh, Filter, StartRef, EndRef, Unpack(StartPos), Unpack(EndPos), Abandon, Scratch);
             if (Planned == FNavClusterGraph::ERoute::Abandoned)
             {
                 return ECorridor::Restart;
@@ -163,7 +164,7 @@ namespace Lumina
             const bool bReachable = Planned == FNavClusterGraph::ERoute::Reached;
             float GoalPos[3];
             dtVcopy(GoalPos, EndPos);
-            const dtPolyRef GoalRef = bReachable ? EndRef : Clusters.NearestPoly(Mesh, Route.back().Key, Unpack(EndPos));
+            const dtPolyRef GoalRef = bReachable ? EndRef : Clusters.NearestPoly(Mesh, Route.Last().Key, Unpack(EndPos));
             if (!bReachable)
             {
                 PolyCenter(Mesh, GoalRef, GoalPos);
@@ -178,7 +179,7 @@ namespace Lumina
             int32 Progress = 0;
             PathLen = 0;
 
-            const int32 MaxSegments = 2 * (int32)Route.size() + 8;
+            const int32 MaxSegments = 2 * (int32)Route.Num() + 8;
             for (int32 Iteration = 0; Iteration < MaxSegments; ++Iteration)
             {
                 if (YieldToSwap())
@@ -187,11 +188,11 @@ namespace Lumina
                 }
 
                 int32 Target = Progress;
-                while (Target + 1 < (int32)Route.size() && Route[Target].Distance - Route[Progress].Distance < 2.0f * SegmentLength)
+                while (Target + 1 < (int32)Route.Num() && Route[Target].Distance - Route[Progress].Distance < 2.0f * SegmentLength)
                 {
                     ++Target;
                 }
-                const bool bFinal = Target + 1 >= (int32)Route.size();
+                const bool bFinal = Target + 1 >= (int32)Route.Num();
                 const dtPolyRef TargetRef = bFinal ? GoalRef : Route[Target].EntryRef;
                 float TargetPos[3];
                 if (bFinal)
@@ -252,7 +253,7 @@ namespace Lumina
                         Nearest = i;
                     }
                 }
-                Progress = Math::Min(Math::Max(Nearest, Progress + 1), (int32)Route.size() - 1);
+                Progress = Math::Min(Math::Max(Nearest, Progress + 1), (int32)Route.Num() - 1);
             }
             return ECorridor::Fallback;
         }
@@ -269,7 +270,7 @@ namespace Lumina
     bool FNavMesh::Initialize(const FVector3& InOrigin, float InTileWorldSize, int32 MaxResidentTiles, int32 MaxPolysPerTile)
     {
         TVector<SNavTileData> None;
-        return Initialize(InOrigin, InTileWorldSize, MaxResidentTiles, MaxPolysPerTile, std::move(None));
+        return Initialize(InOrigin, InTileWorldSize, MaxResidentTiles, MaxPolysPerTile, Move(None));
     }
 
     bool FNavMesh::Initialize(const FVector3& InOrigin, float InTileWorldSize, int32 MaxResidentTiles, int32 MaxPolysPerTile, TVector<SNavTileData>&& Tiles)
@@ -317,7 +318,7 @@ namespace Lumina
         int32 Stale = 0;
         for (SNavTileData& Tile : Tiles)
         {
-            if (Tile.Blob.empty())
+            if (Tile.Blob.IsEmpty())
             {
                 ++Skipped;
                 continue;
@@ -329,7 +330,7 @@ namespace Lumina
                 continue;
             }
 
-            const size_t Size = Tile.Blob.size();
+            const int32 Size = Tile.Blob.Num();
             uint8* Owned = CopyForDetour(Tile.Blob);
             if (!Owned)
             {
@@ -371,7 +372,7 @@ namespace Lumina
 
         // Over-provision so contention rarely blocks; each query is a few hundred KB.
         const CNavigationSettings& Settings = *GetDefault<CNavigationSettings>();
-        const uint32 PoolSize = (GTaskSystem ? GTaskSystem->GetNumWorkers() : 4u) + (uint32)Math::Max(0, Settings.QueryPoolSlack);
+        const uint32 PoolSize = (Jobs::IsRuntimeRunning() ? Jobs::GetNumWorkers() : 4u) + (uint32)Math::Max(0, Settings.QueryPoolSlack);
         QueryPool = TVector<FQuerySlot>(PoolSize);
         uint32 ReadyQueries = 0;
         for (uint32 i = 0; i < PoolSize; ++i)
@@ -380,6 +381,7 @@ namespace Lumina
             if (Query && dtStatusSucceed(Query->init(NavMesh, Math::Max(64, Settings.QueryNodePoolSize))))
             {
                 QueryPool[i].Query = Query;
+                QueryPool[i].Rng.Seed(0, i);
                 ++ReadyQueries;
             }
             else if (Query)
@@ -392,7 +394,7 @@ namespace Lumina
             LOG_ERROR("FNavMesh::Initialize: no dtNavMeshQuery instances initialized; pathfinding will always return false.");
             dtFreeNavMesh(NavMesh);
             NavMesh = nullptr;
-            QueryPool.clear();
+            QueryPool.Reset();
             return false;
         }
 
@@ -455,7 +457,7 @@ namespace Lumina
         }
         if (NavMesh) dtFreeNavMesh(NavMesh);
 #endif
-        QueryPool.clear();
+        QueryPool.Reset();
         Clusters.Reset(0);
         NavMesh = nullptr;
         bReady = false;
@@ -513,7 +515,7 @@ namespace Lumina
     FNavMesh::FAcquiredQuery FNavMesh::AcquireQuery() const
     {
         // Linear CAS scan; spin loop is a safety net for pathological contention.
-        const uint32 N = (uint32)QueryPool.size();
+        const uint32 N = (uint32)QueryPool.Num();
         if (N == 0) return {};
 
         for (int32 Attempt = 0; Attempt < 8; ++Attempt)
@@ -576,7 +578,6 @@ namespace Lumina
         float EP[3]; Pack(End,   EP);
         float Extents[3]; Pack(Filter.QueryExtents, Extents);
 
-        // Both buffers live on a half-megabyte fiber stack, so the corridor can afford to be generous.
         // The settings are clamped to these ceilings rather than sized dynamically, keeping the query heap free.
         constexpr int32 MaxPolysCeiling = 4096;
         constexpr int32 MaxStraightCeiling = 512;
@@ -609,7 +610,7 @@ namespace Lumina
             ECorridor Long = ECorridor::Fallback;
             if (NavSettings.HierarchicalPathDistance > 0.0f && dtVdist2D(SNear, ENear) >= NavSettings.HierarchicalPathDistance)
             {
-                Long = FindLongCorridor(*NavMesh, Clusters, *Q.Get(), F, SRef, ERef, SNear, ENear, TileWorldSize * kSegmentTiles, Path, PathLen, MaxPolys, PathStatus,
+                Long = FindLongCorridor(*NavMesh, Clusters, *Q.Get(), Q.Slot->ClusterScratch, F, SRef, ERef, SNear, ENear, TileWorldSize * kSegmentTiles, Path, PathLen, MaxPolys, PathStatus,
                     Attempt < kMaxRestarts ? PendingSwaps : NeverAbandon, [&] { return Attempt < kMaxRestarts && Topology.YieldToSwap(Out.Epoch); });
             }
             if (Long == ECorridor::Restart)
@@ -654,17 +655,17 @@ namespace Lumina
             Out.bTruncated = true;
         }
 
-        Out.Corners.reserve(StraightCount);
-        Out.CornerFlags.reserve(StraightCount);
+        Out.Corners.Reserve(StraightCount);
+        Out.CornerFlags.Reserve(StraightCount);
         for (int32 i = 0; i < StraightCount; ++i)
         {
-            Out.Corners.push_back(Unpack(&StraightPath[i * 3]));
+            Out.Corners.Add(Unpack(&StraightPath[i * 3]));
 
             uint8 Flags = (uint8)ENavCornerFlag::None;
             if (StraightFlags[i] & DT_STRAIGHTPATH_START)                Flags |= (uint8)ENavCornerFlag::PathStart;
             if (StraightFlags[i] & DT_STRAIGHTPATH_END)                  Flags |= (uint8)ENavCornerFlag::PathEnd;
             if (StraightFlags[i] & DT_STRAIGHTPATH_OFFMESH_CONNECTION)   Flags |= (uint8)ENavCornerFlag::OffMeshLink;
-            Out.CornerFlags.push_back(Flags);
+            Out.CornerFlags.Add(Flags);
         }
         Out.bValid = true;
 
@@ -702,12 +703,12 @@ namespace Lumina
         FQueryScope Topology(*this);
         bDebugCacheDirty.store(false, std::memory_order_release);
 
-        CachedTriVerts.clear();
-        CachedTriAreas.clear();
-        CachedBoundaryVerts.clear();
-        CachedBoundaryAreas.clear();
-        CachedOffMeshVerts.clear();
-        CachedTileBounds.clear();
+        CachedTriVerts.Reset();
+        CachedTriAreas.Reset();
+        CachedBoundaryVerts.Reset();
+        CachedBoundaryAreas.Reset();
+        CachedOffMeshVerts.Reset();
+        CachedTileBounds.Reset();
 
 #if defined(LUMINA_HAS_RECAST)
         if (!NavMesh) return;
@@ -726,12 +727,12 @@ namespace Lumina
             EdgeEstimate += (size_t)Tile->header->polyCount * 4;
             LinkEstimate += (size_t)Tile->header->offMeshConCount;
         }
-        CachedTriVerts.reserve(TriEstimate * 3);
-        CachedTriAreas.reserve(TriEstimate);
-        CachedBoundaryVerts.reserve(EdgeEstimate * 2);
-        CachedBoundaryAreas.reserve(EdgeEstimate);
-        CachedOffMeshVerts.reserve(LinkEstimate * 2);
-        CachedTileBounds.reserve(MaxTiles);
+        CachedTriVerts.Reserve(IntCastChecked<int32>(TriEstimate * 3));
+        CachedTriAreas.Reserve(IntCastChecked<int32>(TriEstimate));
+        CachedBoundaryVerts.Reserve(IntCastChecked<int32>(EdgeEstimate * 2));
+        CachedBoundaryAreas.Reserve(IntCastChecked<int32>(EdgeEstimate));
+        CachedOffMeshVerts.Reserve(IntCastChecked<int32>(LinkEstimate * 2));
+        CachedTileBounds.Reserve(MaxTiles);
 
         for (int32 i = 0; i < MaxTiles; ++i)
         {
@@ -743,7 +744,7 @@ namespace Lumina
             Tb.Max = FVector3(Tile->header->bmax[0], Tile->header->bmax[1], Tile->header->bmax[2]);
             Tb.X   = Tile->header->x;
             Tb.Y   = Tile->header->y;
-            CachedTileBounds.push_back(Tb);
+            CachedTileBounds.Add(Tb);
 
             for (int p = 0; p < Tile->header->polyCount; ++p)
             {
@@ -758,9 +759,9 @@ namespace Lumina
                     if (Poly.neis[j] != 0) continue;
                     const float* A = &Tile->verts[Poly.verts[j] * 3];
                     const float* B = &Tile->verts[Poly.verts[(j + 1) % Poly.vertCount] * 3];
-                    CachedBoundaryVerts.emplace_back(A[0], A[1], A[2]);
-                    CachedBoundaryVerts.emplace_back(B[0], B[1], B[2]);
-                    CachedBoundaryAreas.push_back(Area);
+                    CachedBoundaryVerts.Emplace(A[0], A[1], A[2]);
+                    CachedBoundaryVerts.Emplace(B[0], B[1], B[2]);
+                    CachedBoundaryAreas.Add(Area);
                 }
 
                 const dtPolyDetail& Detail = Tile->detailMeshes[p];
@@ -773,17 +774,17 @@ namespace Lumina
                         const float* P = (Idx < Poly.vertCount)
                             ? &Tile->verts[Poly.verts[Idx] * 3]
                             : &Tile->detailVerts[(Detail.vertBase + (Idx - Poly.vertCount)) * 3];
-                        CachedTriVerts.emplace_back(P[0], P[1], P[2]);
+                        CachedTriVerts.Emplace(P[0], P[1], P[2]);
                     }
-                    CachedTriAreas.push_back(Area);
+                    CachedTriAreas.Add(Area);
                 }
             }
 
             for (int c = 0; c < Tile->header->offMeshConCount; ++c)
             {
                 const dtOffMeshConnection& Con = Tile->offMeshCons[c];
-                CachedOffMeshVerts.emplace_back(Con.pos[0], Con.pos[1], Con.pos[2]);
-                CachedOffMeshVerts.emplace_back(Con.pos[3], Con.pos[4], Con.pos[5]);
+                CachedOffMeshVerts.Emplace(Con.pos[0], Con.pos[1], Con.pos[2]);
+                CachedOffMeshVerts.Emplace(Con.pos[3], Con.pos[4], Con.pos[5]);
             }
         }
 #endif
@@ -792,8 +793,8 @@ namespace Lumina
     void FNavMesh::ForEachBoundaryEdge(const FBoundaryEdgeVisitor& Visitor) const
     {
         EnsureDebugCache();
-        const size_t N = CachedBoundaryAreas.size();
-        for (size_t i = 0; i < N; ++i)
+        const int32 N = CachedBoundaryAreas.Num();
+        for (int32 i = 0; i < N; ++i)
         {
             Visitor(CachedBoundaryVerts[i * 2 + 0], CachedBoundaryVerts[i * 2 + 1], CachedBoundaryAreas[i]);
         }
@@ -802,8 +803,8 @@ namespace Lumina
     void FNavMesh::ForEachOffMeshLink(const FOffMeshLinkVisitor& Visitor) const
     {
         EnsureDebugCache();
-        const size_t N = CachedOffMeshVerts.size() / 2;
-        for (size_t i = 0; i < N; ++i)
+        const int32 N = CachedOffMeshVerts.Num() / 2;
+        for (int32 i = 0; i < N; ++i)
         {
             Visitor(CachedOffMeshVerts[i * 2 + 0], CachedOffMeshVerts[i * 2 + 1]);
         }
@@ -822,18 +823,18 @@ namespace Lumina
     {
         EnsureDebugCache();
         FNavDebugStats S;
-        S.LoadedTiles   = (int32)CachedTileBounds.size();
-        S.Triangles     = (int32)CachedTriAreas.size();
-        S.BoundaryEdges = (int32)CachedBoundaryAreas.size();
-        S.OffMeshLinks  = (int32)(CachedOffMeshVerts.size() / 2);
+        S.LoadedTiles   = CachedTileBounds.Num();
+        S.Triangles     = CachedTriAreas.Num();
+        S.BoundaryEdges = CachedBoundaryAreas.Num();
+        S.OffMeshLinks  = CachedOffMeshVerts.Num() / 2;
         return S;
     }
 
     void FNavMesh::ForEachTriangle(FTriangleVisitor Visitor) const
     {
         EnsureDebugCache();
-        const size_t NumTris = CachedTriAreas.size();
-        for (size_t i = 0; i < NumTris; ++i)
+        const int32 NumTris = CachedTriAreas.Num();
+        for (int32 i = 0; i < NumTris; ++i)
         {
             Visitor(CachedTriVerts[i * 3 + 0], CachedTriVerts[i * 3 + 1], CachedTriVerts[i * 3 + 2], CachedTriAreas[i]);
         }
@@ -842,10 +843,10 @@ namespace Lumina
     void FNavMesh::ParallelForEachTriangle(const FParallelTriangleVisitor& Visitor) const
     {
         EnsureDebugCache();
-        const size_t NumTris = CachedTriAreas.size();
+        const int32 NumTris = CachedTriAreas.Num();
         if (NumTris == 0) return;
 
-        Task::ParallelFor((uint32)NumTris, [this, &Visitor](uint32 i)
+        Jobs::ParallelFor((uint32)NumTris, [this, &Visitor](uint32 i)
         {
             Visitor(CachedTriVerts[i * 3 + 0], CachedTriVerts[i * 3 + 1], CachedTriVerts[i * 3 + 2], CachedTriAreas[i]);
         });
@@ -940,18 +941,18 @@ namespace Lumina
         LUMINA_PROFILE_SCOPE();
 
 #if defined(LUMINA_HAS_RECAST)
-        if (!NavMesh || Swaps.empty())
+        if (!NavMesh || Swaps.IsEmpty())
         {
             return 0;
         }
 
         // Copied into Detour's allocator before the hold, so readers wait only for the relinking, and a rejected blob keeps its old tile.
-        TVector<uint8*> Owned(Swaps.size(), nullptr);
-        TVector<uint8> Accepted(Swaps.size(), 1);
-        for (size_t i = 0; i < Swaps.size(); ++i)
+        TVector<uint8*> Owned(Swaps.Num(), nullptr);
+        TVector<uint8> Accepted(Swaps.Num(), 1);
+        for (int32 i = 0; i < Swaps.Num(); ++i)
         {
             const TVector<uint8>* Blob = Swaps[i].Blob;
-            if (Blob == nullptr || Blob->empty())
+            if (Blob == nullptr || Blob->IsEmpty())
             {
                 continue;
             }
@@ -962,14 +963,22 @@ namespace Lumina
         int32 Landed = 0;
         {
             FSwapScope Topology(*this);
-            for (size_t i = 0; i < Swaps.size(); ++i)
+            for (int32 i = 0; i < Swaps.Num(); ++i)
             {
                 if (!Accepted[i])
                 {
                     continue;
                 }
                 RemoveTileLocked(Swaps[i].X, Swaps[i].Y);
-                Landed += Owned[i] == nullptr || AddTileLocked(Owned[i], (int32)Swaps[i].Blob->size()) ? 1 : 0;
+                if (Owned[i] == nullptr || AddTileLocked(Owned[i], Swaps[i].Blob->Num()))
+                {
+                    ++Landed;
+                }
+                else
+                {
+                    LOG_ERROR("FNavMesh::RebuildTiles: tile ({}, {}) was removed but Detour rejected its rebuilt blob; the area is now unpathable until it is retried.",
+                        Swaps[i].X, Swaps[i].Y);
+                }
                 RecordTileChangeLocked(Swaps[i].X, Swaps[i].Y);
             }
         }
@@ -987,7 +996,7 @@ namespace Lumina
         LUMINA_PROFILE_SCOPE();
 
 #if defined(LUMINA_HAS_RECAST)
-        if (!NavMesh || Blob.empty() || !ValidateTileBlob(Blob, TileX, TileY))
+        if (!NavMesh || Blob.IsEmpty() || !ValidateTileBlob(Blob, TileX, TileY))
         {
             return false;
         }
@@ -1003,7 +1012,7 @@ namespace Lumina
         bool bResult = false;
         {
             FSwapScope Topology(*this);
-            bResult = AddTileLocked(Owned, (int32)Blob.size());
+            bResult = AddTileLocked(Owned, Blob.Num());
             if (bResult)
             {
                 RecordTileChangeLocked(TileX, TileY);
@@ -1086,19 +1095,9 @@ namespace Lumina
             return false;
         }
 
-        // Thread-local xorshift; cheap RNG for Detour's sampling callback.
-        static thread_local uint32 RngState = 0xDEADBEEF;
-        auto Rand01 = []() -> float
-        {
-            uint32 X = RngState ? RngState : 1u;
-            X ^= X << 13; X ^= X >> 17; X ^= X << 5;
-            RngState = X;
-            return (X & 0x00FFFFFFu) * (1.0f / 16777216.0f);
-        };
-
         dtPolyRef RandomRef = 0;
         float RandomPt[3];
-        if (dtStatusFailed(Q.Get()->findRandomPointAroundCircle(StartRef, Snapped, Radius, &F, Rand01, &RandomRef, RandomPt)) || RandomRef == 0)
+        if (dtStatusFailed(Q.Get()->findRandomPointAroundCircle(StartRef, Snapped, Radius, &F, NextSlotRandom01, &Q.Slot->Rng, &RandomRef, RandomPt)) || RandomRef == 0)
         {
             return false;
         }
@@ -1155,29 +1154,18 @@ namespace Lumina
         bool TileLinksAreAligned(const TVector<uint8>& Blob)
         {
 #if defined(LUMINA_HAS_RECAST)
-            if (Blob.size() < sizeof(dtMeshHeader))
+            if (static_cast<size_t>(Blob.Num()) < sizeof(dtMeshHeader))
             {
                 return false;
             }
-            const dtMeshHeader* H = reinterpret_cast<const dtMeshHeader*>(Blob.data());
+            const dtMeshHeader* H = reinterpret_cast<const dtMeshHeader*>(Blob.GetData());
             const int32 Expected = ExpectedTileBlobSize(H);
-            if ((int32)Blob.size() != Expected)
+            if (Blob.Num() != Expected)
             {
                 return false;
             }
 
-            auto A4 = [](int32 x) { return (x + 3) & ~3; };
-#ifdef DT_POLYREF64
-            auto A8 = [](int32 x) { return (x + 7) & ~7; };
-            const int32 LinkOffset = A8((int32)sizeof(dtMeshHeader))
-                                   + A8((int32)sizeof(float) * 3 * H->vertCount)
-                                   + A4((int32)sizeof(dtPoly) * H->polyCount);
-#else
-            const int32 LinkOffset = A4((int32)sizeof(dtMeshHeader))
-                                   + A4((int32)sizeof(float) * 3 * H->vertCount)
-                                   + A4((int32)sizeof(dtPoly) * H->polyCount);
-#endif
-            return (LinkOffset % (int32)alignof(dtLink)) == 0;
+            return (TileLinkOffset(H) % (int32)alignof(dtLink)) == 0;
 #else
             (void)Blob;
             return true;

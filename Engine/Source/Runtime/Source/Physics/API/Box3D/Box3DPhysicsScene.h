@@ -32,7 +32,9 @@ namespace Lumina
     struct SRagdollLocomotionComponent;
     struct STransformComponent;
     struct SMeshCollision;
+    struct SMeshColliderComponent;
     class CMesh;
+    class CStaticMesh;
     class CWorld;
 }
 
@@ -67,6 +69,23 @@ namespace Lumina::Physics
         b3Vec3                  Scale{ 1.0f, 1.0f, 1.0f };
     };
 
+    struct FBox3DGeometryDeleter
+    {
+        void operator()(b3HullData* Hull) const { b3DestroyHull(Hull); }
+        void operator()(b3MeshData* Mesh) const { b3DestroyMesh(Mesh); }
+        void operator()(b3HeightFieldData* Field) const { b3DestroyHeightField(Field); }
+    };
+
+    template <typename T>
+    using TOwnedGeometry = TUniquePtr<T, FBox3DGeometryDeleter>;
+
+    // Box3D keeps pointing at a mesh or height field while the shape lives, so the body holds what was built for it alone.
+    struct FBodyGeometry
+    {
+        TOwnedGeometry<b3MeshData>          Mesh;
+        TOwnedGeometry<b3HeightFieldData>   HeightField;
+    };
+
     struct FRigidBodyBuildResult
     {
         b3BodyDef               BodyDef{};
@@ -74,6 +93,9 @@ namespace Lumina::Physics
         TVector<FPendingShape>  Shapes;
         // A box collider's hull lives here until commit, since Box3D clones it on shape creation and the shared cache's lock serialized parallel builds.
         TUniquePtr<b3BoxHull>   BoxHull;
+        // Cloned by Box3D on shape creation like BoxHull, so they are freed at commit.
+        TVector<TOwnedGeometry<b3HullData>> OwnedHulls;
+        FBodyGeometry           Geometry;
 
         FVector3                LastBodyPosition = FVector3(0.0f);
         FQuat                   LastBodyRotation = FQuat::Identity();
@@ -134,9 +156,9 @@ namespace Lumina::Physics
 
         void Clear()
         {
-            Pushes.clear();
-            Landings.clear();
-            Jumps.clear();
+            Pushes.Reset();
+            Landings.Reset();
+            Jumps.Reset();
         }
     };
 
@@ -190,7 +212,7 @@ namespace Lumina::Physics
         void FollowTransform(ECS::FRegistry& Registry, ECS::FEntity Entity, SCharacterPhysicsComponent& Physics,
             SCharacterMovementComponent& Movement, float FixedDt);
         void BuildInterpolatedTransforms(float Alpha);
-        void ApplyInterpolatedTransforms();
+        void ApplyInterpolatedTransforms(bool bCarriersOnly);
 
         EPhysicsBodyStatus GetBodyStatus(ECS::FEntity Entity) const override;
         bool TryGetBodyState(ECS::FEntity Entity, FPhysicsBodyState& Out) const override;
@@ -228,6 +250,7 @@ namespace Lumina::Physics
 
         void OnConstraintComponentConstructed(ECS::FRegistry& Registry, ECS::FEntity Entity);
         void OnConstraintComponentDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity);
+        bool OwnsComponentConstraint(uint32 Handle, ECS::FEntity Entity);
 
         void AddForce(ECS::FEntity Entity, const FVector3& Force) override;
         void AddImpulse(ECS::FEntity Entity, const FVector3& Impulse) override;
@@ -251,6 +274,7 @@ namespace Lumina::Physics
         FQuat GetBodyRotation(ECS::FEntity Entity) const override;
 
         uint32 GetBodyCount() override;
+        uint32 GetAwakeBodyCount() override;
 
         // Joints alive in the solver, counted here because Box3D's world registry is private to the module that links it.
         uint32 GetLiveJointCount();
@@ -260,6 +284,10 @@ namespace Lumina::Physics
         uint32 CreateStaticBodyGroup(ECS::FEntity Owner, TSpan<const FStaticInstanceDesc> Instances) override;
         void DestroyStaticBodyGroup(uint32 GroupID) override;
 
+        SPhysicsBodyTarget CreateBody(const FPhysicsBodyDesc& Desc) override;
+        void DestroyBody(const SPhysicsBodyTarget& Body) override;
+        void SetBodyTransform(const SPhysicsBodyTarget& Body, const FVector3& Position, const FQuat& Rotation) override;
+
         TSharedPtr<FPhysicsRagdollHandle> CreateRagdoll(const FRagdollDesc& Desc) override;
         bool IsRagdollReady(const FPhysicsRagdollHandle& Handle) const override;
         void ReadRagdollPose(const FPhysicsRagdollHandle& Handle, const FMatrix4& WorldToEntity, const FSkeletonResource* Skeleton, TVector<FMatrix4>& OutBoneTransforms) override;
@@ -267,6 +295,7 @@ namespace Lumina::Physics
         void GetRagdollRootTransform(const FPhysicsRagdollHandle& Handle, FVector3& OutPosition, FQuat& OutRotation) override;
         SPhysicsBodyTarget GetRagdollBoneTarget(ECS::FEntity Entity, FName Bone) const override;
         uint32 AllocateRagdollGroupID() override { return NextRagdollGroupID++; }
+        void RetuneRagdollLimits(ECS::FEntity Entity, const CPhysicsAsset& Asset) override;
 
         uint32 CreateConstraint(const SConstraintDesc& Desc) override;
         void DestroyConstraint(uint32 ConstraintID) override;
@@ -283,6 +312,8 @@ namespace Lumina::Physics
         b3BodyId ResolveBody(uint32 BodyID) const;
         uint32 RegisterBody(b3BodyId BodyId);
         void UnregisterBody(uint32 BodyID);
+        // False when Count more bodies would pass MaxBodies, warning once per scene.
+        bool HasBodyCapacity(uint32 Count);
 
         const b3HullData* GetOrCreateBoxHull(const FVector3& HalfExtent);
         const b3HullData* GetOrCreateCylinderHull(float Radius, float HalfHeight);
@@ -291,7 +322,10 @@ namespace Lumina::Physics
         const b3MeshData* GetOrCreateTriangleMesh(const CMesh* Mesh);
 
         bool BuildCompoundShapes(const SCompoundColliderComponent& Comp, const STransformComponent& Transform, TVector<FPendingShape>& OutShapes);
-        bool BuildMeshCollision(const SMeshCollision& Collision, const FVector3& Scale, TVector<FPendingShape>& OutShapes);
+        bool BuildMeshCollision(const SMeshCollision& Collision, const FVector3& Scale, FRigidBodyBuildResult& Out);
+
+        // Geometry held by live bodies, built for each body alone rather than drawn from a shared cache.
+        int32 GetBodyGeometryCount() const { return BodyGeometry.Num(); }
 
         struct FBodyMaterialEntry
         {
@@ -317,7 +351,8 @@ namespace Lumina::Physics
         bool ReadBodyState(b3BodyId Body, FPhysicsBodyState& Out) const;
         void SynchronizeBodies();
         void SynchronizeBodyGroups();
-        void CommitStaticBodyGroup(uint32 GroupID, ECS::FEntity Owner, TSpan<const FRigidBodyBuildResult> Builds);
+        void CommitStaticBodyGroup(uint32 GroupID, ECS::FEntity Owner, TSpan<FRigidBodyBuildResult> Builds);
+        void AdoptBodyGeometry(uint32 Handle, FRigidBodyBuildResult& Build);
 
         struct FPendingStaticGroup
         {
@@ -374,11 +409,13 @@ namespace Lumina::Physics
         void MarkAuthoredKinematic(uint32 Handle);
         uint32 StageInterpSlot(uint32 BodyHandle, const FVector3& Position, const FQuat& Rotation);
         void ResetInterpStaging();
+        void StageSettledBodies();
         void DropCharacterInterpSlots();
 
         void BulkCreateRigidBodies(ECS::FRegistry& Registry);
         void CreateRigidBodiesBatched(const TVector<ECS::FEntity>& Entities);
-        void RebuildStaleDynamicMeshBodies(ECS::FRegistry& Registry);
+        void RebuildStaleMeshBodies(ECS::FRegistry& Registry);
+        static CStaticMesh* ResolveColliderMesh(const ECS::FRegistry& Registry, ECS::FEntity Entity, const SMeshColliderComponent& Collider);
 
         EBodyBuildStatus TryBuildRigidBody(ECS::FRegistry& Registry, ECS::FEntity Entity, FRigidBodyBuildResult& OutResult);
         uint32 CommitRigidBody(ECS::FEntity Entity, FRigidBodyBuildResult& Build);
@@ -392,6 +429,9 @@ namespace Lumina::Physics
         void MonitorBreakableConstraints(float Dt);
         void DestroyAllConstraints();
         void DestroyAllStaticBodyGroups();
+        void DestroyAllCreatedBodies();
+        FRigidBodyBuildResult MakeEntityFreeBuild(EBodyType Type, const FVector3& Position, const FQuat& Rotation, const SCollisionProfile& Profile,
+            const CPhysicsMaterial* Material, int32 SourceIndex) const;
         void DestroyGeometryCaches();
         void ApplyWorldSettings(const Lumina::SDefaultWorldSettings& Settings);
         bool WorldSettingsChanged(const Lumina::SDefaultWorldSettings& Settings);
@@ -403,10 +443,11 @@ namespace Lumina::Physics
             uint8   Kind = 0;
             float   X = 0.0f, Y = 0.0f, Z = 0.0f;
             const void* Source = nullptr;
+            uint32  Version = 0;
 
             bool operator==(const FHullKey& Other) const
             {
-                return Kind == Other.Kind && X == Other.X && Y == Other.Y && Z == Other.Z && Source == Other.Source;
+                return Kind == Other.Kind && X == Other.X && Y == Other.Y && Z == Other.Z && Source == Other.Source && Version == Other.Version;
             }
         };
 
@@ -425,6 +466,7 @@ namespace Lumina::Physics
                 MixFloat(Key.X); MixFloat(Key.Y); MixFloat(Key.Z);
                 Mix((uint32)(reinterpret_cast<uintptr_t>(Key.Source) & 0xFFFFFFFFu));
                 Mix((uint32)(reinterpret_cast<uintptr_t>(Key.Source) >> 32));
+                Mix(Key.Version);
                 return Hash;
             }
         };
@@ -435,34 +477,20 @@ namespace Lumina::Physics
         THashMap<FHullKey, b3BoxHull*, FHullKeyHash>        BoxHullCache;
 
         mutable FSharedMutex                                MeshCacheMutex;
-        THashMap<const void*, b3MeshData*>                  MeshCache;
+        THashMap<FHullKey, b3MeshData*, FHullKeyHash>       MeshCache;
 
-        TVector<b3HeightFieldData*>                         OwnedHeightFields;
+        // Keyed by geometry version, so a replaced mesh builds fresh while bodies still holding the old entry stay valid.
+        static FHullKey MakeMeshGeometryKey(const CMesh* Mesh);
 
-        void TrackOwnedHull(b3HullData* Hull);
-        void TrackOwnedMesh(b3MeshData* Mesh);
-        void TrackOwnedHeightField(b3HeightFieldData* Field);
-
-        // Geometry unique to one asset or component, so a shared cache would never hit; freed with the scene.
-        // Guarded because the parallel body build appends to them.
-        mutable FMutex                                      OwnedGeometryMutex;
-        TVector<b3HullData*>                                OwnedHulls;
-        TVector<b3MeshData*>                                OwnedMeshes;
+        // Keyed by body handle and released in DestroyBodyHandle, after the shapes pointing at it.
+        THashMap<uint32, FBodyGeometry>                     BodyGeometry;
 
         // A dynamic mesh collider's shape, built on a worker so a streamed-in chunk never welds and partitions on the game thread.
         struct FDynamicMeshCook
         {
-            TAtomic<bool>   bDone{ false };
-            bool            bFailed = false;
-            b3MeshData*     Mesh = nullptr;
-            b3HullData*     Hull = nullptr;
-
-            ~FDynamicMeshCook();
-            FDynamicMeshCook() = default;
-            FDynamicMeshCook(const FDynamicMeshCook&) = delete;
-            FDynamicMeshCook& operator=(const FDynamicMeshCook&) = delete;
-            FDynamicMeshCook(FDynamicMeshCook&&) = delete;
-            FDynamicMeshCook& operator=(FDynamicMeshCook&&) = delete;
+            TAtomic<bool>                   bDone{ false };
+            TOwnedGeometry<b3MeshData>      Mesh;
+            TOwnedGeometry<b3HullData>      Hull;
         };
 
         struct FDynamicMeshCookEntry
@@ -603,6 +631,7 @@ namespace Lumina::Physics
         float                                   Accumulator = 0.0f;
         uint32                                  CollisionSteps = 0;
         uint32                                  MaxBodies = 0;
+        bool                                    bWarnedBodyCap = false;
 
         static constexpr uint32                 kInitialBodyReservation = 4096;
         static constexpr uint32                 kInitialContactReservation = 8192;
@@ -614,6 +643,9 @@ namespace Lumina::Physics
 
         THashMap<uint32, TVector<uint32>>       StaticBodyGroups;
         uint32                                  NextStaticBodyGroupID = 1;
+
+        // Handles of bodies from CreateBody, the only ones DestroyBody and SetBodyTransform will touch.
+        THashSet<uint32>                        CreatedBodies;
 
         struct FBox3DConstraint
         {
@@ -636,6 +668,7 @@ namespace Lumina::Physics
         FMutex                                  ConstraintsMutex;
         THashMap<uint32, FBox3DConstraint>      Constraints;
         uint32                                  NextConstraintID = 1;
+        b3BodyId                                WorldAnchorBody = b3_nullBodyId;
 
         FMutex                                  PendingConstraintMutex;
         TVector<ECS::FEntity>                   PendingConstraintCreations;
@@ -659,12 +692,12 @@ namespace Lumina::Physics
 
             void PushBack()
             {
-                Entities.emplace_back();
-                Flags.emplace_back();
-                PrevPos.emplace_back();
-                CurrPos.emplace_back();
-                PrevQx.emplace_back(); PrevQy.emplace_back(); PrevQz.emplace_back(); PrevQw.emplace_back();
-                CurrQx.emplace_back(); CurrQy.emplace_back(); CurrQz.emplace_back(); CurrQw.emplace_back();
+                Entities.Emplace();
+                Flags.Emplace();
+                PrevPos.Emplace();
+                CurrPos.Emplace();
+                PrevQx.Emplace(); PrevQy.Emplace(); PrevQz.Emplace(); PrevQw.Emplace();
+                CurrQx.Emplace(); CurrQy.Emplace(); CurrQz.Emplace(); CurrQw.Emplace();
             }
 
             void Resize(size_t Count)
@@ -674,26 +707,26 @@ namespace Lumina::Physics
 
             void EnsureLerpCapacity()
             {
-                const size_t N = Entities.size();
-                LerpPos.resize(N);
-                LerpQx.resize(N); LerpQy.resize(N); LerpQz.resize(N); LerpQw.resize(N);
+                const int32 N = Entities.Num();
+                LerpPos.SetNum(N);
+                LerpQx.SetNum(N); LerpQy.SetNum(N); LerpQz.SetNum(N); LerpQw.SetNum(N);
             }
 
             void Truncate(size_t Count)
             {
-                Entities.resize(Count); Flags.resize(Count);
-                PrevPos.resize(Count);  CurrPos.resize(Count);
-                PrevQx.resize(Count); PrevQy.resize(Count); PrevQz.resize(Count); PrevQw.resize(Count);
-                CurrQx.resize(Count); CurrQy.resize(Count); CurrQz.resize(Count); CurrQw.resize(Count);
+                Entities.SetNum(IntCastChecked<int32>(Count)); Flags.SetNum(IntCastChecked<int32>(Count));
+                PrevPos.SetNum(IntCastChecked<int32>(Count));  CurrPos.SetNum(IntCastChecked<int32>(Count));
+                PrevQx.SetNum(IntCastChecked<int32>(Count)); PrevQy.SetNum(IntCastChecked<int32>(Count)); PrevQz.SetNum(IntCastChecked<int32>(Count)); PrevQw.SetNum(IntCastChecked<int32>(Count));
+                CurrQx.SetNum(IntCastChecked<int32>(Count)); CurrQy.SetNum(IntCastChecked<int32>(Count)); CurrQz.SetNum(IntCastChecked<int32>(Count)); CurrQw.SetNum(IntCastChecked<int32>(Count));
             }
 
             void Clear()
             {
-                Entities.clear(); Flags.clear();
-                PrevPos.clear();  CurrPos.clear();  LerpPos.clear();
-                PrevQx.clear(); PrevQy.clear(); PrevQz.clear(); PrevQw.clear();
-                CurrQx.clear(); CurrQy.clear(); CurrQz.clear(); CurrQw.clear();
-                LerpQx.clear(); LerpQy.clear(); LerpQz.clear(); LerpQw.clear();
+                Entities.Reset(); Flags.Reset();
+                PrevPos.Reset();  CurrPos.Reset();  LerpPos.Reset();
+                PrevQx.Reset(); PrevQy.Reset(); PrevQz.Reset(); PrevQw.Reset();
+                CurrQx.Reset(); CurrQy.Reset(); CurrQz.Reset(); CurrQw.Reset();
+                LerpQx.Reset(); LerpQy.Reset(); LerpQz.Reset(); LerpQw.Reset();
             }
         };
         FInterpStaging                          InterpStaging;
@@ -701,13 +734,18 @@ namespace Lumina::Physics
         // Characters are restaged on every blend, so their slots trail the bodies and are dropped before the next one.
         uint32                                  InterpBodySlots = 0;
         bool                                    bInterpCharacterTail = false;
-        TVector<uint32>                         InterpApplied;
         TVector<uint32>                         InterpAppliedParented;
+
+        // Slots of parented bodies with kinematic or static riders, valid until the staging is rebuilt.
+        TVector<uint32>                         InterpCarrierSlots;
         TVector<uint8>                          InterpCategory;
 
         // Body handle to staging slot for this frame, reset through StagedBodyHandles so it stays O(moved).
         TVector<uint32>                         BodyStagingSlot;
         TVector<uint32>                         StagedBodyHandles;
+
+        // Bodies the last blend left between two poses, which settle on the simulated one if no move event refreshes them.
+        TVector<uint32>                         SettleCandidates;
 
         // Dense wake state per body handle, diffed against the move events to raise OnWake / OnSleep.
         TVector<uint8>                          BodyAwake;

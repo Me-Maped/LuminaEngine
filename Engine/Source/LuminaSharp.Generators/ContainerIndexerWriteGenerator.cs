@@ -1,4 +1,4 @@
-using System.Linq;
+using LuminaSharp.ScriptProperties;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -9,8 +9,6 @@ namespace LuminaSharp.Generators;
 [Generator]
 public sealed class ContainerIndexerWriteGenerator : IIncrementalGenerator
 {
-    private const string VectorType = "Lumina.TVector<T>";
-
     private static readonly DiagnosticDescriptor MarshalledIndexerWrite = new(
         id: "LUM0201",
         title: "Write through a marshalled TVector indexer",
@@ -24,22 +22,35 @@ public sealed class ContainerIndexerWriteGenerator : IIncrementalGenerator
     {
         IncrementalValuesProvider<Diagnostic?> Diagnostics = context.SyntaxProvider
             .CreateSyntaxProvider(
-                static (Node, _) => Node is ElementAccessExpressionSyntax Access && IsWriteTarget(Access),
+                static (Node, _) => Node is ElementAccessExpressionSyntax Access && IsWriteTarget(WrittenExpression(Access)),
                 static (Context, Cancel) => Validate((ElementAccessExpressionSyntax)Context.Node, Context.SemanticModel, Cancel))
             .Where(static Item => Item != null);
 
         context.RegisterSourceOutput(Diagnostics, static (Context, Item) => Context.ReportDiagnostic(Item!));
     }
 
-    private static bool IsWriteTarget(ElementAccessExpressionSyntax Access)
+    private static ExpressionSyntax SkipParentheses(ExpressionSyntax Inner)
     {
-        ExpressionSyntax Outer = Access;
-        while (Outer.Parent is ParenthesizedExpressionSyntax Parens)
+        while (Inner.Parent is ParenthesizedExpressionSyntax Parens)
         {
-            Outer = Parens;
+            Inner = Parens;
         }
+        return Inner;
+    }
 
-        // A member write such as List[0].Field = x goes through a view and is left alone, so only the element itself counts.
+    // The outermost member access rooted at the element, so List[0].A.B = x is judged by what it writes.
+    private static ExpressionSyntax WrittenExpression(ElementAccessExpressionSyntax Access)
+    {
+        ExpressionSyntax Outer = SkipParentheses(Access);
+        while (Outer.Parent is MemberAccessExpressionSyntax Member && Member.Expression == Outer)
+        {
+            Outer = SkipParentheses(Member);
+        }
+        return Outer;
+    }
+
+    private static bool IsWriteTarget(ExpressionSyntax Outer)
+    {
         return Outer.Parent switch
         {
             AssignmentExpressionSyntax Assign => Assign.Left == Outer,
@@ -71,7 +82,7 @@ public sealed class ContainerIndexerWriteGenerator : IIncrementalGenerator
         }
 
         INamedTypeSymbol Owner = Indexer.ContainingType;
-        if (Owner.OriginalDefinition.ToDisplayString() != VectorType || Owner.TypeArguments.Length != 1)
+        if (Owner.OriginalDefinition.ToDisplayString() != ScriptPropertyTypeNames.TVector || Owner.TypeArguments.Length != 1)
         {
             return null;
         }
@@ -82,7 +93,30 @@ public sealed class ContainerIndexerWriteGenerator : IIncrementalGenerator
             return null;
         }
 
+        ExpressionSyntax Written = WrittenExpression(Access);
+        if (Written != SkipParentheses(Access) && !IsMemberWriteOnCopy(Access, Written, Element, Model, Cancel))
+        {
+            return null;
+        }
+
         return Diagnostic.Create(MarshalledIndexerWrite, Access.GetLocation(), Element.ToDisplayString());
+    }
+
+    // A view element writes its members through a pointer, and a reference-typed member along the path writes into a shared object.
+    private static bool IsMemberWriteOnCopy(ElementAccessExpressionSyntax Access, ExpressionSyntax Written, ITypeSymbol Element, SemanticModel Model, System.Threading.CancellationToken Cancel)
+    {
+        if (Element.TypeKind != TypeKind.Struct || Element.IsUnmanagedType || IsNativeView(Element))
+        {
+            return false;
+        }
+        for (SyntaxNode Node = Access.Parent!; Node != Written; Node = Node.Parent!)
+        {
+            if (Node is MemberAccessExpressionSyntax && Model.GetTypeInfo(Node, Cancel).Type?.IsValueType != true)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     // Mirrors ElementKinds.Of, where everything but a blittable value or a bool is marshalled.
@@ -92,19 +126,20 @@ public sealed class ContainerIndexerWriteGenerator : IIncrementalGenerator
         {
             return false;
         }
+        // A script struct that needs marshalling holds a managed field, so the unmanaged check already covers it.
         if (!Type.IsUnmanagedType)
         {
             return true;
         }
-        if (Type is INamedTypeSymbol { IsGenericType: true } Generic)
-        {
-            return Generic.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
-                || Generic.ContainingNamespace?.ToDisplayString() == "Lumina";
-        }
-        if (Type.GetAttributes().Any(Attribute => Attribute.AttributeClass?.Name == "NativeSlotViewAttribute"))
-        {
-            return true;
-        }
-        return Type.AllInterfaces.Any(Interface => Interface.Name == "ISoftObjectReference");
+        return Type is INamedTypeSymbol { IsGenericType: true } Generic
+                && (Generic.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T || Generic.ContainingNamespace?.ToDisplayString() == "Lumina")
+            || IsNativeView(Type);
+    }
+
+    private static bool IsNativeView(ITypeSymbol Type)
+    {
+        return ScriptPropertyClassifier.FindAttribute(Type, ScriptPropertyTypeNames.NativeSlotViewAttribute) != null
+            || ScriptPropertyClassifier.IsSoftObjectReference(Type)
+            || ScriptPropertyClassifier.IsStructHandle(Type);
     }
 }

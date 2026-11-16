@@ -25,6 +25,9 @@ namespace Lumina
         // A command whose before-image equals its after-image is dropped at commit (the drag-that-didn't-move).
         virtual bool IsNoOp() const { return false; }
 
+        // Marks what the command touched as unsaved, run once it is done and after every undo and redo.
+        virtual void MarkChanged() const {}
+
         virtual FName GetName() const { return FName(); }
 
         /** Objects this command will act on when it is undone or redone, so they can be repointed. */
@@ -56,7 +59,7 @@ namespace Lumina
         FName                                 Name;
         TVector<TUniquePtr<IUndoableCommand>> Commands;
 
-        bool IsEmpty() const { return Commands.empty(); }
+        bool IsEmpty() const { return Commands.IsEmpty(); }
 
         void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func)
         {
@@ -68,8 +71,11 @@ namespace Lumina
                 }
             }
         }
-        void Undo() { for (auto It = Commands.rbegin(); It != Commands.rend(); ++It) { (*It)->Undo(); } }
-        void Redo() { for (TUniquePtr<IUndoableCommand>& C : Commands) { C->Redo(); } }
+        void Undo() { for (auto It = Commands.rbegin(); It != Commands.rend(); ++It) { (*It)->Undo(); } MarkChanged(); }
+        void Redo() { for (TUniquePtr<IUndoableCommand>& C : Commands) { C->Redo(); } MarkChanged(); }
+
+        // Run after the whole step is applied, so each command sees which of its entities ended up alive.
+        void MarkChanged() const { for (const TUniquePtr<IUndoableCommand>& C : Commands) { C->MarkChanged(); } }
     };
 
     // Domain-blind undo/redo owner on FEditorTool; domains contribute IUndoableCommands.
@@ -98,7 +104,7 @@ namespace Lumina
         {
             if (bOpen && Command != nullptr)
             {
-                Open.Commands.push_back(Move(Command));
+                Open.Commands.Add(Move(Command));
             }
         }
 
@@ -125,10 +131,10 @@ namespace Lumina
         void Undo();
         void Redo();
 
-        bool  CanUndo() const { return !UndoStack.empty(); }
-        bool  CanRedo() const { return !RedoStack.empty(); }
-        FName PeekUndoName() const { return UndoStack.empty() ? FName() : UndoStack.back().Name; }
-        FName PeekRedoName() const { return RedoStack.empty() ? FName() : RedoStack.back().Name; }
+        bool  CanUndo() const { return !UndoStack.IsEmpty(); }
+        bool  CanRedo() const { return !RedoStack.IsEmpty(); }
+        FName PeekUndoName() const { return UndoStack.IsEmpty() ? FName() : UndoStack.Last().Name; }
+        FName PeekRedoName() const { return RedoStack.IsEmpty() ? FName() : RedoStack.Last().Name; }
 
         void Clear();
 

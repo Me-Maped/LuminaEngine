@@ -54,7 +54,7 @@ namespace Lumina
     };
 
     /** Cell grid plus the VT parser that drives it, with no dependency on how it gets drawn. */
-    class FTerminalScreen
+    class EDITOR_API FTerminalScreen
     {
     public:
 
@@ -70,7 +70,7 @@ namespace Lumina
 
         NODISCARD int32 GetColumns() const { return Columns; }
         NODISCARD int32 GetRows() const { return Rows; }
-        NODISCARD int32 GetScrollbackCount() const { return static_cast<int32>(Scrollback.size()); }
+        NODISCARD int32 GetScrollbackCount() const { return Scrollback.Num(); }
 
         /** Negative indexes reach into scrollback, zero through Rows-1 address the live screen. */
         NODISCARD const FTerminalLine& GetLine(int32 RowIndex) const;

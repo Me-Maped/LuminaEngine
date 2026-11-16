@@ -1,4 +1,5 @@
-﻿#include "FontEditorTool.h"
+#include "FontEditorTool.h"
+#include "UI/InfoTable.h"
 
 #include "Assets/AssetTypes/Font/Font.h"
 #include "Core/Object/Cast.h"
@@ -23,14 +24,14 @@ namespace Lumina
         CFont* Font = Cast<CFont>(Asset.Get());
         if (Font == nullptr || !Font->IsValid())
         {
-            PreviewFontBytes.clear();
+            PreviewFontBytes.Reset();
             return;
         }
 
         PreviewFontBytes = Font->GetFontData();
         ImFontConfig Config;
         Config.FontDataOwnedByAtlas = false;
-        PreviewFont = ImGui::GetIO().Fonts->AddFontFromMemoryTTF(PreviewFontBytes.data(), (int)PreviewFontBytes.size(), 0.0f, &Config);
+        PreviewFont = ImGui::GetIO().Fonts->AddFontFromMemoryTTF(PreviewFontBytes.GetData(), PreviewFontBytes.Num(), 0.0f, &Config);
     }
 
     void FFontEditorTool::OnAssetDataChangedExternally()
@@ -90,7 +91,7 @@ namespace Lumina
             }
 
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", FontAsset->GetName().c_str());
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", *FontAsset->GetName());
             ImGuiX::Font::PopFont();
 
             ImGui::Spacing();
@@ -103,30 +104,17 @@ namespace Lumina
                 ImGui::TableSetupColumn(LOC_ID("Value"), ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableHeadersRow();
 
-                auto Row = [](const char* Label, const FString& Value)
+                InfoTable::Row("Family", FontAsset->FamilyName.IsEmpty() ? "Unknown" : FontAsset->FamilyName);
+                InfoTable::Row("Style", FontAsset->StyleName.IsEmpty() ? "Unknown" : FontAsset->StyleName);
+                InfoTable::Row("Glyphs", Format("{}", FontAsset->NumGlyphs));
+                InfoTable::Row("Scalable", FontAsset->bIsScalable ? "Yes" : "No");
+                InfoTable::Row("Kerning", FontAsset->bHasKerning ? "Yes" : "No");
+
+                InfoTable::Row("File Size", ImGuiX::FormatSize(FontAsset->GetFontData().Num()));
+
+                if (!FontAsset->SourcePath.IsEmpty())
                 {
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::TextUnformatted(Label);
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::TextUnformatted(Value.c_str());
-                };
-
-                Row(LOC("Family"), FontAsset->FamilyName.empty() ? FString(LOC("Unknown")) : FontAsset->FamilyName);
-                Row(LOC("Style"), FontAsset->StyleName.empty() ? FString(LOC("Unknown")) : FontAsset->StyleName);
-                Row(LOC("Glyphs"), Format("{}", FontAsset->NumGlyphs));
-                Row(LOC("Scalable"), FontAsset->bIsScalable ? FString(LOC("Yes")) : FString(LOC("No")));
-                Row(LOC("Kerning"), FontAsset->bHasKerning ? FString(LOC("Yes")) : FString(LOC("No")));
-
-                const size_t Bytes = FontAsset->GetFontData().size();
-                FString SizeStr = Bytes >= Constants::kMiB
-                    ? Format("{}", Bytes / Constants::kMiB) + " MB"
-                    : Format("{}", Bytes / Constants::kKiB) + " KB";
-                Row(LOC("File Size"), SizeStr);
-
-                if (!FontAsset->SourcePath.empty())
-                {
-                    Row(LOC("Source"), FontAsset->SourcePath);
+                    InfoTable::Row("Source", FontAsset->SourcePath);
                 }
 
                 ImGui::EndTable();
@@ -155,12 +143,6 @@ namespace Lumina
 
     void FFontEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const
     {
-        ImGui::DockBuilderRemoveNodeChildNodes(InDockspaceID);
-
-        ImGuiID LeftDockID = 0, RightDockID = 0;
-        ImGui::DockBuilderSplitNode(InDockspaceID, ImGuiDir_Right, 0.3f, &RightDockID, &LeftDockID);
-
-        ImGui::DockBuilderDockWindow(GetToolWindowName(FontPreviewName).c_str(), LeftDockID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(FontDetailsName).c_str(), RightDockID);
+        SplitDockingLayoutLeftRight(InDockspaceID, FontPreviewName, FontDetailsName, 0.3f);
     }
 }

@@ -7,23 +7,13 @@ using LuminaSharp;
 
 namespace Lumina;
 
-/// <summary>
-/// A writable <see cref="IDictionary{K,V}"/> view over a native reflected map, the associative counterpart of
-/// <see cref="TVector{T}"/>. Every operation goes through the map's type-erased op table, so one view works
-/// for a compile-time <c>THashMap&lt;K,V&gt;</c> and for the runtime map a script property is stored in.
-///
-/// It is a VIEW: the storage belongs to the native object, and the view does not own it. As with
-/// <see cref="Dictionary{K,V}"/>, a mutation invalidates any enumerator taken before it.
-///
-/// Iteration order is the native map's, stable between mutations but not otherwise meaningful.
-/// </summary>
+// Writable IDictionary view over a native reflected map through its type-erased op table; a mutation invalidates earlier enumerators.
 public readonly unsafe struct THashMap<K, V> : IDictionary<K, V>
 {
     private readonly nint Map;   // the map instance (FScriptDynamicMap, or a THashMap<K,V>)
     private readonly nint Ops;   // FMapOps for (K,V)
 
-    /// <summary>Views an existing native map through its ops table. Public because the accessors
-    /// ScriptPropertyRewriter emits for a user script are compiled into the user's own assembly.</summary>
+    // Public because ScriptPropertyRewriter accessors compile into the user's own assembly.
     public THashMap(nint map, nint ops)
     {
         Map = map;
@@ -32,19 +22,13 @@ public readonly unsafe struct THashMap<K, V> : IDictionary<K, V>
 
     private MapOps* OpsPtr => (MapOps*)Ops;
 
-    /// <summary>False when the property this came from did not resolve, so the view has no storage.</summary>
     public bool IsValid => Map != 0 && Ops != 0;
 
-    public int Count => IsValid ? (int)OpsPtr->Size((void*)Map) : 0;
+    public int Count => IsValid ? OpsPtr->Num((void*)Map) : 0;
 
     public bool IsReadOnly => false;
 
-    /// <summary>Reads a value, throwing when the key is absent (as <see cref="Dictionary{K,V}"/> does).
-    /// <para>To WRITE, call <see cref="Set"/>. <c>Map[key] = value</c> does not compile when the map came
-    /// from a property: assigning through a property that returns a struct is CS1612, because the setter
-    /// would run on a temporary. A list can return its element by ref to sidestep that; a map cannot,
-    /// because a ref indexer would have to insert on a miss and so would turn a READ of an absent key into
-    /// a silent insert.</para></summary>
+    // Read-only, since a ref indexer would insert on a miss; write with Set to avoid CS1612 on a property-returned map.
     public V this[K key]
     {
         get => TryGetValue(key, out V Value)
@@ -53,8 +37,6 @@ public readonly unsafe struct THashMap<K, V> : IDictionary<K, V>
         set => Set(key, value);
     }
 
-    /// <summary>Inserts or overwrites. Use this rather than <c>Map[key] = value</c> when the map came from a
-    /// property; see the indexer.</summary>
     public void Set(K key, V value)
     {
         if (!IsValid)
@@ -68,9 +50,10 @@ public readonly unsafe struct THashMap<K, V> : IDictionary<K, V>
             return;
         }
 
-        // A null value makes native default-construct the slot, which is then assigned through its accessor.
-        void* Slot = InsertKey(key, null);
-        if (Slot != null)
+        // A handle read out of a container is copied by native before inserting can rehash it away.
+        nint Source = ElementMarshal.BoundAddress(value);
+        void* Slot = InsertKey(key, (void*)Source);
+        if (Slot != null && Source == 0)
         {
             ElementMarshal.Write<V>((nint)Slot, value);
         }
@@ -81,15 +64,20 @@ public readonly unsafe struct THashMap<K, V> : IDictionary<K, V>
     {
         if (!ElementKind<K>.IsMarshalled)
         {
-            return OpsPtr->Insert((void*)Map, Unsafe.AsPointer(ref key), value);
+            return OpsPtr->Add((void*)Map, Unsafe.AsPointer(ref key), value);
         }
 
         byte* Scratch = stackalloc byte[(int)OpsPtr->KeySize];
         OpsPtr->ConstructKey((void*)Map, Scratch);
-        ElementMarshal.Write<K>((nint)Scratch, key);
-        void* Slot = OpsPtr->Insert((void*)Map, Scratch, value);
-        OpsPtr->DestructKey((void*)Map, Scratch);
-        return Slot;
+        try
+        {
+            ElementMarshal.Write<K>((nint)Scratch, key);
+            return OpsPtr->Add((void*)Map, Scratch, value);
+        }
+        finally
+        {
+            OpsPtr->DestructKey((void*)Map, Scratch);
+        }
     }
 
     private void* FindKey(K key)
@@ -101,25 +89,35 @@ public readonly unsafe struct THashMap<K, V> : IDictionary<K, V>
 
         byte* Scratch = stackalloc byte[(int)OpsPtr->KeySize];
         OpsPtr->ConstructKey((void*)Map, Scratch);
-        ElementMarshal.Write<K>((nint)Scratch, key);
-        void* Slot = OpsPtr->Find((void*)Map, Scratch);
-        OpsPtr->DestructKey((void*)Map, Scratch);
-        return Slot;
+        try
+        {
+            ElementMarshal.Write<K>((nint)Scratch, key);
+            return OpsPtr->Find((void*)Map, Scratch);
+        }
+        finally
+        {
+            OpsPtr->DestructKey((void*)Map, Scratch);
+        }
     }
 
     private bool RemoveKey(K key)
     {
         if (!ElementKind<K>.IsMarshalled)
         {
-            return OpsPtr->RemoveByKey((void*)Map, Unsafe.AsPointer(ref key)) != 0;
+            return OpsPtr->Remove((void*)Map, Unsafe.AsPointer(ref key)) != 0;
         }
 
         byte* Scratch = stackalloc byte[(int)OpsPtr->KeySize];
         OpsPtr->ConstructKey((void*)Map, Scratch);
-        ElementMarshal.Write<K>((nint)Scratch, key);
-        bool bRemoved = OpsPtr->RemoveByKey((void*)Map, Scratch) != 0;
-        OpsPtr->DestructKey((void*)Map, Scratch);
-        return bRemoved;
+        try
+        {
+            ElementMarshal.Write<K>((nint)Scratch, key);
+            return OpsPtr->Remove((void*)Map, Scratch) != 0;
+        }
+        finally
+        {
+            OpsPtr->DestructKey((void*)Map, Scratch);
+        }
     }
 
     public bool TryGetValue(K key, out V value)
@@ -139,8 +137,7 @@ public readonly unsafe struct THashMap<K, V> : IDictionary<K, V>
 
     public bool ContainsKey(K key) => IsValid && FindKey(key) != null;
 
-    /// <summary>Adds a pair. Unlike <see cref="Dictionary{K,V}.Add"/> this overwrites an existing key rather
-    /// than throwing, matching the native map's insert-or-assign.</summary>
+    // Overwrites an existing key instead of throwing, matching the native insert-or-assign.
     public void Add(K key, V value) => Set(key, value);
 
     public bool Remove(K key) => IsValid && RemoveKey(key);
@@ -149,16 +146,15 @@ public readonly unsafe struct THashMap<K, V> : IDictionary<K, V>
     {
         if (IsValid)
         {
-            OpsPtr->Clear((void*)Map);
+            OpsPtr->Reset((void*)Map);
         }
     }
 
-    /// <summary>Pre-sizes the map for an expected entry count.</summary>
     public void Reserve(int count)
     {
         if (IsValid && count > 0)
         {
-            OpsPtr->Reserve((void*)Map, (nuint)count);
+            OpsPtr->Reserve((void*)Map, count);
         }
     }
 
@@ -265,7 +261,7 @@ public readonly unsafe struct THashMap<K, V> : IDictionary<K, V>
     {
         private readonly nint Map;
         private readonly nint Ops;
-        private nuint Cursor;
+        private int Cursor;
         private nint Key;
         private nint Value;
 
@@ -293,7 +289,7 @@ public readonly unsafe struct THashMap<K, V> : IDictionary<K, V>
                 return false;
             }
 
-            nuint Next = Cursor;
+            int Next = Cursor;
             void* FoundKey = null;
             void* FoundValue = null;
             bool bFound = ((MapOps*)Ops)->Next((void*)Map, &Next, &FoundKey, &FoundValue) != 0;

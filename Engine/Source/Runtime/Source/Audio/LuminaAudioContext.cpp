@@ -7,7 +7,7 @@
 #include "Log/Log.h"
 #include "Memory/MemoryTracking.h"
 #include "ProceduralAudioStream.h"
-#include "TaskSystem/Scheduler/JobScheduler.h"
+#include "TaskSystem/TaskSystem.h"
 
 #include <cstring>
 #include <thread>
@@ -35,6 +35,7 @@ namespace Lumina
 		FreeSlots.Initialize(MaxVoiceSlots);
 
 		ResetVoiceSlots();
+		PumpDone.Signal();
 
 		if (CreateDeviceAndMixer(0, 0, 0))
 		{
@@ -46,12 +47,7 @@ namespace Lumina
 	{
 		bRunning.store(false, Atomic::MemoryOrderRelease);
 
-		if (PumpCounter != nullptr)
-		{
-			Jobs::WaitForCounter(PumpCounter);
-			Jobs::FreeCounter(PumpCounter);
-			PumpCounter = nullptr;
-		}
+		PumpDone.Wait();
 
 		DestroyDeviceAndMixer();
 
@@ -59,7 +55,7 @@ namespace Lumina
 		{
 			SlotSources[Slot].reset();
 		}
-		RetiredSources.clear();
+		RetiredSources.Reset();
 	}
 
 	bool FLuminaAudioContext::CreateDeviceAndMixer(uint32 SampleRate, uint32 Channels, uint32 PeriodFrames)
@@ -134,73 +130,78 @@ namespace Lumina
 
 	bool FLuminaAudioContext::AcquireVoiceSlot(uint8 Priority, SAudioHandle& OutHandle)
 	{
-		uint32 Slot = 0;
-		bool bTookFreeSlot = false;
-
-		if (ActiveVoices.load(Atomic::MemoryOrderRelaxed) < MaxActiveVoices.load(Atomic::MemoryOrderRelaxed) && FreeSlots.TryDequeue(Slot))
+		auto ClaimSlot = [&](uint32 Slot, bool bTookFreeSlot)
 		{
-			bTookFreeSlot = true;
-		}
-		else
-		{
-			FScopeLock Lock(SlotLock);
-
-			if (ActiveVoices.load(Atomic::MemoryOrderRelaxed) < MaxActiveVoices.load(Atomic::MemoryOrderRelaxed) && FreeSlots.TryDequeue(Slot))
+			uint32 Generation = NextGeneration.fetch_add(1, Atomic::MemoryOrderRelaxed);
+			if (Generation == 0)
 			{
-				bTookFreeSlot = true;
+				Generation = NextGeneration.fetch_add(1, Atomic::MemoryOrderRelaxed);
 			}
-			else
+
+			SlotCanceled[Slot].store(false, Atomic::MemoryOrderRelaxed);
+			SlotPriority[Slot].store(Priority, Atomic::MemoryOrderRelaxed);
+			SlotGeneration[Slot].store(Generation, Atomic::MemoryOrderRelaxed);
+			SlotState[Slot].store((uint8)EAudioVoiceState::Playing, Atomic::MemoryOrderRelease);
+
+			if (bTookFreeSlot)
 			{
-				// Steal the quietest-priority voice strictly below ours; ties keep the older voice.
-				uint32 Victim = MaxVoiceSlots;
-				uint8 VictimPriority = Priority;
-				for (uint32 i = 0; i < MaxVoiceSlots; ++i)
-				{
-					if (SlotState[i].load(Atomic::MemoryOrderRelaxed) == (uint8)EAudioVoiceState::Free)
-					{
-						continue;
-					}
-					const uint8 SlotPri = SlotPriority[i].load(Atomic::MemoryOrderRelaxed);
-					if (SlotPri < VictimPriority)
-					{
-						VictimPriority = SlotPri;
-						Victim = i;
-					}
-				}
+				ActiveVoices.fetch_add(1, Atomic::MemoryOrderRelaxed);
+			}
 
-				if (Victim == MaxVoiceSlots)
-				{
-					DroppedVoices.fetch_add(1, Atomic::MemoryOrderRelaxed);
-					return false;
-				}
+			OutHandle.Generation = Generation;
+			OutHandle.Index      = Slot;
+			return true;
+		};
 
-				Slot = Victim;
+		uint32 FreeSlot = 0;
+		auto TakeFreeSlot = [&]()
+		{
+			return ActiveVoices.load(Atomic::MemoryOrderRelaxed) < MaxActiveVoices.load(Atomic::MemoryOrderRelaxed) && FreeSlots.TryDequeue(FreeSlot);
+		};
+
+		if (TakeFreeSlot())
+		{
+			return ClaimSlot(FreeSlot, true);
+		}
+
+		FScopeLock Lock(SlotLock);
+
+		if (TakeFreeSlot())
+		{
+			return ClaimSlot(FreeSlot, true);
+		}
+
+		// Steal the quietest-priority voice strictly below ours; ties keep the older voice.
+		uint32 Victim = MaxVoiceSlots;
+		uint8 VictimPriority = Priority;
+		for (uint32 i = 0; i < MaxVoiceSlots; ++i)
+		{
+			if (SlotState[i].load(Atomic::MemoryOrderRelaxed) == (uint8)EAudioVoiceState::Free)
+			{
+				continue;
+			}
+			const uint8 SlotPri = SlotPriority[i].load(Atomic::MemoryOrderRelaxed);
+			if (SlotPri < VictimPriority)
+			{
+				VictimPriority = SlotPri;
+				Victim = i;
 			}
 		}
 
-		uint32 Generation = NextGeneration.fetch_add(1, Atomic::MemoryOrderRelaxed);
-		if (Generation == 0)
+		if (Victim == MaxVoiceSlots)
 		{
-			Generation = NextGeneration.fetch_add(1, Atomic::MemoryOrderRelaxed);
+			DroppedVoices.fetch_add(1, Atomic::MemoryOrderRelaxed);
+			return false;
 		}
 
-		SlotCanceled[Slot].store(false, Atomic::MemoryOrderRelaxed);
-		SlotPriority[Slot].store(Priority, Atomic::MemoryOrderRelaxed);
-		SlotGeneration[Slot].store(Generation, Atomic::MemoryOrderRelaxed);
-		SlotState[Slot].store((uint8)EAudioVoiceState::Playing, Atomic::MemoryOrderRelease);
-
-		if (bTookFreeSlot)
-		{
-			ActiveVoices.fetch_add(1, Atomic::MemoryOrderRelaxed);
-		}
-
-		OutHandle.Generation = Generation;
-		OutHandle.Index      = Slot;
-		return true;
+		// Claimed under SlotLock, so a release of the victim's old voice either frees it before the search or sees the new generation and backs off.
+		return ClaimSlot(Victim, false);
 	}
 
 	void FLuminaAudioContext::ReleaseVoiceSlot(uint32 Slot, uint32 Generation)
 	{
+		ForgetGraphInstance(SAudioHandle{ Generation, Slot });
+
 		FScopeLock Lock(SlotLock);
 
 		// A newer voice may already own this slot through a priority takeover; leave its claim intact.
@@ -229,12 +230,12 @@ namespace Lumina
 		Retired.Generation = SlotSourceGeneration[Slot];
 
 		SlotSources[Slot].reset();
-		RetiredSources.push_back(Move(Retired));
+		RetiredSources.Add(Move(Retired));
 	}
 
 	void FLuminaAudioContext::FlushRetiredSources(bool bForce)
 	{
-		if (RetiredSources.empty())
+		if (RetiredSources.IsEmpty())
 		{
 			return;
 		}
@@ -243,15 +244,15 @@ namespace Lumina
 		const bool bDeviceIdle = !Device || !Mixer.IsInitialized();
 		const uint64 Now = Mixer.GetRenderCount();
 
-		for (size_t i = RetiredSources.size(); i > 0; --i)
+		for (int32 i = RetiredSources.Num(); i > 0; --i)
 		{
-			const size_t Index = i - 1;
+			const int32 Index = i - 1;
 			// A takeover that fails after retiring leaves the old voice playing, so its source also waits for that voice to end.
 			const FRetiredSource& Retired = RetiredSources[Index];
 			const bool bReleased = Now > Retired.RenderCountAtRetire + kRetireRenderDelay && !Mixer.IsVoiceLive(Retired.Slot, Retired.Generation);
 			if (bForce || bDeviceIdle || bReleased)
 			{
-				RetiredSources.erase(RetiredSources.begin() + (ptrdiff_t)Index);
+				RetiredSources.RemoveAt(IntCastChecked<int32>((ptrdiff_t)Index));
 			}
 		}
 	}
@@ -268,28 +269,22 @@ namespace Lumina
 	{
 		SweepGraphInstances();
 
-		if (!bRunning.load(Atomic::MemoryOrderAcquire) || !Jobs::IsInitialized())
+		if (!bRunning.load(Atomic::MemoryOrderAcquire) || !Jobs::IsRuntimeRunning())
 		{
 			return;
 		}
 
-		if (PumpCounter == nullptr)
+		if (PumpDone.IsSignaled())
 		{
-			PumpCounter = Jobs::AllocCounter(0);
-		}
-
-		bool Expected = false;
-		if (bPumpActive.compare_exchange_strong(Expected, true, Atomic::MemoryOrderAcqRel))
-		{
-			Jobs::RunJob(&FLuminaAudioContext::PumpEntry, this, Jobs::EJobPriority::Normal, PumpCounter, "Audio::Pump", true);
+			PumpDone.Reset();
+			Jobs::Spawn(Jobs::EJobPriority::Normal, PumpDone, &FLuminaAudioContext::PumpTask, this);
 		}
 	}
 
-	void FLuminaAudioContext::PumpEntry(void* Arg, uint32)
+	Jobs::TTask<void> FLuminaAudioContext::PumpTask(FLuminaAudioContext* Self)
 	{
-		FLuminaAudioContext* Self = static_cast<FLuminaAudioContext*>(Arg);
 		Self->PumpOnce();
-		Self->bPumpActive.store(false, Atomic::MemoryOrderRelease);
+		co_return;
 	}
 
 	void FLuminaAudioContext::PumpOnce()
@@ -338,6 +333,12 @@ namespace Lumina
 			return;
 		}
 
+		if (Cmd.Type == EAudioCommandType::SetListenerEnabled)
+		{
+			Mixer.SetListenerEnabled(Cmd.ByteValue, Cmd.bValue);
+			return;
+		}
+
 		if (Cmd.Type == EAudioCommandType::SetPriority)
 		{
 			if (Cmd.Handle.Index < MaxVoiceSlots &&
@@ -368,15 +369,15 @@ namespace Lumina
 
 		const uint32 Slot = Play.Handle.Index;
 
+		// A priority takeover lands on a slot the device thread is still rendering, so its source retires rather than dies.
+		RetireSlotSource(Slot);
+
 		// The voice was stopped or flushed before the pump ever saw it.
 		if (Play.StopEpoch != StopEpoch.load(Atomic::MemoryOrderRelaxed) || SlotCanceled[Slot].load(Atomic::MemoryOrderRelaxed))
 		{
 			ReleaseVoiceSlot(Slot, Play.Handle.Generation);
 			return;
 		}
-
-		// A priority takeover evicts this slot's previous occupant, whose source outlives the swap.
-		RetireSlotSource(Slot);
 
 		// Nothing drains the start queue while the device is down or being reopened, so decoding the voice would only fill it.
 		if (!Device || !Device->IsRunning() || Device->NeedsRestart())
@@ -414,7 +415,7 @@ namespace Lumina
 				TVector<uint8> Bytes;
 				if (!VFS::ReadFile(Bytes, FStringView(Play.Path)))
 				{
-					LOG_WARN("Audio: failed to read file '{}'", Play.Path.c_str());
+					LOG_WARN("Audio: failed to read file '{}'", *Play.Path);
 					ReleaseVoiceSlot(Slot, Play.Handle.Generation);
 					return;
 				}
@@ -437,9 +438,6 @@ namespace Lumina
 		Desc.Source     = Source.get();
 		Desc.bGenerated = bGenerated;
 		Desc.Params     = Play.Params;
-
-		// A priority takeover lands on a slot the device thread is still rendering, so its source retires rather than dies.
-		RetireSlotSource(Slot);
 
 		// Published before the start is queued, so the device thread never sees a slot without its source.
 		SlotSources[Slot] = Move(Source);
@@ -486,10 +484,10 @@ namespace Lumina
 				continue;
 			}
 
-			const uint32 Generation = SlotGeneration[Slot].load(Atomic::MemoryOrderRelaxed);
+			// Releases the voice that finished, since a steal whose play is still queued has already moved SlotGeneration to the new voice.
+			const uint32 Generation = SlotSourceGeneration[Slot];
 
 			RetireSlotSource(Slot);
-			ForgetGraphInstance(SAudioHandle{ Generation, Slot });
 			ReleaseVoiceSlot(Slot, Generation);
 		}
 	}
@@ -537,7 +535,7 @@ namespace Lumina
 
 	SAudioHandle FLuminaAudioContext::PlayAudio(const TSharedPtr<FAudioData>& Data, const SAudioPlayParams& Params)
 	{
-		if (!Data || Data->Bytes.empty())
+		if (!Data || Data->Bytes.IsEmpty())
 		{
 			return SAudioHandle::Invalid();
 		}
@@ -567,7 +565,7 @@ namespace Lumina
 
 	SAudioHandle FLuminaAudioContext::PlayFile(FStringView File, const SAudioPlayParams& Params)
 	{
-		if (File.empty())
+		if (File.IsEmpty())
 		{
 			return SAudioHandle::Invalid();
 		}
@@ -663,14 +661,20 @@ namespace Lumina
 	TSharedPtr<FAudioGraphInstance> FLuminaAudioContext::FindGraphInstance(SAudioHandle Handle) const
 	{
 		FScopeLock Lock(GraphInstanceLock);
-		const auto It = GraphInstances.find(MakeGraphKey(Handle));
-		return It != GraphInstances.end() ? It->second : nullptr;
+		const auto It = GraphInstances.Find(MakeGraphKey(Handle));
+		return It != nullptr ? (*It) : nullptr;
 	}
 
 	void FLuminaAudioContext::ForgetGraphInstance(SAudioHandle Handle)
 	{
 		FScopeLock Lock(GraphInstanceLock);
-		GraphInstances.erase(MakeGraphKey(Handle));
+		GraphInstances.Remove(MakeGraphKey(Handle));
+	}
+
+	int32 FLuminaAudioContext::GetGraphInstanceCount() const
+	{
+		FScopeLock Lock(GraphInstanceLock);
+		return GraphInstances.Num();
 	}
 
 	void FLuminaAudioContext::SweepGraphInstances()
@@ -679,12 +683,12 @@ namespace Lumina
 
 		for (auto It = GraphInstances.begin(); It != GraphInstances.end();)
 		{
-			const uint32 Slot = (uint32)(It->first & 0xFFFFFFFFull);
-			const uint32 Generation = (uint32)(It->first >> 32);
+			const uint32 Slot = (uint32)(It->Key & 0xFFFFFFFFull);
+			const uint32 Generation = (uint32)(It->Key >> 32);
 
 			if (Slot >= MaxVoiceSlots || SlotGeneration[Slot].load(Atomic::MemoryOrderRelaxed) != Generation)
 			{
-				It = GraphInstances.erase(It);
+				It = GraphInstances.Remove(It);
 			}
 			else
 			{
@@ -864,7 +868,7 @@ namespace Lumina
 
 	void FLuminaAudioContext::SetListenerEnabled(uint32 ListenerIndex, bool bEnabled)
 	{
-		Mixer.SetListenerEnabled(ListenerIndex, bEnabled);
+		PostToMixer(FAudioCommand::MakeSetListenerEnabled(ListenerIndex, bEnabled));
 	}
 
 	void FLuminaAudioContext::FDeviceRouter::RenderAudio(float* OutInterleaved, uint32 FrameCount)

@@ -1,27 +1,24 @@
 #include "RuntimePCH.h"
 #include "CoroutineSystem.h"
-#include "World/Subsystems/TimerSubsystem.h"
-#include "World/World.h"
+#include "TimerSystem.h"
 
 namespace Lumina
 {
-    // Exclusive, since a resumed coroutine is arbitrary code.
-    void SCoroutineSystem::Configure()
+    void CCoroutineSystem::Configure()
     {
         RequireUpdate(EUpdateStage::FrameStart);
         RequireUpdate(EUpdateStage::Paused);
+
+        // Deferred work from one segment flushes in no fixed order, so the callback runners keep a declared one.
+        RunsAfter<CTimerSystem>();
     }
 
-    void SCoroutineSystem::OnUpdate(const SSystemContext& Context)
+    void CCoroutineSystem::OnUpdate(const SSystemContext& Context)
     {
-        LUMINA_PROFILE_SCOPE();
-
-        CWorld* World = Context.GetWorld();
-        if (World == nullptr)
+        // A resumed coroutine runs script, so the tick waits for the flush on the main thread.
+        Context.Defer([](const SExclusiveContext& X)
         {
-            return;
-        }
-        const bool bPaused = Context.GetUpdateStage() == EUpdateStage::Paused;
-        World->GetTimers()->GetCoroutineManager().Tick(World->GetWorldDeltaTime(), World->GetRealDeltaTime(), bPaused);
+            X.GetRegistry().Ctx().Get<FCoroutineManager>().Tick(X.DeltaTime, X.RealDeltaTime, X.GetUpdateStage() == EUpdateStage::Paused);
+        });
     }
 }

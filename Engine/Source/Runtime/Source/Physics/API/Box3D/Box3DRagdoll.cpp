@@ -1,4 +1,5 @@
 #include "RuntimePCH.h"
+#include "World/Entity/Systems/SystemAccess.h"
 #include "World/ECS/Registry.h"
 #include "Box3DPhysicsScene.h"
 
@@ -19,13 +20,6 @@ namespace Lumina::Physics
 {
     namespace
     {
-        FQuat RagdollAxisAngle(const FVector3& Axis, float Angle)
-        {
-            const float Half = Angle * 0.5f;
-            const FVector3 Scaled = Math::Normalize(Axis) * Math::Sin(Half);
-            return FQuat(Math::Cos(Half), Scaled.x, Scaled.y, Scaled.z);
-        }
-
         // Rotation taking local +Y onto Dir, which is the axis a capsule is built along.
         FQuat RagdollYToDir(const FVector3& Dir)
         {
@@ -37,15 +31,44 @@ namespace Lumina::Physics
             }
             if (D < -0.9999f)
             {
-                return RagdollAxisAngle(FVector3(0.0f, 0.0f, 1.0f), Math::Pi<float>());
+                return Math::AngleAxis(Math::Pi<float>(), FVector3(0.0f, 0.0f, 1.0f));
             }
-            return RagdollAxisAngle(Math::Normalize(Math::Cross(Y, Dir)), Math::Acos(D));
+            return Math::AngleAxis(Math::Acos(D), Math::Normalize(Math::Cross(Y, Dir)));
         }
 
-        FVector3 RagdollPerpendicular(const FVector3& Axis)
+        // The largest axis of the entity's scale, the same measure physics sizes spheres and capsules by.
+        float ComputeRagdollShapeScale(const FMatrix4& EntityToWorld)
         {
-            const FVector3 Reference = Math::Abs(Axis.y) < 0.99f ? FVector3(0.0f, 1.0f, 0.0f) : FVector3(1.0f, 0.0f, 0.0f);
-            return Math::Normalize(Math::Cross(Reference, Axis));
+            FVector3 Position;
+            FQuat Rotation;
+            FVector3 Scale;
+            AnimPose::DecomposeTRS(EntityToWorld, Position, Rotation, Scale);
+            const float Largest = Math::Max(Math::Abs(Scale.x), Math::Max(Math::Abs(Scale.y), Math::Abs(Scale.z)));
+            return Largest > 1e-4f ? Largest : 1.0f;
+        }
+
+        // Sets a joint's hard cone and twist and its ligament's spring from Setup, adding the ligament the first time the joint needs one.
+        void ApplyRagdollJointLimit(FPhysicsRagdollHandle& Ragdoll, FRagdollJointLimit& Limit, const SPhysicsConstraintSetup& Setup)
+        {
+            // Box3D's cone is round, so it backstops the wider swing and the ligament holds the narrower one.
+            b3SphericalJoint_SetConeLimit(Limit.Cone, Math::Radians(Math::Max(Setup.Swing1LimitDegrees, Setup.Swing2LimitDegrees)));
+            b3SphericalJoint_SetTwistLimits(Limit.Cone, -Math::Radians(Setup.TwistLimitDegrees), Math::Radians(Setup.TwistLimitDegrees));
+
+            Limit.LimitsRadians = Setup.GetLimitsRadians();
+            Limit.SoftStart = Setup.GetSoftLimitStart();
+            Limit.LimitHertz = Setup.LimitStiffness * Limit.Retune;
+            Limit.MaxTorque = Setup.MaxLimitTorque * Limit.TorqueShare;
+
+            // With soft limits off an elliptical cone still needs the ligament, held at the limits themselves.
+            if (!b3Joint_IsValid(Limit.Ligament) && (Setup.bSoftLimits || Setup.Swing1LimitDegrees != Setup.Swing2LimitDegrees))
+            {
+                Limit.Ligament = Ragdoll.AddSlackMotor(Ragdoll.Bodies[Limit.ParentBody], Ragdoll.Bodies[Limit.Body], b3Joint_GetLocalFrameA(Limit.Cone), b3Joint_GetLocalFrameB(Limit.Cone));
+            }
+            if (b3Joint_IsValid(Limit.Ligament))
+            {
+                b3MotorJoint_SetAngularDampingRatio(Limit.Ligament, Setup.LimitDampingRatio * Limit.Retune);
+            }
+            b3Joint_WakeBodies(Limit.Cone);
         }
 
         struct FRagdollBodyDef
@@ -57,12 +80,6 @@ namespace Lumina::Physics
             FPendingShape   Shape;
             bool            bOverrideMass = false;
             float           Mass = 1.0f;
-            float           TwistDeg = 30.0f;
-            float           Swing1Deg = 45.0f;
-            float           Swing2Deg = 45.0f;
-            float           MotorFrequency = 0.0f;
-            float           MotorDamping = 0.0f;
-            float           MotorStrength = 1.0f;
         };
 
         // A joint's muscle gets a share of the strongest by the mass hanging off it, so a neck is weaker than a hip.
@@ -72,8 +89,9 @@ namespace Lumina::Physics
 
     TSharedPtr<FPhysicsRagdollHandle> FBox3DPhysicsScene::CreateRagdoll(const FRagdollDesc& Desc)
     {
+        ValidateNotInParallelSystem("CreateRagdoll");
         if (Desc.Skeleton == nullptr || Desc.ComponentBoneGlobals == nullptr
-            || Desc.Skeleton->GetNumBones() == 0 || Desc.ComponentBoneGlobals->size() != Desc.Skeleton->Bones.size())
+            || Desc.Skeleton->GetNumBones() == 0 || Desc.ComponentBoneGlobals->Num() != Desc.Skeleton->Bones.Num())
         {
             return nullptr;
         }
@@ -94,8 +112,8 @@ namespace Lumina::Physics
         }
         Request.Handle = MakeShared<FPhysicsRagdollHandle>();
         auto Handle = Request.Handle;
-        OwnedRagdolls.push_back({ Desc.Entity, Handle });
-        PendingRagdolls.push_back(Move(Request));
+        OwnedRagdolls.Emplace(Desc.Entity, Handle);
+        PendingRagdolls.Add(Move(Request));
         return Handle;
     }
 
@@ -112,7 +130,7 @@ namespace Lumina::Physics
 
         const TVector<FMatrix4>& Globals = Request.Globals;
         const int32 NumBones = Skeleton->GetNumBones();
-        if ((int32)Globals.size() != NumBones || NumBones == 0)
+        if (Globals.Num() != NumBones || NumBones == 0)
         {
             return nullptr;
         }
@@ -128,15 +146,18 @@ namespace Lumina::Physics
             AnimPose::DecomposeTRS(Desc.EntityToWorld * Globals[BoneIndex], OutPos, OutRot, Scale);
         };
 
-        if (!Request.Bodies.empty())
+        // Bodies are placed through the entity's scale, so shapes authored in skeleton units scale with it like other physics shapes.
+        const float ShapeScale = ComputeRagdollShapeScale(Desc.EntityToWorld);
+
+        if (!Request.Bodies.IsEmpty())
         {
             TVector<int32> Order;
-            Order.reserve(Request.Bodies.size());
-            for (int32 i = 0; i < (int32)Request.Bodies.size(); ++i)
+            Order.Reserve(Request.Bodies.Num());
+            for (int32 i = 0; i < Request.Bodies.Num(); ++i)
             {
                 if (Skeleton->FindBoneIndex(Request.Bodies[i].BoneName) != Constants::kIndexNone)
                 {
-                    Order.push_back(i);
+                    Order.Add(i);
                 }
             }
 
@@ -162,28 +183,28 @@ namespace Lumina::Physics
                 {
                     case ERagdollBodyShape::Box:
                     {
-                        const b3HullData* Hull = GetOrCreateBoxHull(Setup.HalfExtent);
+                        const b3HullData* Hull = GetOrCreateBoxHull(Setup.HalfExtent * ShapeScale);
                         if (Hull == nullptr)
                         {
                             continue;
                         }
-                        Def.Shape = MakeHullShape(Hull, Setup.TranslationOffset, OffsetRot);
+                        Def.Shape = MakeHullShape(Hull, Setup.TranslationOffset * ShapeScale, OffsetRot);
                         break;
                     }
                     case ERagdollBodyShape::Sphere:
                     {
-                        Def.Shape = MakeSphereShape(Setup.TranslationOffset, Setup.Radius);
+                        Def.Shape = MakeSphereShape(Setup.TranslationOffset * ShapeScale, Setup.Radius * ShapeScale);
                         break;
                     }
                     default:
                     {
-                        Def.Shape = MakeCapsuleShape(Setup.TranslationOffset, OffsetRot, Setup.Radius, Setup.HalfHeight);
+                        Def.Shape = MakeCapsuleShape(Setup.TranslationOffset * ShapeScale, OffsetRot, Setup.Radius * ShapeScale, Setup.HalfHeight * ShapeScale);
                         break;
                     }
                 }
 
-                BoneToBody[BoneIndex] = (int32)Defs.size();
-                Defs.push_back(Move(Def));
+                BoneToBody[BoneIndex] = Defs.Num();
+                Defs.Add(Move(Def));
             }
         }
         else
@@ -202,22 +223,23 @@ namespace Lumina::Physics
                 const TVector<int32> Children = Skeleton->GetChildBones(BoneIndex);
                 bool bBuilt = false;
 
-                if (!Children.empty())
+                if (!Children.IsEmpty())
                 {
                     FVector3 ChildAvg(0.0f);
                     for (int32 C : Children)
                     {
                         ChildAvg += FVector3(Globals[C][3]);
                     }
-                    ChildAvg /= (float)Children.size();
+                    ChildAvg /= (float)Children.Num();
 
                     const FVector3 DirC = ChildAvg - BonePos;
-                    const float Length = Math::Length(DirC);
-                    if (Length > 1e-4f)
+                    const float SkeletonLength = Math::Length(DirC);
+                    if (SkeletonLength > 1e-4f)
                     {
                         const FVector3 DirLocal = Math::Normalize(Math::Inverse(BoneRotC) * DirC);
-                        const float Radius = Math::Clamp(Length * 0.12f, 0.02f, 0.1f);
-                        const float HalfHeight = Math::Max(Length * 0.5f - Radius, 0.01f);
+                        const float Length = SkeletonLength * ShapeScale;
+                        const float Radius = Math::Clamp(SkeletonLength * 0.12f, 0.02f, 0.1f) * ShapeScale;
+                        const float HalfHeight = Math::Max(Length * 0.5f - Radius, 0.01f * ShapeScale);
 
                         Def.Shape = MakeCapsuleShape(DirLocal * (Length * 0.5f), RagdollYToDir(DirLocal), Radius, HalfHeight);
                         bBuilt = true;
@@ -226,15 +248,15 @@ namespace Lumina::Physics
 
                 if (!bBuilt)
                 {
-                    Def.Shape = MakeSphereShape(FVector3(0.0f), 0.03f);
+                    Def.Shape = MakeSphereShape(FVector3(0.0f), 0.03f * ShapeScale);
                 }
 
-                BoneToBody[BoneIndex] = (int32)Defs.size();
-                Defs.push_back(Move(Def));
+                BoneToBody[BoneIndex] = Defs.Num();
+                Defs.Add(Move(Def));
             }
         }
 
-        if (Defs.empty())
+        if (Defs.IsEmpty())
         {
             return nullptr;
         }
@@ -244,10 +266,10 @@ namespace Lumina::Physics
             int32 Parent = Skeleton->GetBone(Def.BoneIndex).ParentIndex;
             while (Parent >= 0)
             {
-                auto It = BoneToBody.find(Parent);
-                if (It != BoneToBody.end())
+                auto It = BoneToBody.Find(Parent);
+                if (It != nullptr)
                 {
-                    Def.ParentBodyIndex = It->second;
+                    Def.ParentBodyIndex = (*It);
                     break;
                 }
                 Parent = Skeleton->GetBone(Parent).ParentIndex;
@@ -255,11 +277,11 @@ namespace Lumina::Physics
         }
 
         TSharedPtr<FPhysicsRagdollHandle> Handle = Request.Handle;
-        if (BodyHandles.size() - FreeBodyHandles.size() + Defs.size() > MaxBodies) { return nullptr; }
+        if (!HasBodyCapacity(static_cast<uint32>(Defs.Num()))) { return nullptr; }
         Handle->WorldId = WorldId;
-        Handle->Bodies.reserve(Defs.size());
-        Handle->BodyHandles.reserve(Defs.size());
-        Handle->JointToBone.reserve(Defs.size());
+        Handle->Bodies.Reserve(Defs.Num());
+        Handle->BodyHandles.Reserve(Defs.Num());
+        Handle->JointToBone.Reserve(Defs.Num());
 
         b3ShapeDef ShapeDef = b3DefaultShapeDef();
         ShapeDef.filter = Box3DUtils::MakeShapeFilter(Profile);
@@ -268,8 +290,13 @@ namespace Lumina::Physics
         ShapeDef.enableContactEvents = true;
         ShapeDef.updateBodyMass = false;
 
-        for (const FRagdollBodyDef& Def : Defs)
+        TVector<int32> DefIndexToBodyIndex;
+        DefIndexToBodyIndex.SetNum(Defs.Num(), -1);
+
+        for (int32 DefIndex = 0; DefIndex < Defs.Num(); ++DefIndex)
         {
+            const FRagdollBodyDef& Def = Defs[DefIndex];
+
             b3BodyDef BodyDef = b3DefaultBodyDef();
             BodyDef.type = b3_dynamicBody;
             BodyDef.position = Box3DUtils::ToB3Vec3(Def.WorldPos);
@@ -304,76 +331,82 @@ namespace Lumina::Physics
                 b3Body_SetMassData(BodyId, MassData);
             }
 
-            Handle->Bodies.push_back(BodyId);
-            Handle->BodyHandles.push_back(BodyHandle);
-            Handle->JointToBone.push_back(Def.BoneIndex);
+            DefIndexToBodyIndex[DefIndex] = Handle->Bodies.Num();
+            Handle->Bodies.Add(BodyId);
+            Handle->BodyHandles.Add(BodyHandle);
+            Handle->JointToBone.Add(Def.BoneIndex);
         }
 
-        if (Handle->Bodies.empty())
+        if (Handle->Bodies.IsEmpty())
         {
             return nullptr;
         }
 
-        for (int32 i = 0; i < (int32)Defs.size(); ++i)
+        const int32 NumBodies = Handle->Bodies.Num();
+        Handle->ParentBody.SetNum(NumBodies, -1);
+        TVector<float> SubtreeMass;
+        SubtreeMass.SetNum(NumBodies, 0.0f);
+        TVector<FVector3> SubtreeMoment;
+        SubtreeMoment.SetNum(NumBodies, FVector3(0.0f));
+        float TotalMass = 0.0f;
+        for (int32 DefIndex = 0; DefIndex < Defs.Num(); ++DefIndex)
         {
-            const FRagdollBodyDef& Def = Defs[i];
-            if (Def.ParentBodyIndex < 0 || i >= (int32)Handle->Bodies.size() || Def.ParentBodyIndex >= (int32)Handle->Bodies.size())
+            const int32 BodyIndex = DefIndexToBodyIndex[DefIndex];
+            if (BodyIndex < 0)
             {
                 continue;
             }
 
+            const int32 ParentDefIndex = Defs[DefIndex].ParentBodyIndex;
+            Handle->ParentBody[BodyIndex] = (ParentDefIndex >= 0 && DefIndexToBodyIndex[ParentDefIndex] >= 0)
+                ? DefIndexToBodyIndex[ParentDefIndex] : -1;
+            const b3BodyId Body = Handle->Bodies[BodyIndex];
+            if (b3Body_IsValid(Body))
+            {
+                SubtreeMass[BodyIndex] = b3Body_GetMass(Body);
+                SubtreeMoment[BodyIndex] = Box3DUtils::FromB3Vec3(b3Body_GetWorldCenter(Body)) * SubtreeMass[BodyIndex];
+                TotalMass += SubtreeMass[BodyIndex];
+            }
+        }
+        for (int32 i = NumBodies - 1; i >= 0; --i)
+        {
+            if (Handle->ParentBody[i] >= 0)
+            {
+                SubtreeMass[Handle->ParentBody[i]] += SubtreeMass[i];
+                SubtreeMoment[Handle->ParentBody[i]] += SubtreeMoment[i];
+            }
+        }
+
+        // Every jointed body gets its hard limits, a muscle left slack until the ragdoll is powered, and a ligament for its soft limits.
+        for (int32 DefIndex = 0; DefIndex < Defs.Num(); ++DefIndex)
+        {
+            const int32 BodyIndex = DefIndexToBodyIndex[DefIndex];
+            if (BodyIndex < 0 || Handle->ParentBody[BodyIndex] < 0)
+            {
+                continue;
+            }
+
+            const FRagdollBodyDef& Def = Defs[DefIndex];
             const FRagdollBodyDef& ParentDef = Defs[Def.ParentBodyIndex];
+            const int32 Parent = Handle->ParentBody[BodyIndex];
+            const b3BodyId ChildBody = Handle->Bodies[BodyIndex];
+            const b3BodyId ParentBody = Handle->Bodies[Parent];
 
             // The limit cone is centered on the way the limb itself points at rest, toward its children, so a hanging arm rests inside it.
-            FVector3 TwistAxis(0.0f);
+            FVector3 TowardChildren(0.0f);
             for (int32 ChildBone : Skeleton->GetChildBones(Def.BoneIndex))
             {
                 FVector3 ChildPos;
                 FQuat ChildRot;
                 DecomposeWorld(ChildBone, ChildPos, ChildRot);
-                TwistAxis += ChildPos - Def.WorldPos;
-            }
-            if (Math::Length(TwistAxis) <= 1e-4f)
-            {
-                TwistAxis = Def.WorldPos - ParentDef.WorldPos;
-            }
-            TwistAxis = Math::Length(TwistAxis) > 1e-4f
-                ? Math::Normalize(TwistAxis)
-                : Math::Normalize(Def.WorldRot * FVector3(0.0f, 1.0f, 0.0f));
-
-            float Twist = Def.TwistDeg;
-            float Swing1 = Def.Swing1Deg;
-            float Swing2 = Def.Swing2Deg;
-
-            if (!Request.Constraints.empty())
-            {
-                const FName ChildBone = Skeleton->GetBone(Def.BoneIndex).Name;
-                for (const SPhysicsConstraintSetup& C : Request.Constraints)
-                {
-                    if (C.ChildBone == ChildBone)
-                    {
-                        Twist = C.TwistLimitDegrees;
-                        Swing1 = C.Swing1LimitDegrees;
-                        Swing2 = C.Swing2LimitDegrees;
-                        Defs[i].MotorFrequency = C.MotorFrequency;
-                        Defs[i].MotorDamping = C.MotorDamping;
-                        Defs[i].MotorStrength = C.MotorStrength;
-                        break;
-                    }
-                }
+                TowardChildren += ChildPos - Def.WorldPos;
             }
 
-            const b3BodyId ChildBody = Handle->Bodies[i];
-            const b3BodyId ParentBody = Handle->Bodies[Def.ParentBodyIndex];
+            // A bone the asset has no constraint for, and every bone of a generated ragdoll, gets the defaults.
+            const SPhysicsConstraintSetup Setup = FindConstraintSetup(Request.Constraints, Skeleton->GetBone(Def.BoneIndex).Name);
 
             // Box3D centers the swing cone and the twist on the frame's Z axis, so Z is aimed along the limb.
-            const FVector3 Perp = RagdollPerpendicular(TwistAxis);
-            const FVector3 Bitangent = Math::Cross(TwistAxis, Perp);
-            const FMatrix4 Basis(FVector4(Perp.x, Perp.y, Perp.z, 0.0f),
-                                 FVector4(Bitangent.x, Bitangent.y, Bitangent.z, 0.0f),
-                                 FVector4(TwistAxis.x, TwistAxis.y, TwistAxis.z, 0.0f),
-                                 FVector4(0.0f, 0.0f, 0.0f, 1.0f));
-            const FQuat FrameRotation = Math::ToQuat(Basis);
+            const FQuat FrameRotation = MakeRagdollJointFrame(TowardChildren, Def.WorldPos - ParentDef.WorldPos, Def.WorldRot * FVector3(0.0f, 1.0f, 0.0f));
 
             auto MakeFrame = [&](b3BodyId Body)
             {
@@ -389,87 +422,46 @@ namespace Lumina::Physics
             JointDef.base.localFrameB = MakeFrame(ChildBody);
             JointDef.base.collideConnected = false;
             JointDef.enableConeLimit = true;
-            JointDef.coneAngle = Math::Radians(Math::Max(Swing1, Swing2));
             JointDef.enableTwistLimit = true;
-            JointDef.lowerTwistAngle = -Math::Radians(Twist);
-            JointDef.upperTwistAngle = Math::Radians(Twist);
 
             const b3JointId JointId = b3CreateSphericalJoint(WorldId, &JointDef);
-            if (b3Joint_IsValid(JointId))
+            const float Share = Math::Clamp(kMuscleShareGain * Math::Sqrt(SubtreeMass[BodyIndex] / Math::Max(TotalMass, 1e-3f)), kMinMuscleShare, 1.0f);
+            const FQuat RestRelative = Math::Normalize(Math::Inverse(ParentDef.WorldRot) * Def.WorldRot);
+            const b3JointId MuscleId = Handle->AddSlackMotor(ParentBody, ChildBody,
+                b3Transform{ b3Body_GetLocalPoint(ParentBody, Box3DUtils::ToB3Vec3(Def.WorldPos)), b3Quat_identity },
+                b3Transform{ b3Vec3_zero, Box3DUtils::ToB3Quat(Math::Inverse(RestRelative)) });
+            if (b3Joint_IsValid(MuscleId))
             {
-                Handle->Joints.push_back(JointId);
+                Handle->Muscles.Emplace(MuscleId, BodyIndex, Parent, Share * Setup.MotorStrength, Setup.MotorFrequency, Setup.MotorDamping);
             }
-        }
 
-        const int32 NumBodies = (int32)Handle->Bodies.size();
-        Handle->ParentBody.resize(NumBodies, -1);
-        TVector<float> SubtreeMass;
-        SubtreeMass.resize(NumBodies, 0.0f);
-        float TotalMass = 0.0f;
-        for (int32 i = 0; i < NumBodies; ++i)
-        {
-            Handle->ParentBody[i] = Defs[i].ParentBodyIndex < NumBodies ? Defs[i].ParentBodyIndex : -1;
-            SubtreeMass[i] = b3Body_IsValid(Handle->Bodies[i]) ? b3Body_GetMass(Handle->Bodies[i]) : 0.0f;
-            TotalMass += SubtreeMass[i];
-        }
-        for (int32 i = NumBodies - 1; i >= 0; --i)
-        {
-            if (Handle->ParentBody[i] >= 0)
-            {
-                SubtreeMass[Handle->ParentBody[i]] += SubtreeMass[i];
-            }
-        }
-
-        // Every jointed body gets a muscle, left slack until the ragdoll is powered so a limp ragdoll behaves as it always did.
-        for (int32 i = 0; i < NumBodies; ++i)
-        {
-            const int32 Parent = Handle->ParentBody[i];
-            if (Parent < 0)
+            if (!b3Joint_IsValid(JointId))
             {
                 continue;
             }
+            Handle->Joints.Add(JointId);
 
-            const b3BodyId ChildBody = Handle->Bodies[i];
-            const b3BodyId ParentBody = Handle->Bodies[Parent];
-            const FQuat RestRelative = Math::Normalize(Math::Inverse(Defs[Parent].WorldRot) * Defs[i].WorldRot);
+            // Box3D springs a joint against the two bodies' own inertia, so the ligament is retuned to the limb swinging about its pivot.
+            const float ChildInertia = Math::Max(MeanRotationalInertia(ChildBody), 1e-6f);
+            const float PairInertia = 1.0f / (1.0f / ChildInertia + 1.0f / Math::Max(MeanRotationalInertia(ParentBody), 1e-6f));
+            const FVector3 SubtreeCenter = SubtreeMoment[BodyIndex] / Math::Max(SubtreeMass[BodyIndex], 1e-6f);
+            const float SwungInertia = ChildInertia + SubtreeMass[BodyIndex] * Math::LengthSquared(SubtreeCenter - Def.WorldPos);
 
-            b3MotorJointDef MuscleDef = b3DefaultMotorJointDef();
-            MuscleDef.base.bodyIdA = ParentBody;
-            MuscleDef.base.bodyIdB = ChildBody;
-            MuscleDef.base.localFrameA = b3Transform{ b3Body_GetLocalPoint(ParentBody, Box3DUtils::ToB3Vec3(Defs[i].WorldPos)), b3Quat_identity };
-            MuscleDef.base.localFrameB = b3Transform{ b3Vec3_zero, Box3DUtils::ToB3Quat(Math::Inverse(RestRelative)) };
-            MuscleDef.base.collideConnected = false;
-            MuscleDef.linearVelocity = b3Vec3_zero;
-            MuscleDef.maxVelocityForce = 0.0f;
-            MuscleDef.angularVelocity = b3Vec3_zero;
-            MuscleDef.maxVelocityTorque = 0.0f;
-            MuscleDef.linearHertz = 0.0f;
-            MuscleDef.linearDampingRatio = 0.0f;
-            MuscleDef.maxSpringForce = 0.0f;
-            MuscleDef.angularHertz = 0.0f;
-            MuscleDef.angularDampingRatio = 1.0f;
-            MuscleDef.maxSpringTorque = 0.0f;
-
-            const b3JointId MuscleId = b3CreateMotorJoint(WorldId, &MuscleDef);
-            if (!b3Joint_IsValid(MuscleId))
-            {
-                continue;
-            }
-            Handle->Joints.push_back(MuscleId);
-
-            FRagdollMuscle& Muscle = Handle->Muscles.emplace_back();
-            Muscle.Joint = MuscleId;
-            Muscle.Body = i;
-            Muscle.ParentBody = Parent;
-            Muscle.TorqueScale = Math::Clamp(kMuscleShareGain * Math::Sqrt(SubtreeMass[i] / Math::Max(TotalMass, 1e-3f)), kMinMuscleShare, 1.0f) * Defs[i].MotorStrength;
-            Muscle.HertzOverride = Defs[i].MotorFrequency;
-            Muscle.DampingOverride = Defs[i].MotorDamping;
+            FRagdollJointLimit& Limit = Handle->JointLimits.EmplaceGetRef();
+            Limit.Cone        = JointId;
+            Limit.Body        = BodyIndex;
+            Limit.ParentBody  = Parent;
+            Limit.ParentFrame = Box3DUtils::FromB3Quat(JointDef.base.localFrameA.q);
+            Limit.ChildFrame  = Box3DUtils::FromB3Quat(JointDef.base.localFrameB.q);
+            Limit.Retune      = Math::Sqrt(SwungInertia / PairInertia);
+            Limit.TorqueShare = Share;
+            ApplyRagdollJointLimit(*Handle, Limit, Setup);
         }
 
         // Limbs that are not directly jointed still must not collide, which is what a filter joint is for.
-        for (int32 i = 0; i < (int32)Handle->Bodies.size(); ++i)
+        for (int32 i = 0; i < Handle->Bodies.Num(); ++i)
         {
-            for (int32 j = i + 1; j < (int32)Handle->Bodies.size(); ++j)
+            for (int32 j = i + 1; j < Handle->Bodies.Num(); ++j)
             {
                 b3FilterJointDef FilterDef = b3DefaultFilterJointDef();
                 FilterDef.base.bodyIdA = Handle->Bodies[i];
@@ -478,7 +470,7 @@ namespace Lumina::Physics
                 const b3JointId FilterId = b3CreateFilterJoint(WorldId, &FilterDef);
                 if (b3Joint_IsValid(FilterId))
                 {
-                    Handle->Joints.push_back(FilterId);
+                    Handle->Joints.Add(FilterId);
                 }
             }
         }
@@ -493,6 +485,22 @@ namespace Lumina::Physics
     {
         FPhysicsRagdollHandle* const* Ragdoll = SimulatingRagdolls.Find(Entity);
         return Ragdoll != nullptr && IsRagdollReady(**Ragdoll) ? *Ragdoll : nullptr;
+    }
+
+    void FBox3DPhysicsScene::RetuneRagdollLimits(ECS::FEntity Entity, const CPhysicsAsset& Asset)
+    {
+        ValidateNotInParallelSystem("RetuneRagdollLimits");
+        FPhysicsRagdollHandle* Ragdoll = const_cast<FPhysicsRagdollHandle*>(FindSimulatingRagdoll(Entity));
+        if (Ragdoll == nullptr || Ragdoll->Skeleton == nullptr)
+        {
+            return;
+        }
+
+        for (FRagdollJointLimit& Limit : Ragdoll->JointLimits)
+        {
+            const FName ChildBone = Ragdoll->Skeleton->GetBone(Ragdoll->JointToBone[Limit.Body]).Name;
+            ApplyRagdollJointLimit(*Ragdoll, Limit, FindConstraintSetup(Asset.Constraints, ChildBone));
+        }
     }
 
     FBox3DPhysicsScene::FRagdollMotion FBox3DPhysicsScene::MeasureRagdoll(const FPhysicsRagdollHandle& Ragdoll) const
@@ -531,7 +539,7 @@ namespace Lumina::Physics
         for (int32 BoneIndex = Ragdoll->Skeleton->FindBoneIndex(Bone); Ragdoll->Skeleton->IsBoneIndexValid(BoneIndex);
              BoneIndex = Ragdoll->Skeleton->GetBone(BoneIndex).ParentIndex)
         {
-            for (size_t Part = 0; Part < Ragdoll->JointToBone.size() && Part < Ragdoll->BodyHandles.size(); ++Part)
+            for (int32 Part = 0; Part < Ragdoll->JointToBone.Num() && Part < Ragdoll->BodyHandles.Num(); ++Part)
             {
                 if (Ragdoll->JointToBone[Part] == BoneIndex)
                 {
@@ -552,23 +560,22 @@ namespace Lumina::Physics
     {
         LUMINA_PROFILE_SCOPE();
 
-        if (Handle.Bodies.empty() || Skeleton == nullptr)
+        if (Handle.Bodies.IsEmpty() || Skeleton == nullptr)
         {
             return;
         }
 
         const int32 NumBones = Skeleton->GetNumBones();
-        OutBoneTransforms.resize(NumBones);
+        OutBoneTransforms.SetNum(NumBones);
 
-        TVector<FMatrix4> ComponentGlobals;
-        ComponentGlobals.resize(NumBones);
-        TVector<uint8> Mapped;
-        Mapped.resize(NumBones, 0);
+        // OutBoneTransforms holds the component globals until the last pass applies the inverse bind.
+        TVector<uint8>& Mapped = Handle.PoseBoneMapped;
+        Mapped.Init(0, NumBones);
 
-        for (int32 j = 0; j < (int32)Handle.JointToBone.size(); ++j)
+        for (int32 j = 0; j < Handle.JointToBone.Num(); ++j)
         {
             const int32 BoneIndex = Handle.JointToBone[j];
-            if (!Skeleton->IsBoneIndexValid(BoneIndex) || j >= (int32)Handle.Bodies.size())
+            if (!Skeleton->IsBoneIndexValid(BoneIndex) || j >= Handle.Bodies.Num())
             {
                 continue;
             }
@@ -581,7 +588,7 @@ namespace Lumina::Physics
 
             const FVector3 Pos = Box3DUtils::FromB3Vec3(b3Body_GetPosition(BodyId));
             const FQuat Rot = Box3DUtils::FromB3Quat(b3Body_GetRotation(BodyId));
-            ComponentGlobals[BoneIndex] = WorldToEntity * AnimPose::ComposeTRS(Pos, Rot, FVector3(1.0f));
+            OutBoneTransforms[BoneIndex] = WorldToEntity * AnimPose::ComposeTRS(Pos, Rot, FVector3(1.0f));
             Mapped[BoneIndex] = 1;
         }
 
@@ -592,14 +599,18 @@ namespace Lumina::Physics
             {
                 const int32 Parent = Skeleton->GetBone(i).ParentIndex;
                 const FMatrix4& Local = Skeleton->GetBone(i).LocalTransform;
-                ComponentGlobals[i] = Parent >= 0 ? ComponentGlobals[Parent] * Local : Local;
+                OutBoneTransforms[i] = Parent >= 0 ? OutBoneTransforms[Parent] * Local : Local;
             }
-            OutBoneTransforms[i] = ComponentGlobals[i] * Skeleton->GetBone(i).InvBindMatrix;
+        }
+        for (int32 i = 0; i < NumBones; ++i)
+        {
+            OutBoneTransforms[i] = OutBoneTransforms[i] * Skeleton->GetBone(i).InvBindMatrix;
         }
     }
 
     void FBox3DPhysicsScene::DestroyRagdoll(const TSharedPtr<FPhysicsRagdollHandle>& Handle)
     {
+        ValidateNotInParallelSystem("DestroyRagdoll");
         if (!Handle)
         {
             return;
@@ -613,7 +624,7 @@ namespace Lumina::Physics
         OutPosition = FVector3(0.0f);
         OutRotation = FQuat::Identity();
 
-        if (Handle.Bodies.empty() || !b3Body_IsValid(Handle.Bodies[0]))
+        if (Handle.Bodies.IsEmpty() || !b3Body_IsValid(Handle.Bodies[0]))
         {
             return;
         }

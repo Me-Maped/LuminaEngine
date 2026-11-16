@@ -14,29 +14,17 @@ namespace Lumina
 {
     namespace
     {
-        // Grows the backing FString as the user types, since a shader body outgrows any fixed buffer.
-        int StringResizeCallback(ImGuiInputTextCallbackData* Data)
-        {
-            if (Data->EventFlag == ImGuiInputTextFlags_CallbackResize)
-            {
-                FString* Str = static_cast<FString*>(Data->UserData);
-                Str->resize(Data->BufTextLen);
-                Data->Buf = Str->data();
-            }
-            return 0;
-        }
-
         // Null when the property asks for no picker, which leaves it a plain text field.
         const INamePickerSource* ResolvePickerSource(FProperty* Property, FStringView& OutKind)
         {
             const FCStringView Kind = Property->GetMetadata("Picker");
-            if (Kind.empty())
+            if (Kind.IsEmpty())
             {
                 return nullptr;
             }
 
             OutKind = Kind;
-            return NamePicker::Find(FName(Kind.c_str()));
+            return NamePicker::Find(FName(*Kind));
         }
 
         void DrawUnknownPicker(FStringView Kind)
@@ -61,21 +49,19 @@ namespace Lumina
             return EPropertyChangeOp::None;
         }
 
-        if (!PickerKind.empty())
+        if (!PickerKind.IsEmpty())
         {
             DrawUnknownPicker(PickerKind);
             return EPropertyChangeOp::None;
         }
 
         // None edits as an empty field, which also turns a cleared field back into None.
-        char Buffer[256];
-        strncpy(Buffer, DisplayValue.IsNone() ? "" : DisplayValue.c_str(), sizeof(Buffer));
-        Buffer[sizeof(Buffer) - 1] = 0;
+        FString Text = DisplayValue.IsNone() ? FString() : DisplayValue.ToString();
 
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
-        if (ImGui::InputTextWithHint("##Name", LOC("None"), Buffer, sizeof(Buffer)))
+        if (ImGuiX::InputText("##Name", Text, ImGuiInputTextFlags_None, "None"))
         {
-            DisplayValue = FName(Buffer);
+            DisplayValue = FName(Text);
         }
         ImGui::PopItemWidth();
 
@@ -106,18 +92,18 @@ namespace Lumina
         if (const INamePickerSource* Source = ResolvePickerSource(Property->Property, PickerKind))
         {
             const FNamePickerArgs PickerArgs{ "##Pick", Args.Context,
-                DisplayValue.empty() ? FName() : FName(DisplayValue.c_str()), &PickerState };
+                DisplayValue.IsEmpty() ? FName() : FName(*DisplayValue), &PickerState };
 
             const FNamePickerResult PickerResult = NamePicker::Draw(*Source, PickerArgs);
             if (PickerResult.bChanged)
             {
-                DisplayValue = PickerResult.Value.IsNone() ? FString() : FString(PickerResult.Value.c_str());
+                DisplayValue = PickerResult.Value.IsNone() ? FString() : FString(*PickerResult.Value);
                 return EPropertyChangeOp::Updated;
             }
             return EPropertyChangeOp::None;
         }
 
-        if (!PickerKind.empty())
+        if (!PickerKind.IsEmpty())
         {
             DrawUnknownPicker(PickerKind);
             return EPropertyChangeOp::None;
@@ -133,24 +119,16 @@ namespace Lumina
 
         EPropertyChangeOp Result = EPropertyChangeOp::None;
 
-        char Buffer[1024];
-        strncpy(Buffer, DisplayValue.c_str(), sizeof(Buffer));
-        Buffer[sizeof(Buffer) - 1] = '\0';
-
         if (bMultiline)
         {
             const ImVec2 Size(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeight() * 4.0f + ImGui::GetStyle().FramePadding.y * 2.0f);
-            // Edited in place through the resize callback, since the text can be arbitrarily long.
-            ImGui::InputTextMultiline("##ParamName", DisplayValue.data(), DisplayValue.capacity() + 1, Size,
-                                      ImGuiInputTextFlags_CallbackResize, StringResizeCallback, &DisplayValue);
+            ImGui::InputTextMultiline("##ParamName", DisplayValue.GetData(), DisplayValue.GetCapacity() + 1, Size,
+                                      ImGuiInputTextFlags_CallbackResize, ImGuiX::StringInputResizeCallback<FString>, &DisplayValue);
         }
         else
         {
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - ButtonWidth);
-            if (ImGui::InputText("##ParamName", Buffer, sizeof(Buffer)))
-            {
-                DisplayValue = Buffer;
-            }
+            ImGuiX::InputText("##ParamName", DisplayValue);
             ImGui::PopItemWidth();
 
             // A file of an allowed kind dragged from the content browser lands as its path.
@@ -159,14 +137,14 @@ namespace Lumina
                 for (ETextAssetKind Kind : TextKinds)
                 {
                     FStringView Ext = TextAsset::ExtensionForKind(Kind);
-                    if (!Ext.empty() && Ext[0] == '.')
+                    if (!Ext.IsEmpty() && Ext[0] == '.')
                     {
-                        Ext = Ext.substr(1);
+                        Ext = Ext.Mid(1);
                     }
                     FFixedString Dropped;
                     if (DragDrop::AcceptFile(Ext, Dropped))
                     {
-                        DisplayValue = FString(Dropped.c_str(), Dropped.size());
+                        DisplayValue = FString(*Dropped, Dropped.Len());
                         Result = EPropertyChangeOp::Updated;
                         break;
                     }
@@ -199,38 +177,40 @@ namespace Lumina
                 if (ImGui::IsWindowAppearing())
                 {
                     ImGui::SetKeyboardFocusHere(-1);
-                }
-                if (ImGui::BeginChild("##PathList", ImVec2(300, 300)))
-                {
-                    auto Offer = [&](const FString& Path)
-                    {
-                        if (!ImGuiX::PassSearchFilter(SearchFilter, Path.c_str()))
-                        {
-                            return;
-                        }
-                        if (ImGui::Selectable(Path.c_str()))
-                        {
-                            DisplayValue = Path;
-                            Result = EPropertyChangeOp::Updated;
-                            ImGui::CloseCurrentPopup();
-                        }
-                    };
 
+                    // Rebuilt once on popup open rather than every frame it stays open.
+                    CachedPickerPaths.Empty();
                     if (bTextAsset)
                     {
                         for (ETextAssetKind Kind : TextKinds)
                         {
-                            for (const FTextAssetData* Data : FAssetRegistry::Get().GetTextAssetsOfKind(Kind))
+                            for (const FTextAssetDataPtr& Data : FAssetRegistry::Get().GetTextAssetsOfKind(Kind))
                             {
-                                Offer(FString(Data->Path.c_str(), Data->Path.size()));
+                                CachedPickerPaths.Add(FString(*Data->Path, Data->Path.Len()));
                             }
                         }
                     }
                     else
                     {
-                        for (const FAssetData* Asset : FAssetRegistry::Get().FindByPredicate([](const FAssetData&) { return true; }))
+                        for (const FAssetDataPtr& Asset : FAssetRegistry::Get().FindByPredicate([](const FAssetData&) { return true; }))
                         {
-                            Offer(FString(Asset->Path.c_str()));
+                            CachedPickerPaths.Add(FString(*Asset->Path));
+                        }
+                    }
+                }
+                if (ImGui::BeginChild("##PathList", ImVec2(300, 300)))
+                {
+                    for (const FString& Path : CachedPickerPaths)
+                    {
+                        if (!ImGuiX::PassSearchFilter(SearchFilter, *Path))
+                        {
+                            continue;
+                        }
+                        if (ImGui::Selectable(*Path))
+                        {
+                            DisplayValue = Path;
+                            Result = EPropertyChangeOp::Updated;
+                            ImGui::CloseCurrentPopup();
                         }
                     }
                 }
@@ -242,12 +222,12 @@ namespace Lumina
             if (bTextAsset)
             {
                 ImGui::SameLine(0, 0);
-                ImGui::BeginDisabled(DisplayValue.empty());
+                ImGui::BeginDisabled(DisplayValue.IsEmpty());
                 if (ImGui::Button(LE_ICON_OPEN_IN_NEW "##OpenTextAsset", ImVec2(ImGui::GetFrameHeight(), 0)))
                 {
                     if (IEditorToolContext* Tools = SessionOps::GetToolContext())
                     {
-                        Tools->OpenFileEditor(FStringView(DisplayValue.c_str(), DisplayValue.size()));
+                        Tools->OpenFileEditor(FStringView(*DisplayValue, DisplayValue.Len()));
                     }
                 }
                 ImGui::EndDisabled();

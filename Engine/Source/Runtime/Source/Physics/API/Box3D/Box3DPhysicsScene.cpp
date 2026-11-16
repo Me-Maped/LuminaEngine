@@ -95,7 +95,7 @@ namespace Lumina::Physics
     {
         const Lumina::SDefaultWorldSettings& InitSettings = World->GetDefaultWorldSettings();
         MaxBodies = Math::Max(InitSettings.MaxPhysicsBodies, 1u);
-        ThreadBodyCommands.resize(Jobs::GetNumThreadSlots());
+        ThreadBodyCommands.SetNum(Jobs::GetNumThreadSlots());
 
         b3WorldDef Def = b3DefaultWorldDef();
         Def.workerCount = TaskBridge.GetWorkerCount();
@@ -123,23 +123,14 @@ namespace Lumina::Physics
         static TAtomic<uint64> NextSceneIdentity{ 1 };
         SceneIdentity = NextSceneIdentity.fetch_add(1, std::memory_order_relaxed);
 
-        BodyMaterials.resize(MaxBodies);
-        BodyHandles.reserve(MaxBodies);
+        BodyMaterials.SetNum(MaxBodies);
+        BodyHandles.Reserve(MaxBodies);
 
         ApplyWorldSettings(InitSettings);
 
         ECS::FRegistry& Registry = World->GetEntityRegistry();
 
-        Registry.GetSignals<SSphereColliderComponent>().OnConstruct.Connect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<SBoxColliderComponent>().OnConstruct.Connect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<SCapsuleColliderComponent>().OnConstruct.Connect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<SCylinderColliderComponent>().OnConstruct.Connect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<STaperedCapsuleColliderComponent>().OnConstruct.Connect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<STaperedCylinderColliderComponent>().OnConstruct.Connect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<SPlaneColliderComponent>().OnConstruct.Connect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<SCompoundColliderComponent>().OnConstruct.Connect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<SMeshColliderComponent>().OnConstruct.Connect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<STerrainColliderComponent>().OnConstruct.Connect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
+        ForEachColliderType([&]<typename TCollider>() { Registry.GetSignals<TCollider>().OnConstruct.template Connect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>(); });
         Registry.GetSignals<SVehicleComponent>().OnConstruct.Connect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
     }
 
@@ -147,19 +138,11 @@ namespace Lumina::Physics
     {
         DestroyAllConstraints();
         DestroyAllStaticBodyGroups();
+        DestroyAllCreatedBodies();
 
         ECS::FRegistry& Registry = World->GetEntityRegistry();
 
-        Registry.GetSignals<SSphereColliderComponent>().OnConstruct.Disconnect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<SBoxColliderComponent>().OnConstruct.Disconnect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<SCapsuleColliderComponent>().OnConstruct.Disconnect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<SCylinderColliderComponent>().OnConstruct.Disconnect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<STaperedCapsuleColliderComponent>().OnConstruct.Disconnect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<STaperedCylinderColliderComponent>().OnConstruct.Disconnect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<SPlaneColliderComponent>().OnConstruct.Disconnect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<SCompoundColliderComponent>().OnConstruct.Disconnect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<SMeshColliderComponent>().OnConstruct.Disconnect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
-        Registry.GetSignals<STerrainColliderComponent>().OnConstruct.Disconnect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
+        ForEachColliderType([&]<typename TCollider>() { Registry.GetSignals<TCollider>().OnConstruct.template Disconnect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>(); });
         Registry.GetSignals<SVehicleComponent>().OnConstruct.Disconnect<&ECS::FRegistry::GetOrEmplace<SRigidBodyComponent>>();
 
         if (b3World_IsValid(WorldId))
@@ -172,61 +155,26 @@ namespace Lumina::Physics
         DestroyGeometryCaches();
     }
 
-    void FBox3DPhysicsScene::TrackOwnedHull(b3HullData* Hull)
-    {
-        FScopeLock Lock(OwnedGeometryMutex);
-        OwnedHulls.push_back(Hull);
-    }
-
-    void FBox3DPhysicsScene::TrackOwnedMesh(b3MeshData* Mesh)
-    {
-        FScopeLock Lock(OwnedGeometryMutex);
-        OwnedMeshes.push_back(Mesh);
-    }
-
-    void FBox3DPhysicsScene::TrackOwnedHeightField(b3HeightFieldData* Field)
-    {
-        FScopeLock Lock(OwnedGeometryMutex);
-        OwnedHeightFields.push_back(Field);
-    }
-
     void FBox3DPhysicsScene::DestroyGeometryCaches()
     {
         for (auto& [Key, Hull] : HullCache)
         {
             b3DestroyHull(Hull);
         }
-        HullCache.clear();
+        HullCache.Reset();
 
         for (auto& [Key, Box] : BoxHullCache)
         {
             Memory::Delete(Box);
         }
-        BoxHullCache.clear();
+        BoxHullCache.Reset();
 
         for (auto& [Key, Mesh] : MeshCache)
         {
             b3DestroyMesh(Mesh);
         }
-        MeshCache.clear();
-
-        for (b3HeightFieldData* Field : OwnedHeightFields)
-        {
-            b3DestroyHeightField(Field);
-        }
-        OwnedHeightFields.clear();
-
-        for (b3HullData* Hull : OwnedHulls)
-        {
-            b3DestroyHull(Hull);
-        }
-        OwnedHulls.clear();
-
-        for (b3MeshData* Mesh : OwnedMeshes)
-        {
-            b3DestroyMesh(Mesh);
-        }
-        OwnedMeshes.clear();
+        MeshCache.Reset();
+        BodyGeometry.Reset();
     }
 
     bool FBox3DPhysicsScene::WorldSettingsChanged(const Lumina::SDefaultWorldSettings& Settings)
@@ -284,7 +232,7 @@ namespace Lumina::Physics
 
     b3BodyId FBox3DPhysicsScene::ResolveBody(uint32 BodyID) const
     {
-        if (BodyID >= BodyHandles.size())
+        if (BodyID >= static_cast<uint32>(BodyHandles.Num()))
         {
             return b3_nullBodyId;
         }
@@ -293,36 +241,36 @@ namespace Lumina::Physics
 
     uint32 FBox3DPhysicsScene::RegisterBody(b3BodyId BodyId)
     {
-        if (!FreeBodyHandles.empty())
+        if (!FreeBodyHandles.IsEmpty())
         {
-            const uint32 Handle = FreeBodyHandles.back();
-            FreeBodyHandles.pop_back();
+            const uint32 Handle = FreeBodyHandles.Last();
+            FreeBodyHandles.Pop();
             BodyHandles[Handle] = BodyId;
             ++BodyGenerations[Handle];
             return Handle;
         }
 
-        BodyHandles.push_back(BodyId);
-        BodyGenerations.push_back(1);
-        return (uint32)(BodyHandles.size() - 1);
+        BodyHandles.Add(BodyId);
+        BodyGenerations.Add(1);
+        return (uint32)(BodyHandles.Num() - 1);
     }
 
     void FBox3DPhysicsScene::UnregisterBody(uint32 BodyID)
     {
-        if (BodyID >= BodyHandles.size())
+        if (BodyID >= static_cast<uint32>(BodyHandles.Num()))
         {
             return;
         }
 
         BodyHandles[BodyID] = b3_nullBodyId;
-        FreeBodyHandles.push_back(BodyID);
+        FreeBodyHandles.Add(BodyID);
 
         // The handle can be reused this same frame, so it must not inherit the dead body's staging slot.
-        if (BodyID < BodyStagingSlot.size())
+        if (BodyID < static_cast<uint32>(BodyStagingSlot.Num()))
         {
             // Staged poses outlive a frame without a step, so the dead body's entry must stop drawing.
             const uint32 Slot = BodyStagingSlot[BodyID];
-            if (Slot < InterpStaging.Flags.size())
+            if (Slot < static_cast<uint32>(InterpStaging.Flags.Num()))
             {
                 InterpStaging.Flags[Slot] = EInterpFlag::Skip;
             }
@@ -346,12 +294,17 @@ namespace Lumina::Physics
 
     uint32 FBox3DPhysicsScene::GetBodyCount()
     {
-        return (uint32)(BodyHandles.size() - FreeBodyHandles.size());
+        return (uint32)(BodyHandles.Num() - FreeBodyHandles.Num());
     }
 
     uint32 FBox3DPhysicsScene::GetMaxBodyCount()
     {
         return MaxBodies;
+    }
+
+    uint32 FBox3DPhysicsScene::GetAwakeBodyCount()
+    {
+        return b3World_IsValid(WorldId) ? static_cast<uint32>(b3World_GetAwakeBodyCount(WorldId)) : 0u;
     }
 
     bool FBox3DPhysicsScene::IsBodyActive(ECS::FEntity Entity) const
@@ -504,9 +457,9 @@ namespace Lumina::Physics
 
     void FBox3DPhysicsScene::StoreBodyMaterial(uint32 BodyID, const FRigidBodyBuildResult& Build)
     {
-        if (BodyID >= BodyMaterials.size())
+        if (BodyID >= static_cast<uint32>(BodyMaterials.Num()))
         {
-            BodyMaterials.resize(BodyID + 1);
+            BodyMaterials.SetNum(BodyID + 1);
         }
 
         FBodyMaterialEntry& Entry = BodyMaterials[BodyID];
@@ -519,7 +472,7 @@ namespace Lumina::Physics
 
     void FBox3DPhysicsScene::ClearBodyMaterial(uint32 BodyID)
     {
-        if (BodyID < BodyMaterials.size())
+        if (BodyID < static_cast<uint32>(BodyMaterials.Num()))
         {
             BodyMaterials[BodyID] = FBodyMaterialEntry{};
         }
@@ -533,24 +486,19 @@ namespace Lumina::Physics
         }
 
         // Box3D carries conveyor motion on the surface material, so it is set per shape rather than per body.
-        b3ShapeId Shapes[16];
-        const int32 Count = b3Body_GetShapes(Body, Shapes, 16);
-        for (int32 i = 0; i < Count; ++i)
+        FBodyShapes Shapes;
+        GatherShapes(Body, Shapes);
+        for (b3ShapeId Shape : Shapes)
         {
-            b3SurfaceMaterial Material = b3Shape_GetSurfaceMaterial(Shapes[i]);
+            b3SurfaceMaterial Material = b3Shape_GetSurfaceMaterial(Shape);
             Material.tangentVelocity = Box3DUtils::ToB3Vec3(Linear);
-            b3Shape_SetSurfaceMaterial(Shapes[i], Material);
+            b3Shape_SetSurfaceMaterial(Shape, Material);
         }
 
         if (Math::LengthSquared(Angular) > 0.0f)
         {
             // Box3D has no angular surface drive, so a rotating platform needs a kinematic body instead.
-            static bool bWarned = false;
-            if (!bWarned)
-            {
-                bWarned = true;
-                LOG_WARN("Angular surface velocity is not supported by Box3D; use a kinematic body for rotating platforms.");
-            }
+            LOG_WARN_ONCE("Angular surface velocity is not supported by Box3D; use a kinematic body for rotating platforms.");
         }
     }
 }

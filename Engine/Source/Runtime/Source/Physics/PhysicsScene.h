@@ -1,7 +1,6 @@
 #pragma once
 
-#include "World/ECS/Registry.h"
-
+#include "World/ECS/Entity.h"
 #include "PhysicsTypes.h"
 #include "Core/Templates/Optional.h"
 #include "Containers/Function.h"
@@ -11,7 +10,6 @@
 #include "Core/Math/AABB.h"
 #include "Core/Math/Matrix/MatrixMath.h"
 #include "Ray/RayCast.h"
-#include "Renderer/SkeletonResource.h"
 #include "Core/Object/ObjectMacros.h"
 #include "PhysicsScene.generated.h"
 
@@ -125,6 +123,21 @@ namespace Lumina::Physics
         int32                   SourceIndex = -1;       // Echoed back as SRayResult::InstanceIndex on a hit.
     };
 
+    // A body no entity owns, for procedural or tool geometry. Shapes come from Collision when set, else from the raw triangles, three indices each.
+    struct FPhysicsBodyDesc
+    {
+        EBodyType               Type = EBodyType::Static;
+        FVector3                Position = FVector3(0.0f);
+        FQuat                   Rotation = FQuat::Identity();
+        FVector3                Scale = FVector3(1.0f);
+        TSpan<const FVector3>   TriangleVertices;
+        TSpan<const uint32>     TriangleIndices;
+        const SMeshCollision*   Collision = nullptr;
+        const CPhysicsMaterial* Material = nullptr;
+        SCollisionProfile       Profile = { .Layer = ECollisionProfiles::Static };
+        float                   Mass = 0.0f;            // 0 keeps the mass the shapes give a dynamic body.
+    };
+
     enum class EPhysicsBodyStatus : uint8 { Missing, Pending, Ready, Failed };
 
     // Everything a character's next step reads from its last one, so a predicting client can rewind to it.
@@ -169,59 +182,36 @@ namespace Lumina::Physics
         bool bAwake = false;
     };
 
-    class IPhysicsScene
+    // What a system may call while others run: queries, body reads, and body changes that queue for the next step.
+    class IPhysicsQueries
     {
     public:
 
-        virtual ~IPhysicsScene() { }
-        IPhysicsScene() = default;
-        IPhysicsScene(const IPhysicsScene&) = delete;
-        IPhysicsScene& operator=(const IPhysicsScene&) = delete;
-        IPhysicsScene(IPhysicsScene&&) = delete;
-        IPhysicsScene& operator=(IPhysicsScene&&) = delete;
-        virtual void PreUpdate() = 0;
-        virtual void Update(double DeltaTime) = 0;
+        virtual ~IPhysicsQueries() = default;
 
-        // Runs before each solver step, the only place a force survives the accumulator reset.
-        void SetPreStepCallback(TFunction<void(float)> Callback) { PreStepCallback = Move(Callback); }
-
-        // Runs around every fixed character step, after input is latched, so netcode can record or replace it.
-        void SetCharacterStepHook(TFunction<void(float, bool)> Hook) { CharacterStepHook = Move(Hook); }
-
-        // Collision drawing for this scene alone, so one editor viewport's toggle never reaches another world.
-        void SetDebugDrawEnabled(bool bEnabled) { bDebugDraw = bEnabled; }
-        bool IsDebugDrawEnabled() const { return bDebugDraw; }
-
-        virtual bool GetCharacterNetState(ECS::FEntity Entity, FCharacterNetState& Out) const { return false; }
-        virtual bool SetCharacterNetState(ECS::FEntity Entity, const FCharacterNetState& State) { return false; }
-
-        // One fixed step of a single character outside the physics loop. A replay discards its pushes on dynamic bodies.
-        virtual bool SimulateCharacterStep(ECS::FEntity Entity, const FCharacterMoveInput& Input, float FixedDt, bool bReplay) { return false; }
-
-        virtual void SetCharacterNetDrive(ECS::FEntity Entity, ECharacterNetDrive Drive) {}
-
-        virtual void PostUpdate() = 0;
-        virtual void Simulate() = 0;
-        virtual void StopSimulate() = 0;
-
-        // Game-thread send of what the step recorded into the world's event queues. Pair with Update.
-        virtual void DispatchPendingEvents() {}
-        
         virtual void DeactivateBody(ECS::FEntity Entity) = 0;
+
         virtual void ActivateBody(ECS::FEntity Entity) = 0;
+
         virtual void ChangeBodyMotionType(ECS::FEntity Entity, EBodyType NewType) = 0;
 
         // Whether the body is awake (active) vs asleep (at rest). Default false.
         virtual bool IsBodyActive(ECS::FEntity Entity) const { return false; }
-        
+
         virtual EPhysicsBodyStatus GetBodyStatus(ECS::FEntity Entity) const = 0;
+
         virtual bool TryGetBodyState(ECS::FEntity Entity, FPhysicsBodyState& Out) const = 0;
+
         virtual bool TryGetTargetState(const SPhysicsBodyTarget& Target, FPhysicsBodyState& Out) const = 0;
+
         virtual void AddForceAtTarget(const SPhysicsBodyTarget& Target, const FVector3& Force, const FVector3& Point) = 0;
+
         virtual void AddImpulseAtTarget(const SPhysicsBodyTarget& Target, const FVector3& Impulse, const FVector3& Point) = 0;
+
         virtual void SetTargetLinearVelocity(const SPhysicsBodyTarget& Target, const FVector3& Velocity) = 0;
+
         virtual void SetTargetAngularVelocity(const SPhysicsBodyTarget& Target, const FVector3& Velocity) = 0;
-        
+
         virtual TOptional<SRayResult> CastRay(const SRayCastSettings& Settings) = 0;
 
         // Every body the ray crosses, near-to-far (penetrating bullets). OutHits is cleared first.
@@ -241,12 +231,13 @@ namespace Lumina::Physics
         virtual TOptional<SRayResult> CastShapeClosest(const SQueryShape& Shape, const FVector3& Start, const FVector3& End,
                                                        ECollisionProfiles LayerMask, TSpan<const ECS::FEntity> IgnoreEntities) = 0;
 
-        // Distinct entities intersecting the shape; returns the count written, == size() means possibly more.
+        // Distinct entities intersecting the shape; returns the count written, == OutEntities.Num() means possibly more.
         virtual int32 OverlapShape(const SQueryShape& Shape, const FVector3& Center, ECollisionProfiles LayerMask,
                                    TSpan<const ECS::FEntity> IgnoreEntities, TSpan<ECS::FEntity> OutEntities) = 0;
 
         // False when the entity has no body.
         virtual bool GetClosestPointOnBody(ECS::FEntity Entity, const FVector3& Point, FVector3& OutPoint) const = 0;
+
         virtual bool GetBodyBounds(ECS::FEntity Entity, SAABB& OutBounds) const = 0;
 
         void CastSphere(const SSphereCastSettings& Settings, TVector<SRayResult>& OutHits)
@@ -277,64 +268,129 @@ namespace Lumina::Physics
 
         // An entity whose ragdoll is simulating takes these as one whole ragdoll, pushes shared out by limb mass.
         virtual void AddForce(ECS::FEntity Entity, const FVector3& Force) = 0;
+
         virtual void AddImpulse(ECS::FEntity Entity, const FVector3& Impulse) = 0;
+
         virtual void AddTorque(ECS::FEntity Entity, const FVector3& Torque) = 0;
+
         virtual void AddAngularImpulse(ECS::FEntity Entity, const FVector3& AngularImpulse) = 0;
+
         virtual void AddForceAtPosition(ECS::FEntity Entity, const FVector3& Force, const FVector3& Position) = 0;
+
         virtual void AddImpulseAtPosition(ECS::FEntity Entity, const FVector3& Impulse, const FVector3& Position) = 0;
+
         virtual void SetLinearVelocity(ECS::FEntity Entity, const FVector3& Velocity) = 0;
+
         virtual void SetAngularVelocity(ECS::FEntity Entity, const FVector3& AngularVelocity) = 0;
+
         virtual void SetGravityFactor(ECS::FEntity Entity, float Factor) = 0;
 
         // Shape-accurate buoyancy.
         virtual void ApplyBuoyancyImpulse(ECS::FEntity Entity, const FVector3& SurfacePosition, const FVector3& SurfaceNormal,
             float Buoyancy, float LinearDrag, float AngularDrag, const FVector3& FluidVelocity, float DeltaTime) {}
 
-        // Conveyor belt / moving surface: objects resting on this body's surface are dragged at this
-        // world-space velocity (linear m/s, angular rad/s). Zero clears it. Default is a no-op.
+        // Conveyor belt / moving surface: objects resting on this body's surface are dragged at this world-space velocity (linear m/s, angular rad/s). Zero clears it. Default is a no-op.
         virtual void SetSurfaceVelocity(ECS::FEntity Entity, const FVector3& Linear, const FVector3& Angular) {}
 
         virtual FVector3 GetVelocityAtPoint(ECS::FEntity Entity, const FVector3& Point) const = 0;
+
         virtual FVector3 GetLinearVelocity(ECS::FEntity Entity) const = 0;
+
         virtual FVector3 GetAngularVelocity(ECS::FEntity Entity) const = 0;
+
         virtual FVector3 GetCenterOfMass(ECS::FEntity Entity) const= 0;
 
-        /** Body mass in kg, or 0 for a body that cannot move (static/kinematic have infinite mass). Default
-         *  1 by default; callers scaling a force by it get sane behavior either way. */
+        // Body mass in kg, or 0 for a body that cannot move (static/kinematic have infinite mass). Default 1 by default; callers scaling a force by it get sane behavior either way.
         virtual float GetBodyMass(ECS::FEntity Entity) const { return 1.0f; }
 
         // Actual current body pose, NOT the interpolated render transform (STransformComponent is lagged).
         virtual FVector3 GetBodyPosition(ECS::FEntity Entity) const = 0;
+
         virtual FQuat GetBodyRotation(ECS::FEntity Entity) const = 0;
 
-        /** Current live body count and the configured ceiling. Lets bulk spawners (fracture) clamp to capacity instead of overflowing the body arrays. */
+        // Current live body count and the configured ceiling. Lets bulk spawners (fracture) clamp to capacity instead of overflowing the body arrays.
         virtual uint32 GetBodyCount() = 0;
+
         virtual uint32 GetMaxBodyCount() = 0;
 
-        // Static bodies for instanced geometry (foliage), merged per material and cell into compound bodies; hits report Owner. 0 = nothing built.
-        virtual uint32 CreateStaticBodyGroup(ECS::FEntity Owner, TSpan<const FStaticInstanceDesc> Instances) { return 0; }
-        virtual void DestroyStaticBodyGroup(uint32 GroupID) {}
+        // Bodies the solver is simulating this step, the asleep ones left out; one call, where asking each body is one per body.
+        virtual uint32 GetAwakeBodyCount() = 0;
 
-        // Build a ragdoll's bodies + constraints and add them to the scene. Returns an opaque handle the
-        // caller stores; null on failure. Must be called outside the physics step (PrePhysics is fine).
-        virtual TSharedPtr<FPhysicsRagdollHandle> CreateRagdoll(const FRagdollDesc& Desc) = 0;
-
-        // Read the simulated body transforms back into component-space GPU skinning matrices (Global*InvBind).
-        // OutBoneTransforms is sized to the skeleton; unmapped bones are rebuilt from their parent + bind local.
+        // Read the simulated body transforms back into component-space GPU skinning matrices (Global*InvBind). OutBoneTransforms is sized to the skeleton; unmapped bones are rebuilt from their parent + bind local.
         virtual bool IsRagdollReady(const FPhysicsRagdollHandle& Handle) const = 0;
-        virtual void ReadRagdollPose(const FPhysicsRagdollHandle& Handle, const FMatrix4& WorldToEntity, const FSkeletonResource* Skeleton, TVector<FMatrix4>& OutBoneTransforms) = 0;
 
-        // Remove a ragdoll's bodies + constraints from the scene. Safe with a null/empty handle.
-        virtual void DestroyRagdoll(const TSharedPtr<FPhysicsRagdollHandle>& Handle) = 0;
+        virtual void ReadRagdollPose(const FPhysicsRagdollHandle& Handle, const FMatrix4& WorldToEntity, const FSkeletonResource* Skeleton, TVector<FMatrix4>& OutBoneTransforms) = 0;
 
         // The limb simulating Bone, or its nearest ancestor with a body. Unset until the entity's ragdoll is simulating.
         virtual SPhysicsBodyTarget GetRagdollBoneTarget(ECS::FEntity Entity, FName Bone) const = 0;
 
         // World-space transform of the ragdoll's root body (used to drive the owning entity so culling tracks it).
         virtual void GetRagdollRootTransform(const FPhysicsRagdollHandle& Handle, FVector3& OutPosition, FQuat& OutRotation) = 0;
+    };
+
+    class IPhysicsScene : public IPhysicsQueries
+    {
+    public:
+
+        virtual ~IPhysicsScene() { }
+        IPhysicsScene() = default;
+        IPhysicsScene(const IPhysicsScene&) = delete;
+        IPhysicsScene& operator=(const IPhysicsScene&) = delete;
+        IPhysicsScene(IPhysicsScene&&) = delete;
+        IPhysicsScene& operator=(IPhysicsScene&&) = delete;
+        virtual void PreUpdate() = 0;
+        virtual void Update(double DeltaTime) = 0;
+
+        // Runs before each solver step, the only place a force survives the accumulator reset. ReadsTransforms says whether it reads entity transforms.
+        void SetPreStepCallback(TFunction<void(float)> Callback, TFunction<bool()> ReadsTransforms)
+        {
+            PreStepCallback = Move(Callback);
+            PreStepReadsTransforms = Move(ReadsTransforms);
+        }
+
+        // Runs around every fixed character step, after input is latched, so netcode can record or replace it.
+        void SetCharacterStepHook(TFunction<void(float, bool)> Hook) { CharacterStepHook = Move(Hook); }
+
+        // Collision drawing for this scene alone, so one editor viewport's toggle never reaches another world.
+        void SetDebugDrawEnabled(bool bEnabled) { bDebugDraw = bEnabled; }
+        bool IsDebugDrawEnabled() const { return bDebugDraw; }
+
+        virtual bool GetCharacterNetState(ECS::FEntity Entity, FCharacterNetState& Out) const { return false; }
+        virtual bool SetCharacterNetState(ECS::FEntity Entity, const FCharacterNetState& State) { return false; }
+
+        // One fixed step of a single character outside the physics loop. A replay discards its pushes on dynamic bodies.
+        virtual bool SimulateCharacterStep(ECS::FEntity Entity, const FCharacterMoveInput& Input, float FixedDt, bool bReplay) { return false; }
+
+        virtual void SetCharacterNetDrive(ECS::FEntity Entity, ECharacterNetDrive Drive) {}
+
+        virtual void PostUpdate() = 0;
+        virtual void Simulate() = 0;
+        virtual void StopSimulate() = 0;
+
+        // Game-thread send of what the step recorded into the world's event queues. Pair with Update.
+        virtual void DispatchPendingEvents() {}
+        
+        // Static bodies for instanced geometry (foliage), merged per material and cell into compound bodies; hits report Owner. 0 = nothing built.
+        virtual uint32 CreateStaticBodyGroup(ECS::FEntity Owner, TSpan<const FStaticInstanceDesc> Instances) { return 0; }
+        virtual void DestroyStaticBodyGroup(uint32 GroupID) {}
+
+        // Built before returning, so the target can be driven and read at once; unset when nothing was built. Hits on it report no entity.
+        virtual SPhysicsBodyTarget CreateBody(const FPhysicsBodyDesc& Desc) { return {}; }
+        virtual void DestroyBody(const SPhysicsBodyTarget& Body) {}
+        virtual void SetBodyTransform(const SPhysicsBodyTarget& Body, const FVector3& Position, const FQuat& Rotation) {}
+
+        // Build a ragdoll's bodies + constraints and add them to the scene. Returns an opaque handle the
+        // caller stores; null on failure. Must be called outside the physics step (PrePhysics is fine).
+        virtual TSharedPtr<FPhysicsRagdollHandle> CreateRagdoll(const FRagdollDesc& Desc) = 0;
+
+        // Remove a ragdoll's bodies + constraints from the scene. Safe with a null/empty handle.
+        virtual void DestroyRagdoll(const TSharedPtr<FPhysicsRagdollHandle>& Handle) = 0;
 
         // Monotonic unique id for the next ragdoll's self-collision group.
         virtual uint32 AllocateRagdollGroupID() = 0;
+
+        // Retunes the entity's simulating ragdoll to Asset's joint limits and soft limit springs without rebuilding it.
+        virtual void RetuneRagdollLimits(ECS::FEntity Entity, const CPhysicsAsset& Asset) {}
 
         // Constraints / joints. Create returns an opaque non-zero handle (0 == failure); the caller stores it
         // to drive motors, query break state, or destroy the joint. Must be called outside the physics step
@@ -353,6 +409,7 @@ namespace Lumina::Physics
     protected:
 
         TFunction<void(float)> PreStepCallback;
+        TFunction<bool()> PreStepReadsTransforms;
         TFunction<void(float, bool)> CharacterStepHook;
         bool bDebugDraw = false;
     };

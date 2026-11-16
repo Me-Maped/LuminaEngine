@@ -1,6 +1,8 @@
 ﻿#include "RuntimePCH.h"
 #include "SkeletalMeshUtils.h"
 
+#include "Animation/BindPose.h"
+
 #include <cfloat>
 
 #include "World/ECS/Registry.h"
@@ -44,11 +46,8 @@ namespace Lumina::SkeletalUtils
             return false;
         }
 
-        // The inverse of InvBind is also the bind-pose global, so the no-pose fallback is the same undo.
-        const FMatrix4 BindGlobal = Skeleton->HasBindGlobalMatrices()
-            ? Skeleton->BindGlobalMatrices[BoneIndex]
-            : Math::Inverse(Skeleton->GetBone(BoneIndex).InvBindMatrix);
-        if ((int32)Mesh.BoneTransforms.size() == Skeleton->GetNumBones())
+        const FMatrix4 BindGlobal = AnimPose::GetBindGlobalMatrix(Skeleton, BoneIndex);
+        if (Mesh.BoneTransforms.Num() == Skeleton->GetNumBones())
         {
             OutTransform = Mesh.BoneTransforms[BoneIndex] * BindGlobal;
         }
@@ -200,16 +199,13 @@ namespace Lumina::SkeletalUtils
         const FMatrix4 WorldToComponent = Math::Inverse(Transform->GetWorldMatrix());
         const FVector3 LocalPoint = FVector3(WorldToComponent * FVector4(WorldPoint, 1.0f));
 
-        const bool bLivePose = (int32)Mesh->BoneTransforms.size() == Skeleton->GetNumBones();
-        const bool bCachedBind = Skeleton->HasBindGlobalMatrices();
+        const bool bLivePose = Mesh->BoneTransforms.Num() == Skeleton->GetNumBones();
 
         int32 Closest = Constants::kIndexNone;
         float BestDistSq = FLT_MAX;
         for (int32 i = 0; i < Skeleton->GetNumBones(); ++i)
         {
-            const FMatrix4 BindGlobal = bCachedBind
-                ? Skeleton->BindGlobalMatrices[i]
-                : Math::Inverse(Skeleton->GetBone(i).InvBindMatrix);
+            const FMatrix4 BindGlobal = AnimPose::GetBindGlobalMatrix(Skeleton, i);
             const FMatrix4 Global = bLivePose ? Mesh->BoneTransforms[i] * BindGlobal : BindGlobal;
             const float DistSq = Math::LengthSquared(FVector3(Global[3]) - LocalPoint);
             if (DistSq < BestDistSq)
@@ -221,11 +217,8 @@ namespace Lumina::SkeletalUtils
         return Closest;
     }
 
-    void PackRenderBones(const FMatrix4* BoneTransforms, uint32 NumBones, FBoneTransform* OutBones)
+    void PackRenderBones(const FMatrix4* Src, uint32 NumBones, FBoneTransform* Out)
     {
-        FBoneTransform* RESTRICT Out = OutBones;
-        const FMatrix4* RESTRICT Src = BoneTransforms;
-
         // Chunked to keep the staging on the stack, and long enough for the wide half-conversion path.
         constexpr uint32 kChunk = 64;
         alignas(16) float  RowScratch[kChunk * 10];
@@ -249,7 +242,7 @@ namespace Lumina::SkeletalUtils
                 SIMD::VFloat4(R1).StoreAligned(Rows + 4);
                 SIMD::VFloat4(R2).StoreAligned(Rows + 8);
 
-                float* RESTRICT Dst = RowScratch + n * 10;
+                float* Dst = RowScratch + n * 10;
                 Dst[0] = Rows[0]; Dst[1] = Rows[1]; Dst[2] = Rows[2];
                 Dst[3] = Rows[4]; Dst[4] = Rows[5]; Dst[5] = Rows[6];
                 Dst[6] = Rows[8]; Dst[7] = Rows[9]; Dst[8] = Rows[10];
@@ -265,8 +258,8 @@ namespace Lumina::SkeletalUtils
 
             for (uint32 n = 0; n < Count; ++n)
             {
-                const uint32* RESTRICT Packed = PackScratch + n * 5;
-                uint32* RESTRICT       Rot    = Out[Base + n].Rot;
+                const uint32* Packed = PackScratch + n * 5;
+                uint32*       Rot    = Out[Base + n].Rot;
                 Rot[0] = Packed[0];
                 Rot[1] = Packed[1];
                 Rot[2] = Packed[2];
@@ -276,53 +269,8 @@ namespace Lumina::SkeletalUtils
         }
     }
 
-    namespace
-    {
-        // An unset leader is the nearest ancestor with a skeletal mesh, which is how a modular piece is usually attached.
-        ECS::FEntity DirectPoseLeader(const ECS::FRegistry& Registry, ECS::FEntity Entity, const SFollowerPoseComponent& Follower)
-        {
-            if (Follower.Leader != ECS::NullEntity)
-            {
-                return Follower.Leader;
-            }
-
-            const ECS::FHierarchy& Hierarchy = Registry.GetHierarchy();
-            for (ECS::FEntity Parent = Hierarchy.GetParent(Entity); Parent != ECS::NullEntity; Parent = Hierarchy.GetParent(Parent))
-            {
-                if (Registry.HasAll<SSkeletalMeshComponent>(Parent))
-                {
-                    return Parent;
-                }
-            }
-            return ECS::NullEntity;
-        }
-    }
-
     ECS::FEntity ResolvePoseLeader(const ECS::FRegistry& Registry, ECS::FEntity Follower)
     {
-        // Deeper than any real outfit, and what stops a cycle.
-        constexpr int32 kMaxHops = 8;
-
-        ECS::FEntity Cursor = Follower;
-        for (int32 Hop = 0; Hop < kMaxHops; ++Hop)
-        {
-            const SFollowerPoseComponent* Link = Registry.TryGet<SFollowerPoseComponent>(Cursor);
-            if (Link == nullptr)
-            {
-                return Cursor == Follower ? ECS::NullEntity : Cursor;
-            }
-
-            const ECS::FEntity Next = DirectPoseLeader(Registry, Cursor, *Link);
-            if (Next == ECS::NullEntity || !Registry.IsValid(Next))
-            {
-                return Cursor == Follower ? ECS::NullEntity : Cursor;
-            }
-            if (Next == Follower || Next == Cursor)
-            {
-                return ECS::NullEntity;
-            }
-            Cursor = Next;
-        }
-        return ECS::NullEntity;
+        return ResolvePoseLeader(Registry, Registry, Registry.GetHierarchy(), [&Registry](ECS::FEntity Entity) { return Registry.IsValid(Entity); }, Follower);
     }
 }

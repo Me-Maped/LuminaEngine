@@ -86,7 +86,7 @@ namespace Lumina
         }
 
         const ECS::FEntity Entity = World->ConstructEntity(Name);
-        SpawnedEntities.push_back(Entity);
+        SpawnedEntities.Add(Entity);
         return Entity;
     }
 
@@ -94,7 +94,7 @@ namespace Lumina
     {
         if (!bInitialized || !World.IsValid())
         {
-            SpawnedEntities.clear();
+            SpawnedEntities.Reset();
             return;
         }
 
@@ -102,7 +102,7 @@ namespace Lumina
         {
             World->DestroyEntity(Entity);
         }
-        SpawnedEntities.clear();
+        SpawnedEntities.Reset();
     }
 
     void FThumbnailScene::SetCameraTransform(const FVector3& Position, const FVector3& Target, float FOVDegrees)
@@ -132,7 +132,7 @@ namespace Lumina
         Resolved.ViewVolume      = Camera.GetViewVolume();
         Resolved.bHasView        = true;
         Resolved.bHasPostProcess = false;
-        Resolved.PostProcessMaterials.clear();
+        Resolved.PostProcessMaterials.Reset();
     }
 
     // GPU-side state of a capture that has been submitted but not yet read back.
@@ -193,7 +193,7 @@ namespace Lumina
                 RHI::EStageFlags::Host,
                 RHI::EAccessFlags::HostRead);
 
-            // Submits WITHOUT waiting and keeps the timeline value, so the caller can poll instead of blocking.
+            // Submits without waiting and keeps the timeline value, so the caller can poll instead of blocking.
             Out.Semaphore = RHI::GetQueueTimeline(RHI::EQueueType::Graphics);
             Out.Value     = RHI::Submit(RHI::EQueueType::Graphics, TSpan<const RHI::FCmdListH>{&CL, 1});
         }
@@ -232,7 +232,7 @@ namespace Lumina
             return false;
         }
 
-        // Waits on THIS copy only, since a device-wide idle would stall on unrelated in-flight frame work.
+        // Waits on this copy only, since a device-wide idle would stall on unrelated in-flight frame work.
         RHI::WaitSemaphore(Local.Semaphore, Local.Value);
         return ResolveCapture(Local, Thumbnail);
     }

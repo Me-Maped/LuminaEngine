@@ -23,20 +23,40 @@ namespace Lumina
     {
         FName   Chunk;        // FName("Main") for the default / shared content chunk.
         FString PakPath;      // Absolute path of the written .pak.
-        size_t  NumAssets   = 0;
-        size_t  NumExtras   = 0; // engine resources, shaders, config, etc. (Main only)
-        size_t  Bytes       = 0;
+        int32   NumAssets   = 0;
+        int32   NumExtras   = 0; // engine resources, shaders, config, etc. (Main only)
+        int64   Bytes       = 0;
     };
 
     struct FCookResult
     {
         bool                      bSuccess        = false;
-        size_t                    NumAssetsCooked = 0;
-        size_t                    NumExtraFiles   = 0;
-        size_t                    TotalBytes      = 0;
+        int32                     NumAssetsCooked = 0;
+        int32                     NumExtraFiles   = 0;
+        int64                     TotalBytes      = 0;
         TVector<FCookChunkResult> Chunks;          // one entry per written .pak
         FString                   ErrorMessage;
     };
+
+    class FPakWriter;
+    struct FCookNode;
+
+    // Most packages only lose their thumbnail, which needs no load, so they cook in parallel and only the rest are loaded and saved.
+    EDITOR_API void BundleChunkAssets(FPakWriter& Writer, const TVector<const FCookNode*>& Nodes, FCookResult& Result,
+                                      const TFunction<void(FStringView)>& LogFunc);
+
+    // Sidecars, IDE state, build output, project files and source-control markers, none of which a game reads.
+    EDITOR_API bool IsDevelopmentOnlyGameFile(FStringView VirtualPath, bool bKeepScriptSources);
+
+    // Where the cook of PakPath keeps a record with the project, so the shipped folder holds only what the game reads.
+    EDITOR_API FString GetCookRecordPath(FStringView ProjectDirectory, FStringView PakPath, FStringView Suffix);
+
+    // The project icon re-encoded as PNG, with one warning through LogFunc when it is set but missing or undecodable.
+    EDITOR_API bool EncodeProjectIcon(FStringView IconPath, TVector<uint8>& OutPng, const TFunction<void(FStringView)>& LogFunc);
+
+    // The cooked settings point the game here, and the packager stamps the exe from the record beside the pak's contents list.
+    inline constexpr FStringView CookedProjectIconPath = "/Engine/ProjectIcon.png";
+    inline constexpr FStringView ProjectIconRecordSuffix = ".icon.png";
 
     // Reachability-driven cooker, seeded from FEngine::GetCookRoots(); only .lasset reachable via FAssetData::Dependencies enters a PAK.
     // Chunked output: "Main" uses OutputPakPath verbatim + holds shared content; other chunks land at <stem>-<chunk>.pak.

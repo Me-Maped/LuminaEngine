@@ -7,7 +7,7 @@
 
 namespace Lumina
 {
-    // Sphere-parallel: one plane broadcast across eight spheres, the transpose of the per-object test.
+    // Broadcasts one plane across eight spheres, the transpose of the per-object test.
     FORCEINLINE uint32 FrustumInsideMask8(const FFrustum& F, SIMD::VFloat8 CX, SIMD::VFloat8 CY,
                                           SIMD::VFloat8 CZ, SIMD::VFloat8 R)
     {
@@ -30,14 +30,14 @@ namespace Lumina
 
     struct FSceneCullContext
     {
-        /** World-space sphere for a shadow-casting light's influence region. */
+        // World-space sphere bounding a shadow-casting light's influence.
         struct FLightSphere
         {
             FVector3   Center;
             float       Radius;
         };
 
-        /** Main camera frustum. Anything inside this passes unconditionally. */
+        // Main camera frustum; anything inside it passes unconditionally.
         FFrustum Frustum;
 
         FFrustum SunShadowFrustum;
@@ -54,19 +54,19 @@ namespace Lumina
 
         void Reset()
         {
-            ShadowLights.clear();
-            CaptureFrusta.clear();
+            ShadowLights.Reset();
+            CaptureFrusta.Reset();
             bEnabled = true;
             bHasSun  = false;
         }
 
         // Eight at once against the two frusta everything pays for; OutMaybe still needs the scalar path.
         FORCEINLINE void ShouldKeepBatch8(
-            const float* RESTRICT CenterX,
-            const float* RESTRICT CenterY,
-            const float* RESTRICT CenterZ,
-            const float* RESTRICT Radius,
-            const float* RESTRICT MaxDrawDistance,
+            const float*          CenterX,
+            const float*          CenterY,
+            const float*          CenterZ,
+            const float*          Radius,
+            const float*          MaxDrawDistance,
             uint32                CasterMask,
             const FVector3&       CameraPosition,
             uint32&               OutKeep,
@@ -100,7 +100,7 @@ namespace Lumina
             OutKeep = Keep & ~RejectMask;
 
             // Anything still rejected has a second chance only if one of the rare lists is non-empty.
-            const bool bHasExtras = !CaptureFrusta.empty() || !ShadowLights.empty();
+            const bool bHasExtras = !CaptureFrusta.IsEmpty() || !ShadowLights.IsEmpty();
             OutMaybe = bHasExtras ? (~OutKeep & ~RejectMask & 0xFFu) : 0u;
         }
 
@@ -132,7 +132,7 @@ namespace Lumina
                 return true;
             }
 
-            // Visible to a preview/capture camera: keep regardless of shadow casting.
+            // Visible to a preview or capture camera, so kept regardless of shadow casting.
             for (const FFrustum& CaptureFrustum : CaptureFrusta)
             {
                 if (CaptureFrustum.IntersectsSphere(Center, Radius))

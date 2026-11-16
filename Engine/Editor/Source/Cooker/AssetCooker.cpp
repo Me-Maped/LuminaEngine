@@ -1,17 +1,18 @@
 ﻿#include "AssetCooker.h"
-#include <string>
+#include "Containers/Algorithm.h"
 #include "Platform/Filesystem/PlatformFilesystem.h"
 #include "Paths/Paths.h"
-#include <filesystem>
-#include <fstream>
-#include <nlohmann/json.hpp>
 #include "Assets/AssetManager/AssetManager.h"
 #include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Assets/AssetRegistry/AssetData.h"
 #include "Assets/AssetRegistry/CookRoot.h"
 #include "Assets/AssetRegistry/TextAssetSidecar.h"
 #include "Config/Config.h"
+#include "Config/EngineSettings.h"
 #include "Core/Engine/Engine.h"
+#include "Core/Windows/Window.h"
+#include "Tools/Image/ImageWrite.h"
+#include "Core/Json/Json.h"
 #include "Core/Object/Object.h"
 #include "Core/Object/Package/Package.h"
 #include "Core/Plugin/Plugin.h"
@@ -41,6 +42,7 @@
 #include "Pak/PakWriter.h"
 #include "Renderer/ShaderCache.h"
 #include "World/World.h"
+#include "World/ExternalEntities/ExternalEntities.h"
 #include "Containers/StringFormat.h"
 
 namespace Lumina
@@ -51,6 +53,47 @@ namespace Lumina
     static TConsoleVar CVarCookVerifyStrip("Cook.VerifyStripPerClass", 0,
         "Cooks this many file-cooked packages of each class through a load and save too, and logs whether the bytes match");
 
+    bool IsDevelopmentOnlyGameFile(FStringView VirtualPath, bool bKeepScriptSources)
+    {
+        // The cooked AssetRegistry.bin already carries the sidecars' GUID table.
+        if (TextAssetSidecar::IsSidecarPath(VirtualPath))
+        {
+            return true;
+        }
+
+        // The cook writes every entity into its world's package, so a game never reads an entity file.
+        if (!ExternalEntities::OwningWorldPath(VirtualPath).IsEmpty())
+        {
+            return true;
+        }
+
+        constexpr FStringView Folders[] = { "/obj/", "/bin/", "/.idea/", "/.vs/", "/.git/" };
+        for (const FStringView Folder : Folders)
+        {
+            if (VirtualPath.Find(Folder) != Constants::kIndexNone)
+            {
+                return true;
+            }
+        }
+
+        // A pak game loads the script assemblies the packager prebuilt, while loose mode compiles the sources.
+        if (!bKeepScriptSources && VirtualPath.EndsWith(".cs"))
+        {
+            return true;
+        }
+
+        constexpr FStringView Suffixes[] = { ".csproj", ".sln", ".slnx", ".user", ".DotSettings", "/.gitkeep", "/.gitignore", "/.hidden",
+                                             "/Config/EditorSession.json", "/Config/EditorProjectSettings.json" };
+        for (const FStringView Suffix : Suffixes)
+        {
+            if (VirtualPath.EndsWith(Suffix))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     namespace
     {
         void LogCooker(const TFunction<void(FStringView)>& LogFunc, FStringView Msg)
@@ -59,44 +102,18 @@ namespace Lumina
             {
                 LogFunc(Msg);
             }
-            LOG_INFO("[Cooker] {}", FString(Msg.data(), Msg.size()).c_str());
+            LOG_INFO("[Cooker] {}", *FString(Msg.GetData(), Msg.Len()));
         }
 
         FStringView LeafName(FStringView Path)
         {
-            const size_t Slash = Path.find_last_of("/\\");
-            return Slash == FStringView::npos ? Path : Path.substr(Slash + 1);
-        }
-
-        // IDE state, build output, project files and source-control markers, none of which a game reads.
-        bool IsDevelopmentOnlyFile(FStringView VirtualPath)
-        {
-            constexpr FStringView Folders[] = { "/obj/", "/bin/", "/.idea/", "/.vs/", "/.git/" };
-            for (const FStringView Folder : Folders)
-            {
-                if (VirtualPath.find(Folder) != FStringView::npos)
-                {
-                    return true;
-                }
-            }
-
-            // C# sources too, since the game loads the script assemblies the packager prebuilt.
-            constexpr FStringView Suffixes[] = { ".cs", ".csproj", ".sln", ".user", ".DotSettings", "/.gitkeep", "/.gitignore", "/.hidden",
-                                                 "/Config/EditorSession.json", "/Config/EditorProjectSettings.json" };
-            for (const FStringView Suffix : Suffixes)
-            {
-                if (VirtualPath.ends_with(Suffix))
-                {
-                    return true;
-                }
-            }
-            return false;
+            const int32 Slash = Path.FindLastOf("/\\");
+            return Slash == Constants::kIndexNone ? Path : Path.Mid(Slash + 1);
         }
 
         bool BundleVfsFile(FPakWriter& Writer, FStringView VirtualPath, const TFunction<void(FStringView)>& LogFunc)
         {
-            // Sidecars are editor-only, since the cooked AssetRegistry.bin already carries the GUID table.
-            if (TextAssetSidecar::IsSidecarPath(VirtualPath) || IsDevelopmentOnlyFile(VirtualPath))
+            if (IsDevelopmentOnlyGameFile(VirtualPath, false))
             {
                 return false;
             }
@@ -104,59 +121,37 @@ namespace Lumina
             TVector<uint8> Bytes;
             if (!VFS::ReadFile(Bytes, VirtualPath))
             {
-                LogCooker(LogFunc, Format("  [skip] missing: {}", VirtualPath).c_str());
+                LogCooker(LogFunc, *Format("  [skip] missing: {}", VirtualPath));
                 return false;
             }
 
-            const TSpan<const uint8> Span(Bytes.data(), Bytes.size());
+            const TSpan<const uint8> Span(Bytes.GetData(), Bytes.Num());
             Writer.AddEntry(VirtualPath, Span);
 
-            LogCooker(LogFunc, Format("  + {} ({} bytes)",
+            LogCooker(LogFunc, *Format("  + {} ({} bytes)",
                 VirtualPath,
-                Bytes.size()).c_str());
+                Bytes.Num()));
             return true;
-        }
-
-        // Type packages of modules the shipped game never loads, whose objects in an asset are editor state such as a node graph.
-        const THashSet<FName>& EditorTypePackages()
-        {
-            static const THashSet<FName> Packages = []
-            {
-                THashSet<FName> Out;
-                Out.insert(FName("/Types/Editor"));
-                for (const FPlugin* Plugin : FPluginManager::Get().GetAllPlugins())
-                {
-                    for (const FPluginModuleDescriptor& Module : Plugin->GetDescriptor().Modules)
-                    {
-                        if (Module.Type != EPluginModuleType::Runtime)
-                        {
-                            Out.insert(FName((FString("/Types/") + Module.Name).c_str()));
-                        }
-                    }
-                }
-                return Out;
-            }();
-            return Packages;
         }
 
         // A graph's nodes and pins are exports of their own, each an editor class, so they go by the same test.
         bool IsEditorOnlyObject(const CObject* Object)
         {
             const CClass* Class = Object->GetClass();
-            return Class != nullptr && Class->GetPackage() != nullptr && EditorTypePackages().contains(Class->GetPackage()->GetName());
+            return Class != nullptr && Class->GetPackage() != nullptr && IsEditorTypePackage(Class->GetPackage()->GetName());
         }
 
         // Every instance under a master, through instances of instances, since each may select its own permutation.
-        void CollectMaterialInstances(const FGuid& Parent, TVector<FAssetData*>& OutInstances, THashSet<FGuid>& Visited)
+        void CollectMaterialInstances(const FGuid& Parent, TVector<FAssetDataPtr>& OutInstances, THashSet<FGuid>& Visited)
         {
-            for (FAssetData* Referencer : FAssetRegistry::Get().GetReferencersOf(Parent))
+            for (const FAssetDataPtr& Referencer : FAssetRegistry::Get().GetReferencersOf(Parent))
             {
                 if (Referencer == nullptr || Referencer->AssetClass != CMaterialInstance::StaticClass()->GetName()
-                    || !Visited.insert(Referencer->AssetGUID).second)
+                    || !Visited.TryAdd(Referencer->AssetGUID))
                 {
                     continue;
                 }
-                OutInstances.push_back(Referencer);
+                OutInstances.Add(Referencer);
                 CollectMaterialInstances(Referencer->AssetGUID, OutInstances, Visited);
             }
         }
@@ -164,18 +159,21 @@ namespace Lumina
         // One bad asset falls back to a verbatim copy with a WARN rather than killing the whole cook.
         bool BundleAssetCooked(FPakWriter& Writer, FStringView VirtualPath, const TFunction<void(FStringView)>& LogFunc)
         {
-            FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(VirtualPath);
+            FAssetDataPtr Data = FAssetRegistry::Get().GetAssetByPath(VirtualPath);
             const bool bMaterial = Data != nullptr && Data->AssetClass == CMaterial::StaticClass()->GetName();
             // An emitter asset carries its own simulation shader, which systems sharing it reference rather than embed.
             const bool bParticleSystem = Data != nullptr && (Data->AssetClass == CParticleSystem::StaticClass()->GetName()
                                                           || Data->AssetClass == CParticleEmitter::StaticClass()->GetName());
 
             // Permutations are baked into the master at cook time, so its instances are inputs to its cooked bytes.
-            TVector<FAssetData*> Instances;
+            TVector<FAssetDataPtr> Instances;
             if (bMaterial)
             {
                 THashSet<FGuid> Visited;
                 CollectMaterialInstances(Data->AssetGUID, Instances, Visited);
+
+                // Registry order is hash order, so sort to keep the cook reproducible.
+                Algo::Sort(Instances, [](const FAssetDataPtr& A, const FAssetDataPtr& B) { return A->AssetGUID < B->AssetGUID; });
             }
 
             // A material's cooked bytes carry shaders built from the templates, so a template edit must miss the cache too.
@@ -184,18 +182,21 @@ namespace Lumina
             {
                 SourceHash ^= CParticleEmitter::GetSimulationTemplateHash();
             }
-            for (const FAssetData* Instance : Instances)
+            // A world's entity files are written into its cooked bytes, so editing one must miss the cache too.
+            TVector<FAssetDataPtr> Inputs = FAssetRegistry::Get().GetEntityFilesOf(VirtualPath);
+            Inputs.Append(Instances);
+            for (const FAssetDataPtr& Input : Inputs)
             {
-                SourceHash = Hash::GetHash64(&Instance->ContentHash, sizeof(Instance->ContentHash), SourceHash);
+                SourceHash = Hash::GetHash64(&Input->ContentHash, sizeof(Input->ContentHash), SourceHash);
             }
             const FCookInputHash Key = FCookDDC::ComputeKey(SourceHash);
 
             TVector<uint8> CookedBytes;
             if (FCookDDC::TryGet(Key, CookedBytes))
             {
-                LogCooker(LogFunc, Format("  + {} (ddc, {} bytes)",
+                LogCooker(LogFunc, *Format("  + {} (ddc, {} bytes)",
                     VirtualPath,
-                    CookedBytes.size()).c_str());
+                    CookedBytes.Num()));
                 Writer.AddEntry(VirtualPath, Move(CookedBytes), true);
                 return true;
             }
@@ -203,8 +204,16 @@ namespace Lumina
             CPackage* Package = CPackage::LoadPackage(VirtualPath);
             if (Package == nullptr)
             {
-                LogCooker(LogFunc, Format("  [warn] failed to load for cook, falling back to verbatim: {}",
-                    VirtualPath).c_str());
+                // A verbatim copy only helps when the game can read what the editor could not, never for a damaged file.
+                TVector<uint8> Binary;
+                FPackageHeader Header;
+                if (!CPackage::ReadPackageContainer(VirtualPath, Binary, Header))
+                {
+                    LogCooker(LogFunc, *Format("  [error] not a readable package, left out of the pak: {}", VirtualPath));
+                    return false;
+                }
+                LogCooker(LogFunc, *Format("  [warn] failed to load for cook, falling back to verbatim: {}",
+                    VirtualPath));
                 return BundleVfsFile(Writer, VirtualPath, LogFunc);
             }
 
@@ -215,33 +224,33 @@ namespace Lumina
                 FString Error;
                 if (!RecompileMaterialIfStale(Material, Error))
                 {
-                    LogCooker(LogFunc, Format("  [warn] {} predates the current shader templates and could not be recompiled, since {}",
-                        VirtualPath, Error).c_str());
+                    LogCooker(LogFunc, *Format("  [warn] {} predates the current shader templates and could not be recompiled, since {}",
+                        VirtualPath, Error));
                 }
                 else if (bStale)
                 {
-                    LogCooker(LogFunc, Format("  recompiled {} against the current shader templates", VirtualPath).c_str());
+                    LogCooker(LogFunc, *Format("  recompiled {} against the current shader templates", VirtualPath));
                 }
 
                 // Editor assets carry no permutations, so each one an instance selects is pulled from the cache or compiled now.
-                if (Material != nullptr && !Material->StaticSwitches.empty())
+                if (Material != nullptr && !Material->StaticSwitches.IsEmpty())
                 {
                     TVector<uint64> Keys;
-                    for (const FAssetData* InstanceData : Instances)
+                    for (const FAssetDataPtr& InstanceData : Instances)
                     {
-                        CPackage* InstancePackage = CPackage::LoadPackage(FStringView(InstanceData->Path.c_str(), InstanceData->Path.size()));
+                        CPackage* InstancePackage = CPackage::LoadPackage(FStringView(*InstanceData->Path, InstanceData->Path.Len()));
                         const CMaterialInstance* Instance = InstancePackage != nullptr
                             ? Cast<CMaterialInstance>(InstancePackage->LoadObjectByName(InstanceData->AssetName)) : nullptr;
                         if (Instance != nullptr && Instance->GetMaterial() == Material && !Algo::Contains(Keys, Instance->GetStaticSwitchKey()))
                         {
-                            Keys.push_back(Instance->GetStaticSwitchKey());
+                            Keys.Add(Instance->GetStaticSwitchKey());
                         }
                     }
 
                     if (const uint32 Failed = EnsureMaterialPermutations(Material, Keys); Failed != 0)
                     {
-                        LogCooker(LogFunc, Format("  [warn] {} of {}'s static switch permutations could not be built; those instances draw with default switches",
-                            Failed, VirtualPath).c_str());
+                        LogCooker(LogFunc, *Format("  [warn] {} of {}'s static switch permutations could not be built; those instances draw with default switches",
+                            Failed, VirtualPath));
                     }
                 }
             }
@@ -251,7 +260,7 @@ namespace Lumina
                 CObject* Loaded = Package->LoadObjectByName(Data->AssetName);
                 CParticleEmitter* Standalone = Cast<CParticleEmitter>(Loaded);
                 const TStrongObjectPtr<CParticleSystem> System = Standalone != nullptr ? ParticleOps::WrapEmitter(Standalone) : TStrongObjectPtr<CParticleSystem>(Cast<CParticleSystem>(Loaded));
-                const int32 NumEmitters = System ? (int32)System->Emitters.size() : 0;
+                const int32 NumEmitters = System ? System->Emitters.Num() : 0;
                 for (int32 Index = 0; Index < NumEmitters; ++Index)
                 {
                     const CParticleEmitter* Emitter = System->Emitters[Index].Get();
@@ -264,8 +273,8 @@ namespace Lumina
                     FParticleEmitterCompileOutput Output;
                     if (ParticleOps::FindStack(System.Get(), Index) == nullptr || !ParticleOps::CompileEmitter(System.Get(), Index, Output))
                     {
-                        LogCooker(LogFunc, Format("  [warn] {} emitter {} has no simulation shader and could not be recompiled, so it will not simulate",
-                            VirtualPath, Index).c_str());
+                        LogCooker(LogFunc, *Format("  [warn] {} emitter {} has no simulation shader and could not be recompiled, so it will not simulate",
+                            VirtualPath, Index));
                     }
                 }
             }
@@ -280,18 +289,18 @@ namespace Lumina
 
             if (!CPackage::SavePackageForCook(Package, CookedBytes, ExcludeEditorObjects))
             {
-                LogCooker(LogFunc, Format("  [warn] cook-save failed, falling back to verbatim: {}",
-                    VirtualPath).c_str());
+                LogCooker(LogFunc, *Format("  [warn] cook-save failed, falling back to verbatim: {}",
+                    VirtualPath));
                 return BundleVfsFile(Writer, VirtualPath, LogFunc);
             }
 
             // Silent failure is fine, since the freshly-cooked bytes still ship and only the cache misses.
             FCookDDC::Put(Key, CookedBytes);
 
-            LogCooker(LogFunc, Format("  + {} (cooked, {} bytes, {} editor object(s) left out)",
+            LogCooker(LogFunc, *Format("  + {} (cooked, {} bytes, {} editor object(s) left out)",
                 VirtualPath,
-                CookedBytes.size(),
-                EditorObjects).c_str());
+                CookedBytes.Num(),
+                EditorObjects));
             Writer.AddEntry(VirtualPath, Move(CookedBytes), true);
             return true;
         }
@@ -320,9 +329,9 @@ namespace Lumina
 
         bool HasEditorOnlyData(const CStruct* Struct, THashMap<const CStruct*, bool>& Memo)
         {
-            if (auto It = Memo.find(Struct); It != Memo.end())
+            if (auto It = Memo.Find(Struct); It != nullptr)
             {
-                return It->second;
+                return (*It);
             }
             // Seeded false so a struct that contains itself through an array ends the walk.
             Memo[Struct] = false;
@@ -342,13 +351,14 @@ namespace Lumina
         // A class whose cooked bytes equal its saved bytes minus the thumbnail, so its packages cook without being loaded.
         bool CooksWithoutLoading(const FAssetData* Data, THashMap<FName, bool>& ClassMemo, THashMap<const CStruct*, bool>& StructMemo)
         {
-            if (Data == nullptr)
+            // A world's own file lists only its entity files, so it is loaded to write every entity inline.
+            if (Data == nullptr || !FAssetRegistry::Get().GetEntityFilesOf(Data->Path).IsEmpty())
             {
                 return false;
             }
-            if (auto It = ClassMemo.find(Data->AssetClass); It != ClassMemo.end())
+            if (auto It = ClassMemo.Find(Data->AssetClass); It != nullptr)
             {
-                return It->second;
+                return (*It);
             }
 
             const CClass* Class = FindObject<CClass>(Data->AssetClass);
@@ -357,7 +367,7 @@ namespace Lumina
             const bool bEligible = Class != nullptr
                 && !Class->IsChildOf(CMaterialInterface::StaticClass())
                 && !Class->IsChildOf(CTexture::StaticClass())
-                && !(Class->GetPackage() != nullptr && EditorTypePackages().contains(Class->GetPackage()->GetName()))
+                && !(Class->GetPackage() != nullptr && IsEditorTypePackage(Class->GetPackage()->GetName()))
                 && !HasEditorOnlyData(Class, StructMemo);
 
             ClassMemo[Data->AssetClass] = bEligible;
@@ -370,73 +380,76 @@ namespace Lumina
             CPackage* Package = CPackage::LoadPackage(Path);
             const bool bSaved = Package != nullptr && CPackage::SavePackageForCook(Package, Saved, [](const CObject* Object) { return IsEditorOnlyObject(Object); });
             const bool bMatch = bSaved && Saved == Stripped;
-            LogCooker(LogFunc, Format("  [verify] {} {} ({} bytes from the file, {} from a load and save)",
-                bMatch ? "matches" : "differs", Path, Stripped.size(), Saved.size()).c_str());
+            LogCooker(LogFunc, *Format("  [verify] {} {} ({} bytes from the file, {} from a load and save)",
+                bMatch ? "matches" : "differs", Path, Stripped.Num(), Saved.Num()));
 
             // Both versions are kept so a difference can be decoded and compared outside the editor.
             if (!bMatch)
             {
-                const FString Dir = FString(Paths::GetEngineInstallDirectory().c_str()) + "/Intermediates/CookVerify/";
-                std::filesystem::create_directories(Dir.c_str());
-                const FString Stem = Dir + FString(LeafName(Path).data(), LeafName(Path).size());
-                Filesystem::AtomicWriteFile(Stem + ".file", TSpan<const uint8>(Stripped.data(), Stripped.size()));
-                Filesystem::AtomicWriteFile(Stem + ".saved", TSpan<const uint8>(Saved.data(), Saved.size()));
+                const FString Dir = FString(*Paths::GetEngineInstallDirectory()) + "/Intermediates/CookVerify/";
+                Filesystem::MakeDirectoryTree(Dir);
+                const FString Stem = Dir + FString(LeafName(Path).GetData(), LeafName(Path).Len());
+                Filesystem::AtomicWriteFile(Stem + ".file", TSpan<const uint8>(Stripped.GetData(), Stripped.Num()));
+                Filesystem::AtomicWriteFile(Stem + ".saved", TSpan<const uint8>(Saved.GetData(), Saved.Num()));
             }
         }
+    }
 
-        // Most packages only lose their thumbnail, which needs no load, so they cook in parallel and only the rest are loaded and saved.
-        void BundleChunkAssets(FPakWriter& Writer, const TVector<const FCookNode*>& Nodes, FCookResult& Result,
-                               const TFunction<void(FStringView)>& LogFunc)
+    void BundleChunkAssets(FPakWriter& Writer, const TVector<const FCookNode*>& Nodes, FCookResult& Result,
+                           const TFunction<void(FStringView)>& LogFunc)
+    {
+        const double Start = PlatformTime::Seconds();
+
+        THashMap<FName, bool> ClassMemo;
+        THashMap<const CStruct*, bool> StructMemo;
+        TVector<uint8> bTryStrip(Nodes.Num(), 0);
+        for (int32 i = 0; i < Nodes.Num(); ++i)
         {
-            const double Start = PlatformTime::Seconds();
-
-            THashMap<FName, bool> ClassMemo;
-            THashMap<const CStruct*, bool> StructMemo;
-            TVector<uint8> bTryStrip(Nodes.size(), 0);
-            for (size_t i = 0; i < Nodes.size(); ++i)
-            {
-                const FStringView Path(Nodes[i]->Path.c_str(), Nodes[i]->Path.size());
-                bTryStrip[i] = CooksWithoutLoading(FAssetRegistry::Get().GetAssetByPath(Path), ClassMemo, StructMemo) ? 1 : 0;
-            }
-
-            TVector<TVector<uint8>> Stripped(Nodes.size());
-            TVector<uint8> bStripped(Nodes.size(), 0);
-            Task::ParallelFor((uint32)Nodes.size(), [&](uint32 i)
-            {
-                if (bTryStrip[i] != 0)
-                {
-                    const FStringView Path(Nodes[i]->Path.c_str(), Nodes[i]->Path.size());
-                    bStripped[i] = CPackage::StripPackageForCook(Path, Stripped[i]) ? 1 : 0;
-                }
-            }, 16);
-
-            // Added in graph order whichever path cooked them, so the pak stays deterministic.
-            size_t NumStripped = 0;
-            size_t NumLoaded = 0;
-            THashMap<FName, int32> Verified;
-            for (size_t i = 0; i < Nodes.size(); ++i)
-            {
-                const FStringView Path(Nodes[i]->Path.c_str(), Nodes[i]->Path.size());
-                if (bStripped[i] != 0 && Verified[Nodes[i]->AssetClass]++ < CVarCookVerifyStrip.GetValue())
-                {
-                    VerifyStrippedPackage(Path, Stripped[i], LogFunc);
-                }
-                if (bStripped[i] != 0)
-                {
-                    Writer.AddEntry(Path, Move(Stripped[i]), true);
-                    ++Result.NumAssetsCooked;
-                    ++NumStripped;
-                }
-                else if (BundleAssetCooked(Writer, Path, LogFunc))
-                {
-                    ++Result.NumAssetsCooked;
-                    ++NumLoaded;
-                }
-            }
-
-            LogCooker(LogFunc, Format("  {} asset(s) cooked from their files, {} loaded and saved, in {:.1f} s",
-                NumStripped, NumLoaded, PlatformTime::Seconds() - Start).c_str());
+            const FStringView Path(*Nodes[i]->Path, Nodes[i]->Path.Len());
+            bTryStrip[i] = CooksWithoutLoading(FAssetRegistry::Get().GetAssetByPath(Path).Get(), ClassMemo, StructMemo) ? 1 : 0;
         }
+
+        TVector<TVector<uint8>> Stripped(Nodes.Num());
+        TVector<uint8> bStripped(Nodes.Num(), 0);
+        Jobs::ParallelFor((uint32)Nodes.Num(), [&](uint32 i)
+        {
+            if (bTryStrip[i] != 0)
+            {
+                const FStringView Path(*Nodes[i]->Path, Nodes[i]->Path.Len());
+                bStripped[i] = CPackage::StripPackageForCook(Path, Stripped[i]) ? 1 : 0;
+            }
+        }, 16);
+
+        // Added in graph order whichever path cooked them, so the pak stays deterministic.
+        int32 NumStripped = 0;
+        int32 NumLoaded = 0;
+        THashMap<FName, int32> Verified;
+        for (int32 i = 0; i < Nodes.Num(); ++i)
+        {
+            const FStringView Path(*Nodes[i]->Path, Nodes[i]->Path.Len());
+            if (bStripped[i] != 0 && Verified[Nodes[i]->AssetClass]++ < CVarCookVerifyStrip.GetValue())
+            {
+                VerifyStrippedPackage(Path, Stripped[i], LogFunc);
+            }
+            if (bStripped[i] != 0)
+            {
+                Writer.AddEntry(Path, Move(Stripped[i]), true);
+                ++Result.NumAssetsCooked;
+                ++NumStripped;
+            }
+            else if (BundleAssetCooked(Writer, Path, LogFunc))
+            {
+                ++Result.NumAssetsCooked;
+                ++NumLoaded;
+            }
+        }
+
+        LogCooker(LogFunc, *Format("  {} asset(s) cooked from their files, {} loaded and saved, in {:.1f} s",
+            NumStripped, NumLoaded, PlatformTime::Seconds() - Start));
+    }
+
+    namespace
+    {
 
         // Every entry of a pak, one per line, so what shipped can be checked without opening the pak.
         void WritePakContents(const FPakWriter& Writer, const FString& PakPath, const TFunction<void(FStringView)>& LogFunc)
@@ -448,52 +461,29 @@ namespace Lumina
             FString Text;
             for (const FFixedString& Path : Paths)
             {
-                Text.append(Path.c_str(), Path.size());
-                Text.push_back('\n');
+                Text.Append(*Path, Path.Len());
+                Text.AppendChar('\n');
             }
 
-            // Kept with the project rather than in the package, so the shipped folder holds only what the game reads.
-            const FString ContentsDir = FString(GEngine->GetProjectPath().data(), GEngine->GetProjectPath().size()) + "/Saved/Cook";
-            Filesystem::MakeDirectoryTree(FStringView(ContentsDir.c_str(), ContentsDir.size()));
-            const FString ContentsPath = ContentsDir + "/" + FString(LeafName(FStringView(PakPath.c_str(), PakPath.size())).data(),
-                                                                       LeafName(FStringView(PakPath.c_str(), PakPath.size())).size()) + ".contents.txt";
-            std::ofstream File(ContentsPath.c_str(), std::ios::binary | std::ios::trunc);
-            File.write(Text.data(), (std::streamsize)Text.size());
-            if (File.good())
+            const FString ContentsPath = GetCookRecordPath(Global::GEngine->GetProjectPath(), FStringView(*PakPath, PakPath.Len()), ".contents.txt");
+            Filesystem::MakeParentDirectoryTree(FStringView(*ContentsPath, ContentsPath.Len()));
+            if (Filesystem::AtomicWriteFile(ContentsPath, TSpan<const uint8>(reinterpret_cast<const uint8*>(Text.GetData()), Text.Len())))
             {
-                LogCooker(LogFunc, Format("  listed {} entries in {}", Paths.size(), ContentsPath.c_str()).c_str());
+                LogCooker(LogFunc, *Format("  listed {} entries in {}", Paths.Num(), *ContentsPath));
             }
-        }
-
-        // VirtualPath ends in ".lasset" (case-insensitive).
-        bool IsLAssetPath(FStringView VirtualPath)
-        {
-            static constexpr FStringView Ext = ".lasset";
-            if (VirtualPath.size() < Ext.size())
-            {
-                return false;
-            }
-            FStringView Tail = VirtualPath.substr(VirtualPath.size() - Ext.size());
-            for (size_t i = 0; i < Ext.size(); ++i)
-            {
-                char a = Tail[i]; char b = Ext[i];
-                if (a >= 'A' && a <= 'Z') a = char(a - 'A' + 'a');
-                if (a != b) return false;
-            }
-            return true;
         }
 
         // Picks up loose files loaded by name at runtime, which carry no asset-reflected references.
-        size_t BundleLooseContent(FPakWriter& Writer, const TFunction<void(FStringView)>& LogFunc)
+        int32 BundleLooseContent(FPakWriter& Writer, const TFunction<void(FStringView)>& LogFunc)
         {
-            size_t Count = 0;
+            int32 Count = 0;
             auto Walk = [&](FStringView Root)
             {
                 VFS::RecursiveDirectoryIterator(Root, [&](const VFS::FFileInfo& Info)
                 {
                     if (Info.IsDirectory()) return;
-                    FStringView Vp(Info.VirtualPath.c_str(), Info.VirtualPath.size());
-                    if (IsLAssetPath(Vp)) return;
+                    FStringView Vp(*Info.VirtualPath, Info.VirtualPath.Len());
+                    if (EndsWithIgnoreCase(Vp, ".lasset")) return;
                     if (BundleVfsFile(Writer, Vp, LogFunc))
                     {
                         ++Count;
@@ -516,34 +506,34 @@ namespace Lumina
             TVector<uint8> Bytes;
             if (!Filesystem::ReadFile(Bytes, DiskPath))
             {
-                LogCooker(LogFunc, Format("  [skip] unreadable extra: {}",
-                    DiskPath).c_str());
+                LogCooker(LogFunc, *Format("  [skip] unreadable extra: {}",
+                    DiskPath));
                 return false;
             }
-            Writer.AddEntry(VirtualPath, TSpan<const uint8>(Bytes.data(), Bytes.size()));
-            LogCooker(LogFunc, Format("  + {} ({} bytes, extra)",
-                VirtualPath, Bytes.size()).c_str());
+            Writer.AddEntry(VirtualPath, TSpan<const uint8>(Bytes.GetData(), Bytes.Num()));
+            LogCooker(LogFunc, *Format("  + {} ({} bytes, extra)",
+                VirtualPath, Bytes.Num()));
             return true;
         }
 
-        size_t BundleExtras(FPakWriter& Writer, const FCookOptions& Options, const TFunction<void(FStringView)>& LogFunc)
+        int32 BundleExtras(FPakWriter& Writer, const FCookOptions& Options, const TFunction<void(FStringView)>& LogFunc)
         {
-            size_t Count = 0;
+            int32 Count = 0;
 
             for (const FString& File : Options.ExtraFiles)
             {
                 if (!Filesystem::IsFile(File))
                 {
-                    LogCooker(LogFunc, Format("  [skip] extra file not found: {}", File.c_str()).c_str());
+                    LogCooker(LogFunc, *Format("  [skip] extra file not found: {}", *File));
                     continue;
                 }
 
                 const FStringView Leaf = LeafName(File);
 
                 FString Vp = "/Extras/";
-                Vp.append(Leaf.data(), Leaf.size());
+                Vp.Append(Leaf.GetData(), Leaf.Len());
 
-                if (BundleDiskFile(Writer, File, FStringView(Vp.c_str(), Vp.size()), LogFunc))
+                if (BundleDiskFile(Writer, File, FStringView(*Vp, Vp.Len()), LogFunc))
                 {
                     ++Count;
                 }
@@ -553,12 +543,12 @@ namespace Lumina
             {
                 if (!Filesystem::IsDirectory(Dir))
                 {
-                    LogCooker(LogFunc, Format("  [skip] extra dir not found: {}", Dir.c_str()).c_str());
+                    LogCooker(LogFunc, *Format("  [skip] extra dir not found: {}", *Dir));
                     continue;
                 }
 
                 const FStringView RootName = LeafName(Dir);
-                const size_t RootLength = Dir.size();
+                const int32 RootLength = Dir.Len();
 
                 Filesystem::IterateDirectoryRecursive(Dir, [&](const Filesystem::FDirectoryEntry& Entry)
                 {
@@ -567,13 +557,13 @@ namespace Lumina
                         return;
                     }
 
-                    const FStringView Relative = Entry.FullPath.substr(RootLength);
+                    const FStringView Relative = Entry.FullPath.Mid(RootLength);
 
                     FString Vp = "/Extras/";
-                    Vp.append(RootName.data(), RootName.size());
-                    Vp.append(Relative.data(), Relative.size());
+                    Vp.Append(RootName.GetData(), RootName.Len());
+                    Vp.Append(Relative.GetData(), Relative.Len());
 
-                    if (BundleDiskFile(Writer, Entry.FullPath, FStringView(Vp.c_str(), Vp.size()), LogFunc))
+                    if (BundleDiskFile(Writer, Entry.FullPath, FStringView(*Vp, Vp.Len()), LogFunc))
                     {
                         ++Count;
                     }
@@ -582,8 +572,28 @@ namespace Lumina
             return Count;
         }
 
+        bool BundleProjectIcon(FPakWriter& Writer, FStringView PakPath, const TFunction<void(FStringView)>& LogFunc)
+        {
+            const FString RecordPath = GetCookRecordPath(Global::GEngine->GetProjectPath(), PakPath, ProjectIconRecordSuffix);
+            Filesystem::RemoveFile(FStringView(*RecordPath, RecordPath.Len()));
+
+            const FFixedString IconPath = Global::GEngine->GetProjectIconPath();
+            TVector<uint8> Png;
+            if (!EncodeProjectIcon(IconPath, Png, LogFunc))
+            {
+                return false;
+            }
+
+            const TSpan<const uint8> Bytes(Png.GetData(), Png.Num());
+            Writer.AddEntry(CookedProjectIconPath, Bytes);
+            Filesystem::MakeParentDirectoryTree(FStringView(*RecordPath, RecordPath.Len()));
+            Filesystem::WriteFile(FStringView(*RecordPath, RecordPath.Len()), Bytes);
+            LogCooker(LogFunc, *Format("  + {} ({} bytes, from {})", CookedProjectIconPath, Png.Num(), IconPath));
+            return true;
+        }
+
         // Inject Project.Name into /Config/GameSettings.json so the cooked runtime can resolve the project DLL.
-        bool BundleConfigWithProjectName(FPakWriter& Writer, const TFunction<void(FStringView)>& LogFunc)
+        bool BundleConfigWithProjectName(FPakWriter& Writer, bool bShipsProjectIcon, const TFunction<void(FStringView)>& LogFunc)
         {
             FString JsonText;
             if (!VFS::ReadFile(JsonText, "/Config/GameSettings.json"))
@@ -591,32 +601,32 @@ namespace Lumina
                 JsonText = "{}";
             }
 
-            nlohmann::json Doc;
-            try
+            FJsonValue Doc;
+            if (!FJsonValue::Parse(JsonText.View(), Doc) || !Doc.IsObject())
             {
-                Doc = nlohmann::json::parse(JsonText.c_str());
-            }
-            catch (...)
-            {
-                Doc = nlohmann::json::object();
+                Doc = FJsonValue::MakeObject();
             }
 
-            if (!Doc.contains("Project") || !Doc["Project"].is_object())
+            if (!Doc["Project"].IsObject())
             {
-                Doc["Project"] = nlohmann::json::object();
+                Doc.Set("Project", FJsonValue::MakeObject());
             }
-            Doc["Project"]["Name"] = std::string(GEngine->GetProjectName().data(), GEngine->GetProjectName().size());
+            Doc.FindOrAdd("Project").Set("Name", FStringView(Global::GEngine->GetProjectName().GetData(), Global::GEngine->GetProjectName().Len()));
 
-            const std::string Out = Doc.dump(4);
-            Writer.AddEntry("/Config/GameSettings.json", FStringView(Out.c_str(), Out.size()));
-            LogCooker(LogFunc, Format("  + /Config/GameSettings.json (cooked, {} bytes)", Out.size()).c_str());
+            // The setting names a file under the project, which a package does not carry.
+            const FString Section = FConfig::GetSettingsSection(CProjectSettings::StaticClass());
+            Doc.FindOrAdd(FStringView(*Section, Section.Len())).Set("Icon", bShipsProjectIcon ? CookedProjectIconPath : FStringView());
+
+            const FString Out = Doc.ToString(4);
+            Writer.AddEntry("/Config/GameSettings.json", Out.View());
+            LogCooker(LogFunc, *Format("  + /Config/GameSettings.json (cooked, {} bytes)", Out.Len()));
             return true;
         }
 
         // Bundles the engine content a runtime needs, under /Engine/Resources.
-        size_t BundleEngineResources(FPakWriter& Writer, const TFunction<void(FStringView)>& LogFunc)
+        int32 BundleEngineResources(FPakWriter& Writer, const TFunction<void(FStringView)>& LogFunc)
         {
-            size_t Count = 0;
+            int32 Count = 0;
             VFS::RecursiveDirectoryIterator("/Engine/Resources", [&](const VFS::FFileInfo& Info)
             {
                 if (Info.IsDirectory())
@@ -624,7 +634,7 @@ namespace Lumina
                     return;
                 }
                 
-                FStringView Vp(Info.VirtualPath.c_str(), Info.VirtualPath.size());
+                FStringView Vp(*Info.VirtualPath, Info.VirtualPath.Len());
 
                 if (BundleVfsFile(Writer, Vp, LogFunc))
                 {
@@ -635,9 +645,9 @@ namespace Lumina
         }
 
         // Bundle every cached SPIR-V (.lsc) under /Intermediates/ShaderCache.
-        size_t BundleShaderCache(FPakWriter& Writer, const TFunction<void(FStringView)>& LogFunc)
+        int32 BundleShaderCache(FPakWriter& Writer, const TFunction<void(FStringView)>& LogFunc)
         {
-            size_t Count = 0;
+            int32 Count = 0;
             VFS::RecursiveDirectoryIterator("/Intermediates/ShaderCache", [&](const VFS::FFileInfo& Info)
             {
                 if (Info.IsDirectory() || Info.GetExt() != ".lsc")
@@ -645,7 +655,7 @@ namespace Lumina
                     return;
                 }
 
-                const FStringView VirtualPath(Info.VirtualPath.c_str(), Info.VirtualPath.size());
+                const FStringView VirtualPath(*Info.VirtualPath, Info.VirtualPath.Len());
                 TVector<uint8> Bytes;
                 if (!VFS::ReadFile(Bytes, VirtualPath))
                 {
@@ -657,25 +667,25 @@ namespace Lumina
                 const bool bStripped = FShaderCache::StripCacheFileForCook(Bytes, Stripped);
                 const TVector<uint8>& Shipped = bStripped ? Stripped : Bytes;
 
-                Writer.AddEntry(VirtualPath, TSpan<const uint8>(Shipped.data(), Shipped.size()));
-                LogCooker(LogFunc, Format("  + {} ({} bytes{})", VirtualPath, Shipped.size(),
-                    bStripped ? Format(", {} before stripping", Bytes.size()) : FString()).c_str());
+                Writer.AddEntry(VirtualPath, TSpan<const uint8>(Shipped.GetData(), Shipped.Num()));
+                LogCooker(LogFunc, *Format("  + {} ({} bytes{})", VirtualPath, Shipped.Num(),
+                    bStripped ? Format(", {} before stripping", Bytes.Num()) : FString()));
                 ++Count;
             });
             return Count;
         }
 
         // Bundle other /Config/*.json files; GameSettings.json is handled by BundleConfigWithProjectName.
-        size_t BundleAuxConfigFiles(FPakWriter& Writer, const TFunction<void(FStringView)>& LogFunc)
+        int32 BundleAuxConfigFiles(FPakWriter& Writer, const TFunction<void(FStringView)>& LogFunc)
         {
-            size_t Count = 0;
+            int32 Count = 0;
             VFS::DirectoryIterator("/Config", [&](const VFS::FFileInfo& Info)
             {
                 if (Info.IsDirectory() || Info.GetExt() != ".json")
                 {
                     return;
                 }
-                FStringView Vp(Info.VirtualPath.c_str(), Info.VirtualPath.size());
+                FStringView Vp(*Info.VirtualPath, Info.VirtualPath.Len());
                 if (Vp == FStringView("/Config/GameSettings.json"))
                 {
                     return;
@@ -689,19 +699,42 @@ namespace Lumina
         }
     }
 
+    FString GetCookRecordPath(FStringView ProjectDirectory, FStringView PakPath, FStringView Suffix)
+    {
+        FString Path(*Paths::Combine(ProjectDirectory, "Saved/Cook", LeafName(PakPath)));
+        Path.Append(Suffix.GetData(), Suffix.Len());
+        return Path;
+    }
+
+    bool EncodeProjectIcon(FStringView IconPath, TVector<uint8>& OutPng, const TFunction<void(FStringView)>& LogFunc)
+    {
+        if (IconPath.IsEmpty())
+        {
+            return false;
+        }
+
+        Windowing::FWindowIcon Icon;
+        if (Windowing::LoadWindowIcon(IconPath, Icon) && ImageWrite::EncodePng(OutPng, Icon.Width, Icon.Height, 4, Icon.Pixels.GetData(), Icon.Width * 4))
+        {
+            return true;
+        }
+        LogCooker(LogFunc, *Format("  [warn] project icon {} is missing or not an image, so the package keeps the Lumina icon", IconPath));
+        return false;
+    }
+
     FCookResult FAssetCooker::Cook(FStringView OutputPakPath, const FCookOptions& Options, const TFunction<void(FStringView)>& LogFunc)
     {
         FCookResult Result;
         FCookDDC::Reset();
 
-        if (GEngine == nullptr || GEngine->GetProjectName().empty())
+        if (Global::GEngine == nullptr || Global::GEngine->GetProjectName().IsEmpty())
         {
             Result.ErrorMessage = "No project loaded.";
             return Result;
         }
 
-        const TVector<FCookRoot> Roots = GEngine->GetCookRoots();
-        if (Roots.empty())
+        const TVector<FCookRoot> Roots = Global::GEngine->GetCookRoots();
+        if (Roots.IsEmpty())
         {
             Result.ErrorMessage =
                 "No cook roots defined.\n"
@@ -710,26 +743,26 @@ namespace Lumina
             return Result;
         }
 
-        LogCooker(LogFunc, Format("Building cook graph from {} root(s), shader templates {:016x}...", Roots.size(),
-            CMaterial::GetShaderTemplateHash()).c_str());
+        LogCooker(LogFunc, *Format("Building cook graph from {} root(s), shader templates {:016x}...", Roots.Num(),
+            CMaterial::GetShaderTemplateHash()));
 
         FCookGraph Graph(FAssetRegistry::Get());
         Graph.AddRoots(Roots);
 
         // FindByPredicate returns hash order, so sort by GUID before adding to keep the graph deterministic.
         {
-            TVector<FAssetData*> Grouped = FAssetRegistry::Get().FindByPredicate(
+            TVector<FAssetDataPtr> Grouped = FAssetRegistry::Get().FindByPredicate(
                 [](const FAssetData& D) { return !FAssetManager::Get().GetGroupOfClass(D.AssetClass).IsNone(); });
             Algo::Sort(Grouped,
-                [](const FAssetData* A, const FAssetData* B) { return A->AssetGUID < B->AssetGUID; });
-            if (!Grouped.empty())
+                [](const FAssetDataPtr& A, const FAssetDataPtr& B) { return A->AssetGUID < B->AssetGUID; });
+            if (!Grouped.IsEmpty())
             {
-                LogCooker(LogFunc, Format("  Grouped assets: {} -> implicit cook roots", Grouped.size()).c_str());
+                LogCooker(LogFunc, *Format("  Grouped assets: {} -> implicit cook roots", Grouped.Num()));
             }
-            for (const FAssetData* Data : Grouped)
+            for (const FAssetDataPtr& Data : Grouped)
             {
                 FCookRoot Root;
-                Root.Asset = FString(Data->Path.c_str(), Data->Path.size());
+                Root.Asset = FString(*Data->Path, Data->Path.Len());
                 Root.Chunk = kMainChunkName;
                 Graph.AddRoot(Root);
             }
@@ -738,12 +771,12 @@ namespace Lumina
         // The project root subdirs plus every enabled plugin's mount.
         TVector<FString> ContentRoots;
         // All of /Game, since scripts keep the JSON they read beside them or in a data folder outside Content.
-        ContentRoots.emplace_back("/Game");
+        ContentRoots.Emplace("/Game");
         for (const FPlugin* Plugin : FPluginManager::Get().GetAllPlugins())
         {
             if (!Plugin->IsEnabled())        continue;
             if (!Plugin->IsContentMounted()) continue;
-            ContentRoots.emplace_back(Plugin->GetMountAlias());
+            ContentRoots.Emplace(Plugin->GetMountAlias());
         }
 
         // VFS walk order is OS-dependent, so sort resolved paths before adding to keep the cook reproducible.
@@ -753,8 +786,8 @@ namespace Lumina
             Algo::Sort(UiScan.AssetPaths);
             if (UiScan.FilesScanned > 0)
             {
-                LogCooker(LogFunc, Format("  UI scan: {} file(s), {} candidate ref(s), {} resolved -> implicit cook roots",
-                    UiScan.FilesScanned, UiScan.RawCandidates, UiScan.ResolvedRefs).c_str());
+                LogCooker(LogFunc, *Format("  UI scan: {} file(s), {} candidate ref(s), {} resolved -> implicit cook roots",
+                    UiScan.FilesScanned, UiScan.RawCandidates, UiScan.ResolvedRefs));
             }
             for (const FString& Path : UiScan.AssetPaths)
             {
@@ -771,8 +804,8 @@ namespace Lumina
             Algo::Sort(ScriptScan.FolderPaths);
             if (ScriptScan.FilesScanned > 0)
             {
-                LogCooker(LogFunc, Format("  Script scan: {} file(s), {} asset ref(s), {} folder ref(s) -> implicit cook roots",
-                    ScriptScan.FilesScanned, ScriptScan.AssetPaths.size(), ScriptScan.FolderPaths.size()).c_str());
+                LogCooker(LogFunc, *Format("  Script scan: {} file(s), {} asset ref(s), {} folder ref(s) -> implicit cook roots",
+                    ScriptScan.FilesScanned, ScriptScan.AssetPaths.Num(), ScriptScan.FolderPaths.Num()));
             }
             for (const FString& Path : ScriptScan.AssetPaths)
             {
@@ -780,7 +813,7 @@ namespace Lumina
             }
             for (const FString& Folder : ScriptScan.FolderPaths)
             {
-                Graph.AddFolderRoot(FStringView(Folder.c_str(), Folder.size()), kMainChunkName);
+                Graph.AddFolderRoot(FStringView(*Folder, Folder.Len()), kMainChunkName);
             }
         }
 
@@ -788,55 +821,52 @@ namespace Lumina
 
         for (const FCookGraphIssue& Issue : Graph.GetIssues())
         {
-            LogCooker(LogFunc, Format("  [warn] {}: {}",
-                Issue.Source.c_str(), Issue.Detail.c_str()).c_str());
+            LogCooker(LogFunc, *Format("  [warn] {}: {}",
+                *Issue.Source, *Issue.Detail));
         }
 
         const auto Reachable = Graph.GetReachableNodesSorted();
-        LogCooker(LogFunc, Format("Reachable assets: {}", Reachable.size()).c_str());
+        LogCooker(LogFunc, *Format("Reachable assets: {}", Reachable.Num()));
 
         // Sorted-by-GUID input order is preserved per chunk so PAK entry order stays deterministic.
-        const FName kMainChunk("Main");
         THashMap<FName, TVector<const FCookNode*>> ByChunk;
         for (const FCookNode* Node : Reachable)
         {
-            const FName Chunk = Node->Chunk.IsNone() ? kMainChunk : Node->Chunk;
-            ByChunk[Chunk].push_back(Node);
+            const FName Chunk = Node->Chunk.IsNone() ? kMainChunkName : Node->Chunk;
+            ByChunk[Chunk].Add(Node);
         }
 
         // Alphabetical with Main forced first, since Main carries shared content and the verbatim path.
         TVector<FName> ChunkOrder;
-        ChunkOrder.reserve(ByChunk.size());
-        for (const auto& Pair : ByChunk) ChunkOrder.push_back(Pair.first);
-        if (ByChunk.find(kMainChunk) == ByChunk.end())
+        ByChunk.GenerateKeyArray(ChunkOrder);
+        if (ByChunk.TryAdd(kMainChunkName))      // ensure a Main PAK exists for shared content
         {
-            ByChunk[kMainChunk] = {};      // ensure a Main PAK exists for shared content
-            ChunkOrder.push_back(kMainChunk);
+            ChunkOrder.Add(kMainChunkName);
         }
         Algo::Sort(ChunkOrder,
             [&](const FName& A, const FName& B)
             {
-                if (A == kMainChunk) return true;
-                if (B == kMainChunk) return false;
+                if (A == kMainChunkName) return true;
+                if (B == kMainChunkName) return false;
                 return A.ToString() < B.ToString();
             });
 
         // Main keeps the caller's name verbatim, while others become stem, chunk and extension.
         auto ChunkPakPath = [&](FName Chunk) -> FString
         {
-            const FString FullPath(OutputPakPath.data(), OutputPakPath.size());
-            if (Chunk == kMainChunk) return FullPath;
+            const FString FullPath(OutputPakPath.GetData(), OutputPakPath.Len());
+            if (Chunk == kMainChunkName) return FullPath;
 
-            const size_t DotPos = FullPath.find_last_of('.');
-            const size_t SlashPos = FullPath.find_last_of("/\\");
-            const bool bExtAfterSlash = DotPos != FString::npos
-                && (SlashPos == FString::npos || DotPos > SlashPos);
+            const int32 DotPos = FullPath.FindLastOf('.');
+            const int32 SlashPos = FullPath.FindLastOf("/\\");
+            const bool bExtAfterSlash = DotPos != Constants::kIndexNone
+                && (SlashPos == Constants::kIndexNone || DotPos > SlashPos);
 
-            const FString Stem = bExtAfterSlash ? FullPath.substr(0, DotPos) : FullPath;
-            const FString Ext  = bExtAfterSlash ? FullPath.substr(DotPos)    : FString(".pak");
+            const FString Stem = bExtAfterSlash ? FullPath.Mid(0, DotPos) : FullPath;
+            const FString Ext  = bExtAfterSlash ? FullPath.Mid(DotPos)    : FString(".pak");
             FString Out = Stem;
             Out += "-";
-            Out += Chunk.ToString().c_str();
+            Out += *Chunk.ToString();
             Out += Ext;
             return Out;
         };
@@ -844,25 +874,27 @@ namespace Lumina
         for (const FName& Chunk : ChunkOrder)
         {
             FPakWriter Writer;
-            const bool bIsMain = (Chunk == kMainChunk);
+            const bool bIsMain = (Chunk == kMainChunkName);
 
             BundleChunkAssets(Writer, ByChunk[Chunk], Result, LogFunc);
 
-            size_t ChunkExtras = 0;
+            int32 ChunkExtras = 0;
             if (bIsMain)
             {
-                if (BundleConfigWithProjectName(Writer, LogFunc)) { ++ChunkExtras; }
+                const bool bShipsProjectIcon = BundleProjectIcon(Writer, OutputPakPath, LogFunc);
+                ChunkExtras += bShipsProjectIcon ? 1 : 0;
+                if (BundleConfigWithProjectName(Writer, bShipsProjectIcon, LogFunc)) { ++ChunkExtras; }
                 ChunkExtras += BundleAuxConfigFiles(Writer, LogFunc);
 
                 LogCooker(LogFunc, "Bundling engine resources...");
-                const size_t NumEngine = BundleEngineResources(Writer, LogFunc);
+                const int32 NumEngine = BundleEngineResources(Writer, LogFunc);
                 ChunkExtras += NumEngine;
-                LogCooker(LogFunc, Format("  bundled {} engine files", NumEngine).c_str());
+                LogCooker(LogFunc, *Format("  bundled {} engine files", NumEngine));
 
                 LogCooker(LogFunc, "Bundling shader cache...");
-                const size_t NumShaders = BundleShaderCache(Writer, LogFunc);
+                const int32 NumShaders = BundleShaderCache(Writer, LogFunc);
                 ChunkExtras += NumShaders;
-                LogCooker(LogFunc, Format("  bundled {} cached shaders", NumShaders).c_str());
+                LogCooker(LogFunc, *Format("  bundled {} cached shaders", NumShaders));
 
                 if (!Options.bExtractScriptsAsLooseFiles)
                 {
@@ -873,7 +905,7 @@ namespace Lumina
                     LogCooker(LogFunc, "Skipping loose content in PAK (loose mode).");
                 }
 
-                if (!Options.ExtraFiles.empty() || !Options.ExtraDirectories.empty())
+                if (!Options.ExtraFiles.IsEmpty() || !Options.ExtraDirectories.IsEmpty())
                 {
                     LogCooker(LogFunc, "Bundling extras...");
                     ChunkExtras += BundleExtras(Writer, Options, LogFunc);
@@ -882,39 +914,39 @@ namespace Lumina
                 {
                     const FString Stamp = Format("{:016x}", CMaterial::GetShaderTemplateHash());
                     if (Writer.AddEntry(CMaterial::CookedShaderTemplateHashPath,
-                        TSpan<const uint8>(reinterpret_cast<const uint8*>(Stamp.data()), Stamp.size())))
+                        TSpan<const uint8>(reinterpret_cast<const uint8*>(Stamp.GetData()), Stamp.Len())))
                     {
                         ++ChunkExtras;
-                        LogCooker(LogFunc, Format("  + {} ({})", CMaterial::CookedShaderTemplateHashPath, Stamp).c_str());
+                        LogCooker(LogFunc, *Format("  + {} ({})", CMaterial::CookedShaderTemplateHashPath, Stamp));
                     }
                 }
 
                 // A near-empty registry usually means stale editor discovery, so warn loudly in the cook log.
                 {
-                    const size_t LiveCount = FAssetRegistry::Get().GetAssets().size();
+                    const int32 LiveCount = FAssetRegistry::Get().FindByPredicate([](const FAssetData&) { return true; }).Num();
                     TVector<uint8> Bytes;
                     FMemoryWriter Ar(Bytes);
                     FAssetRegistry::Get().WriteToArchive(Ar);
                     if (Writer.AddEntry("/Engine/AssetRegistry.bin",
-                        TSpan<const uint8>(Bytes.data(), Bytes.size())))
+                        TSpan<const uint8>(Bytes.GetData(), Bytes.Num())))
                     {
                         ++ChunkExtras;
-                        LogCooker(LogFunc, Format("  + /Engine/AssetRegistry.bin (cooked, {} bytes, {} live entries)",
-                            Bytes.size(), LiveCount).c_str());
+                        LogCooker(LogFunc, *Format("  + /Engine/AssetRegistry.bin (cooked, {} bytes, {} live entries)",
+                            Bytes.Num(), LiveCount));
                     }
                     // Only warn at zero (fresh projects have few assets); zero means discovery never ran or wiped the registry, fix by deleting the .json cache + restart.
                     if (LiveCount == 0)
                     {
-                        LogCooker(LogFunc, Format("  [warn] live registry has 0 entries, Shipping runtime will not find anything. "
+                        LogCooker(LogFunc, *Format("  [warn] live registry has 0 entries, Shipping runtime will not find anything. "
                             "Delete <EngineInstall>/Intermediates/AssetRegistry.json and restart the editor "
-                            "to force a fresh discovery, then re-cook.").c_str());
+                            "to force a fresh discovery, then re-cook."));
                     }
                 }
             }
 
             const FString OutPath = ChunkPakPath(Chunk);
-            const size_t ChunkBytes = Writer.TotalEntryBytes();
-            Filesystem::MakeParentDirectoryTree(FStringView(OutPath.c_str(), OutPath.size()));
+            const int64 ChunkBytes = Writer.TotalEntryBytes();
+            Filesystem::MakeParentDirectoryTree(FStringView(*OutPath, OutPath.Len()));
             if (!Writer.Finalize(OutPath))
             {
                 Result.ErrorMessage = FString("Failed to write PAK at ") + OutPath;
@@ -925,21 +957,21 @@ namespace Lumina
             FCookChunkResult ChunkResult;
             ChunkResult.Chunk     = Chunk;
             ChunkResult.PakPath   = OutPath;
-            ChunkResult.NumAssets = ByChunk[Chunk].size();
+            ChunkResult.NumAssets = ByChunk[Chunk].Num();
             ChunkResult.NumExtras = ChunkExtras;
             ChunkResult.Bytes     = ChunkBytes;
-            Result.Chunks.push_back(Move(ChunkResult));
+            Result.Chunks.Add(Move(ChunkResult));
 
             Result.NumExtraFiles += ChunkExtras;
             Result.TotalBytes    += ChunkBytes;
 
-            LogCooker(LogFunc, Format("Wrote chunk '{}' -> {} ({} entries, {} bytes)",
-                Chunk.ToString().c_str(), OutPath.c_str(),
-                Writer.NumEntries(), ChunkBytes).c_str());
+            LogCooker(LogFunc, *Format("Wrote chunk '{}' -> {} ({} entries, {} bytes)",
+                *Chunk.ToString(), *OutPath,
+                Writer.NumEntries(), ChunkBytes));
         }
 
-        LogCooker(LogFunc, Format("DDC: {} hits, {} misses ({} bytes written this cook)",
-            FCookDDC::Hits(), FCookDDC::Misses(), FCookDDC::WrittenBytes()).c_str());
+        LogCooker(LogFunc, *Format("DDC: {} hits, {} misses ({} bytes written this cook)",
+            FCookDDC::Hits(), FCookDDC::Misses(), FCookDDC::WrittenBytes()));
 
         Result.bSuccess = true;
         return Result;

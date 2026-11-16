@@ -2,6 +2,7 @@
 #include "Object.h"
 #include "Class.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
+#include "Core/Serialization/MemoryArchiver.h"
 #include "Core/Serialization/ObjectArchiver.h"
 #include "Package/Package.h"
 
@@ -57,6 +58,10 @@ namespace Lumina
     CObject* CObject::Duplicate()
     {
         CObject* Duplicate = NewObject(GetClass(), GetPackage());
+        if (Duplicate == nullptr)
+        {
+            return nullptr;
+        }
         if (CClass* Class = GetClass())
         {
             for (FProperty* Current : Class->GetProperties())

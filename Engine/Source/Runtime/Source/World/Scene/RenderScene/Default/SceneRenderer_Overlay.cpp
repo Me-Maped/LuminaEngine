@@ -20,7 +20,6 @@ namespace Lumina
             return;
         }
 
-        LUMINA_PROFILE_SECTION_COLORED("Scene Debug View", tracy::Color::Magenta);
         SCENE_GPU_SCOPE(CL, "Scene Debug View");
 
         const FSceneImage& ColorImg = GetNamedImage(ENamedImage::HDR);
@@ -43,7 +42,7 @@ namespace Lumina
         FGraphicsPipelineKey Key;
         Key.VS          = VertexShader;
         Key.PS          = PixelShader;
-        Key.ColorTargets.push_back({ ColorImg.Desc.Format, {} });
+        Key.ColorTargets.Add({ ColorImg.Desc.Format, {} });
         RHI::CmdSetPipeline(CL, GetOrCreatePipeline(Key));
 
         struct FSceneDebugViewPC
@@ -72,13 +71,83 @@ namespace Lumina
     }
 #endif
 
+    namespace
+    {
+        RHI::FBlendDesc MakeOverlayAlphaBlend()
+        {
+            RHI::FBlendDesc AlphaBlend;
+            AlphaBlend.bBlendEnable   = true;
+            AlphaBlend.SrcColorFactor = RHI::EFactor::SrcAlpha;
+            AlphaBlend.DstColorFactor = RHI::EFactor::OneMinusSrcAlpha;
+            AlphaBlend.SrcAlphaFactor = RHI::EFactor::One;
+            AlphaBlend.DstAlphaFactor = RHI::EFactor::OneMinusSrcAlpha;
+            return AlphaBlend;
+        }
+    }
+
+    RHI::ELoadOp FDefaultSceneRenderer::TakeHDRLoadOp(bool bAfterParticles)
+    {
+        const FFrameData& Frame = *RenderFrame;
+
+        // These write HDR before any overlay pass and decide their own clear.
+        const bool bWrittenUpstream = !Frame.Geometry.DrawCommands.IsEmpty() || FrameFlags.bHasEnvironment
+            || !Frame.Extracts.TerrainExtracts.IsEmpty() || bSceneColorClearedForCallbacks
+            || (bAfterParticles && !Frame.Extracts.ParticleExtracts.IsEmpty());
+
+        // Stamped by tick and view, so a new frame or the next view starts uncleared without a reset.
+        const bool bWrittenThisView = HDRWrittenTick == OptionalImageTick && HDRWrittenView == CurrentView;
+        HDRWrittenTick = OptionalImageTick;
+        HDRWrittenView = CurrentView;
+
+        return (bWrittenUpstream || bWrittenThisView) ? RHI::ELoadOp::Load : RHI::ELoadOp::Clear;
+    }
+
+    void FDefaultSceneRenderer::BeginHDROverlayPass(RHI::FCmdListH CL, RHI::ELoadOp HDRLoadOp, bool bWithPicker,
+                                                    const RHI::FBlendDesc& HDRBlend, FGraphicsPipelineKey& Key)
+    {
+        const FSceneImage& HDR = GetNamedImage(ENamedImage::HDR);
+
+        RHI::FRenderAttachment Colors[2];
+        uint32 NumColors = 1;
+        Colors[0].Texture = HDR.Texture;
+        Colors[0].LoadOp  = HDRLoadOp;
+        Colors[0].StoreOp = RHI::EStoreOp::Store;
+
+        Key.DepthFormat = EFormat::D32;
+        Key.ColorTargets.Emplace(HDR.Desc.Format, HDRBlend);
+
+        // Entity picking is editor-only; a packaged game binds no Picker MRT (SV_Target1 writes discard).
+        #if USING(WITH_EDITOR)
+        if (bWithPicker)
+        {
+            const FSceneImage& Picker = GetNamedImage(ENamedImage::Picker);
+            Colors[1].Texture = Picker.Texture;
+            Colors[1].LoadOp  = RHI::ELoadOp::Load;
+            Colors[1].StoreOp = RHI::EStoreOp::Store;
+            NumColors = 2;
+            Key.ColorTargets.Add({ Picker.Desc.Format, {} });
+        }
+        #else
+        (void)bWithPicker;
+        #endif
+
+        RHI::FRenderPassDesc Pass;
+        Pass.ColorAttachments        = TSpan<const RHI::FRenderAttachment>(Colors, NumColors);
+        Pass.DepthAttachment.Texture = GetNamedImage(ENamedImage::DepthAttachment).Texture;
+        Pass.DepthAttachment.LoadOp  = RHI::ELoadOp::Load;
+        Pass.DepthAttachment.StoreOp = RHI::EStoreOp::Store;
+        Pass.RenderArea              = HDR.GetExtent();
+
+        RHI::CmdBeginRenderPass(CL, Pass);
+        SetViewportScissor(CL, HDR.GetExtent());
+    }
+
     void FDefaultSceneRenderer::BillboardPass(RHI::FCmdListH CL)
     {
         const FFrameData& Frame = *RenderFrame;
         const auto& BillboardInstances = Frame.Primitives.BillboardInstances;
-        const auto& DrawCommands       = Frame.Geometry.DrawCommands;
 
-        if (BillboardInstances.empty() || !FrameSettings.ShouldDrawBillboards())
+        if (BillboardInstances.IsEmpty() || !FrameSettings.ShouldDrawBillboards())
         {
             return;
         }
@@ -92,57 +161,15 @@ namespace Lumina
             return;
         }
 
-        const FSceneImage& HDR    = GetNamedImage(ENamedImage::HDR);
-
-        const bool bHDRWasWritten = !DrawCommands.empty() || FrameFlags.bHasEnvironment
-            || !Frame.Extracts.TerrainExtracts.empty() || !Frame.Primitives.SolidBatches.empty()
-            || !Frame.Primitives.LineBatches.empty() || !Frame.Extracts.ParticleExtracts.empty()
-            || bSceneColorClearedForCallbacks;
-
-        RHI::FRenderAttachment Colors[2];
-        uint32 NumColors = 1;
-        Colors[0].Texture = HDR.Texture;
-        Colors[0].LoadOp  = bHDRWasWritten ? RHI::ELoadOp::Load : RHI::ELoadOp::Clear;
-        Colors[0].StoreOp = RHI::EStoreOp::Store;
-        // Entity picking is editor-only; a packaged game binds no Picker MRT (SV_Target1 writes discard).
-        #if USING(WITH_EDITOR)
-        const FSceneImage& Picker = GetNamedImage(ENamedImage::Picker);
-        Colors[1].Texture = Picker.Texture;
-        Colors[1].LoadOp  = RHI::ELoadOp::Load;
-        Colors[1].StoreOp = RHI::EStoreOp::Store;
-        NumColors = 2;
-        #endif
-
-        RHI::FRenderPassDesc Pass;
-        Pass.ColorAttachments        = TSpan<const RHI::FRenderAttachment>(Colors, NumColors);
-        Pass.DepthAttachment.Texture = GetNamedImage(ENamedImage::DepthAttachment).Texture;
-        Pass.DepthAttachment.LoadOp  = RHI::ELoadOp::Load;
-        Pass.DepthAttachment.StoreOp = RHI::EStoreOp::Store;
-        Pass.RenderArea              = HDR.GetExtent();
-
-        RHI::CmdBeginRenderPass(CL, Pass);
-        SetViewportScissor(CL, HDR.GetExtent());
+        FGraphicsPipelineKey Key;
+        Key.VS = VertexShader;
+        Key.PS = PixelShader;
+        BeginHDROverlayPass(CL, TakeHDRLoadOp(/*bAfterParticles*/ true), /*bWithPicker*/ true, MakeOverlayAlphaBlend(), Key);
         RHI::CmdSetDepthStencil(CL, (RHI::FDepthStencilDesc{}));
         RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
-
-        RHI::FBlendDesc AlphaBlend;
-        AlphaBlend.bBlendEnable   = true;
-        AlphaBlend.SrcColorFactor = RHI::EFactor::SrcAlpha;
-        AlphaBlend.DstColorFactor = RHI::EFactor::OneMinusSrcAlpha;
-        AlphaBlend.SrcAlphaFactor = RHI::EFactor::One;
-        AlphaBlend.DstAlphaFactor = RHI::EFactor::OneMinusSrcAlpha;
-
-        FGraphicsPipelineKey Key;
-        Key.VS          = VertexShader;
-        Key.PS          = PixelShader;
-        Key.DepthFormat = EFormat::D32;
-        Key.ColorTargets.push_back({ HDR.Desc.Format, AlphaBlend });
-        #if USING(WITH_EDITOR)
-        Key.ColorTargets.push_back({ Picker.Desc.Format, {} });
-        #endif
         RHI::CmdSetPipeline(CL, GetOrCreatePipeline(Key));
 
-        RHI::CmdDraw(CL, MakeArgs(), 6, (uint32)BillboardInstances.size(), 0, 0);
+        RHI::CmdDraw(CL, MakeArgs(), 6, (uint32)BillboardInstances.Num(), 0, 0);
         RHI::CmdEndRenderPass(CL);
         Barriers::RasterToRead(CL);
     }
@@ -152,12 +179,12 @@ namespace Lumina
         const FFrameData& Frame = *RenderFrame;
         const auto& WidgetInstances = Frame.Primitives.WidgetInstances;
 
-        if (WidgetInstances.empty())
+        if (WidgetInstances.IsEmpty())
         {
             return;
         }
 
-        LUMINA_PROFILE_SECTION_COLORED("Widget Picker Pass", tracy::Color::Magenta);
+        SCENE_GPU_SCOPE(CL, "Widget Picker");
 
         static const FShaderH VertexShader = FShaderLibrary::Get("WidgetVert.slang");
         static const FShaderH PixelShader = FShaderLibrary::Get("WidgetPickerPixel.slang");
@@ -194,10 +221,10 @@ namespace Lumina
         Key.VS          = VertexShader;
         Key.PS          = PixelShader;
         Key.DepthFormat = EFormat::D32;
-        Key.ColorTargets.push_back({ Picker.Desc.Format, {} });
+        Key.ColorTargets.Add({ Picker.Desc.Format, {} });
         RHI::CmdSetPipeline(CL, GetOrCreatePipeline(Key));
 
-        RHI::CmdDraw(CL, MakeArgs(), 6, (uint32)WidgetInstances.size(), 0, 0);
+        RHI::CmdDraw(CL, MakeArgs(), 6, (uint32)WidgetInstances.Num(), 0, 0);
         RHI::CmdEndRenderPass(CL);
         Barriers::RasterToRead(CL);
     }
@@ -207,12 +234,12 @@ namespace Lumina
         const FFrameData& Frame = *RenderFrame;
         const auto& WidgetInstances = Frame.Primitives.WidgetInstances;
 
-        if (WidgetInstances.empty() || !CurrentView->Output.IsValid())
+        if (WidgetInstances.IsEmpty() || !CurrentView->Output.IsValid())
         {
             return;
         }
 
-        LUMINA_PROFILE_SECTION_COLORED("Widget Pass", tracy::Color::Magenta);
+        SCENE_GPU_SCOPE(CL, "Widgets");
 
         static const FShaderH VertexShader = FShaderLibrary::Get("WidgetVert.slang");
         static const FShaderH PixelShader = FShaderLibrary::Get("WidgetPixel.slang");
@@ -222,6 +249,11 @@ namespace Lumina
         }
 
         const FSceneImage& Output = CurrentView->Output;
+        const FSceneImage& Depth  = GetWidgetDepth(CL, Output.GetExtent());
+        if (!Depth.IsValid())
+        {
+            return;
+        }
 
         RHI::FRenderAttachment Color;
         Color.Texture = Output.Texture;
@@ -230,7 +262,7 @@ namespace Lumina
 
         RHI::FRenderPassDesc Pass;
         Pass.ColorAttachments        = TSpan<const RHI::FRenderAttachment>(&Color, 1);
-        Pass.DepthAttachment.Texture = GetNamedImage(ENamedImage::DepthAttachment).Texture;
+        Pass.DepthAttachment.Texture = Depth.Texture;
         Pass.DepthAttachment.LoadOp  = RHI::ELoadOp::Load;
         Pass.DepthAttachment.StoreOp = RHI::EStoreOp::Store;
         Pass.RenderArea              = Output.GetExtent();
@@ -245,23 +277,51 @@ namespace Lumina
         RHI::CmdSetDepthStencil(CL, (DepthDesc));
         RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
 
-        RHI::FBlendDesc AlphaBlend;
-        AlphaBlend.bBlendEnable   = true;
-        AlphaBlend.SrcColorFactor = RHI::EFactor::SrcAlpha;
-        AlphaBlend.DstColorFactor = RHI::EFactor::OneMinusSrcAlpha;
-        AlphaBlend.SrcAlphaFactor = RHI::EFactor::One;
-        AlphaBlend.DstAlphaFactor = RHI::EFactor::OneMinusSrcAlpha;
-
         FGraphicsPipelineKey Key;
         Key.VS          = VertexShader;
         Key.PS          = PixelShader;
         Key.DepthFormat = EFormat::D32;
-        Key.ColorTargets.push_back({ Output.Desc.Format, AlphaBlend });
+        Key.ColorTargets.Emplace(Output.Desc.Format, MakeOverlayAlphaBlend());
         RHI::CmdSetPipeline(CL, GetOrCreatePipeline(Key));
 
-        RHI::CmdDraw(CL, MakeArgs(), 6, (uint32)WidgetInstances.size(), 0, 0);
+        RHI::CmdDraw(CL, MakeArgs(), 6, (uint32)WidgetInstances.Num(), 0, 0);
         RHI::CmdEndRenderPass(CL);
         Barriers::RasterToRead(CL);
+    }
+
+    // The widgets draw at display resolution, so an upscaled view needs its render-resolution depth resampled to match.
+    const FSceneImage& FDefaultSceneRenderer::GetWidgetDepth(RHI::FCmdListH CL, const FUIntVector2& Extent)
+    {
+        const FSceneImage& SceneDepth = GetNamedImage(ENamedImage::DepthAttachment);
+        if (!SceneDepth.IsValid() || SceneDepth.GetExtent() == Extent)
+        {
+            RetireSceneImage(WidgetDepth);
+            return SceneDepth;
+        }
+
+        if (!WidgetDepth.IsValid() || WidgetDepth.GetExtent() != Extent)
+        {
+            RetireSceneImage(WidgetDepth);
+
+            RHI::FTextureDesc Desc;
+            Desc.Type      = RHI::ETextureType::Tex2D;
+            Desc.Dimension = FUIntVector3(Extent.x, Extent.y, 1);
+            Desc.Format    = EFormat::D32;
+            Desc.Usage     = RHI::EImageUsageFlags::DepthAttachment | RHI::EImageUsageFlags::TransferDst;
+            WidgetDepth    = CreateSceneImage(Desc, /*bSampled*/ false);
+            if (!WidgetDepth.IsValid())
+            {
+                return WidgetDepth;
+            }
+        }
+
+        // Nearest, since a filtered depth would place occluder edges between two surfaces.
+        Barriers::SceneToTransfer(CL);
+        RHI::CmdBlitTexture(CL, SceneDepth.Texture, RHI::FTextureSlice{}, WidgetDepth.Texture, RHI::FTextureSlice{}, RHI::EFilter::Nearest);
+        RHI::CmdBarrier(CL,
+            RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferWrite,
+            RHI::EStageFlags::FragmentTests, RHI::EAccessFlags::DepthStencilRead | RHI::EAccessFlags::DepthStencilWrite);
+        return WidgetDepth;
     }
 
     void FDefaultSceneRenderer::SpritePass(RHI::FCmdListH CL)
@@ -270,12 +330,12 @@ namespace Lumina
         const auto&       Instances = Frame.Primitives.SpriteInstances;
         const auto&       Batches   = Frame.Primitives.SpriteBatches;
 
-        if (Instances.empty() || Batches.empty())
+        if (Instances.IsEmpty() || Batches.IsEmpty())
         {
             return;
         }
 
-        LUMINA_PROFILE_SECTION_COLORED("Sprite Pass", tracy::Color::Magenta);
+        SCENE_GPU_SCOPE(CL, "Sprites");
 
         static const FShaderH VertexShader = FShaderLibrary::Get("SpriteVert.slang");
         static const FShaderH PixelShader  = FShaderLibrary::Get("SpritePixel.slang");
@@ -284,47 +344,11 @@ namespace Lumina
             return;
         }
 
-        const FSceneImage& HDR = GetNamedImage(ENamedImage::HDR);
-
-        RHI::FRenderAttachment Colors[2];
-        uint32 NumColors = 1;
-        Colors[0].Texture = HDR.Texture;
-        Colors[0].LoadOp  = RHI::ELoadOp::Load;
-        Colors[0].StoreOp = RHI::EStoreOp::Store;
-        #if USING(WITH_EDITOR)
-        const FSceneImage& Picker = GetNamedImage(ENamedImage::Picker);
-        Colors[1].Texture = Picker.Texture;
-        Colors[1].LoadOp  = RHI::ELoadOp::Load;
-        Colors[1].StoreOp = RHI::EStoreOp::Store;
-        NumColors = 2;
-        #endif
-
-        RHI::FRenderPassDesc Pass;
-        Pass.ColorAttachments        = TSpan<const RHI::FRenderAttachment>(Colors, NumColors);
-        Pass.DepthAttachment.Texture = GetNamedImage(ENamedImage::DepthAttachment).Texture;
-        Pass.DepthAttachment.LoadOp  = RHI::ELoadOp::Load;
-        Pass.DepthAttachment.StoreOp = RHI::EStoreOp::Store;
-        Pass.RenderArea              = HDR.GetExtent();
-
-        RHI::CmdBeginRenderPass(CL, Pass);
-        SetViewportScissor(CL, HDR.GetExtent());
-
         // Blend only the color target; the Picker (uint id) must not blend.
-        RHI::FBlendDesc AlphaBlend;
-        AlphaBlend.bBlendEnable   = true;
-        AlphaBlend.SrcColorFactor = RHI::EFactor::SrcAlpha;
-        AlphaBlend.DstColorFactor = RHI::EFactor::OneMinusSrcAlpha;
-        AlphaBlend.SrcAlphaFactor = RHI::EFactor::One;
-        AlphaBlend.DstAlphaFactor = RHI::EFactor::OneMinusSrcAlpha;
-
         FGraphicsPipelineKey Key;
-        Key.VS          = VertexShader;
-        Key.PS          = PixelShader;
-        Key.DepthFormat = EFormat::D32;
-        Key.ColorTargets.push_back({ HDR.Desc.Format, AlphaBlend });
-        #if USING(WITH_EDITOR)
-        Key.ColorTargets.push_back({ Picker.Desc.Format, {} });
-        #endif
+        Key.VS = VertexShader;
+        Key.PS = PixelShader;
+        BeginHDROverlayPass(CL, TakeHDRLoadOp(/*bAfterParticles*/ true), /*bWithPicker*/ true, MakeOverlayAlphaBlend(), Key);
         RHI::CmdSetPipeline(CL, GetOrCreatePipeline(Key));
 
         // Blended sprites must not occlude the ones sorted behind them, so depth is read but never written.
@@ -332,7 +356,7 @@ namespace Lumina
         DepthTested.DepthMode = RHI::EDepthFlags::Read;
         DepthTested.DepthTest = RHI::EOp::GreaterEqual;
 
-        const RHI::FGPURange InstancesRange = RHI::CopyTransientArray(Instances.data(), Instances.size());
+        const RHI::FGPURange InstancesRange = RHI::CopyTransientArray(Instances.GetData(), Instances.Num());
 
         struct FSpritePushConstants
         {
@@ -380,7 +404,7 @@ namespace Lumina
         const auto&       Glyphs  = Frame.Primitives.GlyphInstances;
         const auto&       Batches = Frame.Primitives.TextBatches;
 
-        if (Glyphs.empty() || Batches.empty())
+        if (Glyphs.IsEmpty() || Batches.IsEmpty())
         {
             return;
         }
@@ -394,48 +418,12 @@ namespace Lumina
             return;
         }
 
-        const FSceneImage& HDR    = GetNamedImage(ENamedImage::HDR);
-
-        RHI::FRenderAttachment Colors[2];
-        uint32 NumColors = 1;
-        Colors[0].Texture = HDR.Texture;
-        Colors[0].LoadOp  = RHI::ELoadOp::Load;
-        Colors[0].StoreOp = RHI::EStoreOp::Store;
-        #if USING(WITH_EDITOR)
-        const FSceneImage& Picker = GetNamedImage(ENamedImage::Picker);
-        Colors[1].Texture = Picker.Texture;
-        Colors[1].LoadOp  = RHI::ELoadOp::Load;
-        Colors[1].StoreOp = RHI::EStoreOp::Store;
-        NumColors = 2;
-        #endif
-
-        RHI::FRenderPassDesc Pass;
-        Pass.ColorAttachments        = TSpan<const RHI::FRenderAttachment>(Colors, NumColors);
-        Pass.DepthAttachment.Texture = GetNamedImage(ENamedImage::DepthAttachment).Texture;
-        Pass.DepthAttachment.LoadOp  = RHI::ELoadOp::Load;
-        Pass.DepthAttachment.StoreOp = RHI::EStoreOp::Store;
-        Pass.RenderArea              = HDR.GetExtent();
-
-        RHI::CmdBeginRenderPass(CL, Pass);
-        SetViewportScissor(CL, HDR.GetExtent());
-        RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
-
         // Blend only the color target; the Picker (uint id) must not blend.
-        RHI::FBlendDesc AlphaBlend;
-        AlphaBlend.bBlendEnable   = true;
-        AlphaBlend.SrcColorFactor = RHI::EFactor::SrcAlpha;
-        AlphaBlend.DstColorFactor = RHI::EFactor::OneMinusSrcAlpha;
-        AlphaBlend.SrcAlphaFactor = RHI::EFactor::One;
-        AlphaBlend.DstAlphaFactor = RHI::EFactor::OneMinusSrcAlpha;
-
         FGraphicsPipelineKey Key;
-        Key.VS          = VertexShader;
-        Key.PS          = PixelShader;
-        Key.DepthFormat = EFormat::D32;
-        Key.ColorTargets.push_back({ HDR.Desc.Format, AlphaBlend });
-        #if USING(WITH_EDITOR)
-        Key.ColorTargets.push_back({ Picker.Desc.Format, {} });
-        #endif
+        Key.VS = VertexShader;
+        Key.PS = PixelShader;
+        BeginHDROverlayPass(CL, TakeHDRLoadOp(/*bAfterParticles*/ true), /*bWithPicker*/ true, MakeOverlayAlphaBlend(), Key);
+        RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
         RHI::CmdSetPipeline(CL, GetOrCreatePipeline(Key));
 
         RHI::FDepthStencilDesc DepthTested;
@@ -443,7 +431,7 @@ namespace Lumina
         DepthTested.DepthTest = RHI::EOp::GreaterEqual;
 
         // All glyphs across every batch share one transient array; batches index it via FirstInstance.
-        const RHI::FGPURange GlyphsRange = RHI::CopyTransientArray(Glyphs.data(), Glyphs.size());
+        const RHI::FGPURange GlyphsRange = RHI::CopyTransientArray(Glyphs.GetData(), Glyphs.Num());
 
         struct FTextPushConstants
         {
@@ -498,12 +486,12 @@ namespace Lumina
         const auto&       Glyphs = Frame.Primitives.DebugTextGlyphs;
         const auto&       Batch  = Frame.Primitives.DebugTextBatch;
 
-        if (Glyphs.empty() || Batch.Count == 0 || !CurrentView->Output.IsValid())
+        if (Glyphs.IsEmpty() || Batch.Count == 0 || !CurrentView->Output.IsValid())
         {
             return;
         }
 
-        LUMINA_PROFILE_SECTION_COLORED("Debug Text Pass", tracy::Color::Yellow);
+        SCENE_GPU_SCOPE(CL, "Debug Text");
 
         static const FShaderH VertexShader = FShaderLibrary::Get("DebugTextVert.slang");
         static const FShaderH PixelShader = FShaderLibrary::Get("DebugTextPixel.slang");
@@ -528,17 +516,10 @@ namespace Lumina
         RHI::CmdSetDepthStencil(CL, (RHI::FDepthStencilDesc{}));
         RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
 
-        RHI::FBlendDesc AlphaBlend;
-        AlphaBlend.bBlendEnable   = true;
-        AlphaBlend.SrcColorFactor = RHI::EFactor::SrcAlpha;
-        AlphaBlend.DstColorFactor = RHI::EFactor::OneMinusSrcAlpha;
-        AlphaBlend.SrcAlphaFactor = RHI::EFactor::One;
-        AlphaBlend.DstAlphaFactor = RHI::EFactor::OneMinusSrcAlpha;
-
         FGraphicsPipelineKey Key;
         Key.VS = VertexShader;
         Key.PS = PixelShader;
-        Key.ColorTargets.push_back({ Output.Desc.Format, AlphaBlend });
+        Key.ColorTargets.Emplace(Output.Desc.Format, MakeOverlayAlphaBlend());
         RHI::CmdSetPipeline(CL, GetOrCreatePipeline(Key));
 
         struct FTextPushConstants
@@ -557,7 +538,7 @@ namespace Lumina
         const uint32   ScreenH   = Output.GetSizeY();
 
         FTextPushConstants PC = {};
-        PC.Glyphs        = RHI::CopyTransientArray(Glyphs.data(), Glyphs.size());
+        PC.Glyphs        = RHI::CopyTransientArray(Glyphs.GetData(), Glyphs.Num());
         PC.AtlasIndex    = Batch.AtlasIndex;
         PC.AtlasWidth    = Batch.AtlasWidth;
         PC.AtlasHeight   = Batch.AtlasHeight;
@@ -581,9 +562,8 @@ namespace Lumina
         const auto& SimpleVertices     = Frame.Primitives.SimpleVertices;
         const auto& LineBatches        = Frame.Primitives.LineBatches;
         const auto& ImmediateRanges    = Frame.Primitives.ImmediateLines;
-        const auto& DrawCommands       = Frame.Geometry.DrawCommands;
 
-        const bool bHasBatched = !SimpleVertices.empty() && !LineBatches.empty();
+        const bool bHasBatched = !SimpleVertices.IsEmpty() && !LineBatches.IsEmpty();
 
         bool bHasImmediate = false;
         for (const FImmediateLineRenderer::FDrawRange& Range : ImmediateRanges)
@@ -605,35 +585,13 @@ namespace Lumina
             return;
         }
 
-        const FSceneImage& HDR = GetNamedImage(ENamedImage::HDR);
-
-        const bool bHDRWasWritten = !DrawCommands.empty() || FrameFlags.bHasEnvironment
-            || !Frame.Extracts.TerrainExtracts.empty() || !Frame.Primitives.SolidBatches.empty()
-            || bSceneColorClearedForCallbacks;
-
-        RHI::FRenderAttachment Color;
-        Color.Texture = HDR.Texture;
-        Color.LoadOp  = bHDRWasWritten ? RHI::ELoadOp::Load : RHI::ELoadOp::Clear;
-        Color.StoreOp = RHI::EStoreOp::Store;
-
-        RHI::FRenderPassDesc Pass;
-        Pass.ColorAttachments        = TSpan<const RHI::FRenderAttachment>(&Color, 1);
-        Pass.DepthAttachment.Texture = GetNamedImage(ENamedImage::DepthAttachment).Texture;
-        Pass.DepthAttachment.LoadOp  = RHI::ELoadOp::Load;
-        Pass.DepthAttachment.StoreOp = RHI::EStoreOp::Store;
-        Pass.RenderArea              = HDR.GetExtent();
-
-        RHI::CmdBeginRenderPass(CL, Pass);
-        SetViewportScissor(CL, HDR.GetExtent());
-        RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
-
         // No input layout, since the VS pulls vertices from PassAddr by SV_VertexID.
         FGraphicsPipelineKey Key;
-        Key.VS          = VertexShader;
-        Key.PS          = PixelShader;
-        Key.Topology    = RHI::ETopology::LineList;
-        Key.DepthFormat = EFormat::D32;
-        Key.ColorTargets.push_back({ HDR.Desc.Format, {} });
+        Key.VS       = VertexShader;
+        Key.PS       = PixelShader;
+        Key.Topology = RHI::ETopology::LineList;
+        BeginHDROverlayPass(CL, TakeHDRLoadOp(/*bAfterParticles*/ false), /*bWithPicker*/ false, RHI::FBlendDesc{}, Key);
+        RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
         RHI::CmdSetPipeline(CL, GetOrCreatePipeline(Key));
 
         // Depth-tested lines occlude (reversed-Z Greater + depth write); X-ray lines draw on top.
@@ -649,7 +607,7 @@ namespace Lumina
             // Vertices live in the transient ring for this submission; the VS reads them by device address.
             const FSimpleElementPassData VertsPass
             {
-                RHI::CopyTransientArray(SimpleVertices.data(), SimpleVertices.size())
+                RHI::CopyTransientArray(SimpleVertices.GetData(), SimpleVertices.Num())
             };
             const RHI::GPUPtr Args = MakeArgs(VertsPass);
 
@@ -703,14 +661,13 @@ namespace Lumina
         const FFrameData& Frame = *RenderFrame;
         const auto& SolidVertices = Frame.Primitives.SolidVertices;
         const auto& SolidBatches  = Frame.Primitives.SolidBatches;
-        const auto& DrawCommands  = Frame.Geometry.DrawCommands;
 
-        if (SolidVertices.empty() || SolidBatches.empty())
+        if (SolidVertices.IsEmpty() || SolidBatches.IsEmpty())
         {
             return;
         }
 
-        LUMINA_PROFILE_SECTION_COLORED("Batched Triangle Draw", tracy::Color::Green2);
+        SCENE_GPU_SCOPE(CL, "Batched Solid Tris");
 
         static const FShaderH VertexShader = FShaderLibrary::Get("SimpleElementVertex.slang");
         static const FShaderH PixelShader = FShaderLibrary::Get("SimpleElementPixel.slang");
@@ -718,24 +675,6 @@ namespace Lumina
         {
             return;
         }
-
-        const FSceneImage& HDR = GetNamedImage(ENamedImage::HDR);
-
-        // First HDR writer in the frame clears and later ones load; base pass and terrain come first.
-        const bool bHDRWasWritten = !DrawCommands.empty() || FrameFlags.bHasEnvironment || !Frame.Extracts.TerrainExtracts.empty()
-            || bSceneColorClearedForCallbacks;
-
-        RHI::FRenderAttachment Color;
-        Color.Texture = HDR.Texture;
-        Color.LoadOp  = bHDRWasWritten ? RHI::ELoadOp::Load : RHI::ELoadOp::Clear;
-        Color.StoreOp = RHI::EStoreOp::Store;
-
-        RHI::FRenderPassDesc Pass;
-        Pass.ColorAttachments        = TSpan<const RHI::FRenderAttachment>(&Color, 1);
-        Pass.DepthAttachment.Texture = GetNamedImage(ENamedImage::DepthAttachment).Texture;
-        Pass.DepthAttachment.LoadOp  = RHI::ELoadOp::Load;
-        Pass.DepthAttachment.StoreOp = RHI::EStoreOp::Store;
-        Pass.RenderArea              = HDR.GetExtent();
 
         bool bWritesDepth = false;
         for (const FSolidBatch& Batch : SolidBatches)
@@ -755,24 +694,13 @@ namespace Lumina
                 RHI::EAccessFlags::DepthStencilRead | RHI::EAccessFlags::DepthStencilWrite);
         }
 
-        RHI::CmdBeginRenderPass(CL, Pass);
-        SetViewportScissor(CL, HDR.GetExtent());
-        // Two-sided so the surface reads from any angle.
-        RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
-
-        RHI::FBlendDesc AlphaBlend;
-        AlphaBlend.bBlendEnable   = true;
-        AlphaBlend.SrcColorFactor = RHI::EFactor::SrcAlpha;
-        AlphaBlend.DstColorFactor = RHI::EFactor::OneMinusSrcAlpha;
-        AlphaBlend.SrcAlphaFactor = RHI::EFactor::One;
-        AlphaBlend.DstAlphaFactor = RHI::EFactor::OneMinusSrcAlpha;
-
         // No input layout, since the VS pulls vertices from PassAddr by SV_VertexID.
         FGraphicsPipelineKey BlendedKey;
-        BlendedKey.VS          = VertexShader;
-        BlendedKey.PS          = PixelShader;
-        BlendedKey.DepthFormat = EFormat::D32;
-        BlendedKey.ColorTargets.push_back({ HDR.Desc.Format, AlphaBlend });
+        BlendedKey.VS = VertexShader;
+        BlendedKey.PS = PixelShader;
+        BeginHDROverlayPass(CL, TakeHDRLoadOp(/*bAfterParticles*/ false), /*bWithPicker*/ false, MakeOverlayAlphaBlend(), BlendedKey);
+        // Two-sided so the surface reads from any angle.
+        RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
 
         FGraphicsPipelineKey OpaqueKey = BlendedKey;
         OpaqueKey.ColorTargets[0].Blend = RHI::FBlendDesc{};
@@ -785,7 +713,7 @@ namespace Lumina
         OpaqueDepth.DepthMode = RHI::EDepthFlags::Read | RHI::EDepthFlags::Write;
         OpaqueDepth.DepthTest = RHI::EOp::Greater;
 
-        const FSimpleElementPassData VertsPass{ RHI::CopyTransientArray(SolidVertices.data(), SolidVertices.size()) };
+        const FSimpleElementPassData VertsPass{ RHI::CopyTransientArray(SolidVertices.GetData(), SolidVertices.Num()) };
         const RHI::GPUPtr Args = MakeArgs(VertsPass);
 
         struct FModeGroup

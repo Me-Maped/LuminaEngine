@@ -158,7 +158,7 @@ TEST_F(InputTriggerTests, RepeatFiresOnPressThenAfterTheDelayAtTheInterval)
     for (int i = 0; i < 6; ++i)
     {
         Tick(Context);
-        Fired.push_back(ActionState("Scroll", Context).IsRepeated());
+        Fired.Add(ActionState("Scroll", Context).IsRepeated());
     }
     const TVector<bool> Expected = { true, false, true, true, true, true };
     EXPECT_EQ(Fired, Expected);
@@ -211,6 +211,41 @@ TEST_F(InputTriggerTests, ChordActionNeedsItsPartnerDown)
     EXPECT_TRUE(ActionState("Special", Context).IsReleased());
 }
 
+TEST_F(InputTriggerTests, ChordChainRequiresEveryLinkDown)
+{
+    SInputAction Ultimate = MakeDigital("Ultimate", Lumina::EKey::E);
+    Ultimate.ChordAction = FName("Special");
+    SInputAction Special = MakeDigital("Special", Lumina::EKey::LeftShift);
+    Special.ChordAction = FName("Modifier");
+    Author({ MakeDigital("Modifier", Lumina::EKey::LeftControl), Special, Ultimate });
+    FInputContext Context;
+
+    PressKey(Context, Lumina::EKey::E);
+    PressKey(Context, Lumina::EKey::LeftShift);
+    Tick(Context);
+    EXPECT_FALSE(ActionState("Ultimate", Context).IsDown()) << "Special's own chord on Modifier is still up";
+
+    PressKey(Context, Lumina::EKey::LeftControl);
+    Tick(Context);
+    EXPECT_TRUE(ActionState("Ultimate", Context).IsPressed());
+}
+
+TEST_F(InputTriggerTests, ChordChainThroughAMissingActionNeverFires)
+{
+    SInputAction Ultimate = MakeDigital("Ultimate", Lumina::EKey::E);
+    Ultimate.ChordAction = FName("Special");
+    SInputAction Special = MakeDigital("Special", Lumina::EKey::LeftShift);
+    Special.ChordAction = FName("NotAuthored");
+    Author({ Special, Ultimate });
+    FInputContext Context;
+
+    PressKey(Context, Lumina::EKey::E);
+    PressKey(Context, Lumina::EKey::LeftShift);
+    Tick(Context);
+    EXPECT_FALSE(ActionState("Special", Context).IsDown());
+    EXPECT_FALSE(ActionState("Ultimate", Context).IsDown()) << "a chord on an action that never fires never fires either";
+}
+
 TEST_F(InputTriggerTests, ChordOnAMissingActionNeverFires)
 {
     SInputAction Special = MakeDigital("Special", Lumina::EKey::E);
@@ -227,7 +262,7 @@ TEST_F(InputTriggerTests, ToggleFlipsOnEachPressAndSurvivesASettingsChange)
 {
     Author({ MakeDigital("Crouch", Lumina::EKey::C) });
     SPlayerInputSettings Settings;
-    Settings.ToggleActions.push_back(FName("Crouch"));
+    Settings.ToggleActions.Emplace("Crouch");
     FInputActionMap::Get().SetPlayerSettings(Settings);
     FInputContext Context;
 
@@ -255,9 +290,9 @@ TEST_F(InputTriggerTests, BindingOverrideReplacesOnlyItsKeySlot)
     Author({ Jump, Look });
 
     SPlayerInputSettings Settings;
-    Settings.BindingOverrides.push_back(SInputBindingOverride{ FName("Jump"), 0, SKey(Lumina::EKey::J) });
-    Settings.BindingOverrides.push_back(SInputBindingOverride{ FName("Look"), 0, SKey(Lumina::EKey::L) });
-    Settings.BindingOverrides.push_back(SInputBindingOverride{ FName("Jump"), 7, SKey(Lumina::EKey::K) });
+    Settings.BindingOverrides.Emplace(FName("Jump"), 0, SKey(Lumina::EKey::J));
+    Settings.BindingOverrides.Emplace(FName("Look"), 0, SKey(Lumina::EKey::L));
+    Settings.BindingOverrides.Emplace(FName("Jump"), 7, SKey(Lumina::EKey::K));
     FInputActionMap::Get().SetPlayerSettings(Settings);
 
     const SInputAction* Rebound = FInputActionMap::Get().FindAction(FName("Jump"));

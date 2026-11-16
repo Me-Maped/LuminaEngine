@@ -37,6 +37,7 @@ namespace Lumina
         void ConstructValue(void* Value) const override { if (Struct) { Struct->InitializeStruct(Value); } }
         void DestructValue(void* Value) const override  { if (Struct) { Struct->DestroyStruct(Value); } }
         bool OwnsStorage() const override { return Struct != nullptr && Struct->RequiresValueLifecycle(); }
+        void RelocateValue(void* Dest, void* Source) const override { if (Struct) { Struct->RelocateStruct(Dest, Source); } }
 
 
         CStruct* Struct = nullptr;

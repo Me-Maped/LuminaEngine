@@ -15,7 +15,9 @@ public sealed class ActionHistoryData
 /// <summary>Remembers the exact command that produced each output.</summary>
 public sealed class ActionHistory
 {
-    private readonly string HistoryFile;
+    private readonly Func<string, string> ResolveHistoryFile;
+
+    private readonly string[] KnownFiles;
 
     private readonly ConcurrentDictionary<string, string> CommandKeys = new(StringComparer.OrdinalIgnoreCase);
 
@@ -23,30 +25,63 @@ public sealed class ActionHistory
 
     private bool bDirty;
 
-    private ActionHistory(string HistoryFile)
+    private ActionHistory(Func<string, string> ResolveHistoryFile, string[] KnownFiles)
     {
-        this.HistoryFile = HistoryFile;
+        this.ResolveHistoryFile = ResolveHistoryFile;
+        this.KnownFiles = KnownFiles;
     }
 
     public static ActionHistory Load(string HistoryFile)
     {
-        ActionHistory History = new(HistoryFile);
-        ActionHistoryData? Data = JsonStore.Load<ActionHistoryData>(HistoryFile);
+        return Load(new[] { HistoryFile }, _ => HistoryFile);
+    }
 
-        if (Data is not null)
+    // Save writes each output's record back to the file the resolver picks for it.
+    public static ActionHistory Load(IReadOnlyList<string> HistoryFiles, Func<string, string> ResolveHistoryFile)
+    {
+        string[] Distinct = HistoryFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        ActionHistory History = new(ResolveHistoryFile, Distinct);
+        int Dropped = 0;
+
+        foreach (string HistoryFile in Distinct)
         {
-            foreach ((string Output, string Key) in Data.CommandKeys)
+            ActionHistoryData? Data = JsonStore.Load<ActionHistoryData>(HistoryFile);
+
+            if (Data is null)
             {
-                History.CommandKeys[Output] = Key;
+                continue;
             }
 
-            foreach ((string Output, string Fingerprint) in Data.InputFingerprints)
-            {
-                History.InputFingerprints[Output] = Fingerprint;
-            }
+            Dropped += LoadExisting(Data.CommandKeys, History.CommandKeys)
+                + LoadExisting(Data.InputFingerprints, History.InputFingerprints);
+        }
+
+        if (Dropped > 0)
+        {
+            // Marked dirty so the pruned form is written back, rather than orphans being reloaded and re-dropped each build.
+            History.bDirty = true;
+            Log.Verbose("Dropped {0} action history entries for outputs that no longer exist", Dropped);
         }
 
         return History;
+    }
+
+    private static int LoadExisting(Dictionary<string, string> Recorded, ConcurrentDictionary<string, string> Into)
+    {
+        int Dropped = 0;
+
+        foreach ((string Output, string Value) in Recorded)
+        {
+            if (PathUtils.IsMissingFile(Output))
+            {
+                Dropped++;
+                continue;
+            }
+
+            Into[Output] = Value;
+        }
+
+        return Dropped;
     }
 
     public void Save()
@@ -56,19 +91,34 @@ public sealed class ActionHistory
             return;
         }
 
-        ActionHistoryData Data = new();
+        Dictionary<string, ActionHistoryData> DataByFile = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string HistoryFile in KnownFiles)
+        {
+            DataByFile[HistoryFile] = new();
+        }
+
+        ActionHistoryData DataFor(string Output)
+        {
+            string HistoryFile = ResolveHistoryFile(Output);
+            return DataByFile.TryGetValue(HistoryFile, out ActionHistoryData? Data) ? Data : DataByFile[HistoryFile] = new();
+        }
 
         foreach ((string Output, string Key) in CommandKeys.OrderBy(P => P.Key, StringComparer.OrdinalIgnoreCase))
         {
-            Data.CommandKeys[Output] = Key;
+            DataFor(Output).CommandKeys[Output] = Key;
         }
 
         foreach ((string Output, string Fingerprint) in InputFingerprints.OrderBy(P => P.Key, StringComparer.OrdinalIgnoreCase))
         {
-            Data.InputFingerprints[Output] = Fingerprint;
+            DataFor(Output).InputFingerprints[Output] = Fingerprint;
         }
 
-        JsonStore.Save(HistoryFile, Data);
+        foreach ((string HistoryFile, ActionHistoryData Data) in DataByFile)
+        {
+            JsonStore.Save(HistoryFile, Data);
+        }
+
         bDirty = false;
     }
 
@@ -95,6 +145,11 @@ public sealed class ActionHistory
     public bool HasInputsChanged(string OutputFile, string Fingerprint)
     {
         return !InputFingerprints.TryGetValue(OutputFile, out string? Recorded) || Recorded != Fingerprint;
+    }
+
+    public string GetInputFingerprint(string OutputFile)
+    {
+        return InputFingerprints.TryGetValue(OutputFile, out string? Recorded) ? Recorded : string.Empty;
     }
 
     public void Forget(string OutputFile)

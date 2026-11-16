@@ -1,53 +1,93 @@
 #pragma once
 
+#include "Assets/AssetManager/AssetManager.h"
 #include "Containers/Function.h"
 #include "Containers/HashTable.h"
+#include "Containers/String.h"
+#include "GUID/GUID.h"
 #include "imgui.h"
 
 namespace Lumina
 {
     class CClass;
     class CObject;
+    struct FAssetData;
 
-    /** Paints an asset's own content directly into a content-browser tile.
-     *
-     *  For assets whose value IS a shape or a swatch rather than a 3D view -- a curve, a gradient, a color
-     *  -- a rendered world thumbnail is the wrong tool. It costs a scene capture, a GPU readback and a cache
-     *  entry to produce a blurry 512px bitmap of something a handful of draw-list calls draw sharper, at
-     *  whatever size the tile happens to be, and always in sync with the asset (no cache to invalidate when
-     *  the user edits it).
-     *
-     *  Painters are only ever invoked with a RESIDENT asset. The content browser must never load a CObject
-     *  to draw a tile -- that races the editor's own loader on a non-atomic object -- so an asset nothing
-     *  has loaded yet keeps the ordinary thumbnail/fallback icon until something else loads it. Same rule
-     *  CThumbnailManager::ProcessRenderQueue documents.
-     *
-     *  Min/Max are the tile's content rect in screen space, already inset from the button frame.
-     */
+    // Only called for a resident asset, since loading one to draw a tile races the editor's loader.
     using FAssetTilePainterFn = TFunction<void(CObject* Asset, ImDrawList& DrawList, const ImVec2& Min, const ImVec2& Max)>;
 
-    class FAssetTilePainterRegistry
+    // What a tile action started, polled until it ends and stopped early by a second click.
+    struct FAssetTilePreview
+    {
+        TFunction<bool()> IsRunning;
+        TFunction<void()> Stop;
+    };
+
+    // A button drawn over a hovered tile, such as play on a sound.
+    struct FAssetTileAction
+    {
+        const char* Icon       = nullptr;
+        const char* ActiveIcon = nullptr;
+
+        // Only called with the asset resident, and an empty preview means nothing started.
+        TFunction<FAssetTilePreview(CObject* Asset)> Start;
+    };
+
+    // The one preview tile actions run at a time, owned by the tool drawing the tiles and stopped when that tool goes.
+    class EDITOR_API FAssetTilePreviewSlot
+    {
+    public:
+
+        ~FAssetTilePreviewSlot() { Stop(); }
+
+        // Replaces whatever ran before, and starts once Tick sees the asset loaded.
+        void Request(const FAssetTileAction& InAction, const FAssetData& InAsset);
+        void Stop();
+
+        // Called every frame the tiles draw, since a hidden drawer or background tab still ticks.
+        void MarkShown() { bShown = true; }
+
+        // Also stops a preview that ended, whose asset was deleted or renamed, or whose tiles went undrawn since the last Tick.
+        void Tick();
+
+        NODISCARD bool IsActiveFor(const FGuid& InAsset) const { return Asset.IsValid() && Asset == InAsset; }
+
+    private:
+
+        void Advance();
+
+        FAssetTileAction  Action;
+        FAssetHandle      Load;
+        FGuid             Asset;
+        FFixedString      AssetPath;
+        FAssetTilePreview Preview;
+        bool              bShown = false;
+    };
+
+    class EDITOR_API FAssetTilePainterRegistry
     {
     public:
 
         static FAssetTilePainterRegistry& Get();
 
         void Register(CClass* AssetClass, FAssetTilePainterFn Painter);
+        void RegisterAction(CClass* AssetClass, FAssetTileAction Action);
 
-        /** Walks up the class hierarchy, so registering on a base type covers every subclass (a painter on
-         *  CMaterialInterface would serve CMaterial and CMaterialInstance alike). Null when nothing matches,
-         *  which is the common case and means "use the normal thumbnail". */
+        // Walks up the class hierarchy, and null means the class uses its normal thumbnail.
         FAssetTilePainterFn* Find(CClass* AssetClass);
+
+        // Walks up the class hierarchy like Find.
+        const FAssetTileAction* FindAction(CClass* AssetClass);
 
     private:
 
         THashMap<CClass*, FAssetTilePainterFn> Painters;
+        THashMap<CClass*, FAssetTileAction>    Actions;
     };
 
     namespace AssetTilePainters
     {
-        /** Registers the engine's built-in tile painters AND their matching CThumbnailManager thumbnail
-         *  painters. Call once during editor startup, after the thumbnail manager exists. */
+        // Also registers the matching CThumbnailManager painters, so call it after the thumbnail manager exists.
         void RegisterBuiltin();
     }
 }

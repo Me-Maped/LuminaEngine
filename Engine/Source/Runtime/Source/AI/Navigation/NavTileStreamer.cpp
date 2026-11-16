@@ -4,19 +4,12 @@
 #include "NavMesh.h"
 #include "Log/Log.h"
 
-#include <algorithm>
-
 namespace Lumina
 {
     namespace
     {
-        struct FCandidate
-        {
-            int32 Index = 0;
-            int32 X = 0;
-            int32 Y = 0;
-            float Distance = 0.0f;
-        };
+        // Focus drift below this share of a tile cannot change the wanted set enough to be worth a full pass.
+        constexpr float kRefocusTileFraction = 0.05f;
 
         float NearestFocusDistance(const TVector<FVector3>& FocusPoints, const FVector3& Origin, float TileWorldSize, int32 TX, int32 TY)
         {
@@ -33,15 +26,37 @@ namespace Lumina
     {
         Origin = InOrigin;
         TileWorldSize = InTileWorldSize;
-        Resident.clear();
+        Resident.Reset();
+        Rejected.Reset();
         StarvedLogCooldown = 0;
+        bSettled = false;
     }
 
     void FNavTileStreamer::Clear()
     {
-        Resident.clear();
+        Resident.Reset();
+        Rejected.Reset();
         TileWorldSize = 0.0f;
         StarvedLogCooldown = 0;
+        bSettled = false;
+    }
+
+    bool FNavTileStreamer::CanSkipPass(const TVector<FVector3>& FocusPoints, const FSettings& Settings) const
+    {
+        if (!bSettled || Settings != SettledSettings || FocusPoints.Num() != SettledFocus.Num())
+        {
+            return false;
+        }
+
+        const float MaxDrift = TileWorldSize * kRefocusTileFraction;
+        for (int32 i = 0; i < FocusPoints.Num(); ++i)
+        {
+            if (Math::LengthSquared(FocusPoints[i] - SettledFocus[i]) > MaxDrift * MaxDrift)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     FNavTileStreamer::FStats FNavTileStreamer::Update(FNavMesh& Mesh, const TVector<SNavTileData>& Tiles,
@@ -55,17 +70,24 @@ namespace Lumina
             return Stats;
         }
 
+        if (CanSkipPass(FocusPoints, Settings))
+        {
+            Stats.Resident = Resident.Num();
+            Stats.Wanted = Wanted.Num();
+            Stats.Rejected = Wanted.Num() - Resident.Num();
+            return Stats;
+        }
+
         // No focus and a finite radius would evict the world, so treat that as keep everything.
-        const bool bStreamAll = Settings.LoadRadius <= 0.0f || FocusPoints.empty();
+        const bool bStreamAll = Settings.LoadRadius <= 0.0f || FocusPoints.IsEmpty();
         const float KeepRadius = Settings.LoadRadius * Math::Max(1.0f, Settings.KeepRadiusScale);
 
-        TVector<FCandidate> Wanted;
-        Wanted.reserve(Tiles.size());
+        Wanted.Reset(Tiles.Num());
 
-        for (int32 i = 0; i < (int32)Tiles.size(); ++i)
+        for (int32 i = 0; i < Tiles.Num(); ++i)
         {
             const SNavTileData& Tile = Tiles[i];
-            if (Tile.Blob.empty())
+            if (Tile.Blob.IsEmpty())
             {
                 continue;
             }
@@ -77,34 +99,40 @@ namespace Lumina
             const float Threshold = bResident ? KeepRadius : Settings.LoadRadius;
             if (bStreamAll || Distance <= Threshold)
             {
-                Wanted.push_back(FCandidate{ i, Tile.X, Tile.Y, Distance });
+                Wanted.Emplace(i, Tile.X, Tile.Y, Distance);
             }
         }
 
-        Stats.Wanted = (int32)Wanted.size();
+        Stats.Wanted = Wanted.Num();
 
+        // Nearest wins the budget and pages in first, so the clamp does not depend on query history.
+        const auto ByDistance = [](const FCandidate& A, const FCandidate& B) { return A.Distance < B.Distance; };
         const int32 Budget = Math::Max(0, Settings.MaxResidentTiles);
-        if ((int32)Wanted.size() > Budget)
+        if (Wanted.Num() > Budget)
         {
-            // Nearest wins, so the clamp is predictable rather than dependent on query history.
-            std::nth_element(Wanted.begin(), Wanted.begin() + Budget, Wanted.end(),
-                [](const FCandidate& A, const FCandidate& B) { return A.Distance < B.Distance; });
-            Stats.Starved = (int32)Wanted.size() - Budget;
-            Wanted.resize(Budget);
+            Algo::PartialSort(Wanted.begin(), Wanted.begin() + Budget, Wanted.end(), ByDistance);
+            Stats.Starved = Wanted.Num() - Budget;
+            Wanted.SetNum(Budget);
+        }
+        else
+        {
+            Algo::Sort(Wanted, ByDistance);
         }
 
-        THashSet<uint64> WantedKeys;
-        WantedKeys.reserve(Wanted.size());
+        WantedKeys.Reset();
+        WantedKeys.Reserve(Wanted.Num());
         for (const FCandidate& C : Wanted)
         {
-            WantedKeys.insert(NavTile::PackKey(C.X, C.Y));
+            const uint64 Key = NavTile::PackKey(C.X, C.Y);
+            WantedKeys.Add(Key);
+            Stats.Rejected += Rejected.Contains(Key) ? 1 : 0;
         }
 
         // Evictions first: a full pool would otherwise reject an admission that does fit on net.
         int32 Ops = 0;
         for (auto It = Resident.begin(); It != Resident.end() && Ops < Settings.MaxOpsPerTick; )
         {
-            if (WantedKeys.find(*It) != WantedKeys.end())
+            if (WantedKeys.Contains(*It))
             {
                 ++It;
                 continue;
@@ -113,14 +141,10 @@ namespace Lumina
             int32 TX, TY;
             NavTile::UnpackKey(*It, TX, TY);
             Mesh.RemoveTile(TX, TY);
-            It = Resident.erase(It);
+            It = Resident.Remove(It);
             ++Stats.Removed;
             ++Ops;
         }
-
-        // Nearest first, so a budget-limited frame pages in what matters most.
-        std::sort(Wanted.begin(), Wanted.end(),
-            [](const FCandidate& A, const FCandidate& B) { return A.Distance < B.Distance; });
 
         for (const FCandidate& C : Wanted)
         {
@@ -132,7 +156,7 @@ namespace Lumina
             {
                 continue;
             }
-            if ((int32)Resident.size() >= Budget)
+            if (Resident.Num() >= Budget)
             {
                 break;
             }
@@ -140,20 +164,40 @@ namespace Lumina
             // Re-adding a tile the mesh already holds fails, and copies the whole blob to do so.
             if (Mesh.HasTile(C.X, C.Y))
             {
-                Resident.insert(NavTile::PackKey(C.X, C.Y));
+                Resident.Add(NavTile::PackKey(C.X, C.Y));
                 ++Stats.Adopted;
+                continue;
+            }
+
+            const uint64 Key = NavTile::PackKey(C.X, C.Y);
+            if (Rejected.Contains(Key))
+            {
                 continue;
             }
 
             if (Mesh.AddTile(C.X, C.Y, Tiles[C.Index].Blob))
             {
-                Resident.insert(NavTile::PackKey(C.X, C.Y));
+                Resident.Add(Key);
                 ++Stats.Added;
-                ++Ops;
             }
+            else
+            {
+                Rejected.Add(Key);
+                ++Stats.Rejected;
+                LOG_WARN("NavMesh streaming: the navmesh rejected tile ({}, {}), so it stays out until it is rebaked.", C.X, C.Y);
+            }
+            ++Ops;
         }
 
-        Stats.Resident = (int32)Resident.size();
+        Stats.Resident = Resident.Num();
+
+        // Resident only ever holds wanted tiles once evictions finish, so equal counts mean the sets match.
+        bSettled = Ops < Settings.MaxOpsPerTick && Resident.Num() + Stats.Rejected == Wanted.Num();
+        if (bSettled)
+        {
+            SettledFocus = FocusPoints;
+            SettledSettings = Settings;
+        }
 
         if (Stats.Starved > 0)
         {

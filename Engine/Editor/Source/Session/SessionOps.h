@@ -28,11 +28,14 @@ namespace Lumina
  * other UI class and is not broken by the editor rearranging them. An agent endpoint was reaching through
  * GEditorEngine and casting to the concrete UI in six different files before this existed.
  */
+namespace Lumina::Global
+{
+    // What every SessionOps entry point reports when no world editor is open.
+    EDITOR_API extern const char* const GNoSceneEditor;
+}
+
 namespace Lumina::SessionOps
 {
-    // What every entry point here reports when no world editor is open.
-    EDITOR_API extern const char* const GNoSceneEditor;
-
     // What AssetOps takes to route an asset operation through the open editor. Null when there is no UI.
     NODISCARD EDITOR_API IEditorToolContext* GetToolContext();
 
@@ -78,7 +81,7 @@ namespace Lumina::SessionOps
 
     //~ Scene mutation, each snapshotting for undo the way the editor's own tools do.
 
-    EDITOR_API bool RunTransacted(FName Label, const TFunction<void()>& Mutate, FString& OutError);
+    EDITOR_API bool RunTransacted(FName Label, const TFunction<void()>& Mutate, FString& OutError, TVector<ECS::FEntity> Edited = {});
     EDITOR_API bool RunCreationTransacted(FName Label, const TFunction<void()>& Mutate, FString& OutError);
     EDITOR_API bool RunDestroyTransacted(FName Label, const TVector<ECS::FEntity>& Doomed,
         const TFunction<void()>& Mutate, FString& OutError);
@@ -148,6 +151,7 @@ namespace Lumina::SessionOps
 
     EDITOR_API void ForEachTab(const TFunction<void(const FTabInfo&)>& Functor);
     EDITOR_API bool FocusTab(FStringView Name, FString& OutError);
+    EDITOR_API bool OpenToolPanel(FStringView Name, FString& OutError);
 
     //~ The node graph canvas a tab shows, such as a material or animation graph editor's.
 

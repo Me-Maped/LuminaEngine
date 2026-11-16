@@ -40,7 +40,8 @@ namespace Lumina::RmlUi
         FString Message;
     };
 
-    RUNTIME_API bool            Initialize();
+    // bWithRenderer skips FRmlUiRenderer (and the GPU device it needs), for a headless test that only needs a context to dispatch events into.
+    RUNTIME_API bool            Initialize(bool bWithRenderer = true);
     RUNTIME_API void            Shutdown();
 
     // Registers a font asset or .ttf under Family, for documents to select by name. Call after Initialize.
@@ -197,7 +198,7 @@ namespace Lumina::RmlUi
     RUNTIME_API void  PullDocumentToFront(void* Document);
     RUNTIME_API void* GetDocumentRoot(void* Document);   // the document's body element
 
-    // Element queries.
+    // Element queries. Element calls accept only handles these, GetDocumentRoot or FUIEventData gave out, until RmlUi destroys the element.
     RUNTIME_API void* DocumentGetElementById(void* Document, FStringView Id);
     RUNTIME_API void* ElementQuerySelector(void* Element, FStringView Selector);
 

@@ -33,7 +33,7 @@ namespace Lumina::ECS
         NODISCARD FORCEINLINE const FHierarchyNode* Find(FEntity Entity) const
         {
             const uint32 Index = Entity.GetIndex();
-            if (Index >= Nodes.size())
+            if (Index >= static_cast<uint32>(Nodes.Num()))
             {
                 return nullptr;
             }
@@ -98,24 +98,19 @@ namespace Lumina::ECS
             }
         }
 
-        // Parents before children and siblings in order, without building the preorder.
+        // Parents before children and siblings in order, walking the links, so Func must not edit links under Root.
         template<typename TFunc>
         void ForEachDescendant(FEntity Root, TFunc&& Func) const
         {
-            TVector<FEntity> Pending;
-            for (FEntity Child = GetLastChild(Root); !Child.IsNull(); Child = GetPrevSibling(Child))
+            for (FEntity Current = GetFirstChild(Root); !Current.IsNull();)
             {
-                Pending.push_back(Child);
-            }
-            while (!Pending.empty())
-            {
-                const FEntity Current = Pending.back();
-                Pending.pop_back();
                 Func(Current);
-                for (FEntity Child = GetLastChild(Current); !Child.IsNull(); Child = GetPrevSibling(Child))
+                FEntity Next = GetFirstChild(Current);
+                for (FEntity Up = Current; Next.IsNull() && !Up.IsNull() && Up != Root; Up = GetParent(Up))
                 {
-                    Pending.push_back(Child);
+                    Next = GetNextSibling(Up);
                 }
+                Current = Next;
             }
         }
 
@@ -131,7 +126,7 @@ namespace Lumina::ECS
         NODISCARD FORCEINLINE uint32 GetSlot(FEntity Entity) const
         {
             const uint32 Index = Entity.GetIndex();
-            if (Index >= SlotByIndex.size())
+            if (Index >= static_cast<uint32>(SlotByIndex.Num()))
             {
                 return NoSlot;
             }
@@ -143,7 +138,7 @@ namespace Lumina::ECS
         NODISCARD FORCEINLINE uint32 GetSlotOfLive(FEntity Entity) const
         {
             const uint32 Index = Entity.GetIndex();
-            return Index < SlotByIndex.size() ? SlotByIndex[Index] : NoSlot;
+            return Index < static_cast<uint32>(SlotByIndex.Num()) ? SlotByIndex[Index] : NoSlot;
         }
 
         NODISCARD FORCEINLINE const TVector<FEntity>& GetOrder() const { return Order; }

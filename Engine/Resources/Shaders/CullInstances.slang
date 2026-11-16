@@ -34,6 +34,11 @@ struct FCullInstancesArgs
     GPUSpan<uint>              OutPreSkinCursor;
     // One per workgroup of consecutive retained slots; empty disables the skip.
     GPUSpan<FInstanceBlockBounds> BlockBounds;
+
+    // Retained slots the camera sees too small to draw as meshlets, which the proxy pass splats instead. Empty turns proxies off.
+    GPUSpan<uint>              OutProxyList;
+    // The proxy pass's indirect draw, whose second word counts the list.
+    GPUSpan<uint>              OutProxyDrawArgs;
 };
 FCullInstancesArgs* Pass() { return GetPassArgs<FCullInstancesArgs>(); }
 
@@ -95,22 +100,6 @@ bool IsBlockInReach(FInstanceBlockBounds Block, float3 CamPos)
     return dot(ToBox, ToBox) <= Block.Reach * Block.Reach;
 }
 
-// Thinned foliage keeps at least this share of its instances, which caps how wide the survivors grow.
-static const float kMinThinningKeep = 1.0 / 16.0;
-
-// Keyed on the exact position bits, so an instance that has not moved keeps its answer every frame.
-float ThinningHash(float3 Position)
-{
-    const uint3 Bits = asuint(Position);
-    uint H = (Bits.x * 0x8da6b343u) ^ (Bits.y * 0xd8163841u) ^ (Bits.z * 0xcb1ab31fu);
-    H ^= H >> 16u;
-    H *= 0x7feb352du;
-    H ^= H >> 15u;
-    H *= 0x846ca68bu;
-    H ^= H >> 16u;
-    return float(H >> 8u) * (1.0 / 16777216.0);
-}
-
 // Staging all MAX_CULL_VIEWS took 16 KB a group and stalled half the launches on shared memory, so only the first few are staged.
 static const uint kStagedCullViews = 8u;
 groupshared FCullView gsViews[kStagedCullViews];
@@ -119,6 +108,12 @@ groupshared FCullView gsViews[kStagedCullViews];
 FCullView GetCullView(uint View)
 {
     return View < kStagedCullViews ? gsViews[View] : CullViews().GetAligned(View);
+}
+
+// The proxy pass stands in for a proxied instance only in the views drawn from the camera's own projection.
+bool IsCameraProxyView(FCullView View, uint ViewIndex, bool bProxied)
+{
+    return bProxied && (ViewIndex == 0u || View.HasFlag(CULL_VIEW_FLAG_CUSTOM_DEPTH_ONLY));
 }
 
 [shader("compute")]
@@ -196,24 +191,46 @@ void ComputeMain(uint3 GlobalID : SV_DispatchThreadID, uint3 GroupID : SV_GroupI
     // Thinned foliage keeps a share falling with distance squared, so the count on screen stays level, and every view sees the same choice.
     FTransform3x4 Transform = (FTransform3x4)0;
     bool bWidened = false;
-    const float ThinningStart = Cull.ThinningStartDistance;
-    if (!bNoCull && ThinningStart > 0.0 && DistSq > ThinningStart * ThinningStart)
+    const float Keep = bNoCull ? 1.0 : ThinningKeep(DistSq, Cull.ThinningStartDistance);
+    if (Keep < 1.0)
     {
-        const float Keep = max(ThinningStart * ThinningStart / DistSq, kMinThinningKeep);
-        if (ThinningHash(Center) >= Keep)
+        // Hashed on the pivot, the one position the proxy pass rebuilds bit for bit from the same transform.
+        Transform = Pass().RetainedTransforms.Get(SlotIdx);
+        bWidened  = true;
+        const float3 Pivot = float3(Transform.Row0.w, Transform.Row1.w, Transform.Row2.w);
+        const float3 Scale = ThinningScale(Keep, Pivot);
+        if (Scale.y <= 0.0)
         {
             return;
         }
 
-        // Widened across the ground only, so a blade covers more without standing taller.
-        const float  Widen = rsqrt(Keep);
-        Transform = Pass().RetainedTransforms.Get(SlotIdx);
-        bWidened  = true;
-        const float3 Pivot = float3(Transform.Row0.w, Transform.Row1.w, Transform.Row2.w);
-        Transform.Row0.xyz *= Widen;
-        Transform.Row2.xyz *= Widen;
-        Center = Pivot + (Center - Pivot) * float3(Widen, 1.0, Widen);
-        Radius *= Widen;
+        Transform.Row0.xyz *= Scale.x;
+        Transform.Row1.xyz *= Scale.y;
+        Transform.Row2.xyz *= Scale.z;
+        Center = Pivot + (Center - Pivot) * Scale;
+        Radius *= Scale.x;
+    }
+
+    const uint Layers = Cull.bCustomLayers ? Pass().RetainedStatic.At(SlotIdx).RenderLayers : RENDER_LAYER_DEFAULT_MASK;
+
+    // Too small for its meshlets, the camera sees the instance as one splat the proxy pass draws off the retained slot alone.
+    const bool bProxyCandidate = !bSkinned && !bNoCull && !Cull.HasFlag(EInstanceFlags::ShadowOnly) && Cull.HasFlag(EInstanceFlags::HasGeometry)
+                              && Pass().OutProxyList.Count > 0u && (Scene().CullData.VirtualGeometryFlags & VG_FLAG_PROXIES) != 0u
+                              && Scene().CullData.ProxyTransitionPixels > 0.0;
+    const bool bProxied = bProxyCandidate && IsProxySized(Center, Radius, Cull.SphereBounds.xyz);
+    if (bProxied)
+    {
+        // Only what the camera could see, since the proxy pass draws the list without a cull of its own.
+        const FCullView Camera = GetCullView(0u);
+        if (NumViews > 0u && (Camera.LayerMask & Layers) != 0u && !Camera.HasFlag(CULL_VIEW_FLAG_CAST_SHADOW_ONLY)
+            && FrustumContainsSphere(Camera.FrustumPlanes, Center, Radius))
+        {
+            const uint ProxySlot = AppendReserve(Pass().OutProxyDrawArgs.At(1u), Pass().OutProxyList.Count, 0u);
+            if (ProxySlot != kAppendFull)
+            {
+                Pass().OutProxyList.Set(ProxySlot, SlotIdx);
+            }
+        }
     }
 
     // Past the table this reads garbage counts that BuildMeshletBlocks would append against unbounded.
@@ -253,10 +270,8 @@ void ComputeMain(uint3 GlobalID : SV_DispatchThreadID, uint3 GroupID : SV_GroupI
     const bool bFoliage    = Cull.HasFlag(EInstanceFlags::Foliage);
     const uint CustomDepthStencil = Cull.CustomDepthStencil;
     const bool bCustomDepth       = (CustomDepthStencil & CUSTOM_DEPTH_ENABLED_BIT) != 0u;
-    const uint Layers      = Cull.bCustomLayers ? Pass().RetainedStatic.At(SlotIdx).RenderLayers : RENDER_LAYER_DEFAULT_MASK;
     const uint DrawID   = Cull.DrawID;
     const bool bInRange = DrawID < Pass().NumBatches;
-    bool bAnyView = false;
 
     // A skinned instance needs a pre-skin slice only when some view emits it.
     bool bNeedsSkin = false;
@@ -268,16 +283,19 @@ void ComputeMain(uint3 GlobalID : SV_DispatchThreadID, uint3 GroupID : SV_GroupI
                                    : 0u);
 
     // Needed before the compacted slot is claimed, because that slot indexes the range slab.
+    uint FirstVisibleView = NumViews;
     for (uint v = 0; v < NumViews; ++v)
     {
-        if (IsInstanceVisibleToView(GetCullView(v), Center, Radius, bNoCull, bCaster, bShadowOnly, bFarCaster, bFoliage, bCustomDepth, Layers))
+        const FCullView View = GetCullView(v);
+        if (!IsCameraProxyView(View, v, bProxied)
+            && IsInstanceVisibleToView(View, Center, Radius, bNoCull, bCaster, bShadowOnly, bFarCaster, bFoliage, bCustomDepth, Layers))
         {
-            bAnyView = true;
+            FirstVisibleView = v;
             break;
         }
     }
 
-    if (!bAnyView)
+    if (FirstVisibleView == NumViews)
     {
         return;
     }
@@ -304,10 +322,14 @@ void ComputeMain(uint3 GlobalID : SV_DispatchThreadID, uint3 GroupID : SV_GroupI
     }
     const float MaxScale = TransformMaxScale(Transform);
 
+    // The widened sphere, so the slot range bounds the same groups the meshlet cut tests.
+    const float4 SphereBounds = float4(Center, Radius);
+
     // The primary camera's pick, which the instance carries for anything that reads it outside a view.
-    if (bSelectPerView && bHasGeometry && NumViews > 0u)
+    uint SurfaceDrawBound = SurfaceMeshletCount;
+    if (bSelectPerView && bHasGeometry)
     {
-        const uint2 CameraRange = SelectViewMeshletRange(Desc, GetCullView(0u), Cull.SphereBounds, MaxScale);
+        const uint2 CameraRange = SelectViewMeshletRange(Desc, GetCullView(0u), SphereBounds, MaxScale, SurfaceDrawBound);
         SurfaceMeshletOffset = CameraRange.x;
         SurfaceMeshletCount  = CameraRange.y;
     }
@@ -317,18 +339,25 @@ void ComputeMain(uint3 GlobalID : SV_DispatchThreadID, uint3 GroupID : SV_GroupI
     {
         FCullView View = GetCullView(v);
 
-        uint2 Range   = uint2(0u, 0u);
-        uint  Emitted = 0u;
+        uint2 Range     = uint2(0u, 0u);
+        uint  Emitted   = 0u;
+        uint  DrawBound = 0u;
 
-        if (IsInstanceVisibleToView(View, Center, Radius, bNoCull, bCaster, bShadowOnly, bFarCaster, bFoliage, bCustomDepth, Layers))
+        // Views before the first visible one already failed the test above, and that view already passed it.
+        const bool bVisible = v == FirstVisibleView
+                           || (v > FirstVisibleView && !IsCameraProxyView(View, v, bProxied)
+                               && IsInstanceVisibleToView(View, Center, Radius, bNoCull, bCaster, bShadowOnly, bFarCaster, bFoliage, bCustomDepth, Layers));
+        if (bVisible)
         {
-            if (bSelectPerView)
+            // View 0 reuses the camera's pick above.
+            if (bSelectPerView && v > 0u)
             {
-                Range = bHasGeometry ? SelectViewMeshletRange(Desc, View, Cull.SphereBounds, MaxScale) : uint2(0u, 0u);
+                Range = bHasGeometry ? SelectViewMeshletRange(Desc, View, SphereBounds, MaxScale, DrawBound) : uint2(0u, 0u);
             }
             else
             {
-                Range = uint2(SurfaceMeshletOffset, SurfaceMeshletCount);
+                Range     = uint2(SurfaceMeshletOffset, SurfaceMeshletCount);
+                DrawBound = SurfaceDrawBound;
             }
 
             // Clamped here, so the builder inherits a range that is already in bounds.
@@ -343,8 +372,8 @@ void ComputeMain(uint3 GlobalID : SV_DispatchThreadID, uint3 GroupID : SV_GroupI
         {
             FRenderBucket* Bucket = Pass().OutBuckets.At(v * Pass().NumBatches + DrawID);
 
-            // One reservation per emitted meshlet, since every pass that rasterizes the batch draws the same list.
-            InterlockedAdd(Bucket.DrawCapacity, Emitted);
+            // One reservation per meshlet the cut can draw, since every pass that rasterizes the batch draws the same list.
+            InterlockedAdd(Bucket.DrawCapacity, min(DrawBound, Emitted));
 
             // Rounded up per instance because blocks never span instances.
             const uint Blocks = (Emitted + (MESHLET_CULL_GROUP_SIZE - 1u)) / MESHLET_CULL_GROUP_SIZE;
@@ -374,7 +403,7 @@ void ComputeMain(uint3 GlobalID : SV_DispatchThreadID, uint3 GroupID : SV_GroupI
     // Safe to assemble in a local because FGPUInstance holds a header slot, not an address.
     FGPUInstance Inst            = (FGPUInstance)0;
     Inst.Transform               = Transform;
-    Inst.SphereBounds            = float4(Center, Radius);
+    Inst.SphereBounds            = SphereBounds;
     Inst.MeshletHeaderSlot       = Static.MeshletHeaderSlot;
     Inst.MeshletVisibilityBase   = Static.MeshletVisibilityBase;
     Inst.DrawID                  = DrawID;

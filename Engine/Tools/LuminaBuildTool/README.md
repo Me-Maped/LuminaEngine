@@ -31,7 +31,7 @@ LuminaBuild.bat Build Lumina -TargetType=Editor -Configuration=Development
 | `Includes <Target>` | 按包含该头文件的翻译单元数量对头文件排名 |
 | `Deps <Target>` | 将模块声明的依赖与它实际触及的依赖进行对比 |
 | `Tidy [PathFilter]` | 使用工作区 `.clang-tidy` 对第一方源码运行 clang-tidy |
-| `GenerateProjectFiles` | 写出 `.vcxproj`、`.filters`、解决方案以及 `compile_commands.json` |
+| `GenerateProjectFiles` | 写出 `.vcxproj`、`.filters`、解决方案（`-SolutionFormat=Slnx\|Sln`，默认 `Slnx`）以及 `compile_commands.json` |
 
 目标：`Lumina`（编辑器与游戏启动器）、`Reflector`（反射生成器）
 以及 `Tests`。游戏项目位于引擎目录树之外，通过 `-Project=<path>` 传入。
@@ -190,6 +190,17 @@ public 设置会通过 `PublicDependencyModuleNames` 传递性地传播。privat
 插件就会被构建。`DisabledPlugins` 会覆盖这两者。`EditorOnly` 插件和 `Editor` 宿主类型的模块
 会从 Game 目标中剔除。独立的 `Program` 目标完全不承载任何插件。
 
+`Dependencies` 列出其他插件，每一项可以是裸名称，也可以是
+`{ "Name": "Networking", "Optional": true, "Version": 2 }`，其中 `Version` 是能够
+满足该依赖的最低版本。某个插件所要求的依赖未启用，或版本低于要求时，该插件会被
+跳过并给出警告，依赖它的插件同样如此；引擎的加载器拒绝加载的也正是这些。模块自己的
+`SupportedPlatforms` 会进一步收窄插件的平台范围。
+
+工具和引擎用同一套规则读取描述文件：严格 JSON、键名必须完全一致、同一套默认值，
+并且在缺少 `Name`、字段类型错误，或 `Type` / `LoadingPhase` 双方都不认识时直接报错。
+`Engine/Source/Runtime/Tests/PluginDescriptorTests.cpp` 保存双方必须达成一致的用例，
+以及本工具对每个用例给出的结果。
+
 ## 增量构建如何做判断
 
 每个 action 都会声明其输入和输出。action 会在以下情况下重新运行：
@@ -209,8 +220,10 @@ public 设置会通过 `PublicDependencyModuleNames` 传递性地传播。privat
 规则 4 使用编译器自身的 `/sourceDependencies` 输出，因此头文件追踪反映的是实际被包含的内容，
 而不是规则所声称的内容。
 
-缓存位于 `Intermediates/Obj/<Platform>/<Type>-<Config>/.buildtool/` 下。删除它们只需付出一次重建的
-代价，别无其他。
+缓存位于 `<OutputRoot>/Intermediates/Obj/<Platform>/<Type>-<Config>/.buildtool/` 下，
+其中项目构建的 `OutputRoot` 是项目根目录，否则是引擎根目录。即使是在项目构建里，
+引擎自有模块的记录仍留在引擎自己的 `OutputRoot` 下，因此项目会共用引擎的缓存，
+而不是在项目第一次构建时重新编译引擎。删除缓存只需付出一次重建的代价，别无其他。
 
 ## Unity 构建
 
@@ -247,7 +260,7 @@ public 设置会通过 `PublicDependencyModuleNames` 传递性地传播。privat
 有些源文件永远不能合并，这些会被自动排除，而不是靠谁记得把它们列出来：
 
 - 任何带有 `PerFileCompilerOptions` 的文件，否则它会静默丢掉自己要求的标志
-  （`JobScheduler.cpp` 需要 `/GT`，丢掉它意味着崩溃而非报错），
+  （`ForkRuntime.cpp` 在热路径上要求 initial-exec TLS 模型），
 - 预编译头的源文件，它必须在自己的翻译单元中运行 `/Yc`，
 - `PerImageSourceFiles`，它们是按已加载 image 而非按模块划分的，
 - 反射分片（reflection shard），它们本身就已经是作为 unity 文件生成的。
@@ -295,6 +308,10 @@ Modes/          Build、Clean、Query 和 GenerateProjectFiles 入口点
 
 ## 生成的 IDE 项目
 
+解决方案默认写成 `<Name>.slnx`，也可以用 `-SolutionFormat=Sln` 写成传统的 `<Name>.sln`。
+两者列出的项目、文件夹和配置相同，写出其中一种时会删掉先前生成的另一种同名解决方案，
+因此 IDE 不会打开一份过期的。
+
 项目是 NMake 项目：从 IDE 构建某个项目会回调 LuminaBuildTool，而不是在 MSBuild 中重新实现构建。
 
 共有三种，这种划分很重要：
@@ -307,9 +324,9 @@ Modes/          Build、Clean、Query 和 GenerateProjectFiles 入口点
 - **`LuminaRules`** 是一个 C# 项目，包含所有的 `Target.cs`、`Build.cs` 和 `BuildRules.cs`。
   规则文件是针对该工具编译的普通 C#，但只有当某个项目认领它们时，IDE 才会把它们当作 C# 对待；
   没有这样一个项目，它们就会以纯文本打开，没有语法高亮、没有对 `ModuleRules` 的补全，
-  也没有任何错误提示，直到构建失败。它通过 `ActiveCfg` 映射到解决方案中，但没有 `Build.0`，
-  因此它从不构建：构建系统会自行编译这些相同的文件，而编译两次可能因为真实构建并不关心的原因
-  而失败。它的设置刻意与 `RulesCompiler` 保持一致，包括 `ImplicitUsings=disable`，
+  也没有任何错误提示，直到构建失败。它被放进解决方案，但标记为不参与构建，因此它从不构建：
+  构建系统会自行编译这些相同的文件，而编译两次可能因为真实构建并不关心的原因而失败。
+  它的设置刻意与 `RulesCompiler` 保持一致，包括 `ImplicitUsings=disable`，
   这样编辑器报告的内容与构建报告的内容是同一回事。
 
 目标可以设置 `bBuildByDefault = false`，从而不参与整个解决方案的构建但仍可单独构建；
@@ -423,8 +440,7 @@ include 路径上时才行得通。
 
 `PerFileCompilerOptions` 和 `ExcludeFromUnity` 以裸文件名为键，因此一次重命名会静默丢掉挂在旧
 文件名上的任何东西。当其中任一规则引用了一个模块并不拥有的文件时，扫描器会让构建失败。
-在这里保持沉默是错误的结果：`JobScheduler.cpp` 丢掉 `/GT` 会导致 fiber 调度器崩溃，
-而不是给出一条诊断信息。
+在这里保持沉默是错误的结果：丢掉的标志日后会表现为错误编译或变慢，而不是一条诊断信息。
 
 ## 当前状态
 

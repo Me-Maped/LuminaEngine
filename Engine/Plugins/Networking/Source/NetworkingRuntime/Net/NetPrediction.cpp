@@ -20,11 +20,11 @@ namespace Lumina::NetPrediction
         // A client may run this far ahead of real time before its extra moves wait for the next frame.
         constexpr float MaxBudgetSeconds = 0.25f;
 
+        // A lagging client may run this much faster than real time while it works off budget the cap clipped.
+        constexpr float CatchUpRate = 0.5f;
+
         // Older unconfirmed moves than this are dropped, which only happens when the host stops answering.
         constexpr uint32 MaxPendingMoves = 240;
-
-        // How many unconfirmed moves ride in each upload, so a lost packet is covered by the next ones.
-        constexpr uint32 MaxMovesPerUpload = 32;
 
         // Below these the client agrees with the host, since the wire carries millimeters and centimeters per second.
         constexpr float PositionTolerance = 0.02f;
@@ -46,11 +46,6 @@ namespace Lumina::NetPrediction
         int32 UnZigZag(uint32 Value)
         {
             return (int32)(Value >> 1) ^ -(int32)(Value & 1);
-        }
-
-        float FixedStepOf(CWorld* World)
-        {
-            return 1.0f / Math::Max(10.0f, World->GetDefaultWorldSettings().PhysicsHz);
         }
 
         int8 QuantizeAxis(float Value)
@@ -127,6 +122,11 @@ namespace Lumina::NetPrediction
         return IsCharacter(Registry, Entity);
     }
 
+    float FixedStepOf(CWorld* World)
+    {
+        return 1.0f / Math::Max(10.0f, World->GetDefaultWorldSettings().PhysicsHz);
+    }
+
     FNetMoveCommand MakeMoveCommand(uint32 Seq, const FVector3& Move, float YawDegrees, uint32 Buttons)
     {
         FNetMoveCommand Command;
@@ -138,6 +138,11 @@ namespace Lumina::NetPrediction
         return Command;
     }
 
+    float PitchDegrees(int16 Pitch)
+    {
+        return ClampViewPitch((float)Pitch / 100.0f);
+    }
+
     void RefreshDrives(CWorld* World, ECS::FRegistry& Registry, bool bServer)
     {
         Physics::IPhysicsScene* Scene = World->GetPhysicsScene();
@@ -147,17 +152,17 @@ namespace Lumina::NetPrediction
         }
 
         TVector<ECS::FEntity> Characters;
-        for (ECS::FEntity Entity : Registry.View<SNetworkComponent>())
+        for (ECS::FEntity Entity : Registry.View<ECS::Read<SNetworkComponent>>())
         {
             if (IsCharacter(Registry, Entity))
             {
-                Characters.push_back(Entity);
+                Characters.Add(Entity);
             }
         }
 
         for (ECS::FEntity Entity : Characters)
         {
-            const SNetworkComponent& Net = Registry.Get<SNetworkComponent>(Entity);
+            const SNetworkComponent& Net = Registry.Get<ECS::Read<SNetworkComponent>>(Entity);
             Physics::ECharacterNetDrive Drive;
             if (bServer)
             {
@@ -169,56 +174,56 @@ namespace Lumina::NetPrediction
             }
 
             FNetCharacterDrive& Applied = Registry.GetOrEmplace<FNetCharacterDrive>(Entity);
-            if (Applied.Drive == (uint8)Drive)
+            if (Applied.Drive != (uint8)Drive)
             {
-                continue;
-            }
+                // The capsule may not exist on the frame the entity arrived, so the drive is retried until it does.
+                Physics::FCharacterNetState Probe;
+                if (!Scene->GetCharacterNetState(Entity, Probe))
+                {
+                    continue;
+                }
+                Scene->SetCharacterNetDrive(Entity, Drive);
+                Applied.Drive = (uint8)Drive;
 
-            // The capsule may not exist on the frame the entity arrived, so the drive is retried until it does.
-            Physics::FCharacterNetState Probe;
-            if (!Scene->GetCharacterNetState(Entity, Probe))
-            {
-                continue;
+                if (!bServer && Net.LocalRole == ENetRole::AutonomousProxy)
+                {
+                    Registry.EmplaceOrReplace<FNetPredictionClient>(Entity);
+                }
+                else
+                {
+                    Registry.Remove<FNetPredictionClient>(Entity);
+                }
             }
-            Scene->SetCharacterNetDrive(Entity, Drive);
-            Applied.Drive = (uint8)Drive;
-
-            const bool bPredictsHere = !bServer && Net.LocalRole == ENetRole::AutonomousProxy;
-            const bool bServesCommands = bServer && Net.OwningConnectionId != 0;
-            if (bPredictsHere)
-            {
-                Registry.EmplaceOrReplace<FNetPredictionClient>(Entity);
-            }
-            else
-            {
-                Registry.Remove<FNetPredictionClient>(Entity);
-            }
-            if (bServesCommands)
-            {
-                Registry.EmplaceOrReplace<FNetPredictionServer>(Entity).Budget = 4.0f;
-            }
-            else
-            {
-                Registry.Remove<FNetPredictionServer>(Entity);
-            }
+            RefreshServerPrediction(Registry, Entity, bServer ? Net.OwningConnectionId : 0);
         }
     }
 
-    void OnCharacterStep(CWorld* World, float FixedDt, bool bAfter)
+    void RefreshServerPrediction(ECS::FRegistry& Registry, ECS::FEntity Entity, uint32 OwningConnectionId)
     {
-        if (World == nullptr || World->GetNetMode() != ENetMode::Client)
+        if (OwningConnectionId == 0)
         {
+            Registry.Remove<FNetPredictionServer>(Entity);
             return;
         }
 
-        ECS::FRegistry& Registry = World->GetEntityRegistry();
-        Physics::IPhysicsScene* Scene = World->GetPhysicsScene();
-        auto View = Registry.View<FNetPredictionClient>();
+        const FNetPredictionServer* Existing = Registry.TryGet<ECS::Read<FNetPredictionServer>>(Entity);
+        if (Existing != nullptr && Existing->OwningConnectionId == OwningConnectionId)
+        {
+            return;
+        }
+        FNetPredictionServer& Prediction = Registry.EmplaceOrReplace<FNetPredictionServer>(Entity);
+        Prediction.OwningConnectionId = OwningConnectionId;
+        Prediction.Budget = 4.0f;
+    }
+
+    void OnCharacterStep(ECS::FRegistry& Registry, Physics::IPhysicsScene& Scene, bool bAfter)
+    {
+        auto View = Registry.View<ECS::Write<FNetPredictionClient>>();
         for (ECS::FEntity Entity : View)
         {
-            FNetPredictionClient& Prediction = Registry.Get<FNetPredictionClient>(Entity);
-            SCharacterMovementComponent* Movement = Registry.TryGet<SCharacterMovementComponent>(Entity);
-            SCharacterControllerComponent* Controller = Registry.TryGet<SCharacterControllerComponent>(Entity);
+            FNetPredictionClient& Prediction = Registry.Get<ECS::Write<FNetPredictionClient>>(Entity);
+            SCharacterMovementComponent* Movement = Registry.TryGet<ECS::Write<SCharacterMovementComponent>>(Entity);
+            const SCharacterControllerComponent* Controller = Registry.TryGet<ECS::Read<SCharacterControllerComponent>>(Entity);
             if (Movement == nullptr || Controller == nullptr)
             {
                 continue;
@@ -226,9 +231,9 @@ namespace Lumina::NetPrediction
 
             if (bAfter)
             {
-                if (!Prediction.Pending.empty() && !Prediction.Pending.back().bHasAfter)
+                if (!Prediction.Pending.IsEmpty() && !Prediction.Pending.Last().bHasAfter)
                 {
-                    Prediction.Pending.back().bHasAfter = Scene->GetCharacterNetState(Entity, Prediction.Pending.back().After);
+                    Prediction.Pending.Last().bHasAfter = Scene.GetCharacterNetState(Entity, Prediction.Pending.Last().After);
                 }
                 continue;
             }
@@ -251,11 +256,11 @@ namespace Lumina::NetPrediction
             Movement->bHasPendingMoveInput = Input.bHasMove;
             Movement->PendingLookYaw       = Input.LookYaw;
 
-            if (Prediction.Pending.size() >= MaxPendingMoves)
+            if (static_cast<uint32>(Prediction.Pending.Num()) >= MaxPendingMoves)
             {
-                Prediction.Pending.erase(Prediction.Pending.begin());
+                Prediction.Pending.RemoveAt(0);
             }
-            Prediction.Pending.push_back(FPredictedMove{ Command, Movement->MoveSpeed, {}, false });
+            Prediction.Pending.Add(FPredictedMove{ Command, Movement->MoveSpeed, {}, false });
         }
     }
 
@@ -300,68 +305,20 @@ namespace Lumina::NetPrediction
         }
     }
 
-    void SendCommands(ECS::FRegistry& Registry, FNetWorldState& State)
+    bool ReadMoveCommands(const uint8* Data, SIZE_T Size, uint32& OutGuid, TVector<FNetMoveCommand>& OutCommands)
     {
-        auto View = Registry.View<FNetPredictionClient, SNetworkComponent>();
-        for (ECS::FEntity Entity : View)
-        {
-            const FNetPredictionClient& Prediction = Registry.Get<FNetPredictionClient>(Entity);
-            const SNetworkComponent& Net = Registry.Get<SNetworkComponent>(Entity);
-            if (Prediction.Pending.empty() || Net.NetGUID.Value == 0)
-            {
-                continue;
-            }
-
-            const uint32 Count = Math::Min((uint32)Prediction.Pending.size(), MaxMovesPerUpload);
-
-            const uint32 First = (uint32)Prediction.Pending.size() - Count;
-
-            static thread_local TVector<FNetMoveCommand> Upload;
-            Upload.clear();
-            for (uint32 Index = First; Index < (uint32)Prediction.Pending.size(); ++Index)
-            {
-                Upload.push_back(Prediction.Pending[Index].Command);
-            }
-            TVector<uint8> Buffer;
-            WriteMoveCommands(Buffer, Net.NetGUID.Value, Upload.data(), Count);
-            Net::SendFramed(*State.Transport, State.ServerConnection, Buffer.data(), static_cast<SIZE_T>(Buffer.size()), 1, ESendMode::UnreliableSequenced);
-        }
-    }
-
-    void ReceiveCommands(CWorld* World, ECS::FRegistry& Registry, uint32 Sender, const uint8* Data, SIZE_T Size)
-    {
-        FNetWorldState* State = Registry.Ctx().Find<FNetWorldState>();
-        Physics::IPhysicsScene* Scene = World->GetPhysicsScene();
-        if (State == nullptr || Scene == nullptr)
-        {
-            return;
-        }
-
         FNetArchive Reader(Data, Size);
         uint8 Type = 0;
         Reader << Type;
-        const uint32 Guid     = Net::ReadNetGuid(Reader);
+        OutGuid = Net::ReadNetGuid(Reader);
         const uint32 FirstSeq = ReadVarUInt(Reader);
         const uint32 Count    = ReadVarUInt(Reader);
         if (Reader.HasError() || Count > MaxMovesPerUpload)
         {
-            return;
+            return false;
         }
 
-        const ECS::FEntity Entity = State->GuidTable.Find(SNetGUID{ Guid });
-        if (Entity == ECS::NullEntity || !Registry.IsValid(Entity))
-        {
-            return;
-        }
-        const SNetworkComponent* Net = Registry.TryGet<SNetworkComponent>(Entity);
-        FNetPredictionServer* Prediction = Registry.TryGet<FNetPredictionServer>(Entity);
-        SCharacterControllerComponent* Controller = Registry.TryGet<SCharacterControllerComponent>(Entity);
-        if (Net == nullptr || Net->OwningConnectionId != Sender || Prediction == nullptr || Controller == nullptr)
-        {
-            return;
-        }
-
-        const float FixedDt = FixedStepOf(World);
+        OutCommands.Reset();
         FNetMoveCommand Command;
         for (uint32 Index = 0; Index < Count; ++Index)
         {
@@ -385,41 +342,126 @@ namespace Lumina::NetPrediction
             Command.Seq   = FirstSeq + Index;
             if (Reader.HasError())
             {
-                return;
+                return false;
+            }
+            OutCommands.Add(Command);
+        }
+        return true;
+    }
+
+    void SendCommands(ECS::FRegistry& Registry, FNetWorldState& State)
+    {
+        auto View = Registry.View<ECS::Read<FNetPredictionClient>, ECS::Read<SNetworkComponent>>();
+        for (ECS::FEntity Entity : View)
+        {
+            const FNetPredictionClient& Prediction = Registry.Get<ECS::Read<FNetPredictionClient>>(Entity);
+            const SNetworkComponent& Net = Registry.Get<ECS::Read<SNetworkComponent>>(Entity);
+            if (Prediction.Pending.IsEmpty() || Net.NetGUID.Value == 0)
+            {
+                continue;
             }
 
+            const uint32 Count = Math::Min((uint32)Prediction.Pending.Num(), MaxMovesPerUpload);
+
+            const uint32 First = (uint32)Prediction.Pending.Num() - Count;
+
+            TVector<FNetMoveCommand>& Upload = State.ReplicationScratch.MoveCommands;
+            Upload.Reset();
+            for (uint32 Index = First; Index < (uint32)Prediction.Pending.Num(); ++Index)
+            {
+                Upload.Add(Prediction.Pending[Index].Command);
+            }
+            TVector<uint8>& Buffer = State.ReplicationScratch.Buffer;
+            Buffer.Reset();
+            WriteMoveCommands(Buffer, Net.NetGUID.Value, Upload.GetData(), Count);
+            Net::SendFramed(*State.Transport, State.ServerConnection, Buffer.GetData(), static_cast<SIZE_T>(Buffer.Num()), 1, ESendMode::UnreliableSequenced);
+        }
+    }
+
+    void ReceiveCommands(ECS::FRegistry& Registry, Physics::IPhysicsScene& Scene, float FixedDt, uint32 Sender, const uint8* Data, SIZE_T Size)
+    {
+        FNetWorldState* State = Registry.Ctx().Find<FNetWorldState>();
+        if (State == nullptr)
+        {
+            return;
+        }
+
+        uint32 Guid = 0;
+        TVector<FNetMoveCommand>& Commands = State->ReplicationScratch.MoveCommands;
+        if (!ReadMoveCommands(Data, Size, Guid, Commands))
+        {
+            return;
+        }
+
+        const ECS::FEntity Entity = State->GuidTable.Find(SNetGUID{ Guid });
+        if (Entity == ECS::NullEntity || !Registry.IsValid(Entity))
+        {
+            return;
+        }
+        const SNetworkComponent* Net = Registry.TryGet<ECS::Read<SNetworkComponent>>(Entity);
+        FNetPredictionServer* Prediction = Registry.TryGet<ECS::Write<FNetPredictionServer>>(Entity);
+        SCharacterControllerComponent* Controller = Registry.TryGet<ECS::Write<SCharacterControllerComponent>>(Entity);
+        if (Net == nullptr || Net->OwningConnectionId != Sender || Prediction == nullptr || Controller == nullptr)
+        {
+            return;
+        }
+
+        for (const FNetMoveCommand& Command : Commands)
+        {
             if (Command.Seq <= Prediction->LastProcessed)
             {
                 continue;
             }
 
-            // Moves past the budget wait, since the client resends everything it has not seen confirmed.
+            // Moves past the budget wait for the next upload, which carries the newest MaxMovesPerUpload unconfirmed moves.
             if (Prediction->Budget < 1.0f)
             {
                 break;
             }
             Prediction->Budget -= 1.0f;
 
+            // Moves that slid out of the upload window are gone, so the host resyncs here and its next ack rebaselines the client.
+            if (Command.Seq > Prediction->LastProcessed + 1)
+            {
+                Prediction->SkippedMoves += Command.Seq - Prediction->LastProcessed - 1;
+                LOG_WARN_ONCE("[Net][Predict] Host skipped moves {} to {} that fell out of the upload window", Prediction->LastProcessed + 1, Command.Seq - 1);
+            }
+
             Controller->LookInput.x = YawDegrees(Command.Yaw);
-            Controller->LookInput.y = (float)Command.Pitch / 100.0f;
+            Controller->LookInput.y = PitchDegrees(Command.Pitch);
             Controller->Buttons     = Command.Buttons;
 
-            Scene->SimulateCharacterStep(Entity, ToInput(Command, 0.0f), FixedDt, false);
+            Scene.SimulateCharacterStep(Entity, ToInput(Command, 0.0f), FixedDt, false);
             Prediction->LastProcessed = Command.Seq;
             Prediction->AckSeq        = Command.Seq;
-            Prediction->bAckPending   = Scene->GetCharacterNetState(Entity, Prediction->AckState);
+            Prediction->bAckPending   = Scene.GetCharacterNetState(Entity, Prediction->AckState);
         }
     }
 
-    void TickBudgets(CWorld* World, ECS::FRegistry& Registry, float DeltaTime)
+    void TickBudgets(ECS::FRegistry& Registry, float FixedDt, float DeltaTime)
     {
-        const float FixedDt = FixedStepOf(World);
         const float Cap = MaxBudgetSeconds / FixedDt + 4.0f;
-        for (ECS::FEntity Entity : Registry.View<FNetPredictionServer>())
+        const float Refill = DeltaTime / FixedDt;
+        for (ECS::FEntity Entity : Registry.View<ECS::Write<FNetPredictionServer>>())
         {
-            FNetPredictionServer& Prediction = Registry.Get<FNetPredictionServer>(Entity);
-            Prediction.Budget = Math::Min(Prediction.Budget + DeltaTime / FixedDt, Cap);
+            FNetPredictionServer& Prediction = Registry.Get<ECS::Write<FNetPredictionServer>>(Entity);
+
+            // Refill alone matches the client's step rate, so only budget the cap clipped can drain a backlog, and never past real time.
+            const float Grant = Math::Min(Prediction.CatchUp, Refill * CatchUpRate);
+            const float Owed = Prediction.Budget + Refill + Grant;
+            Prediction.Budget  = Math::Min(Owed, Cap);
+            Prediction.CatchUp = Math::Min(Prediction.CatchUp - Grant + Owed - Prediction.Budget, (float)MaxMovesPerUpload);
         }
+    }
+
+    void WriteMoveAck(TVector<uint8>& Buffer, uint32 Guid, uint32 Seq, const Physics::FCharacterNetState& State)
+    {
+        FNetArchive Writer(Buffer);
+        uint8 Type = static_cast<uint8>(ENetMessage::MoveAck);
+        Writer << Type;
+        Net::WriteNetGuid(Writer, Guid);
+        WriteVarUInt(Writer, Seq);
+        WriteState(Writer, State);
     }
 
     void SendAcks(ECS::FRegistry& Registry, FNetWorldState& State, float DeltaTime)
@@ -427,11 +469,11 @@ namespace Lumina::NetPrediction
         const CNetworkSettings* Settings = GetDefault<CNetworkSettings>();
         const float AckInterval = 1.0f / Math::Max(Settings != nullptr ? Settings->MoveAckRate : 20.0f, 1.0f);
 
-        auto View = Registry.View<FNetPredictionServer, SNetworkComponent>();
+        auto View = Registry.View<ECS::Write<FNetPredictionServer>, ECS::Read<SNetworkComponent>>();
         for (ECS::FEntity Entity : View)
         {
-            FNetPredictionServer& Prediction = Registry.Get<FNetPredictionServer>(Entity);
-            const SNetworkComponent& Net = Registry.Get<SNetworkComponent>(Entity);
+            FNetPredictionServer& Prediction = Registry.Get<ECS::Write<FNetPredictionServer>>(Entity);
+            const SNetworkComponent& Net = Registry.Get<ECS::Read<SNetworkComponent>>(Entity);
             Prediction.TimeSinceAck += DeltaTime;
             if (!Prediction.bAckPending || Prediction.TimeSinceAck < AckInterval || Net.OwningConnectionId == 0 || Net.NetGUID.Value == 0)
             {
@@ -440,25 +482,15 @@ namespace Lumina::NetPrediction
             Prediction.bAckPending  = false;
             Prediction.TimeSinceAck = 0.0f;
 
-            TVector<uint8> Buffer;
-            FNetArchive Writer(Buffer);
-            uint8 Type = static_cast<uint8>(ENetMessage::MoveAck);
-            Writer << Type;
-            Net::WriteNetGuid(Writer, Net.NetGUID.Value);
-            WriteVarUInt(Writer, Prediction.AckSeq);
-            WriteState(Writer, Prediction.AckState);
-            Net::SendFramed(*State.Transport, FConnectionHandle{ Net.OwningConnectionId }, Buffer.data(), static_cast<SIZE_T>(Buffer.size()), 1, ESendMode::UnreliableSequenced);
+            TVector<uint8>& Buffer = State.ReplicationScratch.Buffer;
+            Buffer.Reset();
+            WriteMoveAck(Buffer, Net.NetGUID.Value, Prediction.AckSeq, Prediction.AckState);
+            Net::SendFramed(*State.Transport, FConnectionHandle{ Net.OwningConnectionId }, Buffer.GetData(), static_cast<SIZE_T>(Buffer.Num()), 1, ESendMode::UnreliableSequenced);
         }
     }
 
-    void ReceiveAck(CWorld* World, ECS::FRegistry& Registry, FNetWorldState& State, const uint8* Data, SIZE_T Size)
+    void ReceiveAck(ECS::FRegistry& Registry, FNetWorldState& State, Physics::IPhysicsScene& Scene, float FixedDt, const uint8* Data, SIZE_T Size)
     {
-        Physics::IPhysicsScene* Scene = World->GetPhysicsScene();
-        if (Scene == nullptr)
-        {
-            return;
-        }
-
         FNetArchive Reader(Data, Size);
         uint8 Type = 0;
         Reader << Type;
@@ -473,14 +505,14 @@ namespace Lumina::NetPrediction
 
         const ECS::FEntity Entity = State.GuidTable.Find(SNetGUID{ Guid });
         FNetPredictionClient* Prediction = (Entity != ECS::NullEntity && Registry.IsValid(Entity))
-            ? Registry.TryGet<FNetPredictionClient>(Entity) : nullptr;
+            ? Registry.TryGet<ECS::Write<FNetPredictionClient>>(Entity) : nullptr;
         if (Prediction == nullptr || Seq <= Prediction->LastAcked)
         {
             return;
         }
 
         int32 Index = Constants::kIndexNone;
-        for (int32 Candidate = 0; Candidate < (int32)Prediction->Pending.size(); ++Candidate)
+        for (int32 Candidate = 0; Candidate < Prediction->Pending.Num(); ++Candidate)
         {
             if (Prediction->Pending[Candidate].Command.Seq == Seq)
             {
@@ -508,14 +540,13 @@ namespace Lumina::NetPrediction
             Corrected.Velocity  = Host.Velocity;
             Corrected.bGrounded = Host.bGrounded;
             Corrected.JumpCount = Host.JumpCount;
-            Scene->SetCharacterNetState(Entity, Corrected);
+            Scene.SetCharacterNetState(Entity, Corrected);
 
-            const float FixedDt = FixedStepOf(World);
-            for (int32 Later = Index + 1; Later < (int32)Prediction->Pending.size(); ++Later)
+            for (int32 Later = Index + 1; Later < Prediction->Pending.Num(); ++Later)
             {
                 FPredictedMove& Move = Prediction->Pending[Later];
-                Scene->SimulateCharacterStep(Entity, ToInput(Move.Command, Move.MoveSpeed), FixedDt, true);
-                Move.bHasAfter = Scene->GetCharacterNetState(Entity, Move.After);
+                Scene.SimulateCharacterStep(Entity, ToInput(Move.Command, Move.MoveSpeed), FixedDt, true);
+                Move.bHasAfter = Scene.GetCharacterNetState(Entity, Move.After);
             }
 
             if (++Prediction->Corrections <= 5 || (Prediction->Corrections % 100) == 0)
@@ -527,6 +558,6 @@ namespace Lumina::NetPrediction
             }
         }
 
-        Prediction->Pending.erase(Prediction->Pending.begin(), Prediction->Pending.begin() + Index + 1);
+        Prediction->Pending.RemoveAt(0, Index + 1);
     }
 }

@@ -48,6 +48,31 @@ namespace Lumina::EditorEntityUtils
               || Hash == ECS::GetComponentTypeID<FLastSelectedTag>());
     }
 
+    TVector<ECS::FEntity> GatherHierarchyRoots(const ECS::FHierarchy& Hierarchy, TSpan<const ECS::FEntity> Entities)
+    {
+        THashSet<ECS::FEntity> Candidates;
+        for (ECS::FEntity Entity : Entities)
+        {
+            Candidates.Add(Entity);
+        }
+
+        TVector<ECS::FEntity> Roots;
+        Roots.Reserve(Entities.Num());
+        for (ECS::FEntity Entity : Entities)
+        {
+            bool bAncestorInSet = false;
+            for (ECS::FEntity Walk = Hierarchy.GetParent(Entity); Walk != ECS::NullEntity && !bAncestorInSet; Walk = Hierarchy.GetParent(Walk))
+            {
+                bAncestorInSet = Candidates.Contains(Walk);
+            }
+            if (!bAncestorInSet)
+            {
+                Roots.Add(Entity);
+            }
+        }
+        return Roots;
+    }
+
     void CycleGizmoOp(ImGuizmo::OPERATION& InOutOp)
     {
         switch (InOutOp)
@@ -98,9 +123,9 @@ namespace Lumina::EditorEntityUtils
 
     void RenameOutlinerRow(FTreeNodeDisplay& Display, FStringView NewName)
     {
-        const size_t IconEnd = Display.DisplayName.find(' ');
-        FString Label = IconEnd == FString::npos ? FString() : Display.DisplayName.substr(0, IconEnd + 1);
-        Label.append(NewName.data(), NewName.size());
+        const int32 IconEnd = Display.DisplayName.Find(' ');
+        FString Label = IconEnd == Constants::kIndexNone ? FString() : Display.DisplayName.Mid(0, IconEnd + 1);
+        Label.Append(NewName.GetData(), NewName.Len());
         Display.DisplayName = Move(Label);
         Display.bTooltipBuilt = false;
     }
@@ -225,7 +250,7 @@ namespace Lumina::EditorEntityUtils
         }
 
         // The shaped glyph extent gives a label entity a box around its text rather than a unit cube.
-        if (const STextComponent* Text = Registry.TryGet<STextComponent>(Entity); Text && !Text->Text.empty())
+        if (const STextComponent* Text = Registry.TryGet<ECS::Read<STextComponent>>(Entity); Text && !Text->Text.IsEmpty())
         {
             CFont* Font = Text->Font.Get();
             if (Font == nullptr || !Font->HasAtlas())
@@ -240,7 +265,7 @@ namespace Lumina::EditorEntityUtils
                                    : (Text->VerticalAlign == ETextVerticalAlign::Middle)     ? 0.5f : 0.0f;
 
                 TVector<FShapedGlyph> Shaped;
-                if (Font->ShapeText(Text->Text, HAlign, VAlign, Text->LineSpacing, Shaped) && !Shaped.empty())
+                if (Font->ShapeText(Text->Text, HAlign, VAlign, Text->LineSpacing, Shaped) && !Shaped.IsEmpty())
                 {
                     FVector2 EmMin( FLT_MAX,  FLT_MAX);
                     FVector2 EmMax(-FLT_MAX, -FLT_MAX);

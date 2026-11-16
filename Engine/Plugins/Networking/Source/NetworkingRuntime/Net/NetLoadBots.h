@@ -3,6 +3,7 @@
 #include "Containers/String.h"
 #include "Containers/Vector.h"
 #include "Core/Math/Math.h"
+#include "Core/Math/Random.h"
 #include "Memory/SmartPtr.h"
 #include "Networking/INetworkTransport.h"
 #include "Net/NetPrediction.h"
@@ -28,10 +29,10 @@ namespace Lumina
             FString RpcClass       = "NetStress.StressPlayer";
         };
 
-        // Starts only when the process was given -netbots=N.
-        static void StartFromCommandLine();
-        static void Stop();
-        static void Tick();
+        // Null unless the process was given -netbots=N.
+        static TUniquePtr<FNetLoadBotSwarm> CreateFromCommandLine();
+
+        void Tick();
 
     private:
 
@@ -60,7 +61,7 @@ namespace Lumina
             double   NextTurn   = 0.0;
             double   NextChat   = 0.0;
             double   NextAttack = 0.0;
-            uint32   Rng        = 1;
+            FRandomStream Rng;
 
             uint64  BytesIn     = 0;
             uint64  BytesOut    = 0;
@@ -73,7 +74,6 @@ namespace Lumina
         };
 
         void Begin(const FConfig& InConfig);
-        void TickAll();
         void TickBot(FBot& Bot, double Now, double DeltaTime);
         void Receive(FBot& Bot, double Now, const uint8* Data, SIZE_T Size);
         void SendCommands(FBot& Bot, double DeltaTime);

@@ -101,7 +101,7 @@ namespace Lumina
         }
 
         Curve = InCurve;
-        Selection.clear();
+        Selection.Reset();
         DragMode = EDragMode::None;
         bViewInitialized = false;
     }
@@ -247,7 +247,7 @@ namespace Lumina
 
     void FCurveEditorWidget::FrameSelection()
     {
-        if (Curve == nullptr || Selection.empty())
+        if (Curve == nullptr || Selection.IsEmpty())
         {
             FrameAll();
             return;
@@ -295,40 +295,62 @@ namespace Lumina
 
     void FCurveEditorWidget::ToggleSelection(int32 Index)
     {
-        for (auto It = Selection.begin(); It != Selection.end(); ++It)
+        for (int32 i = 0; i < Selection.Num(); ++i)
         {
-            if (*It == Index)
+            if (Selection[i] == Index)
             {
-                Selection.erase(It);
+                Selection.RemoveAt(i);
                 return;
             }
         }
 
-        Selection.push_back(Index);
+        Selection.Add(Index);
     }
 
     void FCurveEditorWidget::SetSelection(int32 Index)
     {
-        Selection.clear();
-        Selection.push_back(Index);
+        Selection.Reset();
+        Selection.Add(Index);
     }
 
     void FCurveEditorWidget::SelectNone()
     {
-        Selection.clear();
+        Selection.Reset();
+    }
+
+    // Undo or the Details panel can shrink the key array behind the widget's back.
+    void FCurveEditorWidget::PruneStaleIndices()
+    {
+        const int32 Num = Curve->NumKeys();
+        const auto IsStale = [Num](int32 Index) { return Index < 0 || Index >= Num; };
+
+        // A key drag pairs Selection slots with DragStartTimes, so pruning mid-drag ends it.
+        if (Selection.RemoveAll(IsStale) > 0 && DragMode == EDragMode::Keys)
+        {
+            DragMode = EDragMode::None;
+        }
+
+        if (TangentDragKey != Constants::kIndexNone && IsStale(TangentDragKey))
+        {
+            TangentDragKey = Constants::kIndexNone;
+            if (DragMode == EDragMode::Tangent)
+            {
+                DragMode = EDragMode::None;
+            }
+        }
     }
 
     void FCurveEditorWidget::BeginKeyDrag()
     {
-        DragStartTimes.clear();
-        DragStartValues.clear();
-        DragStartTimes.reserve(Selection.size());
-        DragStartValues.reserve(Selection.size());
+        DragStartTimes.Reset();
+        DragStartValues.Reset();
+        DragStartTimes.Reserve(Selection.Num());
+        DragStartValues.Reserve(Selection.Num());
 
         for (int32 Index : Selection)
         {
-            DragStartTimes.push_back(Curve->Keys[Index].Time);
-            DragStartValues.push_back(Curve->Keys[Index].Value);
+            DragStartTimes.Add(Curve->Keys[Index].Time);
+            DragStartValues.Add(Curve->Keys[Index].Value);
         }
     }
 
@@ -357,10 +379,10 @@ namespace Lumina
         }
 
         TVector<int32> Order;
-        Order.reserve(Num);
+        Order.Reserve(Num);
         for (int32 Index = 0; Index < Num; ++Index)
         {
-            Order.push_back(Index);
+            Order.Add(Index);
         }
 
         Algo::StableSort(Order, [this](int32 A, int32 B)
@@ -370,12 +392,12 @@ namespace Lumina
 
         TVector<SCurveKey> Sorted;
         TVector<int32> Remap;
-        Sorted.reserve(Num);
-        Remap.resize(Num);
+        Sorted.Reserve(Num);
+        Remap.SetNum(Num);
 
         for (int32 Index = 0; Index < Num; ++Index)
         {
-            Sorted.push_back(Curve->Keys[Order[Index]]);
+            Sorted.Add(Curve->Keys[Order[Index]]);
             Remap[Order[Index]] = Index;
         }
 
@@ -421,7 +443,7 @@ namespace Lumina
 
     void FCurveEditorWidget::DeleteSelected()
     {
-        if (Selection.empty())
+        if (Selection.IsEmpty())
         {
             return;
         }
@@ -429,19 +451,19 @@ namespace Lumina
         TVector<int32> Sorted = Selection;
         Algo::Sort(Sorted);
 
-        for (int32 Index = (int32)Sorted.size() - 1; Index >= 0; --Index)
+        for (int32 Index = Sorted.Num() - 1; Index >= 0; --Index)
         {
             Curve->RemoveKey(Sorted[Index]);
         }
 
-        Selection.clear();
+        Selection.Reset();
         Curve->ComputeAutoTangents();
         NotifyModified();
     }
 
     void FCurveEditorWidget::SetSelectionInterpMode(ECurveInterpMode Mode, bool bBroken)
     {
-        if (Selection.empty())
+        if (Selection.IsEmpty())
         {
             return;
         }
@@ -497,6 +519,7 @@ namespace Lumina
         }
 
         bDirtyThisFrame = false;
+        PruneStaleIndices();
 
         ImGui::PushID(ID);
 
@@ -561,7 +584,7 @@ namespace Lumina
 
     void FCurveEditorWidget::DrawToolbar()
     {
-        const bool bHasSelection = !Selection.empty();
+        const bool bHasSelection = !Selection.IsEmpty();
 
         if (ToolbarExtension)
         {
@@ -643,7 +666,7 @@ namespace Lumina
         ImGui::SameLine();
 
         // Numeric editing of the last-selected key.
-        const int32 ActiveKey = bHasSelection ? Selection.back() : Constants::kIndexNone;
+        const int32 ActiveKey = bHasSelection ? Selection.Last() : Constants::kIndexNone;
         if (ActiveKey != Constants::kIndexNone && ActiveKey < Curve->NumKeys())
         {
             SCurveKey& Key = Curve->Keys[ActiveKey];
@@ -883,8 +906,8 @@ namespace Lumina
         }
 
         char Buffer[96];
-        snprintf(Buffer, sizeof(Buffer), LOC("T %.3f   V %.3f   (%d keys, %d selected)"),
-            MouseCurvePos.x, MouseCurvePos.y, Curve->NumKeys(), (int32)Selection.size());
+        snprintf(Buffer, sizeof(Buffer), "T %.3f   V %.3f   (%d keys, %d selected)",
+            MouseCurvePos.x, MouseCurvePos.y, Curve->NumKeys(), Selection.Num());
 
         const ImVec2 TextSize = ImGui::CalcTextSize(Buffer);
         const ImVec2 Origin = ImVec2(CanvasMax.x - TextSize.x - 10.0f, CanvasMax.y - TextSize.y - 8.0f);
@@ -956,7 +979,7 @@ namespace Lumina
         const float DeltaTime = (Mouse.x - DragStartScreen.x) / GetPixelsPerTime();
         const float DeltaValue = -(Mouse.y - DragStartScreen.y) / GetPixelsPerValue();
 
-        for (SIZE_T Slot = 0; Slot < Selection.size(); ++Slot)
+        for (int32 Slot = 0; Slot < Selection.Num(); ++Slot)
         {
             const int32 Index = Selection[Slot];
             if (Index < 0 || Index >= Curve->NumKeys())
@@ -1159,7 +1182,7 @@ namespace Lumina
                         const ImVec2 Pos = CurveToScreen(Curve->Keys[Index].Time, Curve->Keys[Index].Value);
                         if (Pos.x >= Lo.x && Pos.x <= Hi.x && Pos.y >= Lo.y && Pos.y <= Hi.y && !IsSelected(Index))
                         {
-                            Selection.push_back(Index);
+                            Selection.Add(Index);
                         }
                     }
 
@@ -1195,14 +1218,14 @@ namespace Lumina
             ImGui::OpenPopup("CurveContextMenu");
         }
 
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !IO.WantTextInput)
         {
             DeleteSelected();
         }
 
         if (ImGui::IsKeyPressed(ImGuiKey_F, false))
         {
-            Selection.empty() ? FrameAll() : FrameSelection();
+            Selection.IsEmpty() ? FrameAll() : FrameSelection();
         }
     }
 

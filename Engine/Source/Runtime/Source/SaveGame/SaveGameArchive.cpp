@@ -35,22 +35,6 @@ namespace Lumina
             }
             return Which == ESaveGameProperties::SaveGame || !Property->ShouldSerialize();
         }
-
-        // Patched in after the payload, so the count and every length cost nothing to know up front.
-        template<typename TBody>
-        void WriteSized(FArchive& Ar, TBody&& Body)
-        {
-            const int64 SizePosition = Ar.Tell();
-            int64 Size = 0;
-            Ar << Size;
-            const int64 Start = Ar.Tell();
-            Body();
-            const int64 End = Ar.Tell();
-            Size = End - Start;
-            Ar.Seek(SizePosition);
-            Ar << Size;
-            Ar.Seek(End);
-        }
     }
 
     FSaveGameArchive::FSaveGameArchive(FArchive& InInnerAr)
@@ -78,20 +62,20 @@ namespace Lumina
                 return *this;
             }
 
-            if (const auto Found = WrittenObjects.find(Value); Found != WrittenObjects.end())
+            if (const auto Found = WrittenObjects.Find(Value); Found != nullptr)
             {
                 Kind = EObjectRecord::Repeat;
-                uint32 Index = Found->second;
+                uint32 Index = (*Found);
                 *this << Kind << Index;
                 return *this;
             }
 
             // Recorded before the payload, so an object that reaches itself writes a repeat instead of recursing.
-            WrittenObjects.emplace(Value, (uint32)WrittenObjects.size());
+            WrittenObjects.TryAdd(Value, (uint32)WrittenObjects.Num());
             Kind = EObjectRecord::Inline;
             FName ClassName = Value->GetClass()->GetName();
             *this << Kind << ClassName;
-            WriteSized(*this, [&] { SaveGame::SerializeObjectState(*this, Value); });
+            SaveGame::WriteSized(*this, [&] { SaveGame::SerializeObjectState(*this, Value); });
             return *this;
         }
 
@@ -119,7 +103,7 @@ namespace Lumina
             {
                 uint32 Index = 0;
                 *this << Index;
-                Value = Index < ReadObjects.size() ? ReadObjects[Index] : nullptr;
+                Value = Index < static_cast<uint32>(ReadObjects.Num()) ? ReadObjects[Index] : nullptr;
                 break;
             }
         case EObjectRecord::Inline:
@@ -131,14 +115,14 @@ namespace Lumina
 
                 CClass* Class = FScriptableRegistry::ResolveClass(ClassName);
                 CObject* Object = Class != nullptr ? NewObject(Class, nullptr, NAME_None, FGuid::New(), OF_Transient) : nullptr;
-                ReadObjects.push_back(Object);
+                ReadObjects.Add(Object);
                 if (Object != nullptr)
                 {
                     SaveGame::SerializeObjectState(*this, Object);
                 }
                 else
                 {
-                    LOG_WARN("Save game: class '{}' no longer exists, so an object of it loads as null.", ClassName.c_str());
+                    LOG_WARN("Save game: class '{}' no longer exists, so an object of it loads as null.", *ClassName);
                 }
                 Seek(Start + Size);
                 Value = Object;
@@ -185,25 +169,23 @@ namespace Lumina
         {
             if (Ar.IsWriting())
             {
-                const int64 CountPosition = Ar.Tell();
-                uint32 Count = 0;
-                Ar << Count;
-                for (FProperty* Property : Struct->GetProperties())
+                WriteCounted(Ar, [&]
                 {
-                    if (!Wants(Property, Which))
+                    uint32 Count = 0;
+                    for (FProperty* Property : Struct->GetProperties())
                     {
-                        continue;
+                        if (!Wants(Property, Which))
+                        {
+                            continue;
+                        }
+                        FName Name = Property->GetPropertyName();
+                        uint8 Type = (uint8)Property->GetType();
+                        Ar << Name << Type;
+                        WriteSized(Ar, [&] { Property->Serialize(Ar, Property->GetValuePtr<void>(Data)); });
+                        ++Count;
                     }
-                    FName Name = Property->GetPropertyName();
-                    uint8 Type = (uint8)Property->GetType();
-                    Ar << Name << Type;
-                    WriteSized(Ar, [&] { Property->Serialize(Ar, Property->GetValuePtr<void>(Data)); });
-                    ++Count;
-                }
-                const int64 End = Ar.Tell();
-                Ar.Seek(CountPosition);
-                Ar << Count;
-                Ar.Seek(End);
+                    return Count;
+                });
                 return;
             }
 
@@ -232,7 +214,7 @@ namespace Lumina
                 else if (Property != nullptr)
                 {
                     LOG_WARN("Save game: '{}.{}' changed type since it was saved, so it keeps its current value.",
-                        Struct->GetName().c_str(), Name.c_str());
+                        *Struct->GetName(), *Name);
                 }
                 Ar.Seek(Start + Size);
             }

@@ -23,7 +23,7 @@ namespace Lumina
 {
     class CMaterialNodeGraph;
 
-    class FMaterialEditorTool : public FAssetEditorTool
+    class EDITOR_API FMaterialEditorTool : public FAssetEditorTool
     {
     public:
 
@@ -67,7 +67,6 @@ namespace Lumina
         void DrawViewport(const FUpdateContext& UpdateContext, ImTextureRef ViewportTexture) override;
         void DrawViewportOverlayElements(const FUpdateContext& UpdateContext, ImTextureRef ViewportTexture, ImVec2 ViewportSize) override;
         bool ShouldGenerateThumbnailOnSave() const override { return true; }
-        void OnAssetLoadFinished() override;
         void OnPostUndoRedo() override;
         void DrawToolMenu(const FUpdateContext& UpdateContext) override;
         void DrawMaterialGraph();
@@ -119,7 +118,9 @@ namespace Lumina
         void DrawHelpMenu() override;
         
     private:
-        
+
+        friend struct FMaterialEditorToolTestAccess;
+
         void SetDebugMesh(EDebugMesh Mesh, FStringView Path = "");
         
     private:

@@ -27,6 +27,12 @@ namespace Lumina
 
 		RUNTIME_API void ProcessMessages();
 
+		// Reads the OS events that arrived since ProcessMessages and holds every one for the next call, so only their mouse motion is seen early.
+		RUNTIME_API void PumpLateMessages();
+
+		// The mouse motion PumpLateMessages held, which the next ProcessMessages still delivers.
+		RUNTIME_API FVector2 GetLateMouseDelta() const;
+
 		// Native handle for code that genuinely needs it (Vulkan surface, ImGui GLFW backend).
 		RUNTIME_API GLFWwindow* GetWindow() const;
 
@@ -56,6 +62,9 @@ namespace Lumina
 		RUNTIME_API TVector<SDisplayMode> GetDisplayModes() const;
 
 		RUNTIME_API void SetTitle(const FString& Title);
+
+		// Keeps the current icon when Path is empty or LoadWindowIcon fails.
+		RUNTIME_API void SetIcon(FStringView Path);
 		RUNTIME_API void SetTitleBarHovered(bool bHovered);
 		RUNTIME_API void SetCursorMode(ECursorMode Mode);
 
@@ -90,9 +99,13 @@ namespace Lumina
 		TUniquePtr<FWindowImpl> Impl;
 	};
 
-	namespace Windowing
+	namespace Global
 	{
 		RUNTIME_API extern FWindow* PrimaryWindow;
+	}
+
+	namespace Windowing
+	{
 		// Asserts when there is none. A host that may not have published one uses TryGet instead.
 		RUNTIME_API FWindow* GetPrimaryWindowHandle();
 
@@ -101,6 +114,15 @@ namespace Lumina
 
 		// Null falls back to the primary window. Raw motion only applies while disabled and skips the desktop's pointer acceleration.
 		RUNTIME_API void SetCursorModeForNativeWindow(void* NativeWindow, ECursorMode Mode, bool bRawMotion = false);
+
+		// An OS cursor from the PNG at Path, read through the VFS, clicking at Hotspot from 0,0 at its top left to 1,1 at its bottom right, or null when it cannot be read.
+		RUNTIME_API void* CreateCursorFromImage(FStringView Path, FVector2 Hotspot);
+
+		// One of the desktop's own cursors, or a blank one for Hidden.
+		RUNTIME_API void* CreateSystemCursor(ESystemCursor Shape);
+
+		// Null NativeWindow falls back to the primary window, and a null Cursor brings back the system arrow.
+		RUNTIME_API void SetCursorForNativeWindow(void* NativeWindow, void* Cursor);
 
 		// Authoritative OS-level focus for a native window (GLFWwindow*). Exactly one window is focused at a
 		// time, so this disambiguates the active viewport across separate preview windows under game input.
@@ -113,6 +135,16 @@ namespace Lumina
 			uint8       Buttons[15] = {};
 			const char* Name = nullptr;
 		};
+
+		struct FWindowIcon
+		{
+			TVector<uint8> Pixels;
+			int32          Width = 0;
+			int32          Height = 0;
+		};
+
+		// Decodes a PNG at a virtual or disk path to RGBA8, warning with the path when it cannot be read or decoded.
+		RUNTIME_API bool LoadWindowIcon(FStringView Path, FWindowIcon& Out);
 
 		// False when the slot is empty or holds a device with no standard gamepad mapping.
 		RUNTIME_API bool ReadGamepad(int32 Index, FRawGamepad& Out);

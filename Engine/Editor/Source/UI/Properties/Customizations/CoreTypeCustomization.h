@@ -14,6 +14,7 @@
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "Tools/UI/ImGui/Widgets/TreeListView.h"
 #include "UI/Properties/NamePicker.h"
+#include "UI/Properties/Customizations/AssetPickerFilter.h"
 #include "Tools/UI/ImGui/ImGuiXNumeric.h"
 
 namespace Lumina
@@ -103,18 +104,18 @@ namespace Lumina
             return FString();
         }
 
-        FString Unit = Prop->GetMetadata("Units").c_str();
-        if (Unit.empty())
+        FString Unit = *Prop->GetMetadata("Units");
+        if (Unit.IsEmpty())
         {
             return FString();
         }
 
         FString Format = BaseFormat;
-        Format.append(" ");
+        Format.Append(" ");
         for (char c : Unit)
         {
-            if (c == '%') Format.append("%%");
-            else          Format.push_back(c);
+            if (c == '%') Format.Append("%%");
+            else          Format.AppendChar(c);
         }
         return Format;
     }
@@ -139,11 +140,11 @@ namespace Lumina
             TOptional<ValueType> MinOpt = Prop->GetMetadataNumber<ValueType>("ClampMin");
             TOptional<ValueType> MaxOpt = Prop->GetMetadataNumber<ValueType>("ClampMax");
 
-            const ValueType* Min = MinOpt ? &MinOpt.value() : nullptr;
-            const ValueType* Max = MaxOpt ? &MaxOpt.value() : nullptr;
+            const ValueType* Min = MinOpt ? &MinOpt.GetValue() : nullptr;
+            const ValueType* Max = MaxOpt ? &MaxOpt.GetValue() : nullptr;
 
             const FString UnitFormat = BuildUnitFormat(Prop, DefaultScalarFormat(DT));
-            const char* Format = UnitFormat.empty() ? nullptr : UnitFormat.c_str();
+            const char* Format = UnitFormat.IsEmpty() ? nullptr : *UnitFormat;
 
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
             if (Prop->HasEditorFlag(EPropertyEditorFlags::NoDrag))
@@ -317,6 +318,7 @@ namespace Lumina
 
         TWeakObjectPtr<CObject> Object;
         ImGuiTextFilter SearchFilter;
+        AssetPickerFilter::FAssetsOfClassCache AssetsOfClass;
 
         // Object edits (clear/pick/drop) are one-frame events: emit Started on the change
         // frame, Finished the next, so they form a proper undo transaction.
@@ -342,6 +344,7 @@ namespace Lumina
 
         FSoftObjectPath Path;
         ImGuiTextFilter SearchFilter;
+        AssetPickerFilter::FAssetsOfClassCache AssetsOfClass;
         bool bFinishPending = false;
     };
 
@@ -384,7 +387,7 @@ namespace Lumina
         CStruct* Value = nullptr;
     };
 
-    class FEnumPropertyCustomization : public IPropertyTypeCustomization
+    class EDITOR_API FEnumPropertyCustomization : public IPropertyTypeCustomization
     {
     public:
         
@@ -497,6 +500,7 @@ namespace Lumina
         FString          DisplayValue;
         ImGuiTextFilter  SearchFilter;
         FNamePickerState PickerState;
+        TVector<FString> CachedPickerPaths;
     };
 
     class FVec2PropertyCustomization : public IPropertyTypeCustomization

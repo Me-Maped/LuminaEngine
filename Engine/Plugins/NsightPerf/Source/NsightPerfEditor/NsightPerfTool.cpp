@@ -104,13 +104,44 @@ namespace Lumina
             return ImGuiX::PassSearchFilter(FStringView(Filter),
                 { FStringView(Label.data(), Label.size()), FStringView(Metric.data(), Metric.size()) });
         }
+
+        template <typename TFunc>
+        void ForEachSignal(const nv::perf::hud::Panel& Panel, TFunc&& Func)
+        {
+            for (const auto& pWidget : Panel.widgets)
+            {
+                if (pWidget->type == nv::perf::hud::Widget::Type::ScalarText)
+                {
+                    Func(static_cast<const nv::perf::hud::ScalarText&>(*pWidget).signal);
+                }
+                else if (pWidget->type == nv::perf::hud::Widget::Type::TimePlot)
+                {
+                    const auto& Plot = static_cast<const nv::perf::hud::TimePlot&>(*pWidget);
+                    for (const auto& Signal : Plot.signals)
+                    {
+                        Func(Signal);
+                    }
+                    // Stacked signals are a separate list on the same plot, not a subset of the above.
+                    for (const auto& Signal : Plot.stackedSignals)
+                    {
+                        Func(Signal);
+                    }
+                }
+            }
+        }
     }
+
+    FNsightPerfTool::FNsightPerfTool(IEditorToolContext* Context)
+        : FEditorTool(Context, "Nsight Perf", nullptr)
+    {}
+
+    FNsightPerfTool::~FNsightPerfTool() = default;
 
     void FNsightPerfTool::OnInitialize()
     {
-        State = new FNsightPerfState();
+        State = MakeUnique<FNsightPerfState>();
 
-        if (GCommandLine != nullptr && GCommandLine->Has("nsightexport"))
+        if (Global::GCommandLine != nullptr && Global::GCommandLine->Has("nsightexport"))
         {
             State->bShowMetrics = true;
             State->bAutoExport  = true;
@@ -216,8 +247,7 @@ namespace Lumina
                 State->Sampler.Reset();
             }
         }
-        delete State;
-        State = nullptr;
+        State.Reset();
     }
 
     void FNsightPerfTool::DrawWindow(bool /*bIsFocused*/)
@@ -319,18 +349,7 @@ namespace Lumina
             PanelCount += Config.panels.size();
             for (const auto& Panel : Config.panels)
             {
-                for (const auto& pWidget : Panel.widgets)
-                {
-                    if (pWidget->type == nv::perf::hud::Widget::Type::ScalarText)
-                    {
-                        ++SignalCount;
-                    }
-                    else if (pWidget->type == nv::perf::hud::Widget::Type::TimePlot)
-                    {
-                        const auto& Plot = static_cast<const nv::perf::hud::TimePlot&>(*pWidget);
-                        SignalCount += Plot.signals.size() + Plot.stackedSignals.size();
-                    }
-                }
+                ForEachSignal(Panel, [&SignalCount](const nv::perf::hud::MetricSignal&) { ++SignalCount; });
             }
         }
 
@@ -391,45 +410,26 @@ namespace Lumina
             for (const auto& Panel : Config.panels)
             {
                 const std::string& PanelName = Panel.label.text.empty() ? Panel.name : Panel.label.text;
-
-                for (const auto& pWidget : Panel.widgets)
-                {
-                    if (pWidget->type == nv::perf::hud::Widget::Type::ScalarText)
-                    {
-                        Append(PanelName, static_cast<const nv::perf::hud::ScalarText&>(*pWidget).signal);
-                    }
-                    else if (pWidget->type == nv::perf::hud::Widget::Type::TimePlot)
-                    {
-                        const auto& Plot = static_cast<const nv::perf::hud::TimePlot&>(*pWidget);
-                        for (const auto& Signal : Plot.signals)
-                        {
-                            Append(PanelName, Signal);
-                        }
-                        for (const auto& Signal : Plot.stackedSignals)
-                        {
-                            Append(PanelName, Signal);
-                        }
-                    }
-                }
+                ForEachSignal(Panel, [&](const nv::perf::hud::MetricSignal& Signal) { Append(PanelName, Signal); });
             }
         }
 
         FString Directory = Paths::GetEngineDirectory() + "/Saved/Profiling";
-        Paths::CreateDirectories(FStringView(Directory.c_str(), Directory.size()));
+        Paths::CreateDirectories(Directory.View());
 
         FString Path = Directory + "/NsightPerf.csv";
         const bool bWritten = Filesystem::WriteFile(
-            FStringView(Path.c_str(), Path.size()),
-            TSpan<const uint8>(reinterpret_cast<const uint8*>(Csv.data()), Csv.size()));
+            Path.View(),
+            TSpan<const uint8>(reinterpret_cast<const uint8*>(Csv.data()), static_cast<int32>(Csv.size())));
 
         char Status[512];
         if (bWritten)
         {
-            (void)snprintf(Status, sizeof(Status), LOC("Wrote %zu metrics to %s"), Rows, Path.c_str());
+            (void)snprintf(Status, sizeof(Status), "Wrote %zu metrics to %s", Rows, *Path);
         }
         else
         {
-            (void)snprintf(Status, sizeof(Status), LOC("Could not write %s"), Path.c_str());
+            (void)snprintf(Status, sizeof(Status), "Could not write %s", *Path);
         }
 
         State->ExportStatus = Status;
@@ -451,7 +451,6 @@ namespace Lumina
         constexpr ImGuiTableFlags TableFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg
                                              | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
 
-        // Split out so the two walks cannot drift in how they format or filter their signals.
         auto DrawSignalRow = [this](const nv::perf::hud::MetricSignal& Signal)
         {
             if (!PassesFilter(Signal.label.text, Signal.metric, State->MetricFilter))
@@ -527,26 +526,7 @@ namespace Lumina
                 ImGui::TableSetupColumn(LOC_ID("Min / Avg / Max"), ImGuiTableColumnFlags_WidthStretch, 0.26f);
                 ImGui::TableHeadersRow();
 
-                for (const auto& pWidget : Panel.widgets)
-                {
-                    if (pWidget->type == nv::perf::hud::Widget::Type::ScalarText)
-                    {
-                        DrawSignalRow(static_cast<const nv::perf::hud::ScalarText&>(*pWidget).signal);
-                    }
-                    else if (pWidget->type == nv::perf::hud::Widget::Type::TimePlot)
-                    {
-                        const auto& Plot = static_cast<const nv::perf::hud::TimePlot&>(*pWidget);
-                        for (const auto& Signal : Plot.signals)
-                        {
-                            DrawSignalRow(Signal);
-                        }
-                        // Stacked signals are a separate list on the same plot, not a subset of the above.
-                        for (const auto& Signal : Plot.stackedSignals)
-                        {
-                            DrawSignalRow(Signal);
-                        }
-                    }
-                }
+                ForEachSignal(Panel, DrawSignalRow);
 
                 ImGui::EndTable();
                 ImGui::PopID();

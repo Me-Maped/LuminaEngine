@@ -4,14 +4,11 @@
 #include "Assets/AssetTypes/Material/Material.h"
 #include "Assets/AssetTypes/Material/MaterialInterface.h"
 #include "Assets/AssetTypes/Mesh/StaticMesh/StaticMesh.h"
-#include "Containers/StringFormat.h"
 #include "Core/Object/Package/Package.h"
 #include "Renderer/Vertex.h"
 #include "Tools/PrimitiveManager/PrimitiveManager.h"
 #include "World/Entity/Components/DynamicMeshComponent.h"
 #include "World/World.h"
-
-#include <atomic>
 
 namespace Lumina
 {
@@ -30,24 +27,24 @@ namespace Lumina
         LUMINA_PROFILE_SCOPE();
 
         FDynamicMeshBuildData Data;
-        Data.Positions.resize(VertexCount);
-        Memory::Memcpy(Data.Positions.data(), Positions, sizeof(FVector3) * VertexCount);
+        Data.Positions.SetNum(VertexCount);
+        Memory::Memcpy(Data.Positions.GetData(), Positions, sizeof(FVector3) * VertexCount);
 
         if (Normals != nullptr && NormalFloats == PositionFloats)
         {
-            Data.Normals.resize(VertexCount);
-            Memory::Memcpy(Data.Normals.data(), Normals, sizeof(FVector3) * VertexCount);
+            Data.Normals.SetNum(VertexCount);
+            Memory::Memcpy(Data.Normals.GetData(), Normals, sizeof(FVector3) * VertexCount);
         }
 
         if (UVs != nullptr && UVFloats == VertexCount * 2)
         {
-            Data.UVs.resize(VertexCount);
-            Memory::Memcpy(Data.UVs.data(), UVs, sizeof(FVector2) * VertexCount);
+            Data.UVs.SetNum(VertexCount);
+            Memory::Memcpy(Data.UVs.GetData(), UVs, sizeof(FVector2) * VertexCount);
         }
 
         if (Colors != nullptr && ColorFloats == VertexCount * 4)
         {
-            Data.Colors.resize(VertexCount);
+            Data.Colors.SetNum(VertexCount);
             for (int32 Index = 0; Index < VertexCount; ++Index)
             {
                 const float* Color = Colors + Index * 4;
@@ -55,7 +52,8 @@ namespace Lumina
             }
         }
 
-        Data.Indices.assign(Indices, Indices + IndexCount);
+        Data.Indices.Reset();
+        Data.Indices.Append(Indices, Indices + IndexCount);
 
         // Built once and drawn many times, so the slower, tighter meshlet build pays for itself.
         FMeshBuildOptions Options;
@@ -65,11 +63,10 @@ namespace Lumina
 
         TUniquePtr<FMeshResource> Resource = BuildMeshResource(Data, Options);
 
-        static std::atomic<uint32> Serial = 0;
-        CStaticMesh* Mesh = NewObject<CStaticMesh>(CPackage::GetTransientPackage(), FName(Format("ScriptMesh_{}", Serial.fetch_add(1))));
+        CStaticMesh* Mesh = NewObject<CStaticMesh>(CPackage::GetTransientPackage());
 
         // An empty slot never reports ready, which would keep the mesh from ever drawing.
-        Mesh->Materials.resize(1);
+        Mesh->Materials.SetNum(1);
         Mesh->Materials[0] = Material != nullptr ? Material : static_cast<CMaterialInterface*>(CMaterial::GetDefaultMaterial());
 
         Mesh->SetMeshResourceBatched(Move(Resource));

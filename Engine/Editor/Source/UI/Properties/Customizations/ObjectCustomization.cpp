@@ -43,7 +43,7 @@ namespace Lumina
 
             TStrongObjectPtr<CObject> HardObject = Object.Lock();
 
-            const char* Label = HardObject.IsValid() ? Object.Get()->GetName().c_str() : LOC("<None>");
+            const char* Label = HardObject.IsValid() ? *Object.Get()->GetName() : "<None>";
             ImGui::BeginDisabled(Object == nullptr);
 
             TOptional<ImTextureRef> ButtonTexture;
@@ -55,12 +55,12 @@ namespace Lumina
                 }
             }
 
-            if (!ButtonTexture.has_value())
+            if (!ButtonTexture.IsSet())
             {
                 ButtonTexture = ImGuiX::ToImTextureRef(Paths::GetEngineResourceDirectory() + "/Textures/File.png");
             }
             
-            ImGui::ImageButton(Label, ButtonTexture.value(), ImVec2(64, 64));
+            ImGui::ImageButton(Label, ButtonTexture.GetValue(), ImVec2(64, 64));
             ImGui::EndDisabled();
 
             // Any dragged asset whose class is-a the property's declared class binds to it.
@@ -78,7 +78,7 @@ namespace Lumina
             {
                 if (HardObject)
                 {
-                    static_cast<FEditorUI*>(GEditorEngine->GetDevelopmentToolsUI())->OpenAssetEditor(HardObject->GetGUID());
+                    static_cast<FEditorUI*>(Global::GEditorEngine->GetDevelopmentToolsUI())->OpenAssetEditor(HardObject->GetGUID());
                 }
             }
 
@@ -94,7 +94,7 @@ namespace Lumina
             
             const bool bHasObject = Object != nullptr;
 
-            FFixedString PathString = bHasObject ? Object.Get()->GetName().c_str() : LOC("<None>");
+            FFixedString PathString = bHasObject ? *Object.Get()->GetName() : "<None>";
         
             ImGui::PushStyleColor(ImGuiCol_Text, bHasObject ? ImVec4(0.6f, 0.6f, 0.6f, 1.0f) : ImVec4(1.0f, 0.19f, 0.19f, 1.0f));
         
@@ -127,23 +127,15 @@ namespace Lumina
 
                 if (ImGui::BeginChild("##OptList", ComboDropDownSize, false, ImGuiChildFlags_NavFlattened))
                 {
-                    TVector<FAssetData*> Assets = FAssetRegistry::Get().FindByPredicate([&](const FAssetData& Data)
-                    {
-                        // Null when the asset's class is not registered, e.g. it belongs to an unloaded plugin.
-                        CClass* DataClass = FindObject<CClass>(Data.AssetClass);
-                        CClass* PropertyClass = ObjectProperty->GetPropertyClass();
-                        return DataClass != nullptr && DataClass->IsChildOf(PropertyClass);
-                    });
-                    
                     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4, 4));
                     if (ImGui::BeginTable("##AssetTable", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInner))
                     {
                         ImGui::TableSetupColumn("##Thumb", ImGuiTableColumnFlags_WidthFixed, 42.0f);
                         ImGui::TableSetupColumn("##Name",  ImGuiTableColumnFlags_WidthStretch);
                         
-                        for (const FAssetData* Asset : Assets)
+                        for (const FAssetDataPtr& Asset : AssetsOfClass.Get(ObjectProperty->GetPropertyClass()))
                         {
-                            if (!ImGuiX::PassSearchFilter(SearchFilter, { Asset->AssetName.c_str(), Asset->Path.c_str(), Asset->AssetClass.c_str() }))
+                            if (!ImGuiX::PassSearchFilter(SearchFilter, *Asset->AssetName))
                             {
                                 continue;
                             }
@@ -153,7 +145,7 @@ namespace Lumina
                                 continue;
                             }
 
-                            ImGui::PushID(Asset);
+                            ImGui::PushID(Asset.Get());
                             ImGui::TableNextRow(ImGuiTableRowFlags_None, 42.0f);
                             ImGui::TableSetColumnIndex(0);
                             
@@ -174,7 +166,7 @@ namespace Lumina
                             }
                             
                             ImGui::TableSetColumnIndex(1);
-                            ImGui::TextUnformatted(Asset->AssetName.c_str());
+                            ImGui::TextUnformatted(*Asset->AssetName);
 
                             if (bSelected)
                             {
@@ -195,19 +187,9 @@ namespace Lumina
                 ImGui::EndCombo();
             }
         
-            FEditorUI* EditorUI = static_cast<FEditorUI*>(GEditorEngine->GetDevelopmentToolsUI());
-
             // Outside the disabled block, since this is most useful exactly when the slot is empty.
-            const FAssetData* BrowserSelection = EditorUI != nullptr ? EditorUI->GetContentBrowserSelectedAsset() : nullptr;
-            bool bSelectionFits = false;
-            if (BrowserSelection != nullptr)
-            {
-                CClass* SelectedClass = FindObject<CClass>(BrowserSelection->AssetClass);
-                bSelectionFits = SelectedClass != nullptr && SelectedClass->IsChildOf(ObjectProperty->GetPropertyClass());
-            }
-
-            ImGui::BeginDisabled(!bSelectionFits);
-            if (ImGui::Button(LE_ICON_ARROW_LEFT_CIRCLE "##UseSelected", AssetPickerFilter::kButtonSize))
+            const FAssetDataPtr BrowserSelection = AssetPickerFilter::GetSelectedAssetOfClass(ObjectProperty->GetPropertyClass());
+            if (AssetPickerFilter::DrawUseSelectedButton(BrowserSelection != nullptr, "Select a compatible asset in the Content Browser to use it here."))
             {
                 if (CObject* Loaded = LoadObject<CObject>(BrowserSelection->AssetGUID))
                 {
@@ -215,48 +197,28 @@ namespace Lumina
                     bWasChanged = true;
                 }
             }
-            ImGui::EndDisabled();
 
-            ImGuiX::TextTooltip("{}", bSelectionFits
-                ? LOC("Use the asset selected in the Content Browser.")
-                : LOC("Select a compatible asset in the Content Browser to use it here."));
+            ImGui::SameLine();
+
+            const FString PackageName = HardObject && HardObject->GetPackage() ? HardObject->GetPackage()->GetName().ToString() : FString();
+            AssetPickerFilter::DrawBrowseButton(FStringView(*PackageName, PackageName.Len()));
 
             ImGui::SameLine();
 
             ImGui::BeginDisabled(Object == nullptr);
 
-            // Reveal in the Content Browser, the inverse of the button above.
-            if (ImGui::Button(LE_ICON_MAGNIFY "##Browse", AssetPickerFilter::kButtonSize))
-            {
-                if (HardObject && HardObject->GetPackage() && EditorUI != nullptr)
-                {
-                    const FString PackageName = HardObject->GetPackage()->GetName().ToString();
-                    EditorUI->BrowseToAsset(FStringView(PackageName.c_str(), PackageName.size()));
-                }
-            }
-            ImGuiX::TextTooltip("{}", LOC("Show this asset in the Content Browser."));
-
-            ImGui::SameLine();
-
             if (ImGui::Button(LE_ICON_CONTENT_COPY "##Copy", AssetPickerFilter::kButtonSize))
             {
-                ImGui::SetClipboardText(HardObject->GetName().c_str());
+                ImGui::SetClipboardText(*HardObject->GetName());
             }
 
             ImGui::SameLine();
-        
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.25f, 0.25f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f, 0.15f, 0.15f, 1.0f));
 
-            if (ImGui::Button(LE_ICON_CLOSE_CIRCLE "##Clear", AssetPickerFilter::kButtonSize))
+            if (AssetPickerFilter::DrawClearButton("Clear the reference."))
             {
                 Object.Reset();
                 bWasChanged = true;
             }
-        
-            ImGui::PopStyleColor(3);
-
 
             ImGui::EndDisabled();
             ImGui::EndGroup();
