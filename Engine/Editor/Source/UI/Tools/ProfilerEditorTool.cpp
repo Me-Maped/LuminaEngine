@@ -1,4 +1,4 @@
-﻿#include "Localization/Localization.h"
+#include "Localization/Localization.h"
 #include "ProfilerEditorTool.h"
 #include "ProfilerViewCommon.h"
 
@@ -20,23 +20,17 @@ namespace Lumina
 
     void FProfilerEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("GPU",
-            "Timings come from the scene's debug markers, so every pass that names itself for RenderDoc is "
-            "already a bar. Results are one frame behind, and collection is gated on r.GPUProfiler.Enabled.");
-        DrawHelpTextRow("Assets",
-            "Every package load request this session, with what it cost. A row marked with a wait count "
-            "blocked on another thread's load rather than reading the file itself.");
-        DrawHelpTextRow("Freeze",
-            "Holds the displayed frame still on every tab, so a bar can be hovered without it moving.");
-        DrawHelpTextRow("Smoothing",
-            "Eases the displayed values between frames. Drop it to 0 when chasing a single-frame hitch; "
-            "raise it to read steady-state cost without the numbers dancing.");
-        DrawHelpTextRow("Enable",
-            "Span recording is gated on task.Profiler.Enabled (toggle at the top). Queue and worker stats "
-            "are live even with recording off; the timeline needs recording.");
-        DrawHelpTextRow("Timeline",
-            "One band per thread (W workers, X external threads). Stacked lanes are tasks run while that "
-            "thread was waiting, which is how a blocking wait helps the pool.");
+        DrawHelpTextRow(LOC("GPU"), LOC("Timings come from the scene's debug markers, so every pass that names itself for RenderDoc is "
+            "already a bar. Results are one frame behind, and collection is gated on r.GPUProfiler.Enabled."));
+        DrawHelpTextRow(LOC("Assets"), LOC("Every package load request this session, with what it cost. A row marked with a wait count "
+            "blocked on another thread's load rather than reading the file itself."));
+        DrawHelpTextRow(LOC("Freeze"), LOC("Holds the displayed frame still on every tab, so a bar can be hovered without it moving."));
+        DrawHelpTextRow(LOC("Smoothing"), LOC("Eases the displayed values between frames. Drop it to 0 when chasing a single-frame hitch; "
+            "raise it to read steady-state cost without the numbers dancing."));
+        DrawHelpTextRow(LOC("Enable"), LOC("Span recording is gated on task.Profiler.Enabled (toggle at the top). Queue and worker stats "
+            "are live even with recording off; the timeline needs recording."));
+        DrawHelpTextRow(LOC("Timeline"), LOC("One band per thread (W workers, X external threads). Stacked lanes are tasks run while that "
+            "thread was waiting, which is how a blocking wait helps the pool."));
     }
 
     void FProfilerEditorTool::DrawSharedControls()

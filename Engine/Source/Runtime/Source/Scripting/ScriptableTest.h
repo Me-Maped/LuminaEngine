@@ -5,6 +5,7 @@
 #include "Core/Object/ObjectHandleTyped.h"
 #include "Core/Templates/Optional.h"
 #include "Core/Threading/Thread.h"
+#include "Input/InputEvent.h"
 #include "Scripting/EntityScript.h"
 #include "World/Entity/Components/ComponentRef.h"
 #include "World/Entity/Components/NameComponent.h"
@@ -49,6 +50,32 @@ namespace Lumina
         void ResetNativeValue() { NativeValue = 1.5f; }
     };
 
+    // A base with a pure virtual, which C# can still derive from and supply the event for.
+    REFLECT(Scriptable, Abstract)
+    class RUNTIME_API CAbstractShapeTest : public CObject
+    {
+        GENERATED_BODY()
+    public:
+
+        PROPERTY(Hidden)
+        float Scale = 2.0f;
+
+        FUNCTION()
+        virtual float Area() = 0;
+    };
+
+    REFLECT()
+    class RUNTIME_API CSquareShapeTest : public CAbstractShapeTest
+    {
+        GENERATED_BODY()
+    public:
+
+        PROPERTY(Hidden)
+        float Side = 3.0f;
+
+        float Area() override { return Side * Side * Scale; }
+    };
+
     /// Test C++ entity script, ticked by the same driver as a C# one, counting what ran so a test can assert the order.
     REFLECT()
     class RUNTIME_API CEntityScriptTest : public CEntityScript
@@ -60,8 +87,10 @@ namespace Lumina
         void OnReady() override       { ++ReadyCount; Record('R'); if (ReadyHook != nullptr) { ReadyHook(*this, HookContext); } }
         void OnUpdate(float Dt) override      { ++UpdateCount; AccumulatedTime += Dt; }
         void OnFixedUpdate(float Dt) override { ++FixedUpdateCount; }
-        void OnInput(SInputEvent Event) override { Record('I'); }
         void OnDetach() override      { ++DetachCount; if (DetachHook != nullptr) { DetachHook(*this, HookContext); } }
+
+        // Bound to an SInputComponent's OnInput by the tests that need it, so input proves the delegate path.
+        void RecordInput(SInputEvent) { Record('I'); }
 
         // Appends Phase and Label to a test's log, so a test can read back the order callbacks ran in. Unreflected.
         TVector<FString>* EventLog = nullptr;
@@ -427,5 +456,102 @@ namespace Lumina
         static bool bAskForOwnDefault;
 
         CObject* OwnDefault;
+    };
+
+    // Simulation test state, an integer position plus a float that drifts apart if any peer computes it differently.
+    REFLECT(Component, Rollback, HideInComponentList)
+    struct RUNTIME_API SSimTestBody
+    {
+        GENERATED_BODY()
+
+        // The player who drives it, or -1 for a projectile.
+        PROPERTY()
+        int32 Owner = -1;
+
+        PROPERTY()
+        int32 X = 0;
+
+        PROPERTY()
+        float Energy = 0.0f;
+
+        PROPERTY()
+        int32 Hits = 0;
+    };
+
+    REFLECT()
+    struct RUNTIME_API SSimTestInput
+    {
+        GENERATED_BODY()
+
+        PROPERTY()
+        int32 MoveX = 0;
+
+        PROPERTY()
+        bool bFire = false;
+    };
+
+    // Moves each player's body by its input, fires projectiles that fly, draw random hits and despawn, all in SimId order.
+    REFLECT()
+    class RUNTIME_API CSimTestSystem : public CExclusiveSystem
+    {
+        GENERATED_BODY()
+    public:
+
+        bool ShouldCreate() override { return CEntitySystemTest::bAllowCreation; }
+
+        void Configure() override { RequireUpdate(EUpdateStage::Simulation); }
+
+        void OnExclusiveUpdate(const SExclusiveContext& Context) override;
+
+        // Nudges this peer's state at one tick, so a test can prove the checksums catch a desync.
+        int32 CorruptAtTick = -1;
+
+        // Runs a C# port of this system's tick instead, so a test can hold the two languages to the same state.
+        void (*ManagedTick)(const SExclusiveContext*) = nullptr;
+
+        int32 ProjectilesSpawned = 0;
+    };
+
+    // A native RPC, so a test proves a plain call goes through the generated override and still runs the body here.
+    REFLECT()
+    class RUNTIME_API CEntityScriptRpcTest : public CEntityScript
+    {
+        GENERATED_BODY()
+    public:
+
+        FUNCTION(Rpc = Host)
+        virtual void Ping(int32 Value, const FString& Label) { Received.Add(Lumina::Format("base {} {}", Value, Label)); }
+
+        // Any client may call it, as for a door every player can open.
+        FUNCTION(Rpc = Host, NetFlags = AnyCaller)
+        virtual void Knock(int32 Value) { Received.Add(Lumina::Format("knock {}", Value)); }
+
+        TVector<FString> Received;
+    };
+
+    // Inherits Ping and replaces its body, so the generated override has to reach the most derived one.
+    REFLECT()
+    class RUNTIME_API CEntityScriptRpcDerivedTest : public CEntityScriptRpcTest
+    {
+        GENERATED_BODY()
+    public:
+
+        void Ping(int32 Value, const FString& Label) override { Received.Add(Lumina::Format("derived {} {}", Value, Label)); }
+    };
+
+    // A replicated field with a change handler, so a test proves arriving values reach the handler only at the sync point.
+    REFLECT()
+    class RUNTIME_API CEntityScriptSyncTest : public CEntityScript
+    {
+        GENERATED_BODY()
+    public:
+
+        PROPERTY(Sync, Change = OnHealthChanged)
+        int32 Health = 100;
+
+        FUNCTION()
+        void OnHealthChanged(int32 Old, int32 New) { Changes.Add(Lumina::Format("{} {}", Old, New)); }
+
+        TVector<FString> Changes;
     };
 }

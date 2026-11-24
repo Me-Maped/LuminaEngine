@@ -1,5 +1,6 @@
 #include "RuntimePCH.h"
 #include "NetworkSystem.h"
+#include "World/Entity/Components/EntityTags.h"
 #include "World/ECS/Registry.h"
 
 #include "World/Entity/Systems/SystemContext.h"
@@ -37,7 +38,12 @@
 #include "Log/Log.h"
 #include "Core/CommandLine/CommandLine.h"
 #include "Scripting/EntityScript.h"
-#include "Scripting/DotNet/NetScriptBridge.h"
+#include "Scripting/ScriptNet.h"
+#include "Net/NetMessages.h"
+#include "LuminaNetworkRuntime.h"
+#include "World/Entity/Systems/ScriptSyncSystem.h"
+#include "Networking/NetworkEvents.h"
+#include "Net/NetSimulation.h"
 #include "Core/Object/ScriptClass.h"
 #include "World/Entity/Systems/LifetimeSystem.h"
 
@@ -64,6 +70,31 @@ namespace Lumina
             return "Unknown";
         }
 
+        void InheritNetworking(ECS::FRegistry& Registry, ECS::FEntity Parent, TVector<ECS::FEntity>* OutAdded)
+        {
+            Registry.GetHierarchy().ForEachChild(Parent, [&](ECS::FEntity Child)
+            {
+                if (!Registry.HasAll<SNetworkComponent>(Child))
+                {
+                    // Copied out first, since adding to the same pool can move the parent's component.
+                    SNetworkComponent Inherited = Registry.Get<ECS::Read<SNetworkComponent>>(Parent);
+                    Inherited.NetGUID       = SNetGUID{};
+                    Inherited.LocalRole     = ENetRole::None;
+                    Inherited.RemoteRole    = ENetRole::None;
+                    Inherited.PredictedBy   = 0;
+                    Inherited.PredictionKey = 0;
+                    Inherited.bInherited    = true;
+                    Inherited.bProxyPhysicsConfigured = false;
+                    Registry.Emplace<SNetworkComponent>(Child, Inherited);
+                    if (OutAdded != nullptr)
+                    {
+                        OutAdded->Add(Child);
+                    }
+                }
+                InheritNetworking(Registry, Child, OutAdded);
+            });
+        }
+
         // Sorted by entity id, which deserialization recreates identically, so references match with no spawn.
         void AdoptStableNetworkEntities(ECS::FRegistry& Registry, FNetWorldState& State, bool bAuthority)
         {
@@ -71,6 +102,12 @@ namespace Lumina
             for (ECS::FEntity Entity : Registry.View<ECS::Read<SNetworkComponent>>())
             {
                 Networked.Add(Entity);
+            }
+
+            // Both peers load the same map, so both inherit into the same children and number them alike.
+            for (int32 Index = 0, Authored = Networked.Num(); Index < Authored; ++Index)
+            {
+                InheritNetworking(Registry, Networked[Index], &Networked);
             }
 
             Algo::Sort(Networked, [](ECS::FEntity A, ECS::FEntity B)
@@ -100,11 +137,24 @@ namespace Lumina
             LOG_DISPLAY("[Net] Adopted {} stable networked entities ({})", Networked.Num(), bAuthority ? "authority" : "proxy");
         }
 
-        // A client is AutonomousProxy for what it owns and SimulatedProxy for the rest, every tick.
+        template<typename TTag>
+        void SyncTag(ECS::FRegistry& Registry, ECS::FEntity Entity, bool bWanted)
+        {
+            const bool bHas = Registry.HasAny<TTag>(Entity);
+            if (bWanted && !bHas)
+            {
+                Registry.Emplace<TTag>(Entity);
+            }
+            else if (!bWanted && bHas)
+            {
+                Registry.Remove<TTag>(Entity);
+            }
+        }
+
         void RefreshNetRoles(ECS::FRegistry& Registry, const FNetWorldState& State, bool bServer)
         {
             LUMINA_PROFILE_SCOPE();
-            Registry.View<ECS::Write<SNetworkComponent>>().ForEach([&](ECS::TMut<SNetworkComponent> NetMut)
+            Registry.View<ECS::Write<SNetworkComponent>>().ForEach([&](ECS::FEntity Entity, ECS::TMut<SNetworkComponent> NetMut)
             {
                 const SNetworkComponent& Net = NetMut.Get();
                 if (bServer)
@@ -118,6 +168,10 @@ namespace Lumina
                     NetMut.SetIfChanged(&SNetworkComponent::LocalRole, bOwnedHere ? ENetRole::AutonomousProxy : ENetRole::SimulatedProxy);
                     NetMut.SetIfChanged(&SNetworkComponent::RemoteRole, ENetRole::Authority);
                 }
+
+                const bool bMirrored = !bServer && Net.LocalRole == ENetRole::SimulatedProxy;
+                SyncTag<SNetProxyTag>(Registry, Entity, bMirrored);
+                SyncTag<SNetDrivenTransformTag>(Registry, Entity, bMirrored && Net.bReplicatesMovement);
             });
         }
 
@@ -166,14 +220,31 @@ namespace Lumina
                 const ECS::FEntity Entity = State.GuidTable.Find(SNetGUID{ Guid });
                 if (Entity != ECS::NullEntity && Registry.IsValid(Entity))
                 {
-                    if (SNetworkComponent* Net = Registry.TryGet<ECS::Write<SNetworkComponent>>(Entity))
+                    SNetworkComponent* Net = Registry.TryGet<ECS::Write<SNetworkComponent>>(Entity);
+                    if (Net != nullptr && Net->OwningConnectionId != Owner)
                     {
-                        Net->OwningConnectionId = Owner;
+                        SNetOwnershipChangedEvent Changed;
+                        Changed.Entity             = Entity;
+                        Changed.PreviousOwner      = Net->OwningConnectionId;
+                        Changed.OwningConnectionId = Owner;
+                        Net->OwningConnectionId    = Owner;
+                        ECS::SendEventIfRead(State.Events, Changed);
                     }
                 }
             }
         }
 
+        // Writes the components and script fields the last collect left in the replication scratch.
+        void WritePropertyUpdate(ECS::FRegistry& Registry, FNetWorldState& State, ECS::FEntity Entity, uint32 Guid, TVector<uint8>& OutMsg)
+        {
+            FNetArchive Writer(OutMsg);
+            Net::BindWriters(Writer, State);
+            uint8 Type = static_cast<uint8>(ENetMessage::PropertyUpdate);
+            Writer << Type;
+            Net::WriteNetGuid(Writer, Guid);
+            Net::WriteEntityComponents(Writer, Registry, Entity, &State.ReplicationScratch.Comps);
+            Net::WriteEntityScripts(Writer, State.ReplicationScratch.Scripts);
+        }
 
         // Seeds DiffState and appends a full PropertyUpdate to OutMsg, each only when given.
         void CollectBaseline(ECS::FRegistry& Registry, FNetWorldState& State, ECS::FEntity Entity, uint32 Guid,
@@ -183,18 +254,28 @@ namespace Lumina
             TVector<Net::FScriptRepOut>&    Scripts = State.ReplicationScratch.Scripts;
             Net::CollectComponentFieldsInto(Registry, Entity, State, /*bBaseline*/true, DiffState, Comps);
             Net::CollectScriptFieldsInto(Registry, Entity, State, /*bBaseline*/true, DiffState, Scripts);
-            if (OutMsg == nullptr)
+            if (OutMsg != nullptr)
             {
-                return;
+                WritePropertyUpdate(Registry, State, Entity, Guid, *OutMsg);
             }
+        }
 
-            FNetArchive Writer(*OutMsg);
-            Net::BindWriters(Writer, State);
-            uint8 Type = static_cast<uint8>(ENetMessage::PropertyUpdate);
-            Writer << Type;
-            Net::WriteNetGuid(Writer, Guid);
-            Net::WriteEntityComponents(Writer, Registry, Entity, &Comps);
-            Net::WriteEntityScripts(Writer, Scripts);
+        void WritePropertyResync(ECS::FRegistry& Registry, FNetWorldState& State, ECS::FEntity Entity, uint32 Guid, TVector<uint8>& OutMsg)
+        {
+            // No diff state, so the shared baseline every other client's deltas come from stays where it was.
+            CollectBaseline(Registry, State, Entity, Guid, nullptr, nullptr);
+            TVector<Net::FComponentRepOut>& Comps = State.ReplicationScratch.Comps;
+            if (const FComponentRepState* Diff = Registry.TryGet<ECS::Read<FComponentRepState>>(Entity))
+            {
+                for (uint32 WireIndex : Diff->RemovedWireIndices)
+                {
+                    Net::FComponentRepOut& Removed = Comps.EmplaceGetRef();
+                    Removed.WireIndex = WireIndex;
+                    Removed.bRemoved  = true;
+                    Removed.Block.Reset();
+                }
+            }
+            WritePropertyUpdate(Registry, State, Entity, Guid, OutMsg);
         }
 
         // Carries the baseline so later updates send only changes, and is recipient-independent.
@@ -257,12 +338,30 @@ namespace Lumina
         void MaintainDynamicLifetime(ECS::FRegistry& Registry, FNetWorldState& State)
         {
             LUMINA_PROFILE_SCOPE();
+            TVector<ECS::FEntity> Minted;
             for (auto [Entity, Net] : Registry.View<ECS::Write<SNetworkComponent>>().Each())
             {
                 if (Net.Get().bNetLoadOnClient && Net.Get().NetGUID.Value == 0)
                 {
                     Net->NetGUID = State.GuidTable.AllocateDynamic();
                     State.GuidTable.Register(Net.Get().NetGUID, Entity);
+                    Minted.Add(Entity);
+                }
+            }
+
+            // A spawned prefab's children get their ids in the same tick as its root, so they spawn together.
+            TVector<ECS::FEntity> Inherited;
+            for (ECS::FEntity Entity : Minted)
+            {
+                InheritNetworking(Registry, Entity, &Inherited);
+            }
+            for (ECS::FEntity Entity : Inherited)
+            {
+                SNetworkComponent& Net = Registry.Get<ECS::Write<SNetworkComponent>>(Entity);
+                if (Net.bNetLoadOnClient)
+                {
+                    Net.NetGUID = State.GuidTable.AllocateDynamic();
+                    State.GuidTable.Register(Net.NetGUID, Entity);
                 }
             }
         }
@@ -292,27 +391,11 @@ namespace Lumina
             }
         }
 
-        // Sends the field-granular diff as one reliable broadcast, then clears the tag.
+        // Diffs each dirty entity once for every client, then clears the tag. Each client's copy goes out in its property packets.
         void ReplicateDirtyProperties(ECS::FRegistry& Registry, FNetWorldState& State, double NowTime)
         {
             LUMINA_PROFILE_SCOPE();
-            const CNetworkSettings* Settings = GetDefault<CNetworkSettings>();
-            const int32 BudgetBytes = Settings ? Settings->MaxReliablePropertyBytesPerTick : CNetworkSettings::kDefaultMaxReliablePropertyBytesPerTick;
-            const int32 PauseBytes  = Settings ? Settings->ReliableBacklogPauseBytes : CNetworkSettings::kDefaultReliableBacklogPauseBytes;
-
-            // Every dirty entity stays flagged, so nothing is lost when a saturated link pauses updates.
-            if (PauseBytes > 0 && State.Transport != nullptr)
-            {
-                uint32 MaxBacklog = 0;
-                for (uint32 ConnId : State.ConnectedClientIds)
-                {
-                    MaxBacklog = Math::Max(MaxBacklog, State.Transport->GetReliableBacklogBytes(FConnectionHandle{ ConnId }));
-                }
-                if (MaxBacklog >= static_cast<uint32>(PauseBytes))
-                {
-                    return;
-                }
-            }
+            const int32 BudgetBytes = GetDefault<CNetworkSettings>()->MaxPropertyBytesPerTick;
 
             // Clearing the flag from entities that cannot replicate stops them re-evaluating every tick.
             struct FDirtyEntry { ECS::FEntity Entity; double LastTime; uint32 Guid; };
@@ -367,13 +450,7 @@ namespace Lumina
 
                 // Written once and copied only to clients that hold the entity, which happens after relevancy runs.
                 Buffer.Reset();
-                FNetArchive Writer(Buffer);
-                Net::BindWriters(Writer, State);
-                uint8 Type = static_cast<uint8>(ENetMessage::PropertyUpdate);
-                Writer << Type;
-                Net::WriteNetGuid(Writer, Net.NetGUID.Value);
-                Net::WriteEntityComponents(Writer, Registry, Entity, &Comps);
-                Net::WriteEntityScripts(Writer, Scripts);
+                WritePropertyUpdate(Registry, State, Entity, Net.NetGUID.Value, Buffer);
                 const int32 Before = State.PendingPropertyBytes.Num();
                 Net::AppendFramedMessage(State.PendingPropertyBytes, Buffer.GetData(), static_cast<SIZE_T>(Buffer.Num()));
                 const uint32 Framed = static_cast<uint32>(State.PendingPropertyBytes.Num() - Before);
@@ -392,6 +469,72 @@ namespace Lumina
             LUMINA_PROFILE_VALUE("Net/DirtyPropBytes", BytesThisTick);
         }
         
+        // On the host's copy of a kept stand-in, so the stand-in goes when the host's copy does.
+        struct FNetStandIn
+        {
+            ECS::FEntity Entity = ECS::NullEntity;
+        };
+
+        uint32 BeginPredictedSpawn(FNetWorldState& State, ECS::FEntity StandIn, bool bKeepStandIn, double Expire)
+        {
+            const uint32 Key = State.NextPredictionKey;
+            State.NextPredictionKey = Key == UINT32_MAX ? 1 : Key + 1;
+            State.PredictedSpawns.Add(Key, FNetWorldState::FPredictedSpawn{ StandIn, Expire, bKeepStandIn });
+            return Key;
+        }
+
+        void ResolvePredictedSpawn(ECS::FRegistry& Registry, FNetWorldState& State, ECS::FEntity Entity)
+        {
+            const SNetworkComponent& Net = Registry.Get<ECS::Read<SNetworkComponent>>(Entity);
+            FNetWorldState::FPredictedSpawn Spawn;
+            if (Net.PredictionKey == 0 || Net.PredictedBy != State.LocalPeerId || !State.PredictedSpawns.RemoveAndCopyValue(Net.PredictionKey, Spawn))
+            {
+                return;
+            }
+
+            SNetPredictedSpawnEvent Resolved;
+            Resolved.StandIn       = Spawn.StandIn;
+            Resolved.Authoritative = Entity;
+            Resolved.Key           = Net.PredictionKey;
+            Resolved.bConfirmed    = true;
+
+            // A kept stand-in already shows this spawn here, even if it has since hit something, so the host's copy stays hidden.
+            if (Spawn.bKeepStandIn)
+            {
+                Registry.Emplace<SDisabledTag>(Entity);
+                if (Registry.IsValid(Spawn.StandIn))
+                {
+                    Registry.Emplace<FNetStandIn>(Entity).Entity = Spawn.StandIn;
+                }
+            }
+            else if (Registry.IsValid(Spawn.StandIn))
+            {
+                ECS::Utils::DestroyEntity(Registry, Spawn.StandIn);
+            }
+            ECS::SendEventIfRead(State.Events, Resolved);
+        }
+
+        void ExpirePredictedSpawns(ECS::FRegistry& Registry, FNetWorldState& State, double Now)
+        {
+            for (auto It = State.PredictedSpawns.begin(); It != State.PredictedSpawns.end();)
+            {
+                if (It->Value.Expire > Now)
+                {
+                    ++It;
+                    continue;
+                }
+                SNetPredictedSpawnEvent Refused;
+                Refused.StandIn = It->Value.StandIn;
+                Refused.Key     = It->Key;
+                if (Registry.IsValid(It->Value.StandIn))
+                {
+                    ECS::Utils::DestroyEntity(Registry, It->Value.StandIn);
+                }
+                ECS::SendEventIfRead(State.Events, Refused);
+                It = State.PredictedSpawns.Remove(It);
+            }
+        }
+
         // Client, create + link a server-spawned entity, then apply its components.
         void ApplySpawnEntity(ECS::FRegistry& Registry, FNetWorldState& State, uint32 SenderConn, const uint8* Data, SIZE_T Size)
         {
@@ -457,10 +600,18 @@ namespace Lumina
             Registry.EmplaceOrReplace<FNeedsTransformUpdate>(Entity);
             // Now that this entity's NetGUID is registered, reparent any children that were waiting on it.
             Net::DrainPendingAttach(Registry, State, Guid, Entity);
+
+            SNetEntitySpawnedEvent Spawned;
+            Spawned.Entity             = Entity;
+            Spawned.NetGUID            = Guid;
+            Spawned.OwningConnectionId = Owner;
+            ECS::SendEventIfRead(State.Events, Spawned);
+
+            ResolvePredictedSpawn(Registry, State, Entity);
         }
 
-        // Client, apply a reliable property delta to an existing entity.
-        void ApplyPropertyUpdate(ECS::FRegistry& Registry, FNetWorldState& State, uint32 SenderConn, const uint8* Data, SIZE_T Size)
+        // False when the entity has not spawned here yet or a reference's export has not arrived, so the host should send it again.
+        bool ApplyPropertyUpdate(ECS::FRegistry& Registry, FNetWorldState& State, uint32 SenderConn, const uint8* Data, SIZE_T Size)
         {
             LUMINA_PROFILE_SCOPE();
             FNetArchive Reader(Data, Size);
@@ -469,21 +620,56 @@ namespace Lumina
             const uint32 Guid = Net::ReadNetGuid(Reader);
             if (Reader.HasError())
             {
-                return;
+                return true;
             }
             const ECS::FEntity Entity = State.GuidTable.Find(SNetGUID{ Guid });
-            if (Entity != ECS::NullEntity && Registry.IsValid(Entity))
+            if (Entity == ECS::NullEntity)
             {
-                Net::BindReaders(Reader, State, SenderConn);
-                Net::ReadEntityComponents(Reader, Registry, State, Entity);
-                if (!Reader.HasError() && Registry.IsValid(Entity))
+                return false;
+            }
+            if (!Registry.IsValid(Entity))
+            {
+                return true;
+            }
+
+            Net::BindReaders(Reader, State, SenderConn);
+            Net::ReadEntityComponents(Reader, Registry, State, Entity);
+            if (!Reader.HasError() && Registry.IsValid(Entity))
+            {
+                Net::ReadEntityScripts(Reader, Registry, Entity);
+            }
+            if (Registry.IsValid(Entity))
+            {
+                Registry.EmplaceOrReplace<FNeedsTransformUpdate>(Entity);
+
+                SNetReplicatedEvent Replicated;
+                Replicated.Entity = Entity;
+                ECS::SendEventIfRead(State.Events, Replicated);
+            }
+            return !Reader.bUnresolvedReference;
+        }
+
+        void ApplyPropertyPacket(ECS::FRegistry& Registry, FNetWorldState& State, uint32 SenderConn, const uint8* Data, SIZE_T Size)
+        {
+            uint32 Seq = 0;
+            const SIZE_T Start = NetProperties::ReadPacketHeader(Data, Size, Seq);
+            if (Start == 0 || Seq < State.PropertyAcks.Floor)
+            {
+                return;
+            }
+
+            // Left unacknowledged when anything in it could not land, so the host sends those entities' current state again.
+            bool bLanded = true;
+            Net::ForEachFramedMessage(Data + Start, Size - Start, [&](const uint8* Msg, SIZE_T MsgSize)
+            {
+                if (MsgSize > 0 && static_cast<ENetMessage>(Msg[0]) == ENetMessage::PropertyUpdate)
                 {
-                    Net::ReadEntityScripts(Reader, Registry, Entity);
+                    bLanded &= ApplyPropertyUpdate(Registry, State, SenderConn, Msg, MsgSize);
                 }
-                if (Registry.IsValid(Entity))
-                {
-                    Registry.EmplaceOrReplace<FNeedsTransformUpdate>(Entity);
-                }
+            });
+            if (bLanded)
+            {
+                NetProperties::NoteReceived(State.PropertyAcks, Seq);
             }
         }
 
@@ -502,10 +688,180 @@ namespace Lumina
             State.GuidTable.Unregister(SNetGUID{ Guid });
             if (Entity != ECS::NullEntity)
             {
+                SNetEntityDespawnedEvent Despawned;
+                Despawned.Entity  = Entity;
+                Despawned.NetGUID = Guid;
+                ECS::SendEventIfRead(State.Events, Despawned);
+
+                if (const FNetStandIn* StandIn = Registry.TryGet<ECS::Read<FNetStandIn>>(Entity); StandIn != nullptr && Registry.IsValid(StandIn->Entity))
+                {
+                    ECS::Utils::DestroyEntity(Registry, StandIn->Entity);
+                }
                 ECS::Utils::DestroyEntity(Registry, Entity);
             }
         }
         
+        void MarkReplicatedChanges(ECS::FRegistry& Registry, FNetWorldState& State)
+        {
+            LUMINA_PROFILE_SCOPE();
+            const ECS::FSparseSet* Networked = Registry.FindStorage(static_cast<uint32>(ECS::GetComponentTypeID<SNetworkComponent>()));
+            const uint32 Since = State.ReplicatedChangeTick;
+            State.ReplicatedChangeTick = ECS::FSparseSet::AdvanceChangeTick();
+            if (Networked == nullptr || Networked->GetDenseSize() == 0)
+            {
+                return;
+            }
+
+            const TVector<int32>& TypeIdToIndex = State.ReplTypes.TypeIdToIndex;
+            if (State.ReplicatedWriteEpochs.Num() < TypeIdToIndex.Num())
+            {
+                State.ReplicatedWriteEpochs.SetNum(TypeIdToIndex.Num(), ~0ull);
+            }
+
+            TVector<ECS::FEntity>& Changed = State.ReplicatedChangeScratch;
+            Changed.Reset();
+            for (int32 TypeID = 0; TypeID < TypeIdToIndex.Num(); ++TypeID)
+            {
+                ECS::FSparseSet* Pool = TypeIdToIndex[TypeID] >= 0 ? Registry.FindStorage(static_cast<uint32>(TypeID)) : nullptr;
+                if (Pool == nullptr)
+                {
+                    continue;
+                }
+                // Tracking stamps the whole pool at once, so the first scan of a pool sends everything it holds.
+                if (!Pool->IsTrackingChanges())
+                {
+                    Pool->TrackChanges();
+                }
+                const uint64 Epoch = Pool->GetWriteEpoch();
+                if (State.ReplicatedWriteEpochs[TypeID] == Epoch)
+                {
+                    continue;
+                }
+                State.ReplicatedWriteEpochs[TypeID] = Epoch;
+
+                const ECS::FEntity* Dense = Pool->GetDenseData();
+                const uint32*       Ticks = Pool->GetChangeTickData();
+                for (int32 Index = 0; Index < Pool->GetDenseSize(); ++Index)
+                {
+                    const ECS::FEntity Entity = Dense[Index];
+                    if (!Entity.IsTombstone() && ECS::FSparseSet::IsNewerTick(Ticks[Index], Since)
+                        && Networked->Contains(Entity))
+                    {
+                        Changed.Add(Entity);
+                    }
+                }
+            }
+
+            for (ECS::FEntity Entity : Changed)
+            {
+                if (!Registry.HasAll<FNetDirty>(Entity))
+                {
+                    Registry.Emplace<FNetDirty>(Entity);
+                }
+            }
+        }
+
+        void WriteTearOffMessage(uint32 Guid, TVector<uint8>& OutMsg)
+        {
+            FNetArchive Writer(OutMsg);
+            uint8 Type = static_cast<uint8>(ENetMessage::TearOffEntity);
+            Writer << Type;
+            Net::WriteNetGuid(Writer, Guid);
+        }
+
+        // Leaves Entity a plain local entity, its solver body back to the motion it was authored with if a proxy had frozen it.
+        void StripNetworking(ECS::FRegistry& Registry, CWorld* World, FNetWorldState& State, ECS::FEntity Entity)
+        {
+            const SNetworkComponent& Net = Registry.Get<ECS::Read<SNetworkComponent>>(Entity);
+            Physics::IPhysicsScene* PhysScene = World != nullptr ? World->GetPhysicsScene() : nullptr;
+            const SRigidBodyComponent* Body = Registry.TryGet<ECS::Read<SRigidBodyComponent>>(Entity);
+            if (Net.bProxyPhysicsConfigured && PhysScene != nullptr && Body != nullptr
+                && PhysScene->GetBodyStatus(Entity) == Physics::EPhysicsBodyStatus::Ready)
+            {
+                PhysScene->ChangeBodyMotionType(Entity, Body->BodyType);
+            }
+
+            Registry.Remove<SNetworkComponent, FRepTransform, FComponentRepState, FNetDirty, FScriptSyncState, FNetPredictionClient,
+                            FNetPredictionServer, FNetCharacterDrive, SNetProxyTag, SNetDrivenTransformTag>(Entity);
+            Registry.EmplaceOrReplace<FNeedsTransformUpdate>(Entity);
+
+            SNetEntityTornOffEvent TornOff;
+            TornOff.Entity = Entity;
+            ECS::SendEventIfRead(State.Events, TornOff);
+        }
+
+        void CollectNetworkedHierarchy(ECS::FRegistry& Registry, ECS::FEntity Entity, TVector<ECS::FEntity>& Out)
+        {
+            if (Registry.HasAll<SNetworkComponent>(Entity) && !Out.Contains(Entity))
+            {
+                Out.Add(Entity);
+            }
+            Registry.GetHierarchy().ForEachChild(Entity, [&](ECS::FEntity Child)
+            {
+                CollectNetworkedHierarchy(Registry, Child, Out);
+            });
+        }
+
+        // Ahead of any replication this tick, so nothing more is sent for a torn-off entity and no client despawns its copy.
+        void ProcessTearOffs(CWorld* World, ECS::FRegistry& Registry, FNetWorldState& State)
+        {
+            if (State.PendingTearOffs.IsEmpty())
+            {
+                return;
+            }
+
+            TVector<ECS::FEntity> Torn;
+            for (ECS::FEntity Root : State.PendingTearOffs)
+            {
+                if (Registry.IsValid(Root))
+                {
+                    CollectNetworkedHierarchy(Registry, Root, Torn);
+                }
+            }
+            State.PendingTearOffs.Reset();
+
+            for (ECS::FEntity Entity : Torn)
+            {
+                const uint32 Guid = Registry.Get<ECS::Read<SNetworkComponent>>(Entity).NetGUID.Value;
+                if (Guid != 0)
+                {
+                    TVector<uint8> Msg;
+                    WriteTearOffMessage(Guid, Msg);
+                    for (auto& [Connection, View] : State.ClientViews)
+                    {
+                        if (View.Relevant.Remove(Guid) > 0)
+                        {
+                            Net::AppendFramedMessage(View.PendingReliable, Msg.GetData(), static_cast<SIZE_T>(Msg.Num()));
+                        }
+                    }
+                    State.KnownStableGuids.RemoveSingleSwap(Guid);
+                    if (State.GuidTable.Find(SNetGUID{ Guid }) == Entity)
+                    {
+                        State.GuidTable.Unregister(SNetGUID{ Guid });
+                    }
+                }
+                StripNetworking(Registry, World, State, Entity);
+            }
+        }
+
+        void ApplyTearOff(ECS::FRegistry& Registry, CWorld* World, FNetWorldState& State, const uint8* Data, SIZE_T Size)
+        {
+            FNetArchive Reader(Data, Size);
+            uint8 Type = 0;
+            Reader << Type;
+            const uint32 Guid = Net::ReadNetGuid(Reader);
+            if (Reader.HasError())
+            {
+                return;
+            }
+            const ECS::FEntity Entity = FindLiveEntity(Registry, State, Guid);
+            State.GuidTable.Unregister(SNetGUID{ Guid });
+            if (Entity != ECS::NullEntity && Registry.HasAll<SNetworkComponent>(Entity))
+            {
+                StripNetworking(Registry, World, State, Entity);
+            }
+        }
+
         void ConfigureProxyPhysics(ECS::FRegistry& Registry, CWorld* World)
         {
             Physics::IPhysicsScene* PhysScene = World->GetPhysicsScene();
@@ -1055,12 +1411,45 @@ namespace Lumina
             // Serial, since writing a message mints shared export indices. Each one is identical for every recipient.
             THashMap<uint32, TVector<uint8>> SpawnCache;
             THashMap<uint32, TVector<uint8>> BaselineCache;
+            THashMap<uint32, TVector<uint8>> ResyncCache;
+            const double PropertyNow     = PlatformTime::Seconds();
+            const double PropertyTimeout = GetDefault<CNetworkSettings>()->PropertyAckTimeout;
             for (uint32 ci = 0; ci < NumClients; ++ci)
             {
                 LUMINA_PROFILE_SECTION("Net/ClientOps");
                 RelevantSum += ClientRelevant[ci];
                 RelevantMax  = Math::Max(RelevantMax, ClientRelevant[ci]);
                 TVector<uint8>& Reliable = ClientReliable[ci];
+                const uint32 ConnId = State.ConnectedClientIds[ci];
+                FNetPropertyDelivery& Properties = Views[ci]->Properties;
+                State.Stats.PropertyPacketsLost += NetProperties::Expire(Properties, PropertyNow, PropertyTimeout);
+
+                // A lost packet's entities go again as they are now, written once however many clients lost them.
+                if (Serviced[ci] && !Properties.Resends.IsEmpty())
+                {
+                    Algo::Sort(Properties.Resends);
+                    for (int32 Index = 0; Index < Properties.Resends.Num(); ++Index)
+                    {
+                        const uint32 Guid = Properties.Resends[Index];
+                        const ECS::FEntity Ent = State.GuidTable.Find(SNetGUID{ Guid });
+                        if ((Index > 0 && Properties.Resends[Index - 1] == Guid) || !State.HoldsEntity(ConnId, Guid) || !Registry.IsValid(Ent))
+                        {
+                            continue;
+                        }
+                        TVector<uint8>* CachedPtr = ResyncCache.Find(Guid);
+                        TVector<uint8>& Cached = CachedPtr != nullptr ? *CachedPtr : ResyncCache.Add(Guid);
+                        if (CachedPtr == nullptr)
+                        {
+                            TVector<uint8> Msg;
+                            WritePropertyResync(Registry, State, Ent, Guid, Msg);
+                            Net::AppendFramedMessage(Cached, Msg.GetData(), static_cast<SIZE_T>(Msg.Num()));
+                        }
+                        NetProperties::Queue(Properties, Guid, Cached.GetData(), static_cast<SIZE_T>(Cached.Num()));
+                    }
+                    Properties.Resends.Reset();
+                }
+
+                bool bSpawned = false;
                 for (const FClientOp& Op : ClientOps[ci])
                 {
                     if (Op.Op == EClientOp::Despawn)
@@ -1090,6 +1479,7 @@ namespace Lumina
                         }
                         Net::AppendFramedMessage(Reliable, Cached.GetData(), static_cast<SIZE_T>(Cached.Num()));
                         ++SpawnsSum;
+                        bSpawned = true;
                         continue;
                     }
 
@@ -1106,6 +1496,17 @@ namespace Lumina
                         CollectBaseline(Registry, State, Ent, Op.Guid, &Registry.GetOrEmplace<FComponentRepState>(Ent), &Cached);
                     }
                     Net::AppendFramedMessage(Reliable, Cached.GetData(), static_cast<SIZE_T>(Cached.Num()));
+                }
+
+                // An older property packet still in flight could land after these spawns and undo them, so the client ignores it and gets it again.
+                if (bSpawned)
+                {
+                    TVector<uint8> Fence;
+                    FNetArchive Writer(Fence);
+                    uint8 Type = static_cast<uint8>(ENetMessage::PropertyFence);
+                    Writer << Type;
+                    Writer << Properties.NextSeq;
+                    Net::AppendFramedMessage(Reliable, Fence.GetData(), static_cast<SIZE_T>(Fence.Num()));
                 }
             }
 
@@ -1161,6 +1562,8 @@ namespace Lumina
             PhaseMark(ENetPhase::Exports);
             // Phase B builds every client's payload across workers, since only the transport calls must stay serial.
             TVector<TVector<uint8>> ClientUnreliable; ClientUnreliable.SetNum(NumClients);
+            TVector<TVector<TVector<uint8>>> ClientPropertyPackets; ClientPropertyPackets.SetNum(NumClients);
+            TVector<int32>          ClientPropertyCount; ClientPropertyCount.SetNum(NumClients);
             TVector<uint32>         ClientLargest;    ClientLargest.SetNum(NumClients);
             TVector<uint32>         ClientBytes;      ClientBytes.SetNum(NumClients);
             TVector<uint32>         ClientChunks;     ClientChunks.SetNum(NumClients);
@@ -1175,18 +1578,19 @@ namespace Lumina
                 {
                     AppendOwnership(State, Thread, ConnId, OwnerChanges, bJoiner ? &JoinerTable : nullptr, Pending);
                 }
+                FNetPropertyDelivery& Properties = Views[ci]->Properties;
                 for (const FNetWorldState::FPendingProperty& Property : State.PendingProperties)
                 {
                     if (State.HoldsEntity(ConnId, Property.Guid))
                     {
-                        Pending.Append(State.PendingPropertyBytes.begin() + Property.Offset,
-                            State.PendingPropertyBytes.begin() + Property.Offset + Property.Size);
+                        NetProperties::Queue(Properties, Property.Guid, State.PendingPropertyBytes.GetData() + Property.Offset, Property.Size);
                     }
                 }
                 if (!Serviced[ci])
                 {
                     return;
                 }
+                NetProperties::Pack(Properties, PropertyNow, ClientPropertyPackets[ci], ClientPropertyCount[ci]);
 
                 // Spawns lead, so an update never reaches a client before the entity it changes.
                 TVector<uint8>& Reliable = ClientReliable[ci];
@@ -1223,6 +1627,11 @@ namespace Lumina
                     if (!ClientUnreliable[ci].IsEmpty())
                     {
                         State.Transport->Send(Conn, ClientUnreliable[ci].GetData(), static_cast<SIZE_T>(ClientUnreliable[ci].Num()), 0, ESendMode::UnreliableSequenced);
+                    }
+                    for (int32 Packet = 0; Packet < ClientPropertyCount[ci]; ++Packet)
+                    {
+                        const TVector<uint8>& Bytes = ClientPropertyPackets[ci][Packet];
+                        State.Transport->Send(Conn, Bytes.GetData(), static_cast<SIZE_T>(Bytes.Num()), NetPropertyChannel, ESendMode::UnreliableSequenced);
                     }
                     LargestFrame = Math::Max(LargestFrame, ClientLargest[ci]);
                     TotalBytes  += ClientBytes[ci];
@@ -1474,14 +1883,23 @@ namespace Lumina
                 return;
             }
 
+            // Queued, never run here, so a script's RPC body always runs at the sync point after this system.
+            auto Queue = [&](uint32 From)
+            {
+                if (CWorld* World = Script->GetWorld())
+                {
+                    ScriptNet::QueueRpc(*World, Entity, ScriptIndex, RpcId, From, Move(Payload));
+                }
+            };
+
             if (!bServer)
             {
-                NetScripts::DispatchRpc(Script, RpcId, Caller, Payload.GetData(), PayloadSize);
+                Queue(Caller);
                 return;
             }
 
             ERpcTarget Target = ERpcTarget::Broadcast;
-            if (!NetScripts::FindRpcTarget(Script, RpcId, Target) || Target != static_cast<ERpcTarget>(TargetByte))
+            if (!ScriptNet::FindRpcTarget(Script, RpcId, Target) || Target != static_cast<ERpcTarget>(TargetByte))
             {
                 return;
             }
@@ -1495,7 +1913,7 @@ namespace Lumina
             switch (Target)
             {
             case ERpcTarget::Host:
-                NetScripts::DispatchRpc(Script, RpcId, Sender, Payload.GetData(), PayloadSize);
+                Queue(Sender);
                 break;
             case ERpcTarget::Broadcast:
                 for (uint32 Connection : State.ReadyClientIds)
@@ -1505,7 +1923,7 @@ namespace Lumina
                         Relay(Connection);
                     }
                 }
-                NetScripts::DispatchRpc(Script, RpcId, Sender, Payload.GetData(), PayloadSize);
+                Queue(Sender);
                 break;
             case ERpcTarget::Owner:
             {
@@ -1513,7 +1931,7 @@ namespace Lumina
                 const uint32 Owner = Net != nullptr ? Net->OwningConnectionId : 0u;
                 if (Owner == 0)
                 {
-                    NetScripts::DispatchRpc(Script, RpcId, Sender, Payload.GetData(), PayloadSize);
+                    Queue(Sender);
                 }
                 else if (Owner != Sender)
                 {
@@ -1533,7 +1951,10 @@ namespace Lumina
                 case ENetMessage::OwnershipUpdate:   return "ownership";
                 case ENetMessage::SpawnEntity:       return "spawn";
                 case ENetMessage::DespawnEntity:     return "despawn";
-                case ENetMessage::PropertyUpdate:    return "property";
+                case ENetMessage::TearOffEntity:     return "tearoff";
+                case ENetMessage::EventMessage:      return "message";
+                case ENetMessage::PropertyUpdate:
+                case ENetMessage::PropertyPacket:    return "property";
                 case ENetMessage::MoveAck:           return "moveack";
                 case ENetMessage::ObjectExport:      return "objects";
                 case ENetMessage::AssetExport:       return "assets";
@@ -1622,6 +2043,17 @@ namespace Lumina
 
         void FlushRpcs(FNetWorldState& State)
         {
+            {
+                TScopeLock Scope(State.MessageLock);
+                for (auto& [Connection, Batch] : State.PendingMessages)
+                {
+                    if (!Batch.IsEmpty())
+                    {
+                        State.Transport->Send(FConnectionHandle{ Connection }, Batch.GetData(), static_cast<SIZE_T>(Batch.Num()), 0, ESendMode::Reliable);
+                        Batch.Reset();
+                    }
+                }
+            }
             for (auto& [Connection, Batch] : State.PendingRpcReliable)
             {
                 if (!Batch.IsEmpty())
@@ -1640,6 +2072,55 @@ namespace Lumina
             }
         }
 
+        void SendSessionEvent(CWorld* World, ENetSessionEventKind Kind, uint32 ConnectionId, ENetLeaveReason Reason)
+        {
+            SNetSessionEvent Event;
+            Event.Kind         = Kind;
+            Event.ConnectionId = ConnectionId;
+            Event.Reason       = Reason;
+            ECS::SendEvent(World->GetEvents(), Event);
+        }
+
+        // Runs the tick after the leave event, so its readers and the scripts it fans out to still see what the player held.
+        void ReleaseDepartedConnections(CWorld* World, ECS::FRegistry& Registry, FNetWorldState& State)
+        {
+            for (const uint32 Connection : State.DepartedConnections)
+            {
+                // A player's own entities leave with them instead of lingering as host-owned leftovers.
+                TVector<ECS::FEntity> Leaving;
+                Registry.View<ECS::Read<SNetworkComponent>>().ForEach([&](ECS::FEntity Entity, const SNetworkComponent& Net)
+                {
+                    if (Net.OwningConnectionId == Connection && Net.bDestroyWithOwner)
+                    {
+                        Leaving.Add(Entity);
+                    }
+                });
+                for (ECS::FEntity Entity : Leaving)
+                {
+                    if (Registry.IsValid(Entity))
+                    {
+                        World->DestroyEntity(Entity);
+                    }
+                }
+
+                // Release anything this connection owned so it doesn't stay stuck as an orphan proxy.
+                Registry.View<ECS::Write<SNetworkComponent>>().ForEach([&](ECS::FEntity Entity, ECS::TMut<SNetworkComponent> NetMut)
+                {
+                    if (NetMut.Get().OwningConnectionId == Connection)
+                    {
+                        NetMut->OwningConnectionId = 0;
+                        State.OwnershipChanged.Add(Entity);
+
+                        SNetOwnershipChangedEvent Changed;
+                        Changed.Entity        = Entity;
+                        Changed.PreviousOwner = Connection;
+                        ECS::SendEventIfRead(State.Events, Changed);
+                    }
+                });
+            }
+            State.DepartedConnections.Reset();
+        }
+
         void LeaveHost(CWorld* World, FNetWorldState& State, ENetLeaveReason Reason)
         {
             if (State.bLeaveDispatched)
@@ -1648,7 +2129,7 @@ namespace Lumina
             }
             State.bLeaveDispatched = true;
             LOG_DISPLAY("[Net][Client] Left the host ({})", static_cast<uint32>(Reason));
-            NetScripts::DispatchSession(World, ENetSessionEvent::LeftHost, 0, Reason);
+            SendSessionEvent(World, ENetSessionEventKind::LeftHost, 0, Reason);
         }
 
         void SeedDirtyBaselines(ECS::FRegistry& Registry, FNetWorldState& State)
@@ -1675,50 +2156,25 @@ namespace Lumina
             }
         }
 
-        // A C++ script's Sync fields have no setter to catch a write, so each is compared once a frame before anything is sent.
-        void PollNativeSyncFields(ECS::FRegistry& Registry, FNetWorldState& State)
+        // CScriptSyncSystem compares Sync fields only where this marks the entity networked, so a standalone script costs it nothing.
+        void TrackScriptSync(ECS::FRegistry& Registry)
         {
-            LUMINA_PROFILE_SCOPE();
-            THashMap<const CClass*, bool>& HasSyncFields = State.SyncFieldClassCache;
-            TVector<FProperty*>&           Fields        = State.SyncFieldScratch;
-            TVector<ECS::FEntity>&         Entities      = State.SyncEntityScratch;
-
-            // PollSync runs script callbacks that may add components, so the walk runs over a snapshot.
-            Entities.Reset();
-            Registry.View<ECS::Read<SEntityScriptComponent>, ECS::Read<SNetworkComponent>>().ForEachEntity([&](ECS::FEntity Entity) { Entities.Add(Entity); });
-            for (ECS::FEntity Entity : Entities)
+            TVector<ECS::FEntity> Untracked;
+            Registry.View<ECS::Read<SEntityScriptComponent>, ECS::Read<SNetworkComponent>>(ECS::TExclude<FScriptSyncState>{}).ForEachEntity([&](ECS::FEntity Entity) { Untracked.Add(Entity); });
+            for (ECS::FEntity Entity : Untracked)
             {
-                const SEntityScriptComponent* ScriptComponent = Registry.TryGet<ECS::Read<SEntityScriptComponent>>(Entity);
-                if (ScriptComponent == nullptr)
-                {
-                    continue;
-                }
-                for (const TStrongObjectPtr<CEntityScript>& Held : ScriptComponent->Scripts)
-                {
-                    CEntityScript* Script = Held.Get();
-                    if (Script == nullptr || !Script->IsReady() || ToScriptClass(Script->GetClass()) != nullptr)
-                    {
-                        continue;
-                    }
-                    auto Found = HasSyncFields.Find(Script->GetClass());
-                    if (Found == nullptr)
-                    {
-                        Script->GetClass()->GetNetReplicatedProperties(Fields);
-                        Found = &HasSyncFields.FindOrAdd(Script->GetClass(), !Fields.IsEmpty());
-                    }
-                    if (*Found)
-                    {
-                        Script->PollSync();
-                    }
-                }
+                Registry.Emplace<FScriptSyncState>(Entity);
             }
         }
 
         void SendFrame(CWorld* World, ECS::FRegistry& Registry, FNetWorldState& State, const SSystemContext& Context, bool bServer)
         {
             LUMINA_PROFILE_SCOPE();
+            NetSimulation::Pump(World, State, bServer);
             if (bServer)
             {
+                ProcessTearOffs(World, Registry, State);
+                MarkReplicatedChanges(Registry, State);
                 if (State.ConnectedClients > 0)
                 {
                     State.Stats.PropertyUpdatesSent = 0;
@@ -1773,7 +2229,7 @@ namespace Lumina
                 if (State.bClientConnected && State.bWelcomed && !State.bJoinDispatched)
                 {
                     State.bJoinDispatched = true;
-                    NetScripts::DispatchSession(World, ENetSessionEvent::JoinedHost, 0, ENetLeaveReason::None);
+                    SendSessionEvent(World, ENetSessionEventKind::JoinedHost, 0, ENetLeaveReason::None);
                 }
 
                 if (State.bClientConnected && !State.bClientReadySent)
@@ -1792,6 +2248,12 @@ namespace Lumina
                 {
                     SendOwnedTransforms(Registry, State, Context.GetDeltaTime());
                     NetPrediction::SendCommands(Registry, State);
+
+                    TVector<uint8> Ack;
+                    if (NetProperties::WriteAck(State.PropertyAcks, Ack))
+                    {
+                        State.Transport->Send(State.ServerConnection, Ack.GetData(), static_cast<SIZE_T>(Ack.Num()), NetPropertyChannel, ESendMode::UnreliableSequenced);
+                    }
                 }
             }
 
@@ -1820,11 +2282,8 @@ namespace Lumina
         RequireUpdate(EUpdateStage::FrameEnd);
         // The frame end snapshot leaves out what expired this frame.
         RunsAfter<CLifetimeSystem>();
-    }
-
-    bool CNetworkSystem::HasWork(const SSystemContext& Context)
-    {
-        return GetWorld() != nullptr && GetWorld()->GetNetMode() != ENetMode::Standalone;
+        // Sync fields a script wrote this frame have to be compared before the send reads them.
+        RunsAfter<CScriptSyncSystem>();
     }
 
     void CNetworkSystem::OnExclusiveUpdate(const SExclusiveContext& Context)
@@ -1851,6 +2310,7 @@ namespace Lumina
         {
             State = &Registry.Ctx().Emplace<FNetWorldState>();
             State->Registry = &Registry;
+            State->Events   = &Context.GetEvents();
             LOG_DISPLAY("[Net] World '{}' net mode = {}", *World->GetName(), NetModeToString(NetMode));
         }
         Clock->bNetworked = true;
@@ -1905,7 +2365,7 @@ namespace Lumina
                 {
                     Params.MaxConnections = (uint32)Math::Clamp(MaxClients.GetValue(), 1, 4095);
                 }
-                Params.ChannelCount   = 2;
+                Params.ChannelCount   = NetChannelCount;
 
                 if (State->Transport->StartServer(Params))
                 {
@@ -1935,7 +2395,7 @@ namespace Lumina
                 FConnectParams Params;
                 Params.Address.Host = Host;
                 Params.Address.Port = Port;
-                Params.ChannelCount = 2;
+                Params.ChannelCount = NetChannelCount;
 
                 State->ServerConnection = State->Transport->ConnectToServer(Params);
                 State->ConnectStartTime = PlatformTime::Seconds();
@@ -1954,7 +2414,7 @@ namespace Lumina
 
         if (Context.GetUpdateStage() == EUpdateStage::FrameEnd)
         {
-            PollNativeSyncFields(Registry, *State);
+            TrackScriptSync(Registry);
             const double SendStart = PlatformTime::Seconds();
             SendFrame(World, Registry, *State, Context, bServer);
             const float SendMs = static_cast<float>((PlatformTime::Seconds() - SendStart) * 1000.0);
@@ -1967,6 +2427,11 @@ namespace Lumina
         if (bServer)
         {
             NetPrediction::TickBudgets(Registry, NetPrediction::FixedStepOf(World), Context.GetDeltaTime());
+        }
+
+        if (bServer)
+        {
+            ReleaseDepartedConnections(World, Registry, *State);
         }
 
         // Reuse the events buffer across ticks; Service appends, so clear it first.
@@ -2040,41 +2505,15 @@ namespace Lumina
                     State->InAssets.Remove(Event.Connection.Value);
                     State->InNames.Remove(Event.Connection.Value);
 
-                    // Told before ownership is released, so gameplay can still find what the player had.
                     auto& Ready = State->ReadyClientIds;
                     if (Algo::Find(Ready, Event.Connection.Value) != Ready.end())
                     {
                         Ready.Remove(Event.Connection.Value);
-                        NetScripts::DispatchConnection(World, Event.Connection.Value, false);
+                        SendSessionEvent(World, ENetSessionEventKind::ClientLeft, Event.Connection.Value, ENetLeaveReason::None);
                     }
                     State->ClientViews.Remove(Event.Connection.Value); // drop its per-client relevancy state
-
-                    // A player's own entities leave with them instead of lingering as host-owned leftovers.
-                    TVector<ECS::FEntity> Leaving;
-                    Registry.View<ECS::Read<SNetworkComponent>>().ForEach([&](ECS::FEntity Entity, const SNetworkComponent& Net)
-                    {
-                        if (Net.OwningConnectionId == Event.Connection.Value && Net.bDestroyWithOwner)
-                        {
-                            Leaving.Add(Entity);
-                        }
-                    });
-                    for (ECS::FEntity Entity : Leaving)
-                    {
-                        if (Registry.IsValid(Entity))
-                        {
-                            World->DestroyEntity(Entity);
-                        }
-                    }
-
-                    // Release anything this connection owned so it doesn't stay stuck as an orphan proxy.
-                    Registry.View<ECS::Write<SNetworkComponent>>().ForEach([&](ECS::FEntity Entity, ECS::TMut<SNetworkComponent> NetMut)
-                    {
-                        if (NetMut.Get().OwningConnectionId == Event.Connection.Value)
-                        {
-                            NetMut->OwningConnectionId = 0;
-                            State->OwnershipChanged.Add(Entity);
-                        }
-                    });
+                    NetSimulation::OnConnectionLeft(*State, Event.Connection.Value);
+                    State->DepartedConnections.Add(Event.Connection.Value);
                     LOG_DISPLAY("[Net][Server] Client {} disconnected ({} total)", Event.Connection.Value, State->ConnectedClients);
                 }
                 else
@@ -2098,6 +2537,10 @@ namespace Lumina
                     {
                         return;
                     }
+                    if (NetSimulation::HandleMessage(World, *State, bServer, Event.Connection.Value, static_cast<ENetMessage>(Msg[0]), Msg, MsgSize))
+                    {
+                        return;
+                    }
                     switch (static_cast<ENetMessage>(Msg[0]))
                     {
                     case ENetMessage::TransformSnapshot:
@@ -2116,7 +2559,8 @@ namespace Lumina
                             Reader << PeerId;
                             if (!Reader.HasError())
                             {
-                                State->LocalPeerId = PeerId;
+                                State->LocalPeerId  = PeerId;
+                                State->PropertyAcks = FNetPropertyAcks{};
                                 LOG_DISPLAY("[Net][Client] Assigned Peer ID: {}", PeerId);
                             }
                         }
@@ -2139,10 +2583,48 @@ namespace Lumina
                             ApplyDespawnEntity(Registry, *State, Msg, MsgSize);
                         }
                         break;
+                    case ENetMessage::TearOffEntity:
+                        if (!bServer)
+                        {
+                            ApplyTearOff(Registry, World, *State, Msg, MsgSize);
+                        }
+                        break;
                     case ENetMessage::PropertyUpdate:
                         if (!bServer)
                         {
                             ApplyPropertyUpdate(Registry, *State, Event.Connection.Value, Msg, MsgSize);
+                        }
+                        break;
+                    case ENetMessage::PropertyPacket:
+                        if (!bServer)
+                        {
+                            ApplyPropertyPacket(Registry, *State, Event.Connection.Value, Msg, MsgSize);
+                        }
+                        break;
+                    case ENetMessage::PropertyFence:
+                        if (!bServer)
+                        {
+                            FNetArchive Reader(Msg, MsgSize);
+                            uint8  Type = 0;
+                            uint32 Seq  = 0;
+                            Reader << Type;
+                            Reader << Seq;
+                            if (!Reader.HasError())
+                            {
+                                State->PropertyAcks.Floor = Math::Max(State->PropertyAcks.Floor, Seq);
+                            }
+                        }
+                        break;
+                    case ENetMessage::PropertyAck:
+                        if (bServer)
+                        {
+                            uint32 Latest = 0;
+                            uint32 Bits   = 0;
+                            FNetClientView* View = State->ClientViews.Find(Event.Connection.Value);
+                            if (View != nullptr && NetProperties::ReadAck(Msg, MsgSize, Latest, Bits))
+                            {
+                                State->Stats.PropertyPacketsLost += NetProperties::ApplyAck(View->Properties, Latest, Bits);
+                            }
                         }
                         break;
                     case ENetMessage::ClientTransform:
@@ -2282,7 +2764,7 @@ namespace Lumina
                             if (Algo::Find(Ready, Event.Connection.Value) == Ready.end())
                             {
                                 Ready.Add(Event.Connection.Value);
-                                NetScripts::DispatchConnection(World, Event.Connection.Value, true);
+                                SendSessionEvent(World, ENetSessionEventKind::ClientJoined, Event.Connection.Value, ENetLeaveReason::None);
                             }
                         }
                         break;
@@ -2299,6 +2781,9 @@ namespace Lumina
 
                     case ENetMessage::ScriptRpc:
                         ReceiveScriptRpc(Registry, *State, bServer, Event.Connection.Value, Msg, MsgSize);
+                        break;
+                    case ENetMessage::EventMessage:
+                        NetMessages::Apply(*State, FLuminaNetworkRuntime::Get().GetScriptNetMessages(), bServer ? Event.Connection.Value : 0u, Msg, MsgSize);
                         break;
                     case ENetMessage::MoveCommands:
                         if (Physics::IPhysicsScene* Scene = World->GetPhysicsScene(); bServer && Scene != nullptr)
@@ -2337,6 +2822,11 @@ namespace Lumina
         {
             // Keep proxy physics from fighting replication; each proxy is configured once.
             ConfigureProxyPhysics(Registry, World);
+
+            if (!State->PredictedSpawns.IsEmpty())
+            {
+                ExpirePredictedSpawns(Registry, *State, PlatformTime::Seconds());
+            }
         }
     }
 }

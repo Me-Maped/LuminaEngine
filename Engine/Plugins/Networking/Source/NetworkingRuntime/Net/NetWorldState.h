@@ -9,11 +9,13 @@
 #include "GUID/GUID.h"
 #include "UI/UIDocumentRef.h"
 #include "Networking/INetworkTransport.h"
+#include "World/ECS/EventQueue.h"
 #include "World/Net/NetGUID.h"
 #include "Net/NetReplicationGraph.h"
 #include "Net/NetReplication.h"
 #include "Net/NetPrediction.h"
 #include "Systems/NetworkSystem.h"
+#include "Net/NetPropertyDelivery.h"
 
 namespace Lumina
 {
@@ -41,7 +43,7 @@ namespace Lumina
         OwnershipUpdate   = 4, // server to clients, ownership table
         SpawnEntity       = 5, // server to clients, spawn with components
         DespawnEntity     = 6, // server to clients, despawn
-        PropertyUpdate    = 7, // server to clients, replicated components (reliable)
+        PropertyUpdate    = 7, // server to clients, replicated components and script fields of one entity
         ClientTransform   = 8, // client to server, owned-entity transforms
         Welcome           = 9, // server to client, which level to load
         ClientReady       = 10,// client to server, map loaded, request baseline
@@ -50,10 +52,17 @@ namespace Lumina
         NameExport        = 13,// FName net-index map
         MoveCommands      = 14,// client to host, predicted character input
         MoveAck           = 15,// host to owner, the state a move produced
+        SimStart          = 16,// host to client, a deterministic simulation session and the client's player slot
+        SimInput          = 17,// either way, one player's inputs for consecutive simulation ticks
+        SimChecksum       = 18,// either way, a digest of the simulation state at a tick
+        PropertyPacket    = 19,// host to client, numbered unreliable PropertyUpdates
+        PropertyAck       = 20,// client to host, which property packets arrived
+        PropertyFence     = 21,// host to client, reliably after spawns, the first property packet that may touch them
+        TearOffEntity     = 22,// host to clients, the entity stops being networked and stays as a local copy
+        EventMessage      = 23,// either way, a net message raised as an event where it lands
     };
 
-    // CObject-ref net-index cache. A referenced object is sent as a compact varint index; the index/GUID
-    // map is exported once over a reliable stream and replayed to late joiners. One struct, both directions.
+    // CObject-ref net-index cache, exported once over a reliable stream and replayed to late joiners.
     struct FNetObjectMap
     {
         THashMap<FGuid, uint32>    GuidToIndex;    // outgoing object index
@@ -75,10 +84,7 @@ namespace Lumina
         bool                        bLoggedRefusal = false; // an out-of-range index was reported, incoming refusal or outgoing exhaustion
     };
     
-    // FName net-index cache. FName IDs are an XXHash64 of the string (deterministic across peers), but a peer
-    // can only resolve the text once it has interned it. So the string is exported once over a reliable stream,
-    // keyed by a compact varint index, then every later reference is just that index. Same export-once model as
-    // FNetObjectMap/FNetAssetMap. One struct, both directions.
+    // FName net-index cache, exporting the string once since a peer can only resolve text it has interned.
     struct FNetNameMap
     {
         THashMap<FName, uint32> KeyToIndex;     // outgoing name -> index
@@ -88,8 +94,7 @@ namespace Lumina
         bool                    bLoggedRefusal = false; // an out-of-range index was reported, incoming refusal or outgoing exhaustion
     };
 
-    // Replication-layer instrumentation for the network debug tool. Per-tick fields are refreshed by the
-    // server send path each tick; Peak/OversizedSnapshotDrops are cumulative.
+    // Replication instrumentation for the network debug tool, where per-tick fields refresh each tick and Peak and OversizedSnapshotDrops are cumulative.
     struct FNetReplicationStats
     {
         uint32 MovementFrameBytes      = 0; // size of the LARGEST TransformSnapshot frame this tick (vs cap)
@@ -106,6 +111,7 @@ namespace Lumina
         bool   bKeyframeThisTick       = false;
         uint32 RelevantAvg             = 0; // avg relevant entities per client (interest management)
         uint32 RelevantMax             = 0; // max relevant entities on any one client
+        uint32 PropertyPacketsLost     = 0; // cumulative, property packets a client missed and whose entities went again
     };
 
     // The replicated component types, built with the session so a type a script reload rebinds reaches the next session.
@@ -166,6 +172,7 @@ namespace Lumina
         TVector<uint8>                 FieldBytes;
         TVector<uint32>                FieldOffsets;
         TVector<uint8>                 Mask;
+        TVector<CStruct*>              AppliedTypes;
         TVector<FProperty*>            Fields;
         TVector<uint8>                 Held;
         TVector<uint8>                 Merged;
@@ -187,6 +194,12 @@ namespace Lumina
         // The world's own registry, which entity references need to find an entity's NetGUID.
         ECS::FRegistry*               Registry = nullptr;
 
+        // The world's event queues, null when a test drives replication without a world.
+        ECS::FEventQueues*            Events = nullptr;
+
+        // Server, connections that left last tick, whose entities are released this tick so leave readers still find them.
+        TVector<uint32>               DepartedConnections;
+
         // Client side, link to the server. Invalid until ConnectToServer succeeds.
         FConnectionHandle             ServerConnection;
 
@@ -196,6 +209,9 @@ namespace Lumina
 
         // Server side, clients that sent ClientReady, in join order. Gameplay only ever sees these.
         TVector<uint32>               ReadyClientIds;
+
+        // Host, each client's slot in the deterministic simulation, so a relayed message carries its sender's real slot.
+        THashMap<uint32, uint32>      SimPlayerOfConnection;
 
         // Outgoing script RPCs keyed by destination connection, flushed after the frame's replication.
         THashMap<uint32, TVector<uint8>> PendingRpcReliable;
@@ -221,6 +237,18 @@ namespace Lumina
         // This peer's unique id. ServerPeerId on the server, the assigned handle on a client.
         uint32                        LocalPeerId = ServerPeerId;
 
+        FNetPropertyAcks              PropertyAcks;
+
+        // Client, a local stand-in for a spawn this peer asked the host for, waiting on the host's copy.
+        struct FPredictedSpawn
+        {
+            ECS::FEntity StandIn = ECS::NullEntity;
+            double       Expire = 0.0;
+            bool         bKeepStandIn = true;
+        };
+        THashMap<uint32, FPredictedSpawn> PredictedSpawns;
+        uint32                        NextPredictionKey = 1;
+
         // Server, entities whose owner changed, sent only to clients that hold them and to the owner.
         TVector<ECS::FEntity>         OwnershipChanged;
 
@@ -240,19 +268,26 @@ namespace Lumina
         // Client side, set once the link to the server is established.
         bool                          bClientConnected = false;
 
-        // Server side, seconds since the last full keyframe. Periodically re-arms every client's
-        // FNetClientView::bForceBaseline so a dropped delta self-heals.
+        // Server side, seconds since the last full keyframe, which periodically re-arms bForceBaseline so a dropped delta self-heals.
         float                         TimeSinceKeyframe = 0.0f;
 
         // NetGUID to entity map for this world. Stable ids are adopted once at init.
         FNetGUIDTable                 GuidTable;
 
-        // Dynamic-entity destruction is event-driven (on_destroy<SNetworkComponent> -> GuidTable.Unregister),
-        // so there's no per-tick live-set to maintain -- MaintainDynamicLifetime only assigns GUIDs.
+        // Dynamic-entity destruction is event-driven, so MaintainDynamicLifetime only assigns GUIDs.
 
-        // Server side, adopted stable NetGUIDs still live. Diffed each tick so a level entity destroyed at
-        // runtime is despawned for clients.
+        // Server side, adopted stable NetGUIDs still live, diffed each tick so a destroyed level entity despawns for clients.
         TVector<uint32>               KnownStableGuids;
+
+        // Net messages queued per destination connection, sent with the RPCs. Locked, since a parallel system may send.
+        FMutex                           MessageLock;
+        THashMap<uint32, TVector<uint8>> PendingMessages;
+
+        // The event type each arriving message names, found once by scanning the registered types.
+        THashMap<uint32, ECS::FComponentTypeID> MessageTypes;
+
+        // Server, entities torn off since the last send, whose networking ends before anything replicates this tick.
+        TVector<ECS::FEntity>         PendingTearOffs;
 
         // Server side, stable NetGUIDs destroyed at runtime, replayed to late joiners so they remove copies.
         TVector<uint32>               DestroyedStableGuids;
@@ -275,8 +310,7 @@ namespace Lumina
         // Newest server time received, mirrored into FNetInterpClock for the render clock.
         double                        LatestServerTime   = 0.0;
 
-        // Net-index caches. Outgoing maps this peer mints and exports; incoming maps are kept per sender
-        // connection id since the index space is sender-owned.
+        // Net-index caches, with incoming maps kept per sender connection since the index space is sender-owned.
         FNetObjectMap                    OutObjects;
         FNetAssetMap                     OutAssets;
         FNetNameMap                      OutNames;
@@ -298,9 +332,13 @@ namespace Lumina
         // connId -> record index of the entity that connection owns (its pawn), for O(1) viewpoint lookup.
         THashMap<uint32, uint32>         OwnerToRecord;
         
-        // Per-connection relevancy + send-schedule. Created on connect, erased on disconnect. Never touches
-        // GuidTable (which stays the global entity-lifetime map).
+        // Per-connection relevancy and send schedule, created on connect and erased on disconnect without touching GuidTable.
         THashMap<uint32, FNetClientView> ClientViews;
+
+        // Host, the change tick of the last scan for writes to replicated component fields, and each pool's write epoch then, so an untouched pool is skipped.
+        uint32                           ReplicatedChangeTick = 0;
+        TVector<uint64>                  ReplicatedWriteEpochs;
+        TVector<ECS::FEntity>            ReplicatedChangeScratch;
 
         // Map entities exist on every client, while a spawned one only on clients it is relevant to.
         bool HoldsEntity(uint32 Connection, uint32 Guid) const
@@ -313,16 +351,13 @@ namespace Lumina
             return View != nullptr && View->Relevant.Contains(Guid);
         }
 
-        // Incremented once per ServerReplicateRelevant tick. An FRelevantEntry is "relevant this tick" when
-        // its RelevantTick == this, which replaces a full-map "reset every entry to not-relevant" pass.
+        // An FRelevantEntry is relevant this tick when its RelevantTick matches, which replaces a full-map reset pass.
         uint64                           RelevancyTick = 0;
 
         // Reused buffer for the per-tick transport Service() drain (avoids reallocating it every frame).
         TVector<FNetworkEvent>           ServiceEvents;
 
-        // Client: replicated children whose parent hasn't spawned yet. Key = child entity (integral id, so the
-        // map needs no custom hasher), value = desired parent NetGUID. Drained when that parent spawns
-        // (ApplySpawnEntity), since relevancy spawn order isn't guaranteed.
+        // Client, replicated children keyed by entity whose parent has not spawned yet, since relevancy spawn order is not guaranteed.
         THashMap<uint32, uint32> PendingAttach;
 
         FNetReplicationScratch ReplicationScratch;
@@ -331,10 +366,5 @@ namespace Lumina
         TVector<TVector<FNetGatheredRecord>>      GatheredScratch;
         TVector<TVector<FNetDueRecord>>           DueScratch;
         mutable TVector<TVector<FNetOwnerRecord>> OwnershipPickedScratch;
-
-        // Snapshot scratch and per-class Sync-field cache for PollNativeSyncFields.
-        TVector<FProperty*>           SyncFieldScratch;
-        TVector<ECS::FEntity>         SyncEntityScratch;
-        THashMap<const CClass*, bool> SyncFieldClassCache;
     };
 }

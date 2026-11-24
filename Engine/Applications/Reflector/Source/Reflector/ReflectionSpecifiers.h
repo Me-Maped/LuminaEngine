@@ -19,11 +19,13 @@ namespace Lumina::Reflection
     X(System,               Flag,   Runtime,   "Marks the struct as an ECS system and registers it with the system registry.") \
     X(Event,                Flag,   Runtime,   "Documents the struct as an ECS event. The dispatcher is type-driven, so this emits no registration.") \
     X(BitMask,              Flag,   Runtime,   "Marks an enum as a set of bit flags. CEnum::IsBitmaskEnum() reports it and the editor draws checkboxes.") \
-    X(Abstract,             Flag,   Runtime,   "A base other classes derive from. It is never instantiated, created as a system or subsystem, or listed in a class picker; its subclasses are unaffected. C# spells it with the abstract keyword.") \
+    X(Abstract,             Flag,   Runtime,   "A base other classes derive from. It is never instantiated, created as a system or subsystem, or listed in a class picker; its subclasses are unaffected. C# spells it with the abstract keyword. A C++ class that leaves a pure virtual unimplemented must carry it, or the build stops.") \
     X(ParallelUpdate,       Flag,   Runtime,   "An entity script's promise that its OnUpdate and OnFixedUpdate read and write only its own entity, so the driver runs it in parallel with other such scripts. Inherited by subclasses.") \
     X(HostOnly,             Flag,   Runtime,   "A script, system or world subsystem that runs only on the host, a dedicated server or a standalone game. Inherited, and spelled [Reflect(HostOnly = true)] in C#.") \
     X(ClientOnly,           Flag,   Runtime,   "A script, system or world subsystem that runs only on a client joined to a host. Inherited, and spelled [Reflect(ClientOnly = true)] in C#.") \
+    X(Networked,            Flag,   Runtime,   "A script, system or world subsystem that runs only in a networked session, host or client, never in a standalone game. With HostOnly it runs only on a listen or dedicated server. Inherited, and spelled [Reflect(Networked = true)] in C#.") \
     X(Cosmetic,             Flag,   Runtime,   "A script, system or world subsystem that runs only where something is drawn or played, never on a dedicated server, a bot or a headless process. Inherited, and spelled [Reflect(Cosmetic = true)] in C#.") \
+    X(Rollback,             Flag,   Runtime,   "Marks a component as deterministic simulation state, saved every tick and restored when a late input rewinds the simulation. Spelled [Reflect(Rollback = true)] in C#.") \
     X(ConfigFile,           Value,  Runtime,   "Backs the class with the named config file. The config system loads and saves its properties there.") \
     X(DataModel,            Value,  Runtime,   "The name a UI document's data-model attribute uses for this class. The class name without its C prefix when absent.") \
     X(UIDocument,           Value,  Runtime,   "The .rml a UI script shows when its Document property is empty.")     X(Group,                Value,  Runtime,   "Puts every asset of the class and its subclasses in the named asset group, found and loaded by name through FAssetManager.") \
@@ -78,8 +80,10 @@ namespace Lumina::Reflection
     X(NoReorder,            Flag,   Editor,    "Removes the drag handles from an array property.") \
     X(NoResize,             Flag,   Editor,    "Removes the add and remove buttons from an array property.") \
     X(DefaultCollapsed,     Flag,   Editor,    "Draws a struct or instanced struct property collapsed on first open.") \
-    X(EditCondition,        Value,  Editor,    "Disables the property while the expression is false. Terms are Prop, !Prop, Prop == Value or Prop != Value, joined by && or ||.") \
+    X(EditCondition,        Value,  Editor,    "Disables the property while the expression is false. Terms are Prop or Prop compared with ==, !=, <, <=, > or >= to a value, combined with !, &&, || and parentheses.") \
     X(EditConditionHides,   Flag,   Editor,    "Hides the property instead of disabling it while its EditCondition is false.") \
+    X(EditConditionReason,  Value,  Editor,    "Tooltip shown on the property while its EditCondition disables it, saying how to enable it.") \
+    X(EditValidate,         Value,  Editor,    "Names a FUNCTION on the owning type that takes one value of the property's type and returns why it is not allowed, or an empty FString when it is.") \
     X(RequiresRecook,       Flag,   Editor,    "Editing the property triggers a recook of the owning asset.") \
     X(ScriptReadOnly,       Flag,   Script,    "The generated C# wrapper emits a getter only, whatever the editor flags say.") \
     X(ScriptWritable,       Flag,   Script,    "The generated C# wrapper emits a setter, whatever the editor flags say.") \
@@ -90,8 +94,8 @@ namespace Lumina::Reflection
 #define LUMINA_FUNCTION_SPECIFIERS(X) \
     X(ToolTip,                  Value, Editor, "Hover text for the function. Filled from the declaration's doc comment when not written by hand.") \
     X(Button,                   Either, Editor, "Draws a parameterless function as a button in the object's inspector, labeled with the value when one is given.") \
-    X(Rpc,                      Value, Runtime, "Broadcast, Host or Owner, the C++ spelling of C# [Rpc.*]. The body starts with NET_RPC(...) passing its parameters.") \
-    X(NetFlags,                 Value, Runtime, "Unreliable and OwnerOnly, joined with |, the C++ spelling of C# NetFlags.") \
+    X(Rpc,                      Value, Runtime, "Broadcast, Host or Owner, the C++ spelling of C# [Rpc.*]. The function must be virtual, and calling it routes the call.") \
+    X(NetFlags,                 Value, Runtime, "Unreliable and AnyCaller, joined with |, the C++ spelling of C# NetFlags.") \
     X(Bind,                     Flag,  Runtime, "A command a UI document runs from data-event-*, or a computed {{ value }} when it takes nothing and returns one.") \
     X(SuppressGCTransition,     Flag,  Script, "Skips the GC transition on the generated C# call. Only valid on a short leaf function that never calls back into managed code.") \
     X(NoSuppressGCTransition,   Flag,  Script, "Opts one function back out of a type-wide REFLECT(ScriptFastCalls).") \

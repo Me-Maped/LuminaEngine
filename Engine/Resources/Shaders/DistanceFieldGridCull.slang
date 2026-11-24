@@ -1,0 +1,141 @@
+#pragma once
+#include "Includes/SceneGlobals.slang"
+#include "Includes/DistanceField.slang"
+#include "Includes/DistanceFieldGrid.slang"
+#include "Includes/WaveAtomics.slang"
+
+// Gathers every static caster with a distance field that overlaps the grid, for DistanceFieldGridBin.slang to bin.
+
+static const uint LOCAL_SIZE_X = 64u;
+
+// Mirror of Lumina::FDFGridCullArgs.
+struct FPushConstants
+{
+    // Blocks of 64 slots holding a distance-field caster. Empty walks every slot.
+    GPUSpan<uint>               Blocks;
+    GPUSpan<FInstanceCullEntry> RetainedCullEntries;
+    GPUSpan<FTransform3x4>      RetainedTransforms;
+    GPUSpan<FInstanceStatic>    RetainedStatic;
+    // Casters over many cells, which DistanceFieldGridBin.slang bins with a whole group each.
+    GPUSpan<uint>               LargeObjects;
+    FDFObjectGrid               Grid;
+};
+FPushConstants* Pass() { return GetPassArgs<FPushConstants>(); }
+
+// Inverse of a rotation-scale-translation 3x4, through the adjugate so skew from a parent's scale stays exact.
+FTransform3x4 InverseAffine(FTransform3x4 M)
+{
+    const float3 C0 = float3(M.Row0.x, M.Row1.x, M.Row2.x);
+    const float3 C1 = float3(M.Row0.y, M.Row1.y, M.Row2.y);
+    const float3 C2 = float3(M.Row0.z, M.Row1.z, M.Row2.z);
+    const float3 T  = float3(M.Row0.w, M.Row1.w, M.Row2.w);
+
+    const float3 R0 = cross(C1, C2);
+    const float3 R1 = cross(C2, C0);
+    const float3 R2 = cross(C0, C1);
+    const float  InvDet = 1.0 / dot(C0, R0);
+
+    FTransform3x4 Out;
+    Out.Row0 = float4(R0 * InvDet, -dot(R0, T) * InvDet);
+    Out.Row1 = float4(R1 * InvDet, -dot(R1, T) * InvDet);
+    Out.Row2 = float4(R2 * InvDet, -dot(R2, T) * InvDet);
+    return Out;
+}
+
+[shader("compute")]
+[numthreads(LOCAL_SIZE_X, 1, 1)]
+void ComputeMain(uint3 GroupID : SV_GroupID, uint3 LocalID : SV_GroupThreadID)
+{
+    const uint Group   = GroupID.x + GroupID.y * MAX_DISPATCH_AXIS;
+    const uint Block   = Pass().Blocks.IsEmpty() ? Group : (Pass().Blocks.Contains(Group) ? Pass().Blocks.Get(Group) : 0xFFFFFFFFu);
+    if (Block == 0xFFFFFFFFu)
+    {
+        return;
+    }
+    const uint SlotIdx = Block * LOCAL_SIZE_X + LocalID.x;
+    if (!Pass().RetainedCullEntries.Contains(SlotIdx))
+    {
+        return;
+    }
+
+    const FInstanceCullEntry Cull = Pass().RetainedCullEntries.Get(SlotIdx);
+    if (!Cull.HasFlag(EInstanceFlags::Active) || !Cull.HasFlag(EInstanceFlags::HasGeometry) ||
+        !Cull.HasFlag(EInstanceFlags::CastShadow) || !Cull.HasFlag(EInstanceFlags::HasDistanceField) ||
+        Cull.HasFlag(EInstanceFlags::Skinned))
+    {
+        return;
+    }
+    if (Cull.bCustomLayers && (Pass().RetainedStatic.At(SlotIdx).RenderLayers & Scene().CullData.CameraLayerMask) == 0u)
+    {
+        return;
+    }
+
+    // Reached through the pass block, since a local copy would put its span pointers in a function variable.
+    FDFObjectGrid* Grid = &Pass().Grid;
+    // A degenerate transform leaves a non-finite sphere, whose cell range would turn into a runaway loop.
+    const float4 Sphere = Cull.SphereBounds;
+    if (!all(isfinite(Sphere)) || Sphere.w < Grid.MinRadius)
+    {
+        return;
+    }
+
+    // A caster can only reach receivers whose cells its padded footprint overlaps.
+    const float4 Bounds = Grid.CellBounds(Sphere);
+    if (any(Bounds.zw < 0.0) || any(Bounds.xy >= float2(Grid.Dimension)))
+    {
+        return;
+    }
+
+    FInstanceStatic* Static = Pass().RetainedStatic.At(SlotIdx);
+    const FDistanceFieldVolume Volume = GetDistanceFieldVolume(Static.MeshletHeader);
+    if (!Volume.IsValid() || Volume.MaxDistance <= 0.0 || any(Volume.VolumeSize <= 0.0))
+    {
+        return;
+    }
+
+    const FTransform3x4 LocalToWorld = Pass().RetainedTransforms.Get(SlotIdx);
+    const float3 Scale = float3(length(float3(LocalToWorld.Row0.x, LocalToWorld.Row1.x, LocalToWorld.Row2.x)),
+                                length(float3(LocalToWorld.Row0.y, LocalToWorld.Row1.y, LocalToWorld.Row2.y)),
+                                length(float3(LocalToWorld.Row0.z, LocalToWorld.Row1.z, LocalToWorld.Row2.z)));
+    const float MinScale = min(Scale.x, min(Scale.y, Scale.z));
+    if (!(MinScale > 1e-6))
+    {
+        return;
+    }
+
+    const uint ObjectIndex = WaveInterlockedAdd(Grid.Counters.At(kDFGridObjectCounter), 1u);
+    if (ObjectIndex >= Grid.Objects.Count)
+    {
+        return;
+    }
+
+    uint Flags = Volume.bTwoSided ? kDistanceFieldTwoSided : 0u;
+    const int4 Range = Grid.CellRange(Sphere);
+    if (uint(Range.z - Range.x + 1) * uint(Range.w - Range.y + 1) > kDFGridLargeObjectCells)
+    {
+        Flags |= kDFGridLargeObject;
+        const uint LargeIndex = WaveInterlockedAdd(Grid.Counters.At(kDFGridLargeCounter), 1u);
+        if (LargeIndex < Pass().LargeObjects.Count)
+        {
+            Pass().LargeObjects.Set(LargeIndex, ObjectIndex);
+        }
+    }
+
+    // The bake rounds each axis up to whole voxels of one size, so the volume over its texels gives that size back.
+    uint DimX, DimY, DimZ;
+    Volume.Texture.GetDimensions(DimX, DimY, DimZ);
+    const float3 Voxel = Volume.VolumeSize / float3(max(uint3(DimX, DimY, DimZ), uint3(1u, 1u, 1u)));
+
+    FDFObject Object;
+    Object.WorldToLocal = InverseAffine(LocalToWorld);
+    Object.Sphere       = Sphere;
+    Object.VolumeMin    = Volume.VolumeMin;
+    Object.MaxDistance  = Volume.MaxDistance;
+    Object.VolumeSize   = Volume.VolumeSize;
+    Object.MinScale     = MinScale;
+    Object.Texture      = Volume.Texture;
+    Object.Flags        = Flags;
+    Object.VoxelSize    = max(Voxel.x, max(Voxel.y, Voxel.z));
+    Object._Pad0        = 0u;
+    Grid.Objects.Set(ObjectIndex, Object);
+}

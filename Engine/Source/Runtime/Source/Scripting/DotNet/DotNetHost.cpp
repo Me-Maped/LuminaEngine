@@ -991,6 +991,8 @@ namespace Lumina::DotNet
 
     void GatherScriptUnitsForPackaging(TVector<FPackagedScriptUnit>& Out)
     {
+        DEBUG_ASSERT(Threading::IsMainThread(),
+            "Gathered scripts for packaging off the main thread. The reload swaps the scripts every live world runs, so gather before the packaging worker starts.");
         Out.Reset();
         if (!bInitialized)
         {
@@ -1018,7 +1020,7 @@ namespace Lumina::DotNet
             Out.Add(Move(Packaged));
         }
 
-        // The live generation is the optimized one until this puts a debuggable build back in the editor.
+        // Lifts the force again, so the editor's next reload is optimized unless a debugger is attached.
         if (GManaged.SetScriptCompileOptimization != nullptr)
         {
             GManaged.SetScriptCompileOptimization(0);

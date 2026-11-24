@@ -5,7 +5,10 @@
 #include "RHITexture.h"
 #include "RenderResource.h"
 #include "SwapchainTarget.h"
+#include "HDROutput.h"
+#include "Platform/Display/PlatformDisplay.h"
 #include "Core/Delegates/Delegate.h"
+#include "Containers/FunctionRef.h"
 #include "Memory/SmartPtr.h"
 #include "Containers/HashTable.h"
 #include "Core/Threading/Thread.h"
@@ -48,6 +51,20 @@ namespace Lumina
     // Builds one pipeline from its own copy of the shader code, so it can finish after the shader entries are gone.
     using FPipelineBuild = TMoveOnlyFunction<RHI::FPipelineH()>;
 
+    // One pipeline a frame asked for, named by shader content hashes so a later run can build it again before it is needed.
+    struct FPipelinePrewarmRecord
+    {
+        static constexpr uint32 kMaxWords = 8;
+
+        uint64 Shaders[3] = {};
+        uint64 State      = 0;
+        uint64 Words[kMaxWords] = {};
+        uint32 Ids[kMaxWords]   = {};
+        uint32 Kind  = 0;
+        uint32 Count = 0;
+    };
+    static_assert(sizeof(FPipelinePrewarmRecord) == 136, "Saved as raw bytes, so it must hold no padding.");
+
     // A pipeline depends only on its shaders and raster state, so every scene renderer shares one set and a new world reuses them.
     struct FScenePipelineCache
     {
@@ -65,8 +82,8 @@ namespace Lumina
         // True while a build for Hash is queued or running, so a caller can skip copying the shader code again.
         RUNTIME_API bool IsPending(uint64 Hash);
 
-        // Queues Build on a worker unless one is already queued or done, and returns the pipeline only if it is ready.
-        RUNTIME_API RHI::FPipelineH Request(uint64 Hash, const FShaderH (&Shaders)[3], FPipelineBuild&& Build);
+        // Queues Build on a worker unless one is already queued or done, and returns the pipeline only if it is ready. Prewarm builds wait behind every other.
+        RUNTIME_API RHI::FPipelineH Request(uint64 Hash, const FShaderH (&Shaders)[3], FPipelineBuild&& Build, bool bPrewarm = false);
 
         // Returns the pipeline, building it on this thread unless another thread is already doing so.
         RUNTIME_API RHI::FPipelineH BuildNow(uint64 Hash, const FShaderH (&Shaders)[3], FPipelineBuild&& Build);
@@ -74,6 +91,16 @@ namespace Lumina
         // Retires every pipeline built from a shader that no longer resolves, which a recompile leaves behind.
         RUNTIME_API void PurgeStale();
         void ReleaseAll();
+
+        // Reads the records an earlier run saved, aging each so one whose shaders never load again is dropped.
+        RUNTIME_API void LoadPrewarm(const FString& Path);
+        RUNTIME_API void SavePrewarm();
+
+        // Called on a miss, so the next run builds this pipeline ahead of the frame that needs it.
+        RUNTIME_API void RecordPrewarm(const FPipelinePrewarmRecord& Record);
+
+        // Offers up to Max saved records to Try, which returns true once it has requested one; the rest wait for their shaders to load.
+        RUNTIME_API void PrewarmRecorded(uint32 Max, TFunctionRef<bool(const FPipelinePrewarmRecord&)> Try);
 
     private:
         struct FPendingBuild;
@@ -90,8 +117,21 @@ namespace Lumina
 
         FMutex                                QueueMutex;
         TVector<TSharedPtr<FPendingBuild>>    Queue;
+        TVector<TSharedPtr<FPendingBuild>>    PrewarmQueue;
         uint32                                InFlight = 0;
         std::atomic<uint32>                   BuiltSinceSave{ 0 };
+
+        struct FPrewarmEntry
+        {
+            FPipelinePrewarmRecord Record;
+            uint32                 Age = 0;
+        };
+
+        FMutex                                PrewarmMutex;
+        FString                               PrewarmPath;
+        THashMap<uint64, FPrewarmEntry>       PrewarmRecords;
+        TVector<uint64>                       PrewarmPending;
+        uint32                                PrewarmCursor = 0;
     };
 
     class FRenderManager
@@ -124,6 +164,12 @@ namespace Lumina
 
         // Rebuild the primary swapchain (vsync / present-mode change).
         RUNTIME_API void RecreatePrimarySwapchain();
+
+        // What the primary window presents with, refreshed at the start of every frame.
+        NODISCARD const FHDROutputState& GetHDROutput() const { return HDROutput; }
+
+        // A player's choice from the game settings, used in place of the project's. Zero nits keeps the project's paper white.
+        RUNTIME_API void SetUserHDROutput(EHDROutput Mode, float PaperWhiteNits);
 
         // The whole composited main window, editor UI included, as tightly packed BGRA8 with the top row first.
         struct FWindowCapture
@@ -169,7 +215,15 @@ namespace Lumina
 
         void ApplyPendingResize();
 
-        void RecordWindowCapture(RHI::FCmdListH CL, RHI::FTextureH SwapImage, const FUIntVector2& Extent, uint8 FrameIndex);
+        void RecordWindowCapture(RHI::FCmdListH CL, RHI::FTextureH WindowImage, const FUIntVector2& Extent, uint8 FrameIndex);
+
+        // Polls the monitor now and then, and rebuilds the swapchain when the HDR choice changes.
+        void UpdateHDROutput();
+
+        // Sized to the swapchain on demand, and released once the window presents SDR again.
+        RHI::FTextureH AcquireHDRComposite(const FUIntVector2& Extent);
+        void EncodeHDRComposite(RHI::FCmdListH CL, RHI::FTextureH SwapImage);
+        void ReleaseHDRTargets();
 
         // Runs once the slot's fence has been waited, which is when its copy is complete.
         void ResolveWindowCapture(uint8 FrameIndex);
@@ -206,6 +260,19 @@ namespace Lumina
 
         // New RHI owns presentation: the primary window swapchain.
         RHI::FSwapchainTarget               SwapchainTarget;
+
+        FHDROutputState                     HDROutput;
+        PlatformDisplay::FHDRDisplayInfo    HDRDisplay;
+        double                              NextHDRDisplayQuery = 0.0;
+        bool                                bUserHDROutput      = false;
+        EHDROutput                          UserHDRMode         = EHDROutput::Auto;
+        float                               UserPaperWhiteNits  = 0.0f;
+
+        // The window composited in SDR with the scene's highlight gain in alpha, which the encode turns into HDR10.
+        RHI::FManagedTexture                HDRComposite;
+        // An 8-bit copy of the composite, since a window capture hands out BGRA8 bytes.
+        RHI::FManagedTexture                HDRCaptureScratch;
+        RHI::FPipelineH                     HDREncodePipeline;
 
         FDelegateHandle                     WindowResizedHandle;
 

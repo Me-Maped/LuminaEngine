@@ -41,8 +41,10 @@ namespace Lumina
             FVector4 Fade;
             // .x = letterbox aspect (0 = none), .y = output aspect.
             FVector4 Letterbox;
+            // .x = display headroom in stops above paper white, 0 for an SDR display.
+            FVector4 HDROutput;
         };
-        static_assert(sizeof(FColorGradingConstants) == 192, "FColorGradingConstants layout must match ColorGrading.slang::FColorGradingConstants.");
+        static_assert(sizeof(FColorGradingConstants) == 208, "FColorGradingConstants layout must match ColorGrading.slang::FColorGradingConstants.");
         
         FColorGradingConstants MakeDefaultColorGrading(float Time)
         {
@@ -436,7 +438,7 @@ namespace Lumina
             return;
         }
 
-        const bool bSMAAEnabled = GetViewSMAAMode(*CurrentView) != ESMAAMode::Off;
+        const bool bSMAAEnabled = IsSMAAEnabledFor(*CurrentView);
         const bool bPPMaterials = !ActivePostProcessMaterials.IsEmpty();
         const FSceneImage& Output = (bSMAAEnabled || bPPMaterials) ? GetNamedImage(ENamedImage::LDR) : CurrentView->Output;
 
@@ -467,6 +469,8 @@ namespace Lumina
         FColorGradingConstants Constants = BuildColorGradingConstants(ActivePostProcess, SceneGlobalData.Time);
         Constants.Letterbox.y = (float)Output.GetExtent().x / (float)Math::Max(Output.GetExtent().y, 1u);
         Constants.Features    = ComputeGradingFeatures(Constants);
+        // Captures feed materials and thumbnails, so only the presented view carries the HDR gain.
+        Constants.HDROutput.x = CurrentView == &SceneViews[0] ? Frame.PostProcess.DisplayHeadroomStops : 0.0f;
 
         struct FComposePushConstants
         {
@@ -649,7 +653,7 @@ namespace Lumina
         const bool         bCustomDepth     = Frame.Views.CustomDepthCullView != Constants::kIndexNoneU32
                                            && CustomDepthTex.IsValid() && CustomStencilTex.IsValid();
 
-        const bool bSMAAEnabled = GetViewSMAAMode(*CurrentView) != ESMAAMode::Off;
+        const bool bSMAAEnabled = IsSMAAEnabledFor(*CurrentView);
 
         const FSceneImage* Source = &GetNamedImage(ENamedImage::LDR);
         const FSceneImage* Dest   = &GetNamedImage(ENamedImage::PostProcessScratch);
@@ -963,7 +967,7 @@ namespace Lumina
     }
 
 #if !defined(LE_SHIPPING)
-    // Its own pass, because SceneDebugView runs before terrain and only owns the deferred lane's pixels.
+    // Its own pass, because SceneDebugView only owns the deferred lane's pixels and velocity covers the sky as well.
     void FDefaultSceneRenderer::VelocityDebugPass(RHI::FCmdListH CL)
     {
         if (RenderFrame == nullptr ||
@@ -1025,7 +1029,7 @@ namespace Lumina
     void FDefaultSceneRenderer::SnapshotMotionState(RHI::FCmdListH CL)
     {
         // A temporal upscaler reprojects moving objects too, so it needs their past as much as temporal AA does.
-        const bool bWantsObjectMotion = IsTemporalAAEnabledFor(SceneViews[0]) || IsTemporalUpscalerFor(SceneViews[0]);
+        const bool bWantsObjectMotion = IsSMAAT2xEnabledFor(SceneViews[0]) || IsTemporalUpscalerFor(SceneViews[0]);
         if (!bWantsObjectMotion || !RetainedTransformBuffer || RetainedTransformBuffer.Size == 0)
         {
             if (PrevRetainedTransformBuffer) { DeferFree(PrevRetainedTransformBuffer); PrevRetainedTransformBuffer = {}; }
@@ -1060,22 +1064,6 @@ namespace Lumina
             RHI::CmdMemcpy(CL, { PrevRetainedTransformBuffer.Gpu, Bytes }, { RetainedTransformBuffer.Gpu, Bytes });
             bPrevMotionStateValid = true;
             return;
-        }
-
-        // The grass scatter rewrites its whole block every frame, and the CPU never sees which of its slots it used.
-        if (HasGrassScatter(*RenderFrame))
-        {
-            ScenePrimitives.GetGPUWrittenSlotRanges(MotionGrassRangeScratch);
-            for (const FUIntVector2& Range : MotionGrassRangeScratch)
-            {
-                const uint64 First = Math::Min<uint64>((uint64)Range.x * sizeof(FTransform3x4), Bytes);
-                const uint64 Size  = Math::Min<uint64>((uint64)Range.y * sizeof(FTransform3x4), Bytes - First);
-                if (Size != 0)
-                {
-                    RHI::CmdMemcpy(CL, { PrevRetainedTransformBuffer.Gpu + First, Size }, { RetainedTransformBuffer.Gpu + First, Size });
-                }
-            }
-            Barriers::TransferToCompute(CL);
         }
 
         static_assert(sizeof(FTransform3x4) % 16 == 0, "CopyBufferSlots moves whole 16-byte words.");
@@ -1123,25 +1111,135 @@ namespace Lumina
         bPrevMotionStateValid = true;
     }
 
-    ESMAAMode FDefaultSceneRenderer::GetViewSMAAMode(const FSceneView& View)
+    void FDefaultSceneRenderer::SnapshotGrassMotionState(RHI::FCmdListH CL)
+    {
+        if (!bPrevMotionStateValid || !PrevRetainedTransformBuffer || !RetainedTransformBuffer)
+        {
+            return;
+        }
+
+        const uint64 Bytes = Math::Min(PrevRetainedTransformBuffer.Size, RetainedTransformBuffer.Size);
+        ScenePrimitives.GetGPUWrittenSlotRanges(MotionGrassRangeScratch);
+        if (MotionGrassRangeScratch.IsEmpty())
+        {
+            return;
+        }
+
+        RHI::CmdBarrier(CL,
+            RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
+            RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferRead | RHI::EAccessFlags::TransferWrite);
+        for (const FUIntVector2& Range : MotionGrassRangeScratch)
+        {
+            const uint64 First = Math::Min<uint64>((uint64)Range.x * sizeof(FTransform3x4), Bytes);
+            const uint64 Size  = Math::Min<uint64>((uint64)Range.y * sizeof(FTransform3x4), Bytes - First);
+            if (Size != 0)
+            {
+                RHI::CmdMemcpy(CL, { PrevRetainedTransformBuffer.Gpu + First, Size }, { RetainedTransformBuffer.Gpu + First, Size });
+            }
+        }
+        Barriers::TransferToCompute(CL);
+    }
+
+    EAntiAliasingMethod FBuiltInTemporalAA::GetMethod() const
+    {
+        return EAntiAliasingMethod::TAA;
+    }
+
+    void FBuiltInTemporalAA::Evaluate(RHI::FCmdListH CL, const FUpscaleInputs& Inputs)
+    {
+        Renderer.TemporalAAPass(CL, Inputs);
+    }
+
+    void FDefaultSceneRenderer::TemporalAAPass(RHI::FCmdListH CL, const FUpscaleInputs& Inputs)
+    {
+        SCENE_GPU_SCOPE(CL, "Temporal AA");
+
+        static const FShaderH Shader = FShaderLibrary::Get("TemporalAA.slang");
+        const uint32 Parity = CurrentView->TemporalFrameIndex & 1u;
+        const FSceneImage& Written = GetNamedImage(Parity == 0u ? ENamedImage::TemporalAAHistoryA : ENamedImage::TemporalAAHistoryB);
+        const FSceneImage& Read    = GetNamedImage(Parity == 0u ? ENamedImage::TemporalAAHistoryB : ENamedImage::TemporalAAHistoryA);
+        const FSceneImage& Output  = GetNamedImage(ENamedImage::UpscaledHDR);
+
+        const int32 OutputSlot  = Output.GetMipUAVIndex(0);
+        const int32 WrittenSlot = Written.GetMipUAVIndex(0);
+        if (!Shader || OutputSlot < 0 || WrittenSlot < 0 || Read.GetResourceID() < 0
+            || Inputs.Color.Index == Constants::kIndexNoneU32 || Inputs.Depth.Index == Constants::kIndexNoneU32
+            || Inputs.Velocity.Index == Constants::kIndexNoneU32)
+        {
+            LOG_ERROR_ONCE("Temporal AA is missing an input or a heap slot; skipping the pass.");
+            return;
+        }
+
+        struct FTemporalAAPC
+        {
+            uint32       Color;
+            uint32       Depth;
+            uint32       Velocity;
+            uint32       History;
+            uint32       Output;
+            uint32       HistoryOut;
+            FUIntVector2 RenderSize;
+            FUIntVector2 DisplaySize;
+            FVector2     JitterUV;
+            uint32       bReset;
+            float        ClipGamma;
+            float        MinCurrentWeight;
+            uint32       _Pad0;
+        } PC = {};
+        static_assert(sizeof(FTemporalAAPC) == 64, "FTemporalAAPC must match TemporalAA.slang.");
+
+        const CRendererSettings* Settings = GetDefault<CRendererSettings>();
+        PC.Color            = Inputs.Color.Index;
+        PC.Depth            = Inputs.Depth.Index;
+        PC.Velocity         = Inputs.Velocity.Index;
+        PC.History          = (uint32)Read.GetResourceID();
+        PC.Output           = (uint32)OutputSlot;
+        PC.HistoryOut       = (uint32)WrittenSlot;
+        PC.RenderSize       = Inputs.RenderSize;
+        PC.DisplaySize      = Inputs.DisplaySize;
+        PC.JitterUV         = Inputs.JitterPixels / FVector2(Math::Max(Inputs.RenderSize, FUIntVector2(1)));
+        PC.bReset           = Inputs.bReset ? 1u : 0u;
+        PC.ClipGamma        = Settings != nullptr ? Settings->TAAClipGamma : 1.25f;
+        PC.MinCurrentWeight = Settings != nullptr ? Settings->TAACurrentWeight : 0.04f;
+
+        DispatchCompute(CL, Shader, PC,
+            RenderUtils::GetGroupCount(Inputs.DisplaySize.x, 8u),
+            RenderUtils::GetGroupCount(Inputs.DisplaySize.y, 8u), 1u);
+    }
+
+    EAntiAliasingMethod FDefaultSceneRenderer::GetViewAntiAliasing(const FSceneView& View)
     {
         if (IsTemporalUpscalerFor(View))
         {
-            return ESMAAMode::Off;
+            return View.Upscaler->GetMethod();
         }
-        const ESMAAMode Mode = GetSMAAMode();
-        return (Mode == ESMAAMode::SMAAT2x && View.Size != View.DisplaySize) ? ESMAAMode::SMAA1x : Mode;
+        const EAntiAliasingMethod Method = Upscaling::GetMethod();
+        if (Upscaling::IsTemporal(Method))
+        {
+            return EAntiAliasingMethod::SMAA;
+        }
+        // The T2x subsample pair is a native-resolution pattern, and a capture has no jitter sequence to resolve.
+        if (Method == EAntiAliasingMethod::SMAAT2x && (!View.bIsPrimary || View.Size != View.DisplaySize))
+        {
+            return EAntiAliasingMethod::SMAA;
+        }
+        return Method;
     }
 
-    bool FDefaultSceneRenderer::IsTemporalAAEnabledFor(const FSceneView& View)
+    bool FDefaultSceneRenderer::IsSMAAEnabledFor(const FSceneView& View)
     {
-        // Captures and probe bakes carry no jitter sequence, so they would resolve against another view's frame.
-        return GetViewSMAAMode(View) == ESMAAMode::SMAAT2x && View.bIsPrimary;
+        const EAntiAliasingMethod Method = GetViewAntiAliasing(View);
+        return Method == EAntiAliasingMethod::SMAA || Method == EAntiAliasingMethod::SMAAT2x;
+    }
+
+    bool FDefaultSceneRenderer::IsSMAAT2xEnabledFor(const FSceneView& View)
+    {
+        return GetViewAntiAliasing(View) == EAntiAliasingMethod::SMAAT2x;
     }
 
     bool FDefaultSceneRenderer::IsTemporalUpscalerFor(const FSceneView& View)
     {
-        return View.bIsPrimary && View.Upscaler != nullptr && View.Upscaler->IsTemporal();
+        return View.bIsPrimary && View.Upscaler != nullptr;
     }
 
     bool FDefaultSceneRenderer::IsUpscalingView(const FSceneView& View)
@@ -1203,7 +1301,7 @@ namespace Lumina
         Inputs.ViewKey            = this;
         Inputs.RenderSize         = CurrentView->Size;
         Inputs.DisplaySize        = CurrentView->DisplaySize;
-        Inputs.Mode               = Upscaling::GetRequest().Mode;
+        Inputs.Resolution         = Upscaling::GetRequest().Resolution;
         Inputs.JitterPixels       = FVector2(Global.TemporalJitterU * (float)CurrentView->Size.x,
                                              Global.TemporalJitterV * (float)CurrentView->Size.y);
         Inputs.NearPlane          = Global.NearPlane;
@@ -1271,22 +1369,22 @@ namespace Lumina
         PC.SourceIndex  = (uint32)Source.GetResourceID();
         PC.SourceWidth  = Source.GetSizeX();
         PC.SourceHeight = Source.GetSizeY();
-        PC.Sharpness    = Settings != nullptr ? Math::Clamp(Settings->UpscaleSharpness, 0.0f, 1.0f) : 0.0f;
+        PC.Sharpness    = Settings != nullptr ? Math::Clamp(Settings->SpatialUpscaleSharpness, 0.0f, 1.0f) : 0.0f;
 
         RHI::CmdDraw(CL, MakeArgs(PC), 3, 1, 0, 0);
         RHI::CmdEndRenderPass(CL);
         Barriers::RasterToRead(CL);
     }
 
-    bool FDefaultSceneRenderer::IsTemporalAAEnabled() const
+    bool FDefaultSceneRenderer::IsSMAAT2xEnabled() const
     {
-        return CurrentView != nullptr && IsTemporalAAEnabledFor(*CurrentView);
+        return CurrentView != nullptr && IsSMAAT2xEnabledFor(*CurrentView);
     }
 
     // One predicate for both the blend redirect and the resolve, or a half-allocated set strands the output.
     bool FDefaultSceneRenderer::IsTemporalResolveReady() const
     {
-        return IsTemporalAAEnabled()
+        return IsSMAAT2xEnabled()
             && GetNamedImage(ENamedImage::Velocity).IsValid()
             && GetNamedImage(ENamedImage::TemporalHistoryA).IsValid()
             && GetNamedImage(ENamedImage::TemporalHistoryB).IsValid();
@@ -1305,7 +1403,7 @@ namespace Lumina
     // The debug view is the only way to see whether motion vectors are sane, so it must not need T2x on.
     bool FDefaultSceneRenderer::IsVelocityWanted() const
     {
-        return IsTemporalAAEnabled() || (CurrentView != nullptr && IsTemporalUpscalerFor(*CurrentView))
+        return IsSMAAT2xEnabled() || (CurrentView != nullptr && IsTemporalUpscalerFor(*CurrentView))
             || (CurrentView != nullptr && CurrentView->bIsPrimary && IsVelocityDebugActive());
     }
 
@@ -1433,13 +1531,13 @@ namespace Lumina
         PC.VelocityIndex = (uint32)Velocity.GetResourceID();
 
         // The first frame after a resize, a toggle or a camera cut has nothing behind it, so it resolves to itself.
-        const float Weight = Settings != nullptr ? Math::Clamp(Settings->TemporalHistoryWeight, 0.0f, 0.5f) : 0.5f;
+        const float Weight = Settings != nullptr ? Math::Clamp(Settings->SMAAT2xHistoryWeight, 0.0f, 0.5f) : 0.5f;
         const bool bHasHistory = CurrentView->bTemporalHistoryValid && !IsCameraCutFrame(CameraCutFramesLeft);
         PC.HistoryWeight  = bHasHistory ? Weight : 0.0f;
 
-        PC.ClampGamma         = Settings != nullptr ? Math::Max(Settings->TemporalClampGamma, 0.25f) : 1.0f;
-        PC.MaxReprojection    = Settings != nullptr ? Math::Max(Settings->TemporalMaxReprojection, 0.01f) : 0.25f;
-        PC.bNeighborhoodClamp = (Settings == nullptr || Settings->bTemporalNeighborhoodClamp) ? 1u : 0u;
+        PC.ClampGamma         = Settings != nullptr ? Math::Max(Settings->SMAAT2xClampGamma, 0.25f) : 1.0f;
+        PC.MaxReprojection    = Settings != nullptr ? Math::Max(Settings->SMAAT2xMaxReprojection, 0.01f) : 0.25f;
+        PC.bNeighborhoodClamp = (Settings == nullptr || Settings->bSMAAT2xNeighborhoodClamp) ? 1u : 0u;
         PC._Pad0              = 0u;
 
         RHI::CmdDraw(CL, MakeArgs(PC), 3, 1, 0, 0);

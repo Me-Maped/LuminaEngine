@@ -41,6 +41,13 @@ namespace Lumina
         int32 FrameRateLimit = 0;
 
         PROPERTY(Hidden)
+        EHDROutput HDROutput = EHDROutput::Auto;
+
+        // Zero follows the project, which by default follows the Windows SDR content brightness.
+        PROPERTY(Hidden)
+        float HDRPaperWhiteNits = 0.0f;
+
+        PROPERTY(Hidden)
         EQualityLevel ViewDistanceQuality = EQualityLevel::Default;
 
         PROPERTY(Hidden)
@@ -58,17 +65,17 @@ namespace Lumina
         PROPERTY(Hidden)
         EQualityLevel AntiAliasingQuality = EQualityLevel::Default;
 
-        // Off leaves upscaling to the project's renderer settings, which is where a new player starts.
+        // Off leaves anti-aliasing and render resolution to the project's renderer settings, which is where a new player starts.
         PROPERTY(Hidden)
-        bool bOverrideUpscaling = false;
+        bool bOverrideAntiAliasing = false;
 
         PROPERTY(Hidden)
-        EUpscaler Upscaler = EUpscaler::None;
+        EAntiAliasingMethod AntiAliasing = EAntiAliasingMethod::TAA;
 
         PROPERTY(Hidden)
-        EUpscalerMode UpscalerMode = EUpscalerMode::Custom;
+        ERenderResolution RenderResolution = ERenderResolution::Native;
 
-        // Read while UpscalerMode is Custom, from 25 to 100.
+        // Read while RenderResolution is Custom, from 25 to 100.
         PROPERTY(Hidden)
         float ScreenPercentage = 100.0f;
 
@@ -111,7 +118,7 @@ namespace Lumina
     private:
 
         void ApplyDisplay();
-        void ApplyUpscaling();
+        void ApplyAntiAliasing();
         void CaptureCurrentDisplay();
 
         EQualityLevel& QualitySlot(EScalabilityGroup Group);

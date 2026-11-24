@@ -15,14 +15,7 @@ namespace Lumina
 		FShaderH PixelShader = {};
 	};
 
-	// Keyed by what forces a distinct PIPELINE, not by material identity. Two materials that compile to the
-	// same shaders share one batch and therefore one draw -- which is every material without World Position
-	// Offset, since their geometry stages are byte-identical and the shader library hands out one entry for
-	// identical bytecode.
-	//
-	// The material is carried per INSTANCE (FGPUInstance::MaterialIndex) and per deferred slot
-	// (FBatch::DeferredMaterials, which unions across every material in the batch), so nothing downstream
-	// needs a batch to be one material.
+	// Keyed by what forces a distinct pipeline, so materials that compile to the same shaders share one batch and one draw.
 	struct FDrawBatchKey
 	{
 		FShaderH VisBufferMeshShader = {};
@@ -40,6 +33,8 @@ namespace Lumina
 		uint32 bModulate : 1;
 		uint32 bWriteDepth : 1;
 		uint32 bTwoSided : 1;
+		// Set unless the material is known to leave every vertex where the mesh put it.
+		uint32 bWorldPositionOffset : 1;
 
 		bool operator == (const FDrawBatchKey& Key) const
 		{
@@ -56,7 +51,8 @@ namespace Lumina
 				&& bAdditive    == Key.bAdditive
 				&& bModulate    == Key.bModulate
 				&& bWriteDepth  == Key.bWriteDepth
-				&& bTwoSided    == Key.bTwoSided;
+				&& bTwoSided    == Key.bTwoSided
+				&& bWorldPositionOffset == Key.bWorldPositionOffset;
 		}
 	};
 
@@ -76,6 +72,7 @@ namespace Lumina
 		Hash::HashCombine(Seed, K.bModulate);
 		Hash::HashCombine(Seed, K.bWriteDepth);
 		Hash::HashCombine(Seed, K.bTwoSided);
+		Hash::HashCombine(Seed, K.bWorldPositionOffset);
 		return Seed;
 	}
 
@@ -100,10 +97,10 @@ namespace Lumina
 		uint32                      		bTwoSided : 1;        // two-sided material: VisBuffer disables back-face cull
 		uint32                      		bAnySkinned : 1;      // batch has >=1 skinned binding (SPEC_SKINNED variant select)
 		uint32                      		bAnyStatic  : 1;      // batch has >=1 static binding; both set => mixed => dynamic
+		uint32                      		bWorldPositionOffset : 1;
 	};
 
-	// SPEC_SKINNED: 0 static-only, 1 skinned-only, 2 runtime branch. Specializing away a path the batch
-	// turns out to contain reads that geometry at the other vertex stride, so anything unproven takes 2.
+	// SPEC_SKINNED is 0 static-only, 1 skinned-only, 2 runtime branch, and anything unproven takes 2 to avoid a wrong vertex stride.
 	FORCEINLINE uint8 SelectSkinnedMode(const FMeshDrawCommand& Batch)
 	{
 		if (Batch.bAnySkinned && Batch.bAnyStatic)

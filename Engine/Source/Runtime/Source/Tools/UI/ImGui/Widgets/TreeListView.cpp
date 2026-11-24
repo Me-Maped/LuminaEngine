@@ -2,6 +2,8 @@
 #include "RuntimePCH.h"
 #include "TreeListView.h"
 #include "imgui.h"
+#include "imgui_internal.h"
+#include "Tools/UI/ImGui/EditorColors.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
 
@@ -10,6 +12,9 @@ namespace Lumina
     namespace
     {
         constexpr float kRowHeight = 15.0f;
+
+        // Room kept for the name ahead of the trailing toggles, which give way one at a time once a narrow column cannot fit it.
+        constexpr float kMinNameWidthInFonts = 2.0f;
 
         // Falls back to the plain TooltipText when no rich fields are set.
         void DrawTreeNodeTooltip(const FTreeNodeDisplay& Display)
@@ -167,7 +172,7 @@ namespace Lumina
 
         // Rows sit flush, so the height cell padding used to add moves into the node's frame padding.
         const ImGuiStyle& DrawStyle = ImGui::GetStyle();
-        const ImVec2 RowFramePadding(DrawStyle.FramePadding.x, DrawStyle.FramePadding.y + 2.0f);
+        const ImVec2 RowFramePadding(DrawStyle.FramePadding.x, DrawStyle.FramePadding.y + 5.0f);
 
         ImGui::PushID(this);
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(2, 0));
@@ -385,7 +390,7 @@ namespace Lumina
         // Selection paints the table ROW, not the node's frame, so it covers the row's full height and width.
         if (State.bSelected)
         {
-            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, ImGui::GetColorU32(ImVec4(0.22f, 0.52f, 0.22f, 0.40f)));
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, EditorColors::U32(EditorColors::WithAlpha(EditorColors::Accent(), 0.30f)));
         }
 
         // Closes what this row still has open when a callback restructures the tree; mirrors the tail.
@@ -399,20 +404,70 @@ namespace Lumina
         };
 
         const ImVec2 RowCursorScreenPos = ImGui::GetCursorScreenPos();
+        const ImGuiStyle& LabelStyle = ImGui::GetStyle();
+        const float LabelX = RowCursorScreenPos.x + ImGui::GetFontSize() + LabelStyle.FramePadding.x * 2.0f;
+        const float LabelY = RowCursorScreenPos.y + LabelStyle.FramePadding.y;
+
+        // The toggles are laid out first, so the name is cut short in front of them rather than drawn underneath.
+        const float ButtonWidth = ImGui::GetFrameHeight();
+        const float RowRightX   = RowCursorScreenPos.x + ImGui::GetContentRegionAvail().x;
+        const float IconWidth   = Display.IconText.IsEmpty() ? 0.0f : ImGui::CalcTextSize(*Display.IconText).x;
+        const float NameStartX  = LabelX + IconWidth + ImGui::GetFontSize() * kMinNameWidthInFonts;
+        bool bShowSecondary = Display.bShowSecondaryIcon;
+        bool bShowDisabled  = Display.bShowDisabledIcon;
+        auto TrailingCount = [&]() { return (bShowSecondary ? 1 : 0) + (bShowDisabled ? 1 : 0); };
+        if (bShowSecondary && NameStartX + TrailingCount() * ButtonWidth > RowRightX)
+        {
+            bShowSecondary = false;
+        }
+        if (bShowDisabled && NameStartX + TrailingCount() * ButtonWidth > RowRightX)
+        {
+            bShowDisabled = false;
+        }
+        const float LabelClipX = RowRightX - TrailingCount() * ButtonWidth - LabelStyle.ItemInnerSpacing.x;
 
         // Scoped to the node, since pushing it wider also blanks selected rows in menus and tooltips.
         ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-        const bool bNowExpanded = ImGui::TreeNodeEx("##TreeNode", Flags, "%s", *Display.DisplayName);
+        const bool bNowExpanded = ImGui::TreeNodeEx("##TreeNode", Flags);
         ImGui::PopStyleColor();
 
-        if (!Display.IconText.IsEmpty() && !State.bEditingText)
+        // Hovering a trailing toggle takes hover from the node, so the row's own rect decides.
+        const bool bRowHovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+        if (bRowHovered && !State.bSelected)
         {
-            const ImGuiStyle& Style = ImGui::GetStyle();
-            const float IconX = RowCursorScreenPos.x + ImGui::GetFontSize() + Style.FramePadding.x * 2.0f;
-            const float IconY = RowCursorScreenPos.y + Style.FramePadding.y;
-            ImGui::GetWindowDrawList()->AddText(ImVec2(IconX, IconY), ImGui::GetColorU32(Display.IconColor), *Display.IconText);
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, EditorColors::U32(EditorColors::RowBgHovered()));
+        }
+        if (State.bSelected)
+        {
+            const ImVec2 RowMin(ImGui::GetWindowPos().x, ImGui::GetItemRectMin().y);
+            ImGui::GetWindowDrawList()->AddRectFilled(RowMin, ImVec2(RowMin.x + 3.0f, ImGui::GetItemRectMax().y), EditorColors::U32(EditorColors::Accent()));
         }
 
+        if (!State.bEditingText)
+        {
+            ImDrawList* LabelDL = ImGui::GetWindowDrawList();
+            const char* Label    = *Display.DisplayName;
+            const char* LabelEnd = Label + Display.DisplayName.Len();
+            const ImVec2 LabelSize = ImGui::CalcTextSize(Label, LabelEnd);
+            ImGui::RenderTextEllipsis(LabelDL, ImVec2(LabelX, LabelY), ImVec2(LabelClipX, LabelY + LabelSize.y), LabelClipX, Label, LabelEnd, &LabelSize);
+
+            if (!Display.IconText.IsEmpty())
+            {
+                LabelDL->AddText(ImVec2(LabelX, LabelY), ImGui::GetColorU32(Display.IconColor), *Display.IconText);
+            }
+
+            // A collapsed parent says how much it hides, while there is room past its name.
+            if (!bNowExpanded && !Node.Children.IsEmpty())
+            {
+                char Count[16];
+                snprintf(Count, sizeof(Count), "%d", Node.Children.Num());
+                const float CountX = LabelX + LabelSize.x + LabelStyle.ItemInnerSpacing.x * 2.0f;
+                if (CountX + ImGui::CalcTextSize(Count).x <= LabelClipX)
+                {
+                    LabelDL->AddText(ImVec2(CountX, LabelY), EditorColors::U32(EditorColors::TextMuted()), Count);
+                }
+            }
+        }
 
         {
             ImDrawList* DL = ImGui::GetWindowDrawList();
@@ -425,8 +480,8 @@ namespace Lumina
             const float MidY    = (ItemMin.y + ItemMax.y) * 0.5f;
             const float BaseX   = RowCursorScreenPos.x - Node.Depth * kIndentPerDepth;
             const float Gutter  = ImGui::GetFontSize() * 0.5f + LineStyle.FramePadding.x;
-            const ImU32 LineCol = ImGui::GetColorU32(ImGuiCol_Text, 0.45f);
-            constexpr float LineThickness = 2.5f;
+            const ImU32 LineCol = ImGui::GetColorU32(ImGuiCol_Text, 0.22f);
+            constexpr float LineThickness = 1.5f;
 
             if (Node.Depth > 0)
             {
@@ -619,34 +674,31 @@ namespace Lumina
 
         bool bMouseOverTrailingButton = false;
         {
-            const int32 TrailingCount = (Display.bShowSecondaryIcon ? 1 : 0) + (Display.bShowDisabledIcon ? 1 : 0);
-
-            if (TrailingCount > 0)
+            if (TrailingCount() > 0)
             {
-                const float ButtonWidth = ImGui::GetFrameHeight();
-                const float RowHeight   = ImGui::GetFrameHeight();
+                const float RowHeight = ImGui::GetFrameHeight();
 
                 ImGui::SameLine();
                 const float RightEdgeX = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-                ImGui::SetCursorPosX(RightEdgeX - TrailingCount * ButtonWidth);
+                ImGui::SetCursorPosX(RightEdgeX - TrailingCount() * ButtonWidth);
 
+                // Keeping the row's vertical padding puts the buttons on the node's baseline, or the row grows by that padding below.
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, ImGui::GetStyle().FramePadding.y));
 
-                if (Display.bShowSecondaryIcon)
+                // Quiet until the row is hovered, while a toggle that is off stays readable as the exception.
+                auto TrailingIconColor = [&](bool bOff)
+                {
+                    return bOff ? EditorColors::Warning() : (bRowHovered || State.bSelected ? EditorColors::TextPrimary() : EditorColors::TextMuted());
+                };
+
+                if (bShowSecondary)
                 {
                     ImGui::PushID("##SecondaryToggle");
                     const char* Icon = State.bSecondaryToggled ? *Display.SecondaryIconOff : *Display.SecondaryIconOn;
-                    // Dim while toggled off so the on/off state reads at a glance.
-                    if (State.bSecondaryToggled)
-                    {
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                    }
+                    ImGui::PushStyleColor(ImGuiCol_Text, TrailingIconColor(State.bSecondaryToggled));
                     ImGui::Button(Icon, ImVec2(ButtonWidth, RowHeight));
-                    if (State.bSecondaryToggled)
-                    {
-                        ImGui::PopStyleColor();
-                    }
+                    ImGui::PopStyleColor();
 
                     const bool bSecondaryClicked = ImGui::IsItemActivated();
                     bMouseOverTrailingButton |= ImGui::IsItemHovered();
@@ -665,11 +717,13 @@ namespace Lumina
                     ImGui::SameLine(0.0f, 0.0f);
                 }
 
-                if (Display.bShowDisabledIcon)
+                if (bShowDisabled)
                 {
                     ImGui::PushID("##VisibilityToggle");
                     const char* Icon = State.bDisabled ? LE_ICON_EYE_OFF : LE_ICON_EYE;
+                    ImGui::PushStyleColor(ImGuiCol_Text, TrailingIconColor(State.bDisabled));
                     ImGui::Button(Icon, ImVec2(ButtonWidth, RowHeight));
+                    ImGui::PopStyleColor();
                     const bool bSmallButtonClicked = ImGui::IsItemActivated();
                     bMouseOverTrailingButton |= ImGui::IsItemHovered();
                     ImGui::PopID();

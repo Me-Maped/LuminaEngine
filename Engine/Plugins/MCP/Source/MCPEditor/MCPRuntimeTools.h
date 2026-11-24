@@ -142,6 +142,10 @@ namespace Lumina
         PROPERTY()
         FString Category;
 
+        // Lists GPU allocations under their full names instead of grouping them by the prefix before the first dot.
+        PROPERTY()
+        bool bGpuFullNames = false;
+
         // Forces a managed collection first, so garbage waiting on the collector does not read as a leak.
         PROPERTY()
         bool bCollectManaged = true;
@@ -357,7 +361,7 @@ namespace Lumina
         FString ConfigFile;
 
         // Every field as JSON, only filled when a single class was asked for.
-        PROPERTY()
+        PROPERTY(RawJson)
         FString Values;
     };
 
@@ -402,6 +406,10 @@ namespace Lumina
         // Nesting depth, so a parent's time includes its children's.
         PROPERTY()
         int32 Depth = 0;
+
+        // The hardware queue the pass ran on, so async compute work reads apart from graphics.
+        PROPERTY()
+        FString Queue;
     };
 
     REFLECT()
@@ -414,6 +422,16 @@ namespace Lumina
 
         PROPERTY()
         float TotalMs = 0.0f;
+
+        PROPERTY()
+        float GraphicsMs = 0.0f;
+
+        PROPERTY()
+        float AsyncComputeMs = 0.0f;
+
+        // Async compute time that ran while graphics was also busy.
+        PROPERTY()
+        float AsyncOverlapMs = 0.0f;
 
         PROPERTY()
         TVector<SGpuPassTime> Passes;

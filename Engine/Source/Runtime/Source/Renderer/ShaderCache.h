@@ -8,8 +8,11 @@ namespace Lumina
 {
     namespace FShaderCache
     {
-        constexpr auto kShaderCacheVersion      = 2;
+        constexpr auto kShaderCacheVersion      = 3;
         constexpr FStringView kCacheDirectory   = "/Intermediates/ShaderCache";
+        // The cache version with the compiler's release folded in, so a Slang upgrade misses every entry it did not build.
+        uint64 GetCompilerSeed();
+
         uint64 ComputeSourceSetHash(FStringView ShaderVirtualPath, const TVector<FString>& Defines, const TVector<FString>& SearchRoots, FStringView EntryPoint);
 
         FString CachePathFor(FStringView ShaderVirtualPath, const TVector<FString>& Defines, FStringView EntryPoint);

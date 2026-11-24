@@ -154,8 +154,7 @@ namespace Lumina
 
     void CStruct::Flatten()
     {
-        // Copied, not spliced: a struct with no own properties used to adopt the super's list head outright,
-        // so a later AddProperty walked into the super and appended there instead.
+        // Copied, not spliced, so a later AddProperty cannot walk into the super's list and append there.
         AllProperties = OwnProperties;
         if (SuperStruct != nullptr)
         {
@@ -567,12 +566,21 @@ namespace Lumina
         }
     }
 
-    void CStruct::NetSerializeAll(FNetArchive& Ar, void* Data) const
+    bool CStruct::NetSerializeCustom(FNetArchive& Ar, void* Data) const
     {
-        // A struct that opts into custom/tight net packing (e.g. a quantized math type) handles itself.
         if (StructOps && StructOps->HasNetSerializer())
         {
             StructOps->NetSerialize(Ar, Data);
+            return true;
+        }
+        return false;
+    }
+
+    void CStruct::NetSerializeAll(FNetArchive& Ar, void* Data) const
+    {
+        // A struct that opts into custom/tight net packing (e.g. a quantized math type) handles itself.
+        if (NetSerializeCustom(Ar, Data))
+        {
             return;
         }
 
@@ -654,9 +662,8 @@ namespace Lumina
 
     void CStruct::NetWriteAllDelta(FNetArchive& Ar, void* Data, void* Defaults) const
     {
-        if (StructOps && StructOps->HasNetSerializer())
+        if (NetSerializeCustom(Ar, Data))
         {
-            StructOps->NetSerialize(Ar, Data);
             return;
         }
 
@@ -718,9 +725,8 @@ namespace Lumina
 
     void CStruct::NetReadAllDelta(FNetArchive& Ar, void* Data) const
     {
-        if (StructOps && StructOps->HasNetSerializer())
+        if (NetSerializeCustom(Ar, Data))
         {
-            StructOps->NetSerialize(Ar, Data);
             return;
         }
 

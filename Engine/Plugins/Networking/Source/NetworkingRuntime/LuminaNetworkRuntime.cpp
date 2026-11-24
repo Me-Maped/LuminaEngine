@@ -1,4 +1,6 @@
 #include "LuminaNetworkRuntime.h"
+#include "Networking/NetworkEvents.h"
+#include "Net/NetSimulation.h"
 #include "World/ECS/Registry.h"
 
 #include "NetworkGlobals.h"
@@ -8,6 +10,10 @@
 #include "World/WorldContext.h"
 #include "Net/NetWorldState.h"
 #include "Net/NetLoadBots.h"
+#include "Config/NetworkSettings.h"
+#include "Core/Object/ObjectCore.h"
+#include "Platform/Time/PlatformTime.h"
+#include "Systems/NetworkSystem.h"
 #include "Scripting/EntityScript.h"
 #include "World/Entity/Components/CharacterControllerComponent.h"
 #include "Networking/INetworkTransport.h"
@@ -49,6 +55,17 @@ namespace Lumina
 
         ECS::FRegistry& Registry = World->GetEntityRegistry();
 
+        // A server-only parent's children inherit that, and go with it.
+        TVector<ECS::FEntity> Networked;
+        for (ECS::FEntity Entity : Registry.View<ECS::Read<SNetworkComponent>>())
+        {
+            Networked.Add(Entity);
+        }
+        for (ECS::FEntity Entity : Networked)
+        {
+            NetworkSystemInternal::InheritNetworking(Registry, Entity);
+        }
+
         // Collected first, since destroying while iterating the view it came from is the hazard.
         TVector<ECS::FEntity> ServerOnly;
         for (ECS::FEntity Entity : Registry.View<ECS::Read<SNetworkComponent>>())
@@ -79,6 +96,13 @@ namespace Lumina
         }
 
         ECS::FRegistry& Registry = World->GetEntityRegistry();
+
+        // An entity attached under a networked parent joins its replication, with its own children.
+        const ECS::FEntity Parent = Registry.GetHierarchy().GetParent(Entity);
+        if (Parent != ECS::NullEntity && Registry.HasAll<SNetworkComponent>(Parent))
+        {
+            NetworkSystemInternal::InheritNetworking(Registry, Parent);
+        }
         if (Registry.HasAll<SNetworkComponent>(Entity))
         {
             Registry.EmplaceOrReplace<FNetDirty>(Entity);
@@ -167,6 +191,29 @@ namespace Lumina
         return Fallback;
     }
 
+    uint32 FLuminaNetworkRuntime::PredictSpawn(CWorld* World, ECS::FEntity StandIn, bool bKeepStandIn)
+    {
+        FNetWorldState* State = StateOf(World);
+        if (State == nullptr || IsServerWorld(World) || !RegistryOf(World).IsValid(StandIn))
+        {
+            return 0;
+        }
+        const double Expire = PlatformTime::Seconds() + GetDefault<CNetworkSettings>()->PredictedSpawnTimeout;
+        return NetworkSystemInternal::BeginPredictedSpawn(*State, StandIn, bKeepStandIn, Expire);
+    }
+
+    void FLuminaNetworkRuntime::ConfirmPredictedSpawn(CWorld* World, ECS::FEntity Entity, uint32 ConnectionId, uint32 Key)
+    {
+        ECS::FRegistry& Registry = RegistryOf(World);
+        if (StateOf(World) == nullptr || !IsServerWorld(World) || Key == 0 || !Registry.IsValid(Entity))
+        {
+            return;
+        }
+        SNetworkComponent& Net = Registry.GetOrEmplace<SNetworkComponent>(Entity);
+        Net.PredictedBy   = ConnectionId;
+        Net.PredictionKey = Key;
+    }
+
     void FLuminaNetworkRuntime::BindEntityIds(const CWorld* World, FNetArchive& Ar) const
     {
         if (FNetWorldState* State = StateOf(World))
@@ -218,11 +265,114 @@ namespace Lumina
         SNetworkComponent& Net = Registry.GetOrEmplace<SNetworkComponent>(Entity);
         if (Net.OwningConnectionId != ConnectionId)
         {
+            SNetOwnershipChangedEvent Changed;
+            Changed.Entity             = Entity;
+            Changed.PreviousOwner      = Net.OwningConnectionId;
+            Changed.OwningConnectionId = ConnectionId;
+
             Net.OwningConnectionId = ConnectionId;
             Net.RemoteRole = ConnectionId != 0 ? ENetRole::AutonomousProxy : ENetRole::SimulatedProxy;
             State->OwnershipChanged.Add(Entity);
+            ECS::SendEventIfRead(State->Events, Changed);
+        }
+
+        // Children that inherited their networking follow the owner of the entity they inherited it from.
+        Registry.GetHierarchy().ForEachChild(Entity, [&](ECS::FEntity Child)
+        {
+            const SNetworkComponent* ChildNet = Registry.TryGet<ECS::Read<SNetworkComponent>>(Child);
+            if (ChildNet != nullptr && ChildNet->bInherited)
+            {
+                SetEntityOwner(World, Child, ConnectionId);
+            }
+        });
+        return true;
+    }
+
+    bool FLuminaNetworkRuntime::StartSimulationSession(CWorld* World, const CStruct* InputStruct, uint64 Seed)
+    {
+        FNetWorldState* State = StateOf(World);
+        return State != nullptr && IsServerWorld(World) && NetSimulation::StartSession(World, *State, InputStruct, Seed);
+    }
+
+    bool FLuminaNetworkRuntime::SendNetMessage(CWorld* World, ENetMessageTarget Target, uint32 Connection, ECS::FComponentTypeID TypeID, const void* Message)
+    {
+        FNetWorldState* State = StateOf(World);
+        const bool bHost = State == nullptr || IsServerWorld(World);
+        const bool bHere = bHost && (Target == ENetMessageTarget::Host || Target == ENetMessageTarget::Everyone
+                                     || (Target == ENetMessageTarget::Client && Connection == 0));
+        if (bHere)
+        {
+            NetMessages::Deliver(World->GetEventQueues(), ScriptNetMessages, TypeID, Message, 0);
+        }
+        if (State == nullptr || State->Transport == nullptr || (bHost && Target == ENetMessageTarget::Host))
+        {
+            return bHere;
+        }
+        if (!bHost && Target != ENetMessageTarget::Host)
+        {
+            LOG_WARN_ONCE("[Net] A client sends net messages only to the host, which can pass them on to other clients.");
+            return false;
+        }
+
+        TVector<uint8> Msg;
+        if (!NetMessages::Write(*State, ScriptNetMessages, TypeID, Message, Msg))
+        {
+            LOG_WARN_ONCE("[Net] {} cannot be sent, since it neither derives from SNetMessage nor is a C# INetMessage, or it is too large.",
+                          *ECS::FComponentTypeRegistry::Get().GetInfo(TypeID).Name.ToString());
+            return false;
+        }
+
+        TScopeLock Scope(State->MessageLock);
+        auto Queue = [&](uint32 To)
+        {
+            Net::AppendFramedMessage(State->PendingMessages[To], Msg.GetData(), static_cast<SIZE_T>(Msg.Num()));
+        };
+        if (!bHost)
+        {
+            if (!State->bClientConnected)
+            {
+                return false;
+            }
+            Queue(State->ServerConnection.Value);
+            return true;
+        }
+        if (Target == ENetMessageTarget::Client)
+        {
+            if (Connection == 0)
+            {
+                return true;
+            }
+            if (!State->ReadyClientIds.Contains(Connection))
+            {
+                return false;
+            }
+            Queue(Connection);
+            return true;
+        }
+        for (uint32 Client : State->ReadyClientIds)
+        {
+            Queue(Client);
         }
         return true;
+    }
+
+    void FLuminaNetworkRuntime::RegisterScriptNetMessage(ECS::FComponentTypeID TypeID, uint32 SenderOffset, TSpan<const uint32> EntityOffsets)
+    {
+        ScriptNetMessages.Register(TypeID, SenderOffset, EntityOffsets);
+    }
+
+    void FLuminaNetworkRuntime::TearOff(CWorld* World, ECS::FEntity Entity)
+    {
+        if (World == nullptr || !IsServerWorld(World))
+        {
+            return;
+        }
+        FNetWorldState* State = StateOf(World);
+        ECS::FRegistry& Registry = RegistryOf(World);
+        if (State != nullptr && Registry.IsValid(Entity) && Registry.HasAll<SNetworkComponent>(Entity))
+        {
+            State->PendingTearOffs.Add(Entity);
+        }
     }
 
     void FLuminaNetworkRuntime::MarkEntityDirty(CWorld* World, ECS::FEntity Entity)
@@ -255,7 +405,7 @@ namespace Lumina
     {
         CWorld* World = Script->GetWorld();
         FNetWorldState* State = StateOf(World);
-        if (State == nullptr || State->Transport == nullptr || !Script->IsAttached() || PayloadSize > Net::MaxFramedMessageSize / 2)
+        if (State == nullptr || State->Transport == nullptr || !FEntityScriptAccess::IsAttached(*Script) || PayloadSize > Net::MaxFramedMessageSize / 2)
         {
             return false;
         }

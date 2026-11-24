@@ -2,6 +2,8 @@
 
 #include "Containers/Vector.h"
 #include "Containers/Name.h"
+#include "Core/Object/ObjectMacros.h"
+#include "AnimEvents.generated.h"
 
 namespace Lumina
 {
@@ -10,6 +12,7 @@ namespace Lumina
     struct SAnimNotify;
     struct SAnimNotifyState;
 
+    REFLECT()
     enum class EAnimNotifyEventType : uint8
     {
         // Point notify crossed by the playhead this frame.
@@ -27,8 +30,7 @@ namespace Lumina
         FName Track;
         EAnimNotifyEventType Type = EAnimNotifyEventType::Trigger;
 
-        // Blend weight of the branch that sampled the event (1 for direct clip playback). Graph
-        // blends scale this; events from inactive state-machine branches never fire.
+        // Blend weight of the branch that sampled the event, and events from inactive state-machine branches never fire.
         float Weight = 1.0f;
 
         // Position inside a notify-state window, 0..1, for Tick.

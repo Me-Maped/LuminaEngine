@@ -8,22 +8,17 @@
 #include "Containers/Vector.h"
 #include "Networking/NetworkTypes.h"
 
-// The ECS registry is reached through its own header, and it is already in the
-// Runtime PCH, so this costs nothing here.
+// The ECS registry is reached through its own header, which is already in the Runtime PCH.
 
 namespace Lumina
 {
     class CWorld;
+    class CStruct;
     class CEntityScript;
     class INetworkTransport;
     class FNetArchive;
 
-    // Everything the engine asks of networking, and the whole of it. The engine calls through this
-    // and never names an implementation, so the netcode behind it can be replaced or removed
-    // outright without the engine knowing which one it got.
-    //
-    // Every method has an empty default: with no implementation installed the engine runs exactly as
-    // it does with networking disabled, and an implementation overrides only what it cares about.
+    // Every method has an empty default, so with no implementation installed the engine runs as if networking were disabled.
     class INetworkRuntime
     {
     public:
@@ -35,15 +30,13 @@ namespace Lumina
         virtual void Shutdown() {}
         virtual void Update() {}
 
+        // Host only. Gives every ready client a player slot and starts the world's deterministic simulation on all of them.
+        virtual bool StartSimulationSession(CWorld* World, const CStruct* InputStruct, uint64 Seed) { return false; }
+
         // Clients currently connected to this world, for anything that reports it. Zero without netcode.
         virtual int32 GetConnectedClientCount(const CWorld* World) const { return 0; }
 
-        // Hand the live client connection over to the engine so it survives a map change, leaving the
-        // old world without one. False when there is nothing to carry, which is the usual answer.
-        //
-        // The engine owns the transport across the gap and hands it back after the new world exists,
-        // so a seamless travel does not reconnect. Only the netcode knows where the connection was
-        // kept, which is why this is a handover rather than the engine reaching in for it.
+        // The engine owns the transport across a map change so a seamless travel does not reconnect, and false means nothing to carry.
         virtual bool TakeClientConnection(
             CWorld* OldWorld,
             TUniquePtr<INetworkTransport>& OutTransport,
@@ -53,13 +46,10 @@ namespace Lumina
             return false;
         }
 
-        // A world has finished materializing its serialized entities. A client drops the entities the
-        // server owns exclusively here; the decision of which those are belongs to the netcode, so
-        // the engine reports the event rather than asking for the outcome.
+        // A client drops server-owned entities here, and the netcode decides which those are.
         virtual void OnWorldEntitiesLoaded(CWorld* World) {}
 
-        // An entity's parent changed. Replication may need to observe it; the engine does not know
-        // whether it does.
+        // An entity's parent changed, which replication may need to observe.
         virtual void OnEntityAttachmentChanged(CWorld* World, ECS::FEntity Entity) {}
 
         //~ The gameplay surface scripts reach through. A world with no netcode answers as standalone.
@@ -81,6 +71,15 @@ namespace Lumina
         // A replicated field on Entity changed, so the server diffs it on the next send.
         virtual void MarkEntityDirty(CWorld* World, ECS::FEntity Entity) {}
 
+        // Sends a message of event type TypeID where Target says, raised there as that event with its sender written in. False when it cannot go.
+        virtual bool SendNetMessage(CWorld* World, ENetMessageTarget Target, uint32 Connection, ECS::FComponentTypeID TypeID, const void* Message) { return false; }
+
+        // A C# message has no reflection, so it crosses as its bytes, with the sender written at SenderOffset and each entity id at EntityOffsets translated.
+        virtual void RegisterScriptNetMessage(ECS::FComponentTypeID TypeID, uint32 SenderOffset, TSpan<const uint32> EntityOffsets) {}
+
+        // Server only. Ends networking for Entity and the networked entities under it, leaving every peer its own local copy.
+        virtual void TearOff(CWorld* World, ECS::FEntity Entity) {}
+
         // The id both peers know an entity by, 0 when it has none.
         virtual uint32 EntityToNetId(const CWorld* World, ECS::FEntity Entity) const { return 0; }
         virtual ECS::FEntity NetIdToEntity(const CWorld* World, uint32 NetId) const { return ECS::NullEntity; }
@@ -94,6 +93,12 @@ namespace Lumina
 
         // An entity ConnectionId owns, preferring one with a character controller, or the null entity.
         virtual ECS::FEntity FindOwnedPawn(const CWorld* World, uint32 ConnectionId) const { return ECS::NullEntity; }
+
+        // Client, marks a local stand-in for a spawn it is asking the host for and returns the key to send along, 0 on a host.
+        virtual uint32 PredictSpawn(CWorld* World, ECS::FEntity StandIn, bool bKeepStandIn) { return 0; }
+
+        // Host, ties a new spawn to the key a client sent, set the frame it spawns so the client pairs it with its stand-in.
+        virtual void ConfirmPredictedSpawn(CWorld* World, ECS::FEntity Entity, uint32 ConnectionId, uint32 Key) {}
 
         // Binds the entity ids every peer shares onto Ar, so a reflected value carrying an entity reads alike on every peer.
         virtual void BindEntityIds(const CWorld* World, FNetArchive& Ar) const {}

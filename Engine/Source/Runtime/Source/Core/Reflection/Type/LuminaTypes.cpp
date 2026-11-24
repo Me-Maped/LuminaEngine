@@ -13,8 +13,7 @@
 
 namespace Lumina
 {
-    // Well inside a cache line. Properties are among the most numerous objects in the engine, so the block
-    // stays packed; this catches a member added without checking where it lands as much as one that grows it.
+    // Properties are among the most numerous objects, so this catches any member added without checking where it lands.
     static_assert(sizeof(FProperty) == 56, "FProperty changed size; re-check its member order.");
 
     // Tight-packing types such as bool and struct override NetSerialize on their own property class.
@@ -30,18 +29,7 @@ namespace Lumina
 
     void FEntityProperty::NetSerialize(FNetArchive& Ar, void* Value)
     {
-        uint32& Raw = *static_cast<uint32*>(Value);
-        if (Ar.IsWriting() && Ar.EntityToNetGUID)
-        {
-            WriteVarUInt(Ar, Ar.EntityToNetGUID(Raw));
-            return;
-        }
-        if (Ar.IsReading() && Ar.NetGUIDToEntity)
-        {
-            Raw = Ar.NetGUIDToEntity(ReadVarUInt(Ar));
-            return;
-        }
-        Super::NetSerialize(Ar, Value);
+        Ar.SerializeEntity(*static_cast<uint32*>(Value));
     }
 
     void FBoolProperty::NetSerialize(FNetArchive& Ar, void* Value)

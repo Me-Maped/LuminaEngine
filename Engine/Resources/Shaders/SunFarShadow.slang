@@ -1,24 +1,10 @@
 #pragma once
 #include "Includes/SceneGlobals.slang"
 #include "Includes/GlobalRHI.slang"
-#include "Includes/SunDFShadowCommon.slang"
+#include "Includes/WorldDistanceField.slang"
+#include "Includes/TerrainHeightfield.slang"
 
-// Sun occlusion the cascades cannot hold, marched per pixel from the depth buffer and read back by the lighting.
-
-// Covers a 4x4 open-world terrain tiling with shadow casting enabled on every tile.
-static const uint kMaxTerrainShadowRecords = 16u;
-
-// Mirror of Lumina::FTerrainShadowRecord.
-struct FTerrainShadowRecord
-{
-    float2     OriginXZ;
-    float      Stride;
-    float      OriginY;
-    float      MaxHeight;
-    float      Resolution;
-    FTexture2D Heightmap;
-    float      _Pad;
-};
+// Sun occlusion the virtual shadow levels cannot hold, marched per pixel from the depth buffer and read back by the lighting.
 
 // Mirror of Lumina::FSunFarShadowArgs.
 struct FPushConstants
@@ -32,23 +18,51 @@ struct FPushConstants
     uint                 TerrainSteps;
     uint                 NumTerrains;
     float                _Pad;
-    FSunDFShadowGrid     DFGrid;
+    FWorldDistanceField  Field;
     float                DFNear;
     float                DFFar;
     float                DFMaxTrace;
     uint                 bDistanceField;
-    FTerrainShadowRecord Terrains[kMaxTerrainShadowRecords];
+    FTerrainHeightfield Terrains[kMaxTerrainHeightfields];
 };
 FPushConstants* Pass() { return GetPassArgs<FPushConstants>(); }
 
-float TerrainHeightAt(FTerrainShadowRecord T, float2 XZ)
+// Steps toward the sun through the world field, at least half a voxel at a time so a grazing ray still leaves.
+static const uint kSunFieldSteps = 64u;
+
+// Starts a voxel and a half toward the sun, past the receiver's own surface in the field, since a depth normal on distant foliage is only noise.
+float TraceSunField(FWorldDistanceField* Field, float3 P, float3 ToSun, float TanHalfAngle, float MaxTrace)
 {
-    const float2 UV = ((XZ - T.OriginXZ) / T.Stride + 0.5) / T.Resolution;
-    return T.OriginY + T.Heightmap.SampleLevel(Samplers::LinearClamp, UV, 0.0).r * T.MaxHeight;
+    const uint ReceiverLevel = Field.LevelAt(P);
+    if (ReceiverLevel >= kWorldDFLevels)
+    {
+        return 1.0;
+    }
+
+    float Visibility = 1.0;
+    float t = 1.5 * Field.VoxelSize(ReceiverLevel);
+    [loop]
+    for (uint Step = 0u; Step < kSunFieldSteps && t < MaxTrace; ++Step)
+    {
+        uint Level;
+        const float Distance = Field.Sample(P + ToSun * t, Level);
+        if (Level >= kWorldDFLevels)
+        {
+            break;
+        }
+        const float Voxel = Field.VoxelSize(Level);
+        Visibility = min(Visibility, saturate(Distance / max(t * TanHalfAngle, 0.5 * Voxel)));
+        if (Visibility <= 0.0)
+        {
+            break;
+        }
+        t += max(Distance, 0.5 * Voxel);
+    }
+    return Visibility;
 }
 
 // Entry and exit distances of a ray through the terrain's square footprint, empty when it misses.
-float2 TerrainFootprintRange(FTerrainShadowRecord T, float3 Origin, float3 Dir)
+float2 TerrainFootprintRange(FTerrainHeightfield T, float3 Origin, float3 Dir)
 {
     const float  Extent = T.Stride * (T.Resolution - 1.0);
     const float2 D  = float2(abs(Dir.x) < 1e-6 ? 1e-6 : Dir.x, abs(Dir.z) < 1e-6 ? 1e-6 : Dir.z);
@@ -60,7 +74,7 @@ float2 TerrainFootprintRange(FTerrainShadowRecord T, float3 Origin, float3 Dir)
 }
 
 // Unreal's distance-field penumbra applied to a height field, the closest the ray passes over the ground relative to its cone.
-float TraceTerrainShadow(FTerrainShadowRecord T, float3 P, float ViewDistance)
+float TraceTerrainShadow(FTerrainHeightfield T, float3 P, float ViewDistance)
 {
     const float3 Dir = Pass().ToSun;
     const float  TopY = T.OriginY + T.MaxHeight;
@@ -91,7 +105,7 @@ float TraceTerrainShadow(FTerrainShadowRecord T, float3 P, float ViewDistance)
     {
         const float  t  = TStart * pow(Ratio, (float(i) + 0.5) / float(Steps));
         const float3 Q  = P + Dir * t;
-        const float  Clearance = Q.y + HeightBias - TerrainHeightAt(T, Q.xz);
+        const float  Clearance = Q.y + HeightBias - T.HeightAt(Q.xz);
         Visibility = min(Visibility, saturate(Clearance / (t * Pass().TanHalfAngle + HeightBias)));
         if (Visibility <= 0.0)
         {
@@ -117,19 +131,19 @@ void ComputeMain(uint3 DTid : SV_DispatchThreadID)
     if (Raw > 0.0 && Pass().ToSun.y > 0.0)
     {
         const float2 UV = (float2(Pixel) + 0.5) / float2(Pass().ScreenSize);
-        const float3 P  = ReconstructWorldPos(UV, Raw);
+        const float3 P  = LiftOntoTerrains(ReconstructWorldPos(UV, Raw), Pass().Terrains, Pass().NumTerrains);
         const float  ViewDistance = length(P - GetCameraPosition());
 
         [loop]
-        for (uint i = 0; i < min(Pass().NumTerrains, kMaxTerrainShadowRecords) && Visibility > 0.0; ++i)
+        for (uint i = 0; i < min(Pass().NumTerrains, kMaxTerrainHeightfields) && Visibility > 0.0; ++i)
         {
             Visibility = min(Visibility, TraceTerrainShadow(Pass().Terrains[i], P, ViewDistance));
         }
 
-        // Meshes take over from the cascades here and dissolve over the last tenth of their range.
+        // Meshes take over from the virtual shadow levels here and dissolve over the last tenth of their range.
         if (Pass().bDistanceField != 0u && Visibility > 0.0 && ViewDistance >= Pass().DFNear && ViewDistance <= Pass().DFFar)
         {
-            const float Traced = TraceSunDFShadows(&Pass().DFGrid, P, Pass().ToSun, Pass().TanHalfAngle, Pass().DFMaxTrace);
+            const float  Traced  = TraceSunField(&Pass().Field, P, Pass().ToSun, Pass().TanHalfAngle, Pass().DFMaxTrace);
             const float Fade   = saturate((ViewDistance - Pass().DFFar * 0.9) / (Pass().DFFar * 0.1));
             Visibility = min(Visibility, lerp(Traced, 1.0, Fade));
         }

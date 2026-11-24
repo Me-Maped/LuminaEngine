@@ -241,6 +241,30 @@ namespace Lumina
         StoreRenderData(Move(Refreshed));
     }
 
+    void SDynamicMeshComponent::UploadOnShow()
+    {
+        if (RenderLayers.Bits == 0)
+        {
+            return;
+        }
+
+        const TSharedPtr<FDynamicMeshRenderData> Current = LoadRenderData();
+        if (!Current || Current->MeshletHeaderSlot != 0 || Current->Resource.MeshletData.IsEmpty())
+        {
+            return;
+        }
+
+        // A copy, so the sync waits on its batch instead of drawing the slot the moment it is written.
+        TSharedPtr<FDynamicMeshRenderData> Shown = MakeShared<FDynamicMeshRenderData>(*Current);
+        MeshBuffers::CreateForResource(Shown->Resource);
+        Shown->MeshletHeaderSlot = Shown->Resource.MeshBuffers.MeshletHeaderSlot;
+        if (!bKeepCPUMeshletData)
+        {
+            Shown->Resource.MeshletData.ClearAndShrink();
+        }
+        StoreRenderData(Move(Shown));
+    }
+
     void SDynamicMeshComponent::AddSection(int32 MaterialSlot, int32 StartIndex, int32 IndexCount)
     {
         FDynamicMeshSection& Section = EnsureBuildData().Sections.EmplaceGetRef();
@@ -345,7 +369,7 @@ namespace Lumina
 
         TUniquePtr<FMeshResource> Resource = MakeUnique<FMeshResource>();
         Resource->bSkinnedMesh          = false;
-        Resource->MaxLODs               = Math::Clamp(Options.MaxLODs, 1u, (uint32)MAX_MESH_LODS);
+        Resource->bLODHierarchy         = Options.bLODHierarchy;
         Resource->bGenerateTangents     = Options.bGenerateTangents;
         Resource->bMeshletConeCulling   = Options.bMeshletConeCulling;
         Resource->bOptimizeMeshlets     = Options.bOptimizeMeshlets;
@@ -480,7 +504,7 @@ namespace Lumina
         LUMINA_MEMORY_SCOPE("Meshes");
 
         FMeshBuildOptions Options;
-        Options.MaxLODs             = (uint32)Math::Max(MaxLODs, 1);
+        Options.bLODHierarchy       = bLODHierarchy;
         Options.bGenerateTangents   = bGenerateTangents;
         Options.bMeshletConeCulling = bMeshletConeCulling;
         Options.bOptimizeMeshlets   = bOptimizeMeshlets;
@@ -502,8 +526,22 @@ namespace Lumina
 
         Import::Mesh::GenerateMeshlets(*Resource);
         NewData->Resource = Move(*Resource);
-        MeshBuffers::CreateForResource(NewData->Resource);
-        NewData->MeshletHeaderSlot = NewData->Resource.MeshBuffers.MeshletHeaderSlot;
+        PublishBuilt(Move(NewData));
+
+        // Staging is consumed; the next edit re-stages from scratch.
+        BuildData.reset();
+        return true;
+    }
+
+    void SDynamicMeshComponent::PublishBuilt(TSharedPtr<FDynamicMeshRenderData> NewData)
+    {
+        // A hidden mesh uploads when shown, keeping its meshlets until then.
+        const bool bUpload = RenderLayers.Bits != 0;
+        if (bUpload)
+        {
+            MeshBuffers::CreateForResource(NewData->Resource);
+            NewData->MeshletHeaderSlot = NewData->Resource.MeshBuffers.MeshletHeaderSlot;
+        }
 
         // Geometry half of each surface, straight off the built resource; the material half follows.
         const TVector<FGeometrySurface>& Geometry = NewData->Resource.GeometrySurfaces;
@@ -526,28 +564,16 @@ namespace Lumina
         
         ResolveMaterialsInto(*NewData);
 
-        TVector<FVector3> CommittedPositions = Move(NewData->Resource.Positions);
         NewData->Resource.ClearVertices();
-        if (bKeepCollisionTriangles)
-        {
-            NewData->Resource.Positions = Move(CommittedPositions);
-        }
-        else
-        {
-            NewData->Resource.Indices.Reset();
-            NewData->Resource.Indices.Shrink();
-        }
+        NewData->Resource.Indices.Reset();
+        NewData->Resource.Indices.Shrink();
 
-        if (!bKeepCPUMeshletData)
+        if (bUpload && !bKeepCPUMeshletData)
         {
             NewData->Resource.MeshletData.ClearAndShrink();
         }
 
         // Single publish point. The extract later this tick already reads the new addresses
         PublishRenderData(Move(NewData));
-
-        // Staging is consumed; the next edit re-stages from scratch.
-        BuildData.reset();
-        return true;
     }
 }

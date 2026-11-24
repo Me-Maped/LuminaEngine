@@ -30,6 +30,9 @@ namespace Lumina
     {
         template<typename T>
         concept IsACObject = std::is_base_of_v<CObject, T>;
+
+        template<typename T>
+        concept IsAConcreteCObject = IsACObject<T> && !std::is_abstract_v<T>;
     }
     
     RUNTIME_API CObject* StaticAllocateObject(const FConstructCObjectParams& Params);
@@ -39,10 +42,7 @@ namespace Lumina
     RUNTIME_API CObject* StaticLoadObject(const FGuid& GUID);
     RUNTIME_API CObject* StaticLoadObject(FStringView Name);
 
-    // Top-level "load this asset and its whole dependency closure in parallel" (CPackage::LoadAssetGraph).
-    // Use for big fan-out opens (worlds, level travel); falls back to the inline StaticLoadObject when the
-    // target isn't a registered asset. Do NOT call from inside a load to resolve a single reference -- that
-    // is StaticLoadObject's job (the graph loader is built on top of it).
+    // Parallel load of an asset and its dependency closure, which must not be called inside a load to resolve one reference.
     RUNTIME_API CObject* StaticLoadObjectGraph(const FGuid& GUID);
     RUNTIME_API CObject* StaticLoadObjectGraph(FStringView Name);
 
@@ -101,13 +101,13 @@ namespace Lumina
     RUNTIME_API void GetObjectsWithPackage(const CPackage* Package, TVector<CObject*>& OutObjects);
 
 
-    template<Concept::IsACObject T>
+    template<Concept::IsAConcreteCObject T>
     T* NewObject(EObjectFlags Flags)
     {
         return static_cast<T*>(NewObject(T::StaticClass(), nullptr, NAME_None, FGuid::New(), Flags));
     }
     
-    template<Concept::IsACObject T>
+    template<Concept::IsAConcreteCObject T>
     T* NewObject(CPackage* Package = nullptr, const FName& Name = NAME_None, const FGuid& GUID = FGuid::New(), EObjectFlags Flags = OF_None)
     {
         return static_cast<T*>(NewObject(T::StaticClass(), Package, Name, GUID, Flags));

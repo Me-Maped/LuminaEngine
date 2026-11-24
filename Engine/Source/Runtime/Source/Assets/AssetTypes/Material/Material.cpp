@@ -263,9 +263,15 @@ namespace Lumina
             return true;
         }
 
-        // Compiles one builtin stage from a template. The result lands as binaries, which PostLoad commits.
-        void CompileBuiltinStage(IShaderCompiler& Compiler, CMaterial* Material, EMaterialShaderStage Stage, const char* TemplateFile,
-                                 const char* Define, std::initializer_list<FTemplateToken> Tokens, const char* EntryPoint = nullptr)
+        struct FBuiltinEntry
+        {
+            EMaterialShaderStage Stage;
+            const char*          EntryPoint;
+        };
+
+        // Compiles builtin stages from one template, parsed once. The results land as binaries, which PostLoad commits.
+        void CompileBuiltinEntries(IShaderCompiler& Compiler, CMaterial* Material, const char* TemplateFile, const char* Define,
+                                   std::initializer_list<FTemplateToken> Tokens, std::initializer_list<FBuiltinEntry> Stages)
         {
             const FString TemplatePath = FString(kMaterialShaderDirectory) + TemplateFile;
 
@@ -281,23 +287,30 @@ namespace Lumina
             {
                 Options.MacroDefinitions.Emplace(Define);
             }
-            if (EntryPoint != nullptr)
-            {
-                Options.EntryPoint = EntryPoint;
-            }
 
-            Compiler.CompilerShaderRaw(Move(Source), Move(Options), [Material, Stage](const FShaderHeader& Header) mutable
+            TVector<IShaderCompiler::FRawShaderEntry> Entries;
+            for (const FBuiltinEntry& Entry : Stages)
             {
-                Material->SetStageBinaries(Stage, TSpan<const uint32>(Header.Binaries.GetData(), Header.Binaries.Num()));
-            });
+                const EMaterialShaderStage Stage = Entry.Stage;
+                Entries.Add({ Entry.EntryPoint != nullptr ? FString(Entry.EntryPoint) : FString(), Options.DebugName, [Material, Stage](const FShaderHeader& Header)
+                {
+                    Material->SetStageBinaries(Stage, TSpan<const uint32>(Header.Binaries.GetData(), Header.Binaries.Num()));
+                }, {} });
+            }
+            Compiler.CompileShaderRawEntries(Move(Source), Options, Move(Entries));
+        }
+
+        void CompileBuiltinStage(IShaderCompiler& Compiler, CMaterial* Material, EMaterialShaderStage Stage, const char* TemplateFile,
+                                 const char* Define, std::initializer_list<FTemplateToken> Tokens)
+        {
+            CompileBuiltinEntries(Compiler, Material, TemplateFile, Define, Tokens, { { Stage, nullptr } });
         }
 
         // A geometry template carries both paths, MeshMain for Stage and VertexMain for its vertex-path twin.
         void CompileBuiltinGeometryStage(IShaderCompiler& Compiler, CMaterial* Material, EMaterialShaderStage Stage, const char* TemplateFile,
                                          const char* Define, std::initializer_list<FTemplateToken> Tokens)
         {
-            CompileBuiltinStage(Compiler, Material, Stage, TemplateFile, Define, Tokens, "MeshMain");
-            CompileBuiltinStage(Compiler, Material, VertexPathStage(Stage), TemplateFile, Define, Tokens, "VertexMain");
+            CompileBuiltinEntries(Compiler, Material, TemplateFile, Define, Tokens, { { Stage, "MeshMain" }, { VertexPathStage(Stage), "VertexMain" } });
         }
 
         // Builtins are rebuilt in place, so a compile still in flight lands before the old one is unrooted. Null when there is no compiler.
@@ -438,8 +451,8 @@ namespace Lumina
             {
                 CommitSerializedShaders();
 #if USING(WITH_EDITOR)
-                // Recompiled once in the background so the asset gains a source hash and can drop its embedded bytecode.
-                if (SourceHash == 0 && GetPackage() != nullptr)
+                // Recompiled once in the background so the asset gains a source hash and learns whether its graph offsets vertices.
+                if ((SourceHash == 0 || !bWorldPositionOffsetKnown) && GetPackage() != nullptr)
                 {
                     QueueEditorRecompile(this);
                 }
@@ -812,18 +825,22 @@ namespace Lumina
     {
         const bool bMeshlet = MaterialDomain::IsMeshlet(MaterialType);
         const bool bMasked  = BlendMode == EBlendMode::Masked;
+        // Only the translucent passes bind a meshlet material's forward stages, and only the opaque ones its deferred stage.
+        const bool bForward = IsOITResolved() || IsUnorderedBlend();
+        // Terrain rasters its own meshlets into the VisBuffer and shades in the deferred pass, with no forward stages.
+        const bool bTerrain = MaterialType == EMaterialType::Terrain;
 
         switch (Stage)
         {
-        case EMaterialShaderStage::Pixel:                return true;
+        case EMaterialShaderStage::Pixel:                return (!bMeshlet && !bTerrain) || bForward;
         case EMaterialShaderStage::Vertex:               return MaterialDomain::UsesVertexStage(MaterialType);
-        case EMaterialShaderStage::MeshShadow:
         case EMaterialShaderStage::MeshBase:
+        case EMaterialShaderStage::MeshBaseVertex:       return bMeshlet && bForward;
+        case EMaterialShaderStage::Deferred:             return (bMeshlet && !bForward) || bTerrain;
         case EMaterialShaderStage::VisBufferMesh:
-        case EMaterialShaderStage::MeshShadowVertex:
-        case EMaterialShaderStage::MeshBaseVertex:
-        case EMaterialShaderStage::VisBufferVertex:
-        case EMaterialShaderStage::Deferred:             return bMeshlet;
+        case EMaterialShaderStage::VisBufferVertex:      return bMeshlet || bTerrain;
+        case EMaterialShaderStage::MeshShadow:
+        case EMaterialShaderStage::MeshShadowVertex:     return bMeshlet;
         case EMaterialShaderStage::VisBufferMeshMasked:
         case EMaterialShaderStage::MaskedVisBufferPixel:
         case EMaterialShaderStage::MeshShadowMasked:
@@ -1312,7 +1329,7 @@ namespace Lumina
                        : (_ErrorAxis.z > _ErrorAxis.y) ? float2(-sign(WorldNormal.z) * WorldPosition.x, WorldPosition.y)
                        : float2(-WorldPosition.x, -sign(WorldNormal.y) * WorldPosition.z);
     // Shifted by a multiple of 180 so the row and column math never sees a negative cell and the tiling is unchanged.
-    uint2 _ErrorCell = uint2(int2(floor(_ErrorPlane.x / 0.015), floor(-_ErrorPlane.y / 0.015)) + 1048680);
+    uint2 _ErrorCell = uint2(int2(floor(float2(_ErrorPlane.x, -_ErrorPlane.y) / 0.015)) + 1048680);
     uint _ErrorRow = _ErrorCell.y % 10u;
     uint _ErrorColumn = (_ErrorCell.x + ((_ErrorCell.y / 10u) & 1u) * 18u) % 36u;
     bool _ErrorInk = false;
@@ -1344,6 +1361,7 @@ namespace Lumina
         CMaterial* Material = NewObject<CMaterial>(nullptr, Name);
         Material->AddToRoot();
         Material->BlendMode = InBlendMode;
+        Material->bWorldPositionOffsetKnown = true;
         Material->Parameters.Reset();
         Material->Parameters.Append(InParameters.begin(), InParameters.end());
 
@@ -1382,6 +1400,7 @@ namespace Lumina
         }
 
         CMaterial* Material = NewObject<CMaterial>(nullptr, "DefaultTerrainMaterial");
+        Material->bWorldPositionOffsetKnown = true;
         Material->AddToRoot();
         Material->MaterialType = EMaterialType::Terrain;
         GDefaultTerrainMaterial = Material;
@@ -1396,8 +1415,9 @@ namespace Lumina
 
         const FString NoOffset = "Material.WorldPositionOffset = float3(0.0);\n";
 
-        CompileBuiltinStage(*Compiler, Material, EMaterialShaderStage::Pixel,  "TerrainBasePixelPass.slang",  nullptr, { { kPixelInputsToken, PixelInputs } });
-        CompileBuiltinStage(*Compiler, Material, EMaterialShaderStage::Vertex, "TerrainBaseVertexPass.slang", nullptr, { { kVertexInputsToken, NoOffset } });
+        CompileBuiltinGeometryStage(*Compiler, Material, EMaterialShaderStage::VisBufferMesh, "TerrainVisBuffer.slang", nullptr, { { kVertexInputsToken, NoOffset } });
+        CompileBuiltinStage(*Compiler, Material, EMaterialShaderStage::Deferred, "TerrainDeferredMaterial.slang", nullptr,
+                            { { kVertexInputsToken, NoOffset }, { kPixelInputsToken, PixelInputs } });
 
         Compiler->Flush();
         Material->PostLoad();

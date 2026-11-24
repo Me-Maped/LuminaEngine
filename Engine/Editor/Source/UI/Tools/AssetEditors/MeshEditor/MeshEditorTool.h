@@ -49,12 +49,8 @@ namespace Lumina
         bool bShowAABB = false;
         bool bShowWireframe = false;
 
-        // Selected surface in the Geometry Surfaces UI (-1 = none); drawn as a colored
-        // AABB overlay in Update() to show which part of the mesh it covers.
+        // Drawn as a colored AABB overlay in Update, with -1 meaning none.
         int32 SelectedSurfaceIndex = -1;
-
-        // -1 = automatic (distance-driven), 0..MAX_MESH_LODS-1 = forced.
-        int32 PreviewLODIndex = -1;
 
         ECS::FEntity DirectionalLightEntity = ECS::NullEntity;
         ECS::FEntity MeshEntity = ECS::NullEntity;

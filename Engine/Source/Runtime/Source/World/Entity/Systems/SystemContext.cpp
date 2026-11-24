@@ -75,6 +75,11 @@ namespace Lumina
         return Registry->GetHierarchy();
     }
 
+    FSimulation* SSystemContext::GetSimulation() const
+    {
+        return World != nullptr ? World->GetSimulation() : nullptr;
+    }
+
     void SSystemContext::SetEntityLifetime(ECS::FEntity Entity, float Lifetime) const
     {
         if (ECS::FCommandBus::ShouldDefer())
@@ -146,7 +151,7 @@ namespace Lumina
     ECS::FEntity SSystemContext::Create(FVector3 Location, FName EntityName) const
     {
         LUMINA_PROFILE_SCOPE();
-        return SystemContextInternal::CreateEntity(*Registry, *CommandBus, EntityName, [Location](STransformComponent& Component) { Component.SetLocation(Location); });
+        return SystemContextInternal::CreateEntity(*Registry, *CommandBus, EntityName, [Location](STransformComponent& Component) { Component.SetLocalLocation(Location); });
     }
 
     ECS::FEntity SSystemContext::Create(FName EntityName) const
@@ -163,6 +168,11 @@ namespace Lumina
     EWorldType SSystemContext::GetWorldType() const
     {
         return World->GetWorldType();
+    }
+
+    bool SSystemContext::IsNetClient() const
+    {
+        return World->GetNetMode() == ENetMode::Client;
     }
 
     ECS::FEntity SSystemContext::ScriptCreate(const FTransform& Transform, FName EntityName) const

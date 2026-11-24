@@ -1,6 +1,7 @@
-﻿#include "Localization/Localization.h"
+#include "Localization/Localization.h"
 #include "PropertyTable.h"
 
+#include <cctype>
 #include <cstdlib>
 
 #include "Containers/HashTable.h"
@@ -36,7 +37,7 @@ namespace Lumina::PropertyTableInternal
 {
     using FRowExpansionState = THashMap<FString, bool>;
 
-    // EditCondition metadata, "Prop", "!Prop", "Prop == V" or "Prop != V" joined by && or ||.
+    // EditCondition metadata, terms like "Prop", "Prop == V" or "Prop > V" combined with !, &&, || and parentheses, && binding tighter than ||.
     class FPropertyEditCondition
     {
     public:
@@ -46,26 +47,48 @@ namespace Lumina::PropertyTableInternal
             Truthy,
             Equals,
             NotEquals,
+            Less,
+            LessEqual,
+            Greater,
+            GreaterEqual,
         };
 
         struct FTerm
         {
             FProperty*  Property = nullptr;
-            int64       Expected = 0;
+            double      Expected = 0.0;
             EOperator   Operator = EOperator::Truthy;
-            bool        bNegated = false;
             bool        bLiteralResolved = false;
+        };
+
+        enum class ENodeKind : uint8
+        {
+            Term,
+            Not,
+            And,
+            Or,
+        };
+
+        struct FNode
+        {
+            ENodeKind Kind = ENodeKind::Term;
+            int32     Left = -1;
+            int32     Right = -1;
+            FTerm     Term;
         };
 
         void Parse(FProperty* Source);
         bool Evaluate(void* ContainerPtr) const;
-        bool IsBound() const { return !Terms.IsEmpty(); }
+        bool IsBound() const { return Root >= 0; }
         bool ShouldHide() const { return bHides; }
 
     private:
 
-        TVector<FTerm>  Terms;
-        bool            bRequireAll = true;
+        struct FParser;
+        bool EvaluateNode(int32 Index, void* ContainerPtr) const;
+
+        TVector<FNode>  Nodes;
+        int32           Root = -1;
         bool            bHides = false;
     };
 
@@ -118,6 +141,8 @@ namespace Lumina::PropertyTableInternal
         bool IsArrayElement() const { return bArrayElement; }
         void SetIsArrayElement(bool bTrue) { bArrayElement = bTrue; }
         bool IsReadOnly() const;
+        // The EditConditionReason while the row's condition disables it, empty otherwise.
+        FStringView GetDisabledReason() const;
         bool IsVisible() const;
         bool IsTopLevel() const;
 
@@ -621,7 +646,8 @@ namespace Lumina::PropertyTableInternal
         }
     }
 
-    bool TryReadConditionInteger(FProperty* Property, void* ContainerPtr, int64& OutValue)
+    // Any numeric, enum or bool property read as a double, so every comparison shares one path.
+    bool TryReadConditionNumber(FProperty* Property, void* ContainerPtr, double& OutValue)
     {
         void* ValuePtr = Property->GetValuePtr<uint8>(ContainerPtr);
         if (ValuePtr == nullptr)
@@ -637,21 +663,29 @@ namespace Lumina::PropertyTableInternal
             {
                 return false;
             }
-            OutValue = Inner->GetSignedIntPropertyValue(ValuePtr);
+            OutValue = (double)Inner->GetSignedIntPropertyValue(ValuePtr);
             return true;
         }
-
+        if (Type == EPropertyTypeFlags::Float)
+        {
+            OutValue = (double)*static_cast<const float*>(ValuePtr);
+            return true;
+        }
+        if (Type == EPropertyTypeFlags::Double)
+        {
+            OutValue = *static_cast<const double*>(ValuePtr);
+            return true;
+        }
         if (IsIntegerPropertyType(Type))
         {
-            OutValue = static_cast<FNumericProperty*>(Property)->GetSignedIntPropertyValue(ValuePtr);
+            OutValue = (double)static_cast<FNumericProperty*>(Property)->GetSignedIntPropertyValue(ValuePtr);
             return true;
         }
-
         return false;
     }
 
-    // The literal side of an == / != term, as an integer. Enum terms accept a bare or qualified enumerator.
-    bool TryResolveConditionLiteral(FProperty* Property, FStringView Literal, int64& OutValue)
+    // The literal side of a comparison. Enum terms accept a bare or qualified enumerator.
+    bool TryResolveConditionLiteral(FProperty* Property, FStringView Literal, double& OutValue)
     {
         if (Property->GetType() == EPropertyTypeFlags::Enum)
         {
@@ -669,63 +703,82 @@ namespace Lumina::PropertyTableInternal
                     || (Scope != Constants::kIndexNone && Name.Mid(Scope + 2) == Literal);
                 if (bMatches)
                 {
-                    OutValue = static_cast<int64>(Entry.Value);
+                    OutValue = (double)Entry.Value;
                     return true;
                 }
             }
             return false;
         }
 
-        if (Literal == "true")
+        if (Literal == "true" || Literal == "false")
         {
-            OutValue = 1;
-            return true;
-        }
-        if (Literal == "false")
-        {
-            OutValue = 0;
+            OutValue = Literal == "true" ? 1.0 : 0.0;
             return true;
         }
 
         const FString Text(Literal.GetData(), Literal.Len());
         char* End = nullptr;
-        const long long Parsed = strtoll(*Text, &End, 10);
+        const double Parsed = strtod(*Text, &End);
         if (End == *Text)
         {
             return false;
         }
-        OutValue = static_cast<int64>(Parsed);
+        OutValue = Parsed;
         return true;
+    }
+
+    // A bare property is set when it is a nonzero number, a true bool, a non-null object, a non-empty string or a name other than None.
+    bool IsConditionPropertySet(FProperty* Property, void* ContainerPtr)
+    {
+        switch (Property->GetType())
+        {
+        case EPropertyTypeFlags::Object:
+        {
+            TStrongObjectPtr<CObject> Value;
+            Property->GetValue(ContainerPtr, &Value);
+            return Value != nullptr;
+        }
+        case EPropertyTypeFlags::String:
+        {
+            const FString* Value = Property->GetValuePtr<FString>(ContainerPtr);
+            return Value != nullptr && !Value->IsEmpty();
+        }
+        case EPropertyTypeFlags::Name:
+        {
+            const FName* Value = Property->GetValuePtr<FName>(ContainerPtr);
+            return Value != nullptr && !Value->IsNone();
+        }
+        default:
+        {
+            double Value = 0.0;
+            return TryReadConditionNumber(Property, ContainerPtr, Value) && Value != 0.0;
+        }
+        }
     }
 
     bool EvaluateConditionTerm(const FPropertyEditCondition::FTerm& Term, void* ContainerPtr)
     {
-        bool bResult = false;
-
-        if (Term.Operator == FPropertyEditCondition::EOperator::Truthy)
+        using EOperator = FPropertyEditCondition::EOperator;
+        if (Term.Operator == EOperator::Truthy)
         {
-            if (Term.Property->GetType() == EPropertyTypeFlags::Object)
-            {
-                TStrongObjectPtr<CObject> Value;
-                Term.Property->GetValue(ContainerPtr, &Value);
-                bResult = Value != nullptr;
-            }
-            else
-            {
-                int64 Value = 0;
-                bResult = TryReadConditionInteger(Term.Property, ContainerPtr, Value) && Value != 0;
-            }
-        }
-        else
-        {
-            int64 Value = 0;
-            if (Term.bLiteralResolved && TryReadConditionInteger(Term.Property, ContainerPtr, Value))
-            {
-                bResult = Term.Operator == FPropertyEditCondition::EOperator::Equals ? Value == Term.Expected : Value != Term.Expected;
-            }
+            return IsConditionPropertySet(Term.Property, ContainerPtr);
         }
 
-        return Term.bNegated ? !bResult : bResult;
+        double Value = 0.0;
+        if (!Term.bLiteralResolved || !TryReadConditionNumber(Term.Property, ContainerPtr, Value))
+        {
+            return false;
+        }
+        switch (Term.Operator)
+        {
+        case EOperator::Equals:       return Value == Term.Expected;
+        case EOperator::NotEquals:    return Value != Term.Expected;
+        case EOperator::Less:         return Value < Term.Expected;
+        case EOperator::LessEqual:    return Value <= Term.Expected;
+        case EOperator::Greater:      return Value > Term.Expected;
+        case EOperator::GreaterEqual: return Value >= Term.Expected;
+        default:                      return false;
+        }
     }
 
     // One buffer for the whole editor, so a value can move between panels, not just within one table.
@@ -814,24 +867,33 @@ namespace Lumina::PropertyTableInternal
         return Table.RowPosY1 > Table.InnerClipRect.Max.y || Table.RowPosY1 + Height < Table.InnerClipRect.Min.y;
     }
 
-    // A clipped label leads its tooltip with the full name, since the cell no longer shows it.
-    void DrawPropertyTooltip(const FProperty* Property, bool bLabelClipped = false)
+    // A clipped label leads its tooltip with the full name, since the cell no longer shows it. A disabled row leads with how to enable it.
+    void DrawPropertyTooltip(const FProperty* Property, bool bLabelClipped = false, FStringView DisabledReason = FStringView())
     {
         if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
             return;
         }
 
-        const FCStringView Name = Property->GetPropertyDisplayName();
+        if (!DisabledReason.IsEmpty())
+        {
+            const FStringView Own = Property->GetMetadata("ToolTip");
+            const FString Text = Own.IsEmpty() ? FString(DisabledReason.GetData(), DisabledReason.Len())
+                                               : FString(DisabledReason.GetData(), DisabledReason.Len()) + "\n\n" + FString(Own.GetData(), Own.Len());
+            ImGuiX::WrappedTooltip_Internal(FStringView(*Text, Text.Len()));
+            return;
+        }
+
+        const char* Name = LocalizedPropertyName(Property);
         const FStringView Tooltip = Property->GetMetadata("ToolTip");
         if (Tooltip.IsEmpty())
         {
-            ImGuiX::WrappedTooltip_Internal(FStringView(*Name, Name.Len()));
+            ImGuiX::WrappedTooltip_Internal(FStringView(Name));
             return;
         }
         if (bLabelClipped)
         {
-            const FString Both = FString(*Name) + "\n\n" + FString(Tooltip.GetData(), Tooltip.Len());
+            const FString Both = FString(Name) + "\n\n" + FString(Tooltip.GetData(), Tooltip.Len());
             ImGuiX::WrappedTooltip_Internal(FStringView(*Both, Both.Len()));
             return;
         }
@@ -839,11 +901,11 @@ namespace Lumina::PropertyTableInternal
     }
 
     // An element's inner property has no name or tooltip, so the element reads as its place in the array plus the array's own tooltip.
-    void DrawRowTooltip(const FPropertyHandle* Handle, const FProperty* Property, bool bLabelClipped, FStringView Label = FStringView())
+    void DrawRowTooltip(const FPropertyHandle* Handle, const FProperty* Property, bool bLabelClipped, FStringView Label = FStringView(), FStringView DisabledReason = FStringView())
     {
         if (Handle == nullptr || Handle->OwnerArray == nullptr)
         {
-            DrawPropertyTooltip(Property, bLabelClipped);
+            DrawPropertyTooltip(Property, bLabelClipped, DisabledReason);
             return;
         }
         if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
@@ -1071,10 +1133,138 @@ namespace Lumina::PropertyTableInternal
         return Default != InObject ? Default : nullptr;
     }
 
+    // Recursive descent over the condition text, appending nodes and failing the whole condition on anything it cannot read.
+    struct FPropertyEditCondition::FParser
+    {
+        FStringView     Text;
+        int32           Pos = 0;
+        FProperty*      Source = nullptr;
+        TVector<FNode>& Nodes;
+        bool            bFailed = false;
+
+        void SkipSpace()
+        {
+            while (Pos < Text.Len() && (Text[Pos] == ' ' || Text[Pos] == '\t'))
+            {
+                ++Pos;
+            }
+        }
+
+        bool Match(FStringView Token)
+        {
+            SkipSpace();
+            if (Text.Mid(Pos).StartsWith(Token))
+            {
+                Pos += Token.Len();
+                return true;
+            }
+            return false;
+        }
+
+        int32 Add(ENodeKind Kind, int32 Left, int32 Right)
+        {
+            FNode& Node = Nodes.EmplaceGetRef();
+            Node.Kind  = Kind;
+            Node.Left  = Left;
+            Node.Right = Right;
+            return Nodes.Num() - 1;
+        }
+
+        int32 ParseOr()
+        {
+            int32 Left = ParseAnd();
+            while (!bFailed && Match("||"))
+            {
+                Left = Add(ENodeKind::Or, Left, ParseAnd());
+            }
+            return Left;
+        }
+
+        int32 ParseAnd()
+        {
+            int32 Left = ParseUnary();
+            while (!bFailed && Match("&&"))
+            {
+                Left = Add(ENodeKind::And, Left, ParseUnary());
+            }
+            return Left;
+        }
+
+        int32 ParseUnary()
+        {
+            SkipSpace();
+            if (Pos < Text.Len() && Text[Pos] == '!' && (Pos + 1 >= Text.Len() || Text[Pos + 1] != '='))
+            {
+                ++Pos;
+                return Add(ENodeKind::Not, ParseUnary(), -1);
+            }
+            if (Match("("))
+            {
+                const int32 Inner = ParseOr();
+                bFailed |= !Match(")");
+                return Inner;
+            }
+            return ParseTerm();
+        }
+
+        int32 ParseTerm()
+        {
+            SkipSpace();
+            const int32 NameStart = Pos;
+            while (Pos < Text.Len() && (std::isalnum((unsigned char)Text[Pos]) || Text[Pos] == '_'))
+            {
+                ++Pos;
+            }
+            const FStringView Name = Text.Mid(NameStart, Pos - NameStart);
+            CStruct* Owner = Source->GetOwnerStruct();
+            FProperty* Property = !Name.IsEmpty() && Owner != nullptr ? Owner->GetProperty(FName(Name)) : nullptr;
+            if (Property == nullptr || Property == Source)
+            {
+                bFailed = true;
+                return -1;
+            }
+
+            FTerm Term;
+            Term.Property = Property;
+            struct FOperatorToken { const char* Token; EOperator Operator; };
+            constexpr FOperatorToken Operators[] = {
+                { "==", EOperator::Equals }, { "!=", EOperator::NotEquals }, { "<=", EOperator::LessEqual },
+                { ">=", EOperator::GreaterEqual }, { "<", EOperator::Less }, { ">", EOperator::Greater },
+            };
+            for (const FOperatorToken& Candidate : Operators)
+            {
+                if (Match(Candidate.Token))
+                {
+                    Term.Operator = Candidate.Operator;
+                    break;
+                }
+            }
+            if (Term.Operator != EOperator::Truthy)
+            {
+                SkipSpace();
+                const int32 LiteralStart = Pos;
+                while (Pos < Text.Len() && Text[Pos] != ' ' && Text[Pos] != ')' && Text[Pos] != '&' && Text[Pos] != '|')
+                {
+                    ++Pos;
+                }
+                FStringView Literal = Text.Mid(LiteralStart, Pos - LiteralStart);
+                if (Literal.Len() >= 2 && Literal[0] == '"' && Literal.Last() == '"')
+                {
+                    Literal = Literal.Mid(1, Literal.Len() - 2);
+                }
+                Term.bLiteralResolved = TryResolveConditionLiteral(Property, Literal, Term.Expected);
+            }
+
+            const int32 Index = Add(ENodeKind::Term, -1, -1);
+            Nodes[Index].Term = Term;
+            return Index;
+        }
+    };
+
     void FPropertyEditCondition::Parse(FProperty* Source)
     {
-        Terms.Reset();
-        bRequireAll = true;
+        Nodes.Reset();
+        Root = -1;
         bHides = false;
 
         const FCStringView Expression = Source->GetMetadata("EditCondition");
@@ -1083,98 +1273,34 @@ namespace Lumina::PropertyTableInternal
             return;
         }
 
-        const FStringView Full = Expression;
-        TVector<FStringView> TermViews;
-        int32 Start = 0;
-        while (Start <= Full.Len())
+        const FStringView ExpressionView = Expression;
+        FParser Parser{ ExpressionView, 0, Source, Nodes };
+        const int32 Parsed = Parser.ParseOr();
+        Parser.SkipSpace();
+        if (Parser.bFailed || Parsed < 0 || Parser.Pos != Parser.Text.Len())
         {
-            const int32 And = Full.Find("&&", Start);
-            const int32 Or  = Full.Find("||", Start);
-            const int32 Sep = And == Constants::kIndexNone ? Or : (Or == Constants::kIndexNone ? And : Math::Min(And, Or));
-            if (Sep == Constants::kIndexNone)
-            {
-                TermViews.Add(Full.Mid(Start));
-                break;
-            }
-            bRequireAll &= (Sep == And);
-            TermViews.Add(Full.Mid(Start, Sep - Start));
-            Start = Sep + 2;
+            Nodes.Reset();
+            return;
         }
-
-        for (FStringView TermView : TermViews)
-        {
-            FTerm Term;
-            FStringView Text = TrimWhitespace(TermView);
-            if (!Text.IsEmpty() && Text[0] == '!' && (Text.Len() < 2 || Text[1] != '='))
-            {
-                Term.bNegated = true;
-                Text.RemovePrefix(1);
-            }
-
-            FStringView NameView = Text;
-            FStringView LiteralView;
-            const int32 Equals    = Text.Find("==");
-            const int32 NotEquals = Text.Find("!=");
-            if (Equals != Constants::kIndexNone || NotEquals != Constants::kIndexNone)
-            {
-                const int32 Sep = Equals != Constants::kIndexNone ? Equals : NotEquals;
-                Term.Operator = Sep == Equals ? EOperator::Equals : EOperator::NotEquals;
-                NameView = Text.Mid(0, Sep);
-
-                LiteralView = TrimWhitespace(Text.Mid(Sep + 2));
-                if (LiteralView.Len() >= 2 && LiteralView[0] == '"' && LiteralView.Last() == '"')
-                {
-                    LiteralView = LiteralView.Mid(1, LiteralView.Len() - 2);
-                }
-            }
-
-            NameView = TrimWhitespace(NameView);
-            if (NameView.IsEmpty())
-            {
-                Terms.Reset();
-                return;
-            }
-
-            CStruct* Owner = Source->GetOwnerStruct();
-            Term.Property = Owner != nullptr ? Owner->GetProperty(FName(NameView)) : nullptr;
-            if (Term.Property == nullptr || Term.Property == Source)
-            {
-                Terms.Reset();
-                return;
-            }
-
-            if (Term.Operator != EOperator::Truthy)
-            {
-                Term.bLiteralResolved = TryResolveConditionLiteral(Term.Property, LiteralView, Term.Expected);
-            }
-
-            Terms.Add(Term);
-        }
-
+        Root   = Parsed;
         bHides = Source->HasEditorFlag(EPropertyEditorFlags::EditConditionHides);
+    }
+
+    bool FPropertyEditCondition::EvaluateNode(int32 Index, void* ContainerPtr) const
+    {
+        const FNode& Node = Nodes[Index];
+        switch (Node.Kind)
+        {
+        case ENodeKind::Not: return !EvaluateNode(Node.Left, ContainerPtr);
+        case ENodeKind::And: return EvaluateNode(Node.Left, ContainerPtr) && EvaluateNode(Node.Right, ContainerPtr);
+        case ENodeKind::Or:  return EvaluateNode(Node.Left, ContainerPtr) || EvaluateNode(Node.Right, ContainerPtr);
+        default:             return EvaluateConditionTerm(Node.Term, ContainerPtr);
+        }
     }
 
     bool FPropertyEditCondition::Evaluate(void* ContainerPtr) const
     {
-        if (Terms.IsEmpty() || ContainerPtr == nullptr)
-        {
-            return true;
-        }
-
-        for (const FTerm& Term : Terms)
-        {
-            const bool bTermResult = EvaluateConditionTerm(Term, ContainerPtr);
-            if (bRequireAll && !bTermResult)
-            {
-                return false;
-            }
-            if (!bRequireAll && bTermResult)
-            {
-                return true;
-            }
-        }
-
-        return bRequireAll;
+        return Root < 0 || ContainerPtr == nullptr || EvaluateNode(Root, ContainerPtr);
     }
 
     FPropertyRow::FPropertyRow(const FPropertyChangedEventCallbacks& InCallbacks)
@@ -1698,8 +1824,7 @@ namespace Lumina::PropertyTableInternal
         {
             return FStringView();
         }
-        const FCStringView Display = PropertyHandle->Property->GetPropertyDisplayName();
-        return FStringView(*Display, Display.Len());
+        return FStringView(LocalizedPropertyName(PropertyHandle->Property));
     }
 
     FStringView FPropertyRow::GetFilterSourceLabel() const
@@ -1733,10 +1858,49 @@ namespace Lumina::PropertyTableInternal
         const bool bRestoreExpansion = !bFilterActive && bFilterStateActive;
         bFilterStateActive = bFilterActive;
 
-        const FStringView Label = GetFilterLabel();
-        const bool bSelfMatches = bFilterActive && !Label.IsEmpty() && ImGuiX::PassSearchFilter(Filter, Label);
-        // A matching ancestor, or this row, already shows the subtree. Children inherit that.
-        const bool bShowSubtree = bAncestorMatches || bSelfMatches;
+        bool bSelfMatches = false;
+        if (bFilterActive && !bAncestorMatches)
+        {
+            const FStringView Label = GetFilterLabel();
+            // Copy every field immediately. A numbered FName's c_str() hands back a rotating
+            // thread-local buffer, so holding several of those views aliases them onto the same bytes.
+            TVector<FString> OwnedFields;
+            const auto AddField = [&OwnedFields](FStringView Field)
+            {
+                if (!Field.IsEmpty())
+                {
+                    OwnedFields.Add(FString(Field));
+                }
+            };
+            AddField(Label);
+            AddField(GetFilterSourceLabel());
+            AddField(GetFilterInternalName());
+            for (FStringView Field : SearchContext)
+            {
+                AddField(Field);
+            }
+            // A row matches its category either way round, which is what lets a query mix a
+            // category's original spelling with a property's translated label.
+            for (const FPropertyRow* Ancestor = ParentRow; Ancestor != nullptr; Ancestor = Ancestor->ParentRow)
+            {
+                if (Ancestor->IsCategory())
+                {
+                    AddField(Ancestor->GetFilterSourceLabel());
+                    AddField(Ancestor->GetFilterLabel());
+                }
+            }
+            TVector<FStringView> Fields;
+            Fields.Reserve(OwnedFields.Num());
+            for (const FString& Field : OwnedFields)
+            {
+                Fields.Add(FStringView(Field.c_str(), Field.size()));
+            }
+            bSelfMatches = !Label.IsEmpty() && ImGuiX::PassSearchFilter(Filter, TSpan<const FStringView>(Fields));
+        }
+
+        // A matching property's content belongs to that result, including unnamed map entries.
+        // Categories still use the normal descendant rules, so their subsection stays readable.
+        const bool bShowSubtree = bFilterActive && (bAncestorMatches || (bSelfMatches && !IsCategory()));
 
         // Not short-circuited, since every descendant needs its own flag updated.
         bool bDescendantMatches = false;
@@ -1776,6 +1940,15 @@ namespace Lumina::PropertyTableInternal
             return true;
         }
         return PropertyHandle->Property->IsReadOnly();
+    }
+
+    FStringView FPropertyRow::GetDisabledReason() const
+    {
+        if (PropertyHandle == nullptr || !EditCondition.IsBound() || EditCondition.Evaluate(GetEditConditionContainer()))
+        {
+            return FStringView();
+        }
+        return PropertyHandle->Property->GetMetadata("EditConditionReason");
     }
 
     bool FPropertyRow::HasExtraControls() const
@@ -1886,15 +2059,16 @@ namespace Lumina::PropertyTableInternal
         }
         else
         {
-            bClipped = DrawHeaderLabel(*PropertyHandle->Property->GetPropertyDisplayName());
+            bClipped = DrawHeaderLabel(LocalizedPropertyName(PropertyHandle->Property));
         }
 
-        DrawRowTooltip(PropertyHandle.get(), PropertyHandle->Property, bClipped);
+        DrawRowTooltip(PropertyHandle.get(), PropertyHandle->Property, bClipped, FStringView(), GetDisabledReason());
     }
 
     void FLeafPropertyRow::DrawEditor(const FPropertyDrawArgs& Args)
     {
         ImGui::BeginDisabled(IsReadOnly());
+        ImGui::BeginGroup();
 
         if (Customization)
         {
@@ -1905,7 +2079,22 @@ namespace Lumina::PropertyTableInternal
             ImGui::TextUnformatted(LOC_ICON(LE_ICON_EXCLAMATION, "Missing Property Customization"));
         }
 
+        ImGui::EndGroup();
         ImGui::EndDisabled();
+
+        // A disabled widget reports no hover of its own, so the reason shows over the whole value instead.
+        const FStringView Reason = GetDisabledReason();
+        if (!Reason.IsEmpty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayShort))
+        {
+            ImGuiX::WrappedTooltip_Internal(Reason);
+        }
+
+        // Shown under the value rather than in a tooltip, since a refused value is something to fix, not something to discover.
+        const FString Error = PropertyHandle->CheckCurrentValue();
+        if (!Error.IsEmpty())
+        {
+            DrawPropertyError(FStringView(*Error, Error.Len()));
+        }
     }
 
     float FLeafPropertyRow::GetMeasuredHeaderTextWidth() const
@@ -1916,7 +2105,7 @@ namespace Lumina::PropertyTableInternal
             snprintf(Buf, sizeof(Buf), "%d", PropertyHandle->Index);
             return ImGui::CalcTextSize(Buf).x;
         }
-        return ImGui::CalcTextSize(*PropertyHandle->Property->GetPropertyDisplayName()).x;
+        return ImGui::CalcTextSize(LocalizedPropertyName(PropertyHandle->Property)).x;
     }
 
     FArrayPropertyRow::FArrayPropertyRow(const TSharedPtr<FPropertyHandle>& InPropHandle, FPropertyRow* InParentRow, const FPropertyChangedEventCallbacks& InCallbacks)
@@ -1991,7 +2180,7 @@ namespace Lumina::PropertyTableInternal
     {
         bool bClipped = false;
         const ImGuiTreeNodeFlags Flags = GetElementCount() > 0 ? 0 : ImGuiTreeNodeFlags_Leaf;
-        bExpanded = DrawRowFoldout(*ArrayProperty->GetPropertyDisplayName(), bExpanded, Flags, bClipped);
+        bExpanded = DrawRowFoldout(LocalizedPropertyName(ArrayProperty), bExpanded, Flags, bClipped, nullptr, ArrayProperty->GetPropertyDisplayName().c_str());
         DrawPropertyTooltip(ArrayProperty, bClipped);
     }
 
@@ -2002,7 +2191,7 @@ namespace Lumina::PropertyTableInternal
 
     float FArrayPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(*ArrayProperty->GetPropertyDisplayName()).x;
+        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(LocalizedPropertyNameId(ArrayProperty), nullptr, true).x;
     }
 
     bool FArrayPropertyRow::IsInnerFixedHeight() const
@@ -2319,7 +2508,7 @@ namespace Lumina::PropertyTableInternal
     {
         bool bClipped = false;
         const ImGuiTreeNodeFlags Flags = Children.IsEmpty() ? ImGuiTreeNodeFlags_Leaf : 0;
-        bExpanded = DrawRowFoldout(*MapProperty->GetPropertyDisplayName(), bExpanded, Flags, bClipped);
+        bExpanded = DrawRowFoldout(LocalizedPropertyName(MapProperty), bExpanded, Flags, bClipped, nullptr, MapProperty->GetPropertyDisplayName().c_str());
         DrawPropertyTooltip(MapProperty, bClipped);
     }
 
@@ -2330,7 +2519,7 @@ namespace Lumina::PropertyTableInternal
 
     float FMapPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(*MapProperty->GetPropertyDisplayName()).x;
+        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(LocalizedPropertyNameId(MapProperty), nullptr, true).x;
     }
 
     void FMapPropertyRow::SyncChildren()
@@ -2873,7 +3062,10 @@ namespace Lumina::PropertyTableInternal
 
     FStringView FCategoryPropertyRow::GetFilterLabel() const
     {
-        return FStringView(*Category);
+        // What the filter matches has to be what the header shows, or a search typed in the active
+        // language would miss every section. The view points into the table or the interned name, so
+        // it stays valid as long as the old one did.
+        return FLocalization::Get().TranslateView(FStringView(Category.c_str()), FStringView("category"));
     }
 
     void FCategoryPropertyRow::DrawHeader(const FPropertyDrawArgs& Args)
@@ -2888,24 +3080,41 @@ namespace Lumina::PropertyTableInternal
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorColors::U32(EditorColors::RowBgHovered()));
         ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::TextPrimary());
         bool bClipped = false;
-        bExpanded = CollapsingHeaderEllipsis(*Category, ImGuiTreeNodeFlags_DefaultOpen, bClipped);
+        bExpanded = CollapsingHeaderEllipsis(LOC_CTX(Category.c_str(), "category"), ImGuiTreeNodeFlags_DefaultOpen, bClipped, nullptr, Category.c_str());
         ImGui::PopStyleColor(4);
 
         if (bClipped && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         {
-            ImGuiX::WrappedTooltip_Internal(FStringView(*Category));
+            ImGuiX::WrappedTooltip_Internal(FStringView(LOC_VIEW_CTX(Category.c_str(), "category")));
         }
     }
 
     float FCategoryPropertyRow::GetMeasuredHeaderTextWidth() const
     {
-        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(*Category).x;
+        return ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(LOC_CTX(Category.c_str(), "category")).x;
     }
 
 }
 
 namespace Lumina
 {
+    void DrawPropertyError(FStringView Message)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.36f, 0.36f, 1.0f));
+        ImGui::PushTextWrapPos(0.0f);
+        const FString Line = FString(LE_ICON_ALERT_CIRCLE " ") + FString(Message.GetData(), Message.Len());
+        ImGui::TextUnformatted(*Line, *Line + Line.Len());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+    }
+
+    bool IsPropertyEditConditionMet(FProperty* Property, void* Container)
+    {
+        PropertyTableInternal::FPropertyEditCondition Condition;
+        Condition.Parse(Property);
+        return Condition.Evaluate(Container);
+    }
+
     FPropertyTable::FPropertyTable()
         : FPropertyTable(nullptr, nullptr, nullptr)
     {

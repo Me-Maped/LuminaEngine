@@ -27,8 +27,7 @@ namespace Lumina::RHI
         TakePresentRejected();
         if (IsValid(Swapchain))
         {
-            // Recording is synchronous, so only submitted work can still name these images.
-            // Present fences already drain this swapchain, so only the fallback path needs the idle.
+            // Recording is synchronous and present fences already drain this swapchain, so only the fallback path needs the idle.
             if (!SupportsSwapchainMaintenance1())
             {
                 WaitDeviceIdle();
@@ -76,6 +75,11 @@ namespace Lumina::RHI
         {
             Swapchain = CreateSwapchain(Surface, RequestedExtent);
             Surface   = FSurfaceH{};
+            if (bHDRRequested)
+            {
+                SetSwapchainHDR(Swapchain, true);
+                RecreateSwapchain(Swapchain, RequestedExtent);
+            }
         }
         else
         {
@@ -140,5 +144,25 @@ namespace Lumina::RHI
     EFormat FSwapchainTarget::GetFormat() const
     {
         return GetSwapchainFormat(Swapchain);
+    }
+
+    void FSwapchainTarget::SetHDR(bool bHDR)
+    {
+        if (bHDR == bHDRRequested)
+        {
+            return;
+        }
+
+        bHDRRequested = bHDR;
+        if (IsValid(Swapchain))
+        {
+            SetSwapchainHDR(Swapchain, bHDR);
+            Recreate();
+        }
+    }
+
+    bool FSwapchainTarget::IsHDR() const
+    {
+        return IsValid(Swapchain) && IsSwapchainHDR(Swapchain);
     }
 }

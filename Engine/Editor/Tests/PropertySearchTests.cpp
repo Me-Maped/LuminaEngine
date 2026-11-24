@@ -1,13 +1,15 @@
-﻿#include <gtest/gtest.h>
+#include <gtest/gtest.h>
 
 #include "Config/EngineSettings.h"
 #include "Containers/Algorithm.h"
 #include "Core/Engine/Engine.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/ObjectCore.h"
+#include "Core/Reflection/PropertyCustomization/PropertyCustomization.h"
 #include "Core/Reflection/PropertyTypeTraits.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
 #include "Localization/Localization.h"
+#include "Tools/UI/DevelopmentToolUI.h"
 #include "UI/Properties/PropertyTable.h"
 
 using namespace Lumina;
@@ -34,7 +36,7 @@ namespace
     // container in that order is its first child; a map entry still carries its key property's name.
     const FPropertyTable::FRowProbe* FindChild(const FRows& Rows, const FPropertyTable::FRowProbe& Parent)
     {
-        for (size_t Index = 0; Index + 1 < Rows.size(); ++Index)
+        for (int32 Index = 0; Index + 1 < Rows.Num(); ++Index)
         {
             if (&Rows[Index] == &Parent && Rows[Index + 1].Depth == Parent.Depth + 1)
             {
@@ -86,14 +88,14 @@ namespace
 
         void SetUp() override
         {
-            PreviousEngine = GEngine;
-            GEngine = &Engine;
+            PreviousEngine = Global::GEngine;
+            Global::GEngine = &Engine;
             RegisterPendingTypes();
             Settings = NewObject<CEditorSettings>();
             ASSERT_NE(Settings, nullptr);
             Settings->AddToRoot();
             Settings->MaxBackgroundFPS = 37;
-            Settings->RecentProjects.clear();
+            Settings->RecentProjects.Reset();
             ASSERT_TRUE(FLocalization::Get().SetLanguageFromString(ELanguage::ChineseSimplified,
                 R"({"Max Background FPS":"后台帧率","Performance|category":"性能",
                     "Recent Projects":"最近工程","Loading|category":"加载"})"));
@@ -107,7 +109,7 @@ namespace
             FLocalization::Get().ClearTable();
             if (Settings != nullptr) Settings->RemoveFromRoot();
             for (CStruct* Type : OwnedTypes) Type->RemoveFromRoot();
-            GEngine = PreviousEngine;
+            Global::GEngine = PreviousEngine;
         }
 
         static bool Matches(FPropertyTable& Table, FStringView Query)
@@ -122,7 +124,7 @@ namespace
             Inner->Size = sizeof(FNestedSearchData);
             Inner->Alignment = alignof(FNestedSearchData);
             Inner->AddToRoot();
-            OwnedTypes.push_back(Inner);
+            OwnedTypes.Add(Inner);
             static constexpr FPropertyDesc InnerProperties[] = {
                 {.Name = "Speed", .Offset = offsetof(FNestedSearchData, Speed), .Flags = EPropertyFlags::Editable, .Type = PropertyTypeOf<float>},
                 {.Name = "Height", .Offset = offsetof(FNestedSearchData, Height), .Flags = EPropertyFlags::Editable, .Type = PropertyTypeOf<float>},
@@ -134,7 +136,7 @@ namespace
             Outer->Size = sizeof(FCompositeSearchData);
             Outer->Alignment = alignof(FCompositeSearchData);
             Outer->AddToRoot();
-            OwnedTypes.push_back(Outer);
+            OwnedTypes.Add(Outer);
             // Runtime descriptors live in the type's arena, just like script-minted properties.
             auto& Arena = Outer->GetPropertyArena();
             const auto* NestedType = Arena.EmplaceData<FPropertyType>(FPropertyType{.Kind = EPropertyTypeFlags::Struct, .Resolved = Inner});
@@ -197,13 +199,13 @@ TEST_F(PropertySearchTest, ExistingTableReadsReloadedTranslationWithoutLosingSou
 TEST_F(PropertySearchTest, EmptyReflectedArrayHeaderMatchesWithoutInventingElementNames)
 {
     FPropertyTable Table(Settings);
-    ASSERT_TRUE(Settings->RecentProjects.empty());
+    ASSERT_TRUE(Settings->RecentProjects.IsEmpty());
     EXPECT_TRUE(Matches(Table, "Recent 工程"));
     EXPECT_TRUE(Matches(Table, "recentprojects"));
     EXPECT_TRUE(Matches(Table, "Loading 工程"));
     EXPECT_TRUE(Matches(Table, "加载 Projects"));
     EXPECT_FALSE(Matches(Table, "Recent nonexistent"));
-    EXPECT_TRUE(Settings->RecentProjects.empty());
+    EXPECT_TRUE(Settings->RecentProjects.IsEmpty());
 }
 
 TEST_F(PropertySearchTest, ClearingAndChangingQueryRestoresUnfilteredVisibility)
@@ -216,14 +218,14 @@ TEST_F(PropertySearchTest, ClearingAndChangingQueryRestoresUnfilteredVisibility)
     EXPECT_TRUE(Matches(Table, ""));
     EXPECT_TRUE(Matches(Table, "Background"));
     EXPECT_EQ(Settings->MaxBackgroundFPS, 37);
-    EXPECT_TRUE(Settings->RecentProjects.empty());
+    EXPECT_TRUE(Settings->RecentProjects.IsEmpty());
 }
 
 TEST_F(PropertySearchTest, PopulatedMapMatchIncludesEntriesWithoutForcingExpansion)
 {
     FCompositeSearchData Data;
-    Data.Scores.emplace(1, 2.0f);
-    Data.Unrelated.emplace(9, 7.0f);
+    Data.Scores.Emplace(1, 2.0f);
+    Data.Unrelated.Emplace(9, 7.0f);
     FPropertyTable Table(&Data, MakeCompositeType(), nullptr);
     ASSERT_TRUE(Matches(Table, ""));
     ASSERT_TRUE(Table.SetRowExpanded("Scores", false));
@@ -260,7 +262,7 @@ TEST_F(PropertySearchTest, PopulatedMapMatchIncludesEntriesWithoutForcingExpansi
     ASSERT_NE(Unrelated, nullptr);
     EXPECT_FALSE(Scores->bExpanded);
     EXPECT_TRUE(FindChild(Rows, *Unrelated)->bPassesFilter);
-    EXPECT_EQ(Data.Scores.at(1), 2.0f);
+    EXPECT_EQ(Data.Scores[1], 2.0f);
 }
 
 TEST_F(PropertySearchTest, MatchingStructShowsContentButLeafSearchStillFiltersOtherMembers)
@@ -338,7 +340,7 @@ TEST_F(PropertySearchTest, ExternallyCreatedOptionalPayloadIsUpdatedBeforeFilter
 
 TEST_F(PropertySearchTest, PopulatedArrayStillIncludesItsNumberedEntries)
 {
-    Settings->RecentProjects.emplace_back("First.project");
+    Settings->RecentProjects.Emplace("First.project");
     FPropertyTable Table(Settings);
     ASSERT_TRUE(Matches(Table, "Recent"));
     FRows Rows;
@@ -347,7 +349,7 @@ TEST_F(PropertySearchTest, PopulatedArrayStillIncludesItsNumberedEntries)
     ASSERT_NE(Recent, nullptr);
     ASSERT_EQ(Recent->ChildCount, 1u);
     EXPECT_TRUE(FindChild(Rows, *Recent)->bPassesFilter);
-    EXPECT_EQ(Settings->RecentProjects.size(), 1u);
+    EXPECT_EQ(Settings->RecentProjects.Num(), 1u);
     Table.ClearSearch();
     Table.ProbeRows(Rows);
     Recent = FindRow(Rows, "RecentProjects");

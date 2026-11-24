@@ -51,7 +51,9 @@ namespace Lumina
     };
 
     // Reads the HDR scene color under the cursor a few frames after asking, never waiting on the GPU.
-    class FViewportPixelProbe
+    // Exported because the material editor tool holds one by value, so a test binary that builds
+    // the tool needs the destructor across the module boundary.
+    class EDITOR_API FViewportPixelProbe
     {
     public:
 
@@ -83,7 +85,7 @@ namespace Lumina
     };
 
     // Renders the nodes whose preview is on, each compiled in the background and captured one at a time.
-    class FMaterialNodePreviews
+    class EDITOR_API FMaterialNodePreviews
     {
     public:
 

@@ -7,9 +7,7 @@ namespace Lumina
 {
     class CClass;
 
-    // Settings editor: discovers every CDeveloperSettings subclass via GConfig and draws each
-    // through a FPropertyTable, so it matches every other reflected details panel. Edits write
-    // straight back to the owning JSON file via FConfig::SaveSettings.
+    // Draws every CDeveloperSettings subclass through a FPropertyTable and writes edits back via FConfig::SaveSettings.
     class FSettingsEditorTool : public FEditorTool
     {
     public:
@@ -25,7 +23,7 @@ namespace Lumina
 
         void OnInitialize() override;
 
-        void Select(CClass* SettingsClass) { SelectedClass = SettingsClass; }
+        void Select(CClass* SettingsClass, FStringView Search = {});
         
     protected:
          

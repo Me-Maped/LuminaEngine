@@ -225,18 +225,18 @@ https://github.com/user-attachments/assets/3d797479-fc47-4b8f-baf4-87315709d0c2
    Setup.bat
    ```
    它会下载一个预编译的依赖包
-   （`External-Win64.zip`，约 192 MB），用本仓库中固定的 SHA-256 哈希进行校验
+   （`External-Win64-r2.zip`，约 165 MB），用本仓库中固定的 SHA-256 哈希进行校验
    （需要维护者先录入，见 [`DEPENDENCIES.md`](DEPENDENCIES.md)），配置 git hooks，
    注册 `.lproject` 文件类型，并生成 `Lumina.slnx`。
 
-   该依赖包包含 .NET 10 运行时（C# 脚本）、LLVM/Clang 19
+   该依赖包包含 .NET 10 运行时（C# 脚本）、LLVM/Clang 23
    （反射代码生成）、Slang shader 编译器、RenderDoc 和 Tracy。每一项都是开源的；
    [`DEPENDENCIES.md`](DEPENDENCIES.md) 列出了每个组件的版本、用途、上游来源和许可证，
    并说明了如何自行获取这些组件而不使用依赖包。
 
    若要在无人值守/CI 运行中跳过提示，请传入 `--yes`（或设置
    `LUMINA_SETUP_YES=1`）。如果下载失败，请手动下载
-   [External-Win64.zip](https://github.com/MrDrElliot/LuminaEngine/releases/download/external-deps/External-Win64.zip)，
+   [External-Win64-r2.zip](https://github.com/MrDrElliot/LuminaEngine/releases/download/external-deps/External-Win64-r2.zip)，
    解压到 `LuminaEngine/` 文件夹，然后运行
    `GenerateProjectFiles.bat`。
 
@@ -274,10 +274,10 @@ https://github.com/user-attachments/assets/3d797479-fc47-4b8f-baf4-87315709d0c2
    ```
 
    它会检查上述先决条件、下载一个预编译的依赖包
-   （`External-Linux64.tar.gz`，约 186 MB）、用本仓库中固定的 SHA-256 哈希校验，
+   （`External-Linux64-r2.tar.gz`，约 196 MB）、用本仓库中固定的 SHA-256 哈希校验，
    并配置 git hooks。
 
-   该依赖包包含 .NET 10 运行时（C# 脚本）、LLVM/Clang 19
+   该依赖包包含 .NET 10 运行时（C# 脚本）、LLVM/Clang 23
    （反射代码生成）、Slang shader 编译器、RenderDoc 和 Tracy。每一项都是开源的；
    [`DEPENDENCIES.md`](DEPENDENCIES.md) 列出了每个组件的版本、用途、上游来源和许可证，
    并说明了如何自行获取这些组件而不使用依赖包。
@@ -285,7 +285,7 @@ https://github.com/user-attachments/assets/3d797479-fc47-4b8f-baf4-87315709d0c2
    若要在无人值守/CI 运行中跳过提示，请传入 `-Yes`（或设置
    `LUMINA_SETUP_YES=1`）；无人值守运行绝不会修改你的 shell 配置文件。如果
    下载失败，请手动获取
-   [External-Linux64.tar.gz](https://github.com/MrDrElliot/LuminaEngine/releases/download/external-deps/External-Linux64.tar.gz)
+   [External-Linux64-r2.tar.gz](https://github.com/MrDrElliot/LuminaEngine/releases/download/external-deps/External-Linux64-r2.tar.gz)
    并解压到 `LuminaEngine/` 文件夹。
 
 3. **构建**

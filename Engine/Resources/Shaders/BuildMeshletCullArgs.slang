@@ -32,8 +32,8 @@ struct FBuildMeshletCullArgsArgs
     uint  SubDrawsPerSlice;
     // 0 keeps every block in front for both phases, as the block build does when splitting is off.
     uint  bSplitPhases;
-    // 1 keeps near cascades out of this phase, 2 lays out only them for the dispatch that culls against the receiver mask.
-    uint  bDeferCascades;
+    // 1 keeps shadow levels out of this phase, 2 lays out only them for the dispatch that culls against this frame's pages.
+    uint  bDeferShadows;
     // Corners per meshlet on the vertex path, or 0 for mesh shading.
     uint  VertexPathCorners;
     uint  _Pad0;
@@ -54,11 +54,10 @@ FBuildMeshletCullArgsArgs* Pass() { return GetPassArgs<FBuildMeshletCullArgsArgs
 uint PhaseBlocks(FRenderBucket* Bucket, uint ViewIndex, bool bLate, bool bSplitPhases)
 {
     const uint Front = min(Bucket.BlockCursor, Bucket.BlockCapacity);
-    const bool bDeferred = Pass().bDeferCascades != 0u && CullViewHasFlag(ViewIndex, CULL_VIEW_FLAG_CASCADE)
-                        && !CullViewHasFlag(ViewIndex, CULL_VIEW_FLAG_FAR_CASCADE);
-    if (Pass().bDeferCascades == 2u || bDeferred)
+    const bool bDeferred = Pass().bDeferShadows != 0u && IsDeferredShadowView(ViewIndex);
+    if (Pass().bDeferShadows == 2u || bDeferred)
     {
-        return (Pass().bDeferCascades == 2u && bDeferred) ? Front : 0u;
+        return (Pass().bDeferShadows == 2u && bDeferred) ? Front : 0u;
     }
     if (!bLate)
     {
@@ -160,8 +159,9 @@ void ComputeMain(uint3 ThreadID : SV_DispatchThreadID)
         if (Bucket.DrawCursor > Bucket.DrawCapacity && Bucket.DrawDemand > 0u && Pass().Totals.Contains(8u))
         {
             // Capped per cycle, since one starved bucket must not ask for a list the whole scene could never fill.
-            const double Needed = min((double)Bucket.DrawCursor / (double)Bucket.DrawDemand, 4.0) * (double)Pass().Totals.Get(2u);
-            InterlockedMax(Pass().Totals.At(8u)[0], (uint)min(Needed, 4294967295.0));
+            const uint64_t Grown  = min(uint64_t(Bucket.DrawCursor), uint64_t(Bucket.DrawDemand) * 4u);
+            const uint64_t Needed = Grown * Pass().Totals.Get(2u) / Bucket.DrawDemand;
+            InterlockedMax(Pass().Totals.At(8u)[0], (uint)min(Needed, uint64_t(0xFFFFFFFFu)));
         }
         Bucket.SliceCount[Slice] = (Written > Start) ? (Written - Start) : 0u;
 

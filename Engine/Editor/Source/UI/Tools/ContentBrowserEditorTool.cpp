@@ -687,7 +687,7 @@ namespace Lumina
                 }
             }
 
-            // overridden lifecycle hooks such as OnReady, OnUpdate and OnInput
+            // overridden lifecycle hooks such as OnReady, OnUpdate and OnDetach
             {
                 int32 P = 0;
                 while (Info.Lifecycle.Num() < 16)

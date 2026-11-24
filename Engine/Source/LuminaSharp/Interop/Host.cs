@@ -10,7 +10,7 @@ namespace LuminaSharp;
 public static unsafe partial class Host
 {
     // Must equal Lumina::DotNet::GAbiVersion. Bump on ABI breaks.
-    private const int AbiVersion = 17;
+    private const int AbiVersion = 18;
 
     // Logical name for the engine module hosting this assembly (Runtime); resolved to a native handle via ModuleHandle.
     public const string NativeLibrary = "LuminaNative";
@@ -186,12 +186,12 @@ public static unsafe partial class Host
         return Scripts?.Generation ?? 0;
     }
 
-    /// Takes effect on the next LoadScripts. The packager sets it so shipped assemblies are optimized, and clears it so editor reloads stay debuggable.
+    // Takes effect on the next LoadScripts. The packager sets it so shipped assemblies are optimized even under a debugger, then clears it.
     [ManagedExport]
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     public static void SetScriptCompileOptimization(int bOptimize)
     {
-        ScriptCompiler.bOptimize = bOptimize != 0;
+        ScriptCompiler.bForceOptimize = bOptimize != 0;
     }
 
     /// Fills the editor's C# Diagnostics snapshot (heap, GC, ALC health). Returns 1 on success. ForceCollect != 0 runs a blocking GC first.

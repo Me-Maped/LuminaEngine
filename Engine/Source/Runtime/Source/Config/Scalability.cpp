@@ -32,10 +32,10 @@ namespace Lumina::Scalability
                 "Ultra":  { "RendererSettings.bScreenSpaceReflections": true,  "RendererSettings.SSRQuality": "Ultra",  "RendererSettings.bSupersampleVolumetricLights": true }
             },
             "PostProcess": {
-                "Low":    { "RendererSettings.bEnableGTAO": false, "RendererSettings.GTAOQualityLevel": 0 },
-                "Medium": { "RendererSettings.bEnableGTAO": true,  "RendererSettings.GTAOQualityLevel": 1 },
-                "High":   { "RendererSettings.bEnableGTAO": true,  "RendererSettings.GTAOQualityLevel": 2 },
-                "Ultra":  { "RendererSettings.bEnableGTAO": true,  "RendererSettings.GTAOQualityLevel": 3 }
+                "Low":    { "RendererSettings.bEnableGTAO": false, "RendererSettings.GTAOQualityLevel": 0, "RendererSettings.bDistanceFieldAO": false },
+                "Medium": { "RendererSettings.bEnableGTAO": true,  "RendererSettings.GTAOQualityLevel": 1, "RendererSettings.bDistanceFieldAO": false },
+                "High":   { "RendererSettings.bEnableGTAO": true,  "RendererSettings.GTAOQualityLevel": 2, "RendererSettings.bDistanceFieldAO": true },
+                "Ultra":  { "RendererSettings.bEnableGTAO": true,  "RendererSettings.GTAOQualityLevel": 3, "RendererSettings.bDistanceFieldAO": true }
             },
             "Textures": {
                 "Low":    { "TextureStreamingSettings.ResolutionBias": 0.5,  "TextureStreamingSettings.PoolSizeMB": 512,  "RendererSettings.MaxAnisotropy": 2 },
@@ -44,10 +44,10 @@ namespace Lumina::Scalability
                 "Ultra":  { "TextureStreamingSettings.ResolutionBias": 1.0,  "TextureStreamingSettings.PoolSizeMB": 2048, "RendererSettings.MaxAnisotropy": 16 }
             },
             "AntiAliasing": {
-                "Low":    { "RendererSettings.SMAAMode": "Off",    "RendererSettings.SMAAQuality": "Low" },
-                "Medium": { "RendererSettings.SMAAMode": "SMAA1x", "RendererSettings.SMAAQuality": "Medium" },
-                "High":   { "RendererSettings.SMAAMode": "SMAA1x", "RendererSettings.SMAAQuality": "High" },
-                "Ultra":  { "RendererSettings.SMAAMode": "SMAA1x", "RendererSettings.SMAAQuality": "Ultra" }
+                "Low":    { "RendererSettings.SMAAQuality": "Low" },
+                "Medium": { "RendererSettings.SMAAQuality": "Medium" },
+                "High":   { "RendererSettings.SMAAQuality": "High" },
+                "Ultra":  { "RendererSettings.SMAAQuality": "Ultra" }
             }
         })json";
 

@@ -14,11 +14,6 @@
 #include "Includes/Weather.slang"
 #endif
 
-// Specialized per pipeline; 0 dead-strips the guarded block and its resource access.
-[vk::constant_id(1)] const uint SPEC_ENABLE_DEBUG_VIEWS = 1;
-[vk::constant_id(2)] const uint SPEC_ENABLE_DECALS      = 1;
-[vk::constant_id(3)] const uint SPEC_ENABLE_GTAO        = 1;
-
 // Frame-uniform light loop features, so a frame without them specializes to 0 and sheds their registers.
 [vk::constant_id(10)] const uint SPEC_LOCAL_SHADOWS      = 1;
 [vk::constant_id(11)] const uint SPEC_LOCAL_CONTACT      = 1;
@@ -43,12 +38,11 @@ float3 MeshletDebugColor(uint Index)
     );
 }
 
-// CosTheta and F0 are both in [0,1], so fp16 is ample.
-half3 FresnelSchlickHalf(half CosTheta, half3 F0)
+float3 FresnelSchlick(float CosTheta, float3 F0)
 {
-    half x  = saturate(half(1.0) - CosTheta);
-    half x2 = x * x;
-    return F0 + (half3(1.0) - F0) * (x2 * x2 * x);
+    float x  = saturate(1.0 - CosTheta);
+    float x2 = x * x;
+    return F0 + (1.0 - F0) * (x2 * x2 * x);
 }
 
 // The frame is built in ParallaxOcclusion.slang so POM and normal decode share it.
@@ -86,17 +80,9 @@ float ApplyGeometricSpecularAA(float Roughness, float3 dNdx, float3 dNdy)
     return sqrt(saturate(Alpha + Kernel));
 }
 
-// Godot's positional "Soft Low" filter, 4 taps within 2 atlas texels.
+// Four taps, a 3-texel tent widened to about 2 texels of radius.
 static const int   kLocalShadowTaps          = 4;
 static const float kLocalShadowRadiusTexels  = 2.0;
-
-// One disk rotation per pixel, shared by every local light's shadow so the light loop pays for a single sincos.
-float2 LocalShadowNoiseDir(float2 ScreenPos)
-{
-    float2 Dir;
-    sincos(InterleavedGradientNoise(ScreenPos) * TWO_PI, Dir.y, Dir.x);
-    return Dir;
-}
 
 // The cube face's projection in closed form, the same numbers its view-projection matrix produces without loading it.
 float3 ProjectToCubeFace(float3 D, uint Face, float Radius)
@@ -118,7 +104,7 @@ float3 ProjectToCubeFace(float3 D, uint Face, float Radius)
     return float3(P.xy * InvDepth, Radius * InvRange - Radius * Near * InvRange * InvDepth);
 }
 
-float ComputeLocalShadow(FLight Light, float3 FragmentPos, float3 Normal, float2 NoiseDir)
+float ComputeLocalShadow(FLight Light, float3 FragmentPos, float3 Normal)
 {
     const bool   bSpot          = HasFlag(Light.Flags, ELightFlags::Spot);
     const float3 LightToFrag    = FragmentPos - Light.Position;
@@ -174,22 +160,11 @@ float ComputeLocalShadow(FLight Light, float3 FragmentPos, float3 Normal, float2
     // Taps clamp half a texel inside the face rect so the comparison footprint never reads a neighboring tile.
     const float2 TileMin  = ShadowTile.AtlasUVOffset + TexelUV * 0.5;
     const float2 TileMax  = ShadowTile.AtlasUVOffset + ShadowTile.AtlasUVScale - TexelUV * 0.5;
-    const float2 RadiusUV = TexelUV * kLocalShadowRadiusTexels;
-
-    const float2 GoldenStep = float2(cos(kVogelGoldenAngle), sin(kVogelGoldenAngle));
-    float2 Dir    = NoiseDir;
-    float  Shadow = 0.0;
-    [unroll]
-    for (int i = 0; i < kLocalShadowTaps; ++i)
-    {
-        const float2 Offset = Dir * (RadiusUV * sqrt((float(i) + 0.5) / float(kLocalShadowTaps)));
-        Shadow += ShadowAtlas().SampleCmpLevelZero(clamp(BaseUV + Offset, TileMin, TileMax), RefDepth);
-        Dir = RotateVogel(Dir, GoldenStep);
-    }
-    return Shadow * (1.0 / float(kLocalShadowTaps));
+    const FShadowPCF PCF = { ShadowAtlas(), BaseUV, TexelUV, RefDepth, float2(0.0, 0.0), TileMin, TileMax };
+    return PCF.FilterRadius(kLocalShadowRadiusTexels, ShadowKernelSizeForTaps(kLocalShadowTaps));
 }
 
-float ComputeShadowFactor(FLight Light, float3 FragmentPos, float3 Normal, float3 ViewPosition, float2 ScreenPos, bool ReceiveShadow)
+float ComputeShadowFactor(FLight Light, float3 FragmentPos, float3 Normal, float3 ViewPosition, bool ReceiveShadow)
 {
     if (!ReceiveShadow)
     {
@@ -197,12 +172,12 @@ float ComputeShadowFactor(FLight Light, float3 FragmentPos, float3 Normal, float
     }
     if (HasFlag(Light.Flags, ELightFlags::Directional))
     {
-        return ComputeDirectionalShadow(Light, FragmentPos, Normal, ViewPosition, ScreenPos);
+        return ComputeDirectionalShadow(Light, FragmentPos, Normal, ViewPosition);
     }
-    return ComputeLocalShadow(Light, FragmentPos, Normal, LocalShadowNoiseDir(ScreenPos));
+    return ComputeLocalShadow(Light, FragmentPos, Normal);
 }
 
-// Sun occlusion traced past the cascades from the opaque depth, so translucency never reads it.
+// Sun occlusion traced past the virtual shadow range from the opaque depth, so translucency never reads it.
 float SunFarShadowMask(float2 ScreenPos)
 {
 // A forward masked surface writes its own depth after the trace, so its pixels describe whatever was behind it.
@@ -220,7 +195,7 @@ float SunFarShadowMask(float2 ScreenPos)
 static const uint kLocalContactMaxSteps = 8u;
 
 // Kept out of ComputeShadowFactor, which inlines at two sites; only local lights ever reach this one.
-float LocalContactShadow(FLight Light, float3 FragmentPos, float3 Normal, float2 ScreenPos)
+float LocalContactShadow(FLight Light, float3 FragmentPos, float3 Normal)
 {
     const float Reach = float((Light.Flags >> LIGHT_CONTACT_LENGTH_SHIFT) & LIGHT_CONTACT_LENGTH_MASK) * 0.01;
     const float3 ViewP = mul(GetCameraView(), float4(FragmentPos, 1.0)).xyz;
@@ -231,13 +206,14 @@ float LocalContactShadow(FLight Light, float3 FragmentPos, float3 Normal, float2
     const float3 ViewN = NormalWorldToView(Normal);
     const float3 ViewL = normalize(NormalWorldToView(normalize(Light.Position - FragmentPos)));
 
-    return ContactShadow(ViewP, ViewN, ViewL, InterleavedGradientNoise(ScreenPos), Reach, Steps);
+    // Unjittered, since nothing filters this per-light march afterward and noise would stay on screen.
+    return ContactShadow(ViewP, ViewN, ViewL, 0.5, Reach, Steps);
 }
 
 // Debug visualizers stay out of the compute lane; the deferred renderer resolves them in SceneDebugViewPixel.slang.
 #ifndef SHADING_COMPUTE
 
-// Pixel-shader cost is irrelevant here, only the cascade debug view calls it.
+// Pixel-shader cost is irrelevant here, only the shadow level debug view calls it.
 int FindSunShadowDataIndex()
 {
     if (LightData().bHasSun == 0u)
@@ -256,47 +232,33 @@ int FindSunShadowDataIndex()
     return INDEX_NONE;
 }
 
-// Dark gray means no sun shadow data, a muted tint means outside the selected cascade's bounds.
-float3 CascadeDebugColor(float3 FragmentPos, float3 ViewPosition, float3 ShadedBase)
+// Dark gray means no sun shadow, light gray past the shadowed range, a tint per level, and dim where the level holds no page.
+float3 ShadowLevelDebugColor(float3 FragmentPos, float3 ShadedBase)
 {
-    int SunShadowIdx = FindSunShadowDataIndex();
-    if (SunShadowIdx == INDEX_NONE)
+    if (FindSunShadowDataIndex() == INDEX_NONE)
     {
         return float3(0.08, 0.08, 0.08);
     }
 
-    const int NumActive = ActiveCascadeCount();
-    int CascadeIndex = 0;
-    for (int i = 0; i < NumActive; ++i)
-    {
-        if (ViewPosition.z > LightData().CascadeSplits[i])
-            CascadeIndex = i + 1;
-    }
-    if (CascadeIndex >= NumActive)
+    const int Wanted = VirtualShadowLevelForDistance(length(FragmentPos - GetCameraPosition()));
+    if (Wanted > (int)LightData().SunShadow.LastLevel)
     {
         return float3(0.18, 0.18, 0.18);
     }
-
-    float3 ProjCoords;
-    float2 AtlasUV;
-    const bool Inside = ProjectToSunCascade(SunShadowIdx, CascadeIndex, FragmentPos, ProjCoords, AtlasUV);
-
-    const float3 CascadeTints[NUM_CASCADES] = {
-        float3(1.00, 0.25, 0.25),
-        float3(0.25, 1.00, 0.30),
-        float3(0.30, 0.45, 1.00),
-        float3(1.00, 0.85, 0.25),
-    };
-    float3 Tint = CascadeIndex >= NearCascadeCount() ? float3(0.85, 0.30, 1.00) : CascadeTints[CascadeIndex];
-
-    float Luma = saturate(Luminance(ShadedBase));
-    float3 Color = lerp(Tint * 0.4, Tint, 0.5 + 0.5 * Luma);
-
-    if (!Inside)
+    const uint Level = ClampVirtualShadowLevel(Wanted);
+    const FVirtualShadowLevel Lv = VirtualShadowLevel(Level);
+    const float3 LevelTints[4] = { float3(1.00, 0.25, 0.25), float3(0.25, 1.00, 0.30), float3(0.30, 0.45, 1.00), float3(1.00, 0.85, 0.25) };
+    const float3 Color = lerp(LevelTints[Level % 4u] * 0.4, LevelTints[Level % 4u], 0.5 + 0.5 * saturate(Luminance(ShadedBase)));
+    float2 Texel;
+    float  Depth;
+    uint2  Origin;
+    if (!ProjectToVirtualShadow(Lv, FragmentPos, Texel, Depth) || !FindVirtualShadowPage(Level, Lv, int2(Texel) >> int(VSM_PAGE_SHIFT), Origin))
     {
-        Color *= 0.35;
+        return Color * 0.25;
     }
-    return Color;
+    // Thin dark lines on the page grid.
+    const float2 InPage = fmod(Texel, float(VSM_PAGE_SIZE));
+    return any(InPage < 1.5) ? Color * 0.5 : Color;
 }
 
 #endif // !SHADING_COMPUTE
@@ -327,16 +289,16 @@ float SpecVisibility(FSpecLobe Lobe, float NdotL)
     return 0.5 * rcp(NdotL * Lobe.VisA + Lobe.VisB);
 }
 
-// Terms that do not change across the light loop; BRDF weights are half to halve loop register pressure.
+// Terms that do not change across the light loop.
 struct FShadingContext
 {
     float3 N;
     float3 V;
     float  NdotV;        // max(dot(N,V), 1e-4)
     float  Roughness;    // surface value, before any per-light floor
-    half3  F0;
-    half3  DiffuseBase;  // Albedo * (1-Metallic) / PI
-    half3  EnergyComp;   // multi-scatter compensation (Turquin 2019)
+    float3 F0;
+    float3 DiffuseBase;  // Albedo * (1-Metallic) / PI
+    float3 EnergyComp;   // multi-scatter compensation (Turquin 2019)
 };
 
 // Distance window times spot cone, zero wherever the light cannot reach, which lets callers skip its shadow and BRDF.
@@ -524,17 +486,15 @@ void EvaluateRadianceContributionSplit(FLight Light, FShadingContext S, float3 L
     float Denom = NdotH * NdotH * (Lobe.A2 - 1.0) + 1.0;
     float NDF   = Lobe.A2 / (PI * Denom * Denom);
 
-    // Fresnel and the diffuse/spec tint are [0,1], so fp16 covers them.
-    half  HdotV = (half)max(dot(H, S.V), 0.0);
-    half3 F     = FresnelSchlickHalf(HdotV, S.F0);
+    float  HdotV = max(dot(H, S.V), 0.0);
+    float3 F     = FresnelSchlick(HdotV, S.F0);
 
-    half3 SpecTint = F * S.EnergyComp;
-    half3 Diffuse  = S.DiffuseBase * (half)BurleyDiffuseScale(NdotLf, S.NdotV, (float)HdotV, S.Roughness);
+    float3 SpecTint = F * S.EnergyComp;
+    float3 Diffuse  = S.DiffuseBase * BurleyDiffuseScale(NdotLf, S.NdotV, HdotV, S.Roughness);
 
-    // Recombine in float; NDF and the visibility term carry the HDR dynamic range between them.
-    float3 Spec = float3(SpecTint) * (NDF * SpecVisibility(Lobe, NdotLf));
+    float3 Spec = SpecTint * (NDF * SpecVisibility(Lobe, NdotLf));
 
-    OutDiffuse  = float3(Diffuse) * Radiance * NdotLf;
+    OutDiffuse  = Diffuse * Radiance * NdotLf;
     OutSpecular = Spec * Radiance * NdotLf;
 }
 
@@ -593,7 +553,7 @@ FGBufferData BuildGBufferData(FBaseVertexOutput Input, FMaterialPixelInputs Mate
 #ifndef TRANSLUCENT
     // The material or the instance can opt out, the latter for things that move through static decals.
     const bool bReceivesDecals = (MatFlags & MatFlag_NoDecals) == 0u && (Input.InstanceFlags & (uint)EInstanceFlags::NoDecals) == 0u;
-    if (SPEC_ENABLE_DECALS != 0 && bReceivesDecals && !IsUnlit(G))
+    if (bReceivesDecals && !IsUnlit(G))
     {
         float2 DBufferUV = Input.Position.xy / float2(Scene().ScreenSize.xy);
         ApplyDBuffer(G.BaseColor, G.WorldNormal, G.Roughness, G.Metallic, G.AmbientOcclusion, G.Emissive, DBufferUV);
@@ -656,10 +616,10 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
     Ctx.V           = V;
     Ctx.NdotV       = max(NdotV_EC, 1e-4);
     Ctx.Roughness   = Roughness;
-    Ctx.F0          = (half3)F0;
-    Ctx.DiffuseBase = (half3)(Albedo * (1.0 - Metallic) * INV_PI);
+    Ctx.F0          = F0;
+    Ctx.DiffuseBase = Albedo * (1.0 - Metallic) * INV_PI;
     float3 EnergyComp = 1.0 + F0 * (1.0 / max(DFG_EC.x + DFG_EC.y, 1e-4) - 1.0);
-    Ctx.EnergyComp  = (half3)EnergyComp;
+    Ctx.EnergyComp  = EnergyComp;
 
     // Clamps to ZNear, since a fragment below it wraps ZTile past Clusters() and faults the MMU.
     uint  ClusterIndex = ComputeClusterIndex(ViewPosition.z, ScreenPos);
@@ -685,7 +645,7 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
         // The parallax self-occlusion only ever traced against the sun, so it applies here and not to the whole loop.
         const float SunOcclusion = G.SelfShadow * (bReceiveShadow ? SunFarShadowMask(ScreenPos) : 1.0);
 
-        // Pixels facing away from the sun are self-shadowed, so they skip the cascade lookup; SunL feeds the BRDF too.
+        // Pixels facing away from the sun are self-shadowed, so they skip the sun shadow lookup; SunL feeds the BRDF too.
         float3 SunL    = normalize(Light.Direction.xyz);
         float  SunNdotL = dot(N, SunL);
         const float3 SunMask = LightFunctionMask(Light, SunL, WorldPosition);
@@ -700,7 +660,7 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
 
         if (SunNdotL > 0.0)
         {
-            const float Shadow = ComputeShadowFactor(Light, WorldPosition, N, ViewPosition, ScreenPos, bReceiveShadow) * SunOcclusion;
+            const float Shadow = ComputeShadowFactor(Light, WorldPosition, N, ViewPosition, bReceiveShadow) * SunOcclusion;
 
             if (Shadow > 0.0)
             {
@@ -726,8 +686,6 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
             }
         }
     }
-
-    const float2 ShadowNoiseDir = LocalShadowNoiseDir(ScreenPos);
 
     uint    NumLights   = GetNumLights();
     const GPUSpan<FLight> Lights = LightData().Lights;
@@ -818,13 +776,13 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
                 float Shadow = 1.0;
                 if (SPEC_LOCAL_SHADOWS != 0 && Light.ShadowDataIndex != INDEX_NONE)
                 {
-                    Shadow = bReceiveShadow ? ComputeLocalShadow(Light, WorldPosition, bBackFacing ? -N : N, ShadowNoiseDir) : 1.0;
+                    Shadow = bReceiveShadow ? ComputeLocalShadow(Light, WorldPosition, bBackFacing ? -N : N) : 1.0;
                 }
 
                 // Independent of the shadow map, so a light with no atlas tile can still ground what sits under it.
                 if (SPEC_LOCAL_CONTACT != 0 && bReceiveShadow && bContactShadows && HasFlag(Light.Flags, ELightFlags::ContactShadow))
                 {
-                    Shadow = min(Shadow, LocalContactShadow(Light, WorldPosition, bBackFacing ? -N : N, ScreenPos));
+                    Shadow = min(Shadow, LocalContactShadow(Light, WorldPosition, bBackFacing ? -N : N));
                 }
 
                 if (Shadow > 0.0)
@@ -864,30 +822,24 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
     }
 
     // Translucent skips GTAO, which comes from opaque depth and holds what is behind the glass.
-    float GTAO = 1.0;
+    FScreenAO ScreenAO;
+    ScreenAO.Visibility = 1.0;
+    ScreenAO.BentNormal = N;
     float4 IndirectDiffuse = float4(0.0, 0.0, 0.0, 0.0);
 #ifndef TRANSLUCENT
-    // The compute lane tests at runtime, since deferred lighting does not specialize on GTAO and the fetch is one texel.
-#ifdef SHADING_COMPUTE
-    if (Scene().GTAOSettings.AOTexture.IsValid())
-#else
-    if (SPEC_ENABLE_GTAO != 0 && Scene().GTAOSettings.AOTexture.IsValid())
-#endif
-    {
-        // Explicit LOD, since the deferred lighting lane is compute and has no implicit derivatives.
-        float2 ScreenUV = ScreenPos / float2(Scene().ScreenSize.xy);
-        GTAO = Scene().GTAOSettings.AOTexture.SampleLevel(Samplers::LinearClamp, ScreenUV, 0.0).r;
+    // Explicit LOD inside, since the deferred lighting lane is compute and has no implicit derivatives.
+    const float2 ScreenUV = ScreenPos / float2(Scene().ScreenSize.xy);
+    ScreenAO = SampleScreenAO(ScreenUV, N);
 
-        // Only ever traced alongside GTAO, whose working depth it marches.
-        if (Scene().GTAOSettings.IndirectDiffuse.IsValid())
-        {
-            IndirectDiffuse = Scene().GTAOSettings.IndirectDiffuse.SampleLevel(Samplers::LinearClamp, ScreenUV, 0.0);
-        }
+    // Only ever traced alongside GTAO, whose working depth it marches.
+    if (Scene().GTAOSettings.IndirectDiffuse.IsValid())
+    {
+        IndirectDiffuse = Scene().GTAOSettings.IndirectDiffuse.SampleLevel(Samplers::LinearClamp, ScreenUV, 0.0);
     }
 #endif
 
-    // Specular takes this through ComputeSpecularOcclusion, and where the bounce stands in for the sky the IBL steps back.
-    const float AmbientAO = AO * min(GTAO, 1.0 - IndirectDiffuse.a);
+    // Specular takes this through its cone occlusion, and where the bounce stands in for the sky the IBL steps back.
+    const float AmbientAO = AO * min(ScreenAO.Visibility, 1.0 - IndirectDiffuse.a);
 
     // Metals carry no diffuse.
     const float3 DiffuseColor = Albedo * (1.0 - Metallic);
@@ -900,11 +852,11 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
         float2 DFG_IBL    = SampleBRDFLUT(NdotV_IBL, Roughness);
 #ifdef TRANSLUCENT
         float3 IBLDiffuse, IBLSpec;
-        EvaluateIBLAmbientSplit(WorldPosition, N, V, NdotV_IBL, DFG_IBL, Albedo, F0, Roughness, Metallic, AmbientAO, IBLDiffuse, IBLSpec);
+        EvaluateIBLAmbientSplit(WorldPosition, N, ScreenAO.BentNormal, V, NdotV_IBL, DFG_IBL, Albedo, F0, Roughness, Metallic, AmbientAO, IBLDiffuse, IBLSpec);
         Ambient = IBLDiffuse;
         LoSpec += IBLSpec;
 #else
-        float3 IBLAmbient = EvaluateIBLAmbient(WorldPosition, N, V, NdotV_IBL, DFG_IBL, Albedo, F0, Roughness, Metallic, AmbientAO);
+        float3 IBLAmbient = EvaluateIBLAmbient(WorldPosition, N, ScreenAO.BentNormal, V, NdotV_IBL, DFG_IBL, Albedo, F0, Roughness, Metallic, AmbientAO);
         Ambient = IBLAmbient;
 #endif
     }
@@ -930,7 +882,7 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
         Ambient *= (1.0 - Coat * CoatF);
         Lo      *= (1.0 - Coat * CoatF);
         LoCoat  += CoatIBL * Coat * GetAmbientLightIntensity()
-                 * ComputeSpecularOcclusion(CoatNdotV, AmbientAO, CoatRough);
+                 * ComputeBentSpecularOcclusion(ScreenAO.BentNormal, N, CoatR, CoatNdotV, AmbientAO, CoatRough);
     }
 
     Out.Color = Ambient + Lo + LoCoat + G.Emissive;
@@ -965,7 +917,6 @@ static const float3 kDebugNoCoat    = float3(0.0, 0.06, 0.08);
 static const float3 kWireframeColor      = float3(0.15, 1.0, 1.0);
 static const float  kWireframeWidthPixels = 1.25;
 
-// Callers gate on SPEC_ENABLE_DEBUG_VIEWS so shipping pipelines strip the whole switch.
 float3 ApplyDebugView(uint DebugMode, float3 Color, FGBufferData G, FDebugSurfaceInfo Info,
                       float3 WorldPosition, float3 ViewPosition, float2 ScreenPos)
 {
@@ -1016,12 +967,12 @@ float3 ApplyDebugView(uint DebugMode, float3 Color, FGBufferData G, FDebugSurfac
         Color = ClusterDebugColor(DbgIndex, GetClusterLightCount(DbgIndex));
         break;
     }
-    case DEBUG_MODE_SHADOW_CASCADES:
-        Color = CascadeDebugColor(WorldPosition, ViewPosition, Color);
+    case DEBUG_MODE_SHADOW_LEVELS:
+        Color = ShadowLevelDebugColor(WorldPosition, Color);
         break;
     case DEBUG_MODE_SUN_FAR_SHADOW:
     {
-        // Terrain and distance-field occlusion past the cascades. White where nothing was traced.
+        // Terrain and distance-field occlusion past the virtual shadow range. White where nothing was traced.
         const float Far = SunFarShadowMask(ScreenPos);
         Color = float3(Far, Far, Far);
         break;
@@ -1029,15 +980,17 @@ float3 ApplyDebugView(uint DebugMode, float3 Color, FGBufferData G, FDebugSurfac
     case DEBUG_MODE_GTAO:
     {
         // White where GTAO is off for this view.
-        float DbgAO = 1.0;
-        if (Scene().GTAOSettings.AOTexture.IsValid())
-        {
-            float2 DbgUV = ScreenPos / float2(Scene().ScreenSize.xy);
-            DbgAO = Scene().GTAOSettings.AOTexture.SampleLevel(Samplers::LinearClamp, DbgUV, 0.0).r;
-        }
+        const float DbgAO = Scene().GTAOSettings.AOTexture.IsValid()
+            ? Scene().GTAOSettings.AOTexture.SampleLevel(Samplers::LinearClamp, ScreenPos / float2(Scene().ScreenSize.xy), 0.0).r : 1.0;
         Color = float3(DbgAO, DbgAO, DbgAO);
         break;
     }
+    case DEBUG_MODE_BENT_NORMAL:
+        Color = SampleScreenAO(ScreenPos / float2(Scene().ScreenSize.xy), N).BentNormal * 0.5 + 0.5;
+        break;
+    case DEBUG_MODE_DISTANCE_FIELD_AO:
+        Color = SampleDistanceFieldAO(ScreenPos / float2(Scene().ScreenSize.xy)).xxx;
+        break;
     case DEBUG_MODE_SCREEN_SPACE_GI:
         // Black where the trace is off for this view.
         Color = Scene().GTAOSettings.IndirectDiffuse.IsValid()
@@ -1118,14 +1071,14 @@ float3 ApplyDebugView(uint DebugMode, float3 Color, FGBufferData G, FDebugSurfac
     return Color;
 }
 
-// Forward lane for terrain and translucency; opaque meshes run the two halves in separate deferred passes.
+// Forward lane for translucency; opaque meshes and terrain run the two halves in separate deferred passes.
 FShadedSurface ShadeSurface(FBaseVertexOutput Input, FMaterialPixelInputs Material)
 {
     uint MatFlags = GetMaterialFlags(Input.MaterialIndex);
     if (HasFlag(MatFlags, MatFlag_Masked))
     {
         const float3 ClipAnchor = mul(GetInverseCameraView(), float4(Input.FragPos.xyz, 1.0)).xyz;
-        if (!MaskedAlphaKeep(ClipAnchor, length(Input.FragPos.xyz), Material.Opacity, GetMaterialOpacityClip(Input.MaterialIndex), true))
+        if (!MaskedAlphaKeep(ClipAnchor, length(Input.FragPos.xyz), Material.Opacity, GetMaterialOpacityClip(Input.MaterialIndex)))
         {
             discard;
         }
@@ -1140,7 +1093,7 @@ FShadedSurface ShadeSurface(FBaseVertexOutput Input, FMaterialPixelInputs Materi
     Out.Alpha = Material.Opacity;
 
     uint DebugMode = Scene().CullData.DebugMode;
-    if (SPEC_ENABLE_DEBUG_VIEWS != 0 && DebugMode != DEBUG_MODE_NONE)
+    if (DebugMode != DEBUG_MODE_NONE)
     {
 #ifdef TRANSLUCENT
         Out.Reflection = float3(0.0);

@@ -152,7 +152,17 @@ public static unsafe partial class Native
     [NativeCall(SuppressGCTransition = true)] public static partial uint AdvanceChangeTick();
     [NativeCall] public static partial int ViewNextChunk(IntPtr State, uint* OutEntities, IntPtr* OutPtrs, uint** OutTicks, int MaxCount, int NInclude);
     [NativeCall] public static partial void ViewIncludeEpochs(IntPtr State, uint** OutSlots, int NInclude);
+    [NativeCall(SuppressGCTransition = true)] public static partial int ViewSnapshot(IntPtr State, uint** OutEntities, int* OutDriverInclude);
+    [NativeCall(SuppressGCTransition = true)] public static partial int ViewRowProbes(IntPtr State, void* OutProbes, int MaxProbes, int* OutExcludes, int* OutRequires, uint** OutGeneration, uint* OutSeenGeneration);
     [NativeCall] public static partial void ViewEnd(IntPtr State);
+
+    // The bit archive a script struct's NetSerialize packs itself into, see DotNetNetArchive.cpp.
+    [NativeCall(SuppressGCTransition = true)] public static partial int NetArchiveIsReading(IntPtr Archive);
+    [NativeCall(SuppressGCTransition = true)] public static partial int NetArchiveHasError(IntPtr Archive);
+    [NativeCall(SuppressGCTransition = true)] public static partial void NetArchiveSetError(IntPtr Archive);
+    [NativeCall] public static partial void NetArchiveBits(IntPtr Archive, ulong* Value, uint NumBits);
+    [NativeCall] public static partial void NetArchiveBytes(IntPtr Archive, byte* Data, long Size);
+    [NativeCall] public static partial void NetArchiveEntity(IntPtr Archive, uint* Entity);
 
     // The strong reference a canonical wrapper owns.
     [NativeCall] public static partial IntPtr PinObject(IntPtr Object);
@@ -188,7 +198,7 @@ public static unsafe partial class Native
     [NativeCall] public static partial string NameToString(IntPtr Name);
 
     // Delegate properties, bound to a managed closure and described by their reflected arguments.
-    [NativeCall] public static partial ulong DelegateBind(IntPtr Delegate, ulong Callback);
+    [NativeCall] public static partial ulong DelegateBind(IntPtr Delegate, ulong Callback, IntPtr Owner);
     [NativeCall] public static partial void DelegateUnbind(IntPtr Delegate, ulong Handle);
     [NativeCall] public static partial int DelegateManagedListeners(IntPtr Delegate, ulong* OutIds, ulong* OutTokens, int Capacity);
     [NativeCall] public static partial int DelegateArgCount(IntPtr DelegateProperty);

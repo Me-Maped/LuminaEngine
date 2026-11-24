@@ -1,4 +1,4 @@
-﻿#include "EditorTool.h"
+#include "EditorTool.h"
 
 #include "EditorToolContext.h"
 #include "Localization/Localization.h"
@@ -10,6 +10,7 @@
 #include "Assets/AssetTypes/Prefabs/PrefabComponents.h"
 #include "Core/Console/ConsoleVariable.h"
 #include "Core/Object/Package/Package.h"
+#include "Core/Object/Package/Thumbnail/PackageThumbnail.h"
 #include "Core/UpdateContext.h"
 #include "FileSystem/FileSystem.h"
 #include "Input/InputContext.h"
@@ -17,6 +18,7 @@
 #include "Log/Log.h"
 #include "Renderer/RHI.h"
 #include "Renderer/RHICore.h"
+#include "Renderer/RenderManager.h"
 #include "Settings/EditorSettings.h"
 #include "Thumbnails/ThumbnailUtils.h"
 #include "Tools/ComponentVisualizers/ComponentVisualizer.h"
@@ -41,6 +43,7 @@
 #include "World/Entity/Components/EntityTags.h"
 #include "World/Entity/Components/InputComponent.h"
 #include "World/Entity/Components/SkeletalMeshComponent.h"
+#include "World/Entity/Systems/DebugDrawSystem.h"
 #include "World/Entity/Components/SocketAttachmentComponent.h"
 #include "World/Entity/Components/StaticMeshComponent.h"
 #include "World/Entity/Components/TerrainComponent.h"
@@ -190,8 +193,15 @@ namespace Lumina
 
         if (const void* MappedMemory = Readback.Cpu)
         {
-            ThumbnailUtils::StoreDownsampledRGBA(*Package->GetPackageThumbnail(),
+            FPackageThumbnail& Thumbnail = *Package->GetPackageThumbnail();
+            ThumbnailUtils::StoreDownsampledRGBA(Thumbnail,
                 static_cast<const uint8*>(MappedMemory), SourceWidth, SourceHeight, (size_t)SourceWidth * 4u);
+
+            // The display image's alpha holds the HDR highlight gain while the editor presents HDR, which a thumbnail must not read as coverage.
+            for (int32 Alpha = 3; Alpha < Thumbnail.ImageData.Num(); Alpha += 4)
+            {
+                Thumbnail.ImageData[Alpha] = 255;
+            }
         }
 
         RHI::Retire(Readback);
@@ -594,8 +604,8 @@ namespace Lumina
         GetDefaultCameraPose(CameraLocation, CameraTarget);
 
         STransformComponent& CameraTransform = World->GetComponent<STransformComponent>(EditorEntity);
-        CameraTransform.SetLocation(CameraLocation);
-        CameraTransform.SetRotation(Math::FindLookAtRotation(CameraTarget, CameraLocation));
+        CameraTransform.SetLocalLocation(CameraLocation);
+        CameraTransform.SetLocalRotation(Math::FindLookAtRotation(CameraTarget, CameraLocation));
 
         World->GetCamera()->SetActiveCamera(EditorEntity);
     }
@@ -818,8 +828,8 @@ namespace Lumina
 
         STransformComponent& Transform = World->GetComponent<STransformComponent>(EditorEntity);
 
-        const FVector3 StartLocation = Transform.GetLocation();
-        const FQuat    StartRotation = Transform.GetRotation();
+        const FVector3 StartLocation = Transform.GetLocalLocation();
+        const FQuat    StartRotation = Transform.GetLocalRotation();
 
         FVector3 Pivot = CameraState.OrbitTarget;
         if (CameraState.Mode == EEditorCameraMode::Free)
@@ -836,7 +846,7 @@ namespace Lumina
                     }
                 }
 
-                CameraState.ViewGizmoPivot = StartLocation + Transform.GetForward() * PivotDistance;
+                CameraState.ViewGizmoPivot = StartLocation + Transform.GetLocalForward() * PivotDistance;
             }
 
             Pivot = CameraState.ViewGizmoPivot;
@@ -918,8 +928,8 @@ namespace Lumina
             Location -= DollyDelta;
         }
 
-        Transform.SetLocation(Location);
-        Transform.SetRotation(Rotation);
+        Transform.SetLocalLocation(Location);
+        Transform.SetLocalRotation(Rotation);
 
         // Carry both free-mode pivots along so a following tumble doesn't snap the view.
         CameraState.ViewGizmoPivot += PanDelta;
@@ -1056,18 +1066,29 @@ namespace Lumina
         ImGui::GetWindowDrawList()->AddRectFilled(PanelMin, PanelMax, EditorColors::U32(EditorColors::PanelBg()));
 
         // A target nobody has composited into holds whatever memory it was given, so it is not drawn.
-        const IRenderScene* Scene = HasWorld() ? GetWorld()->GetRenderer() : nullptr;
+        IRenderScene* Scene = HasWorld() ? GetWorld()->GetRenderer() : nullptr;
         const bool bHasSceneImage = Scene != nullptr && Scene->HasCompositedFrame();
+
+        if (Scene != nullptr)
+        {
+            // Only the main window can present HDR10, and a torn-off tool window always presents SDR.
+            const FRenderManager* Manager = TryRender();
+            const bool bMainWindow = ImGui::GetWindowViewport() == ImGui::GetMainViewport();
+            Scene->SetDisplayHeadroom(Manager != nullptr && bMainWindow ? Manager->GetHDROutput().GetHeadroomStops() : 0.0f);
+        }
 
         if (bHasSceneImage)
         {
-            ImGui::GetWindowDrawList()->AddImage(
+            ImDrawList* DrawList = ImGui::GetWindowDrawList();
+            ImGuiX::BeginSceneDisplay(DrawList);
+            DrawList->AddImage(
                 ViewportTexture,
                 WindowPosition,
                 WindowBottomRight,
                 ImVec2(0, 0), ImVec2(1, 1),
                 IM_COL32_WHITE
             );
+            ImGuiX::EndSceneDisplay(DrawList);
         }
 
         else
@@ -1237,6 +1258,19 @@ namespace Lumina
             ImGui::EndMenu();
         }
 
+        if (FDebugDrawState* DrawState = World->GetEntityRegistry().Ctx().Find<FDebugDrawState>(); DrawState != nullptr && ImGui::BeginMenu(LOC("Networking")))
+        {
+            for (const FDebugDrawNetworkingView& View : kDebugDrawNetworkingViews)
+            {
+                bool bOn = EnumHasAnyFlags(DrawState->Networking, View.View);
+                if (ImGui::MenuItem(LOC_VIEW(View.Label), nullptr, &bOn))
+                {
+                    DrawState->Networking ^= View.View;
+                }
+            }
+            ImGui::EndMenu();
+        }
+
         if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_BONE, "Skeleton")))
         {
             DrawSkeletonDebugMenuItems();
@@ -1301,9 +1335,14 @@ namespace Lumina
                 {
                     { ERenderSceneDebugFlags::LightComplexity, "Light Complexity" },
                     { ERenderSceneDebugFlags::ClusterGrid,     "Light Clusters"   },
-                    { ERenderSceneDebugFlags::ShadowCascades,  "Shadow Cascades"  },
+                    { ERenderSceneDebugFlags::ShadowLevels,    "Shadow Levels"    },
                     { ERenderSceneDebugFlags::SunFarShadow,    "Sun Far Shadow"   },
+                    // Redraws every cached page while open, so each caster shows how it rasterizes rather than only the ones that moved.
+                    { ERenderSceneDebugFlags::ShadowRaster,    "Shadow Raster"    },
                     { ERenderSceneDebugFlags::GTAO,            "GTAO"             },
+                    { ERenderSceneDebugFlags::BentNormal,      "Bent Normal"      },
+                    { ERenderSceneDebugFlags::DistanceFieldAO, "Distance Field AO" },
+                    { ERenderSceneDebugFlags::WorldDistanceField, "World Distance Field" },
                     { ERenderSceneDebugFlags::ScreenSpaceGI,   "Screen Space GI"  },
                     // The two failure modes look identical in a lit view, hence two separate inspectors.
                     { ERenderSceneDebugFlags::ProbeInfluence,  "Probe Influence"  },
@@ -1355,7 +1394,6 @@ namespace Lumina
                     "Cone Cull",
                     "Occlusion Cull (Instances)",
                     "Occlusion Cull (Meshlets, 2-phase)",
-                    "Occlusion Cull (Shadows)",
                     "CPU Instance Cull",
                     "Level of Detail",
                 };
@@ -1365,7 +1403,6 @@ namespace Lumina
                     "Rejects meshlets whose normal cone faces away from the view.\nOff: backfacing clusters are submitted. The only cull besides occlusion that removes PARTS of a mesh.",
                     "Whole instances hidden by last frame's depth pyramid are rejected outright. Single-phase and\nexact enough at this granularity: an object is hidden or it is not.\nOff: no instance-level occlusion culling.",
                     "Per-meshlet Hi-Z, resolved across two VisBuffer phases: the early pass defers what last frame's\npyramid hid, the pyramid is rebuilt from this frame's own depth, and the late pass re-tests exactly\nthose. No frame latency -- disoccluded meshlets still draw the same frame.\nOff: the frame collapses to a single geometry phase and meshlets are frustum-culled only.",
-                    "The same test for shadow cascades, against the cascade pyramid.",
                     "Pre-upload reject of instances outside every contributing view, on the CPU.\nOff: the whole retained set is uploaded each frame.",
                     "Distance-based LOD selection.\nOff: always LOD 0, full detail.",
                 };
@@ -1376,7 +1413,6 @@ namespace Lumina
                     &Settings.bConeCull,
                     &Settings.bOcclusionCull,
                     &Settings.bMeshletOcclusionCull,
-                    &Settings.bShadowOcclusionCull,
                     &Settings.bCPUInstanceCull,
                     &Settings.bUseLODs,
                 };
@@ -1514,7 +1550,7 @@ namespace Lumina
             return;
         }
 
-        FVector3 CurrentForward = EditorTransform.GetForward();
+        FVector3 CurrentForward = EditorTransform.GetLocalForward();
         CameraState.FocusFreePosition = EntityWorldLocation - CurrentForward * FocusDistance;
         CameraState.FocusFreeRotation = Math::FindLookAtRotation(EntityWorldLocation, CameraState.FocusFreePosition);
         CameraState.bFocusInterp      = true;
@@ -1532,7 +1568,7 @@ namespace Lumina
             && World->IsValidEntity(EditorEntity))
         {
             const STransformComponent& Transform = World->GetComponent<STransformComponent>(EditorEntity);
-            const FVector3 Position = Transform.GetLocation();
+            const FVector3 Position = Transform.GetLocalLocation();
             const FVector3 Offset   = Position - CameraState.OrbitTarget;
             const float Distance = Math::Length(Offset);
 
@@ -1588,7 +1624,7 @@ namespace Lumina
             && EditorEntity != ECS::NullEntity && World->IsValidEntity(EditorEntity)
             && World->HasComponent<STransformComponent>(EditorEntity))
         {
-            const FVector3 Location = World->GetComponent<STransformComponent>(EditorEntity).GetLocation();
+            const FVector3 Location = World->GetComponent<STransformComponent>(EditorEntity).GetLocalLocation();
             const float Distance = Math::Distance(Location, CameraState.LastFocusPoint);
             if (Distance > 0.1f)
             {
@@ -1641,7 +1677,7 @@ namespace Lumina
         }
 
         STransformComponent& Transform = World->GetComponent<STransformComponent>(EditorEntity);
-        Transform.SetLocation(Transform.GetLocation() + Delta);
+        Transform.SetLocalLocation(Transform.GetLocalLocation() + Delta);
     }
 
     void FEditorTool::ApplyOrbitTransform()
@@ -1664,8 +1700,8 @@ namespace Lumina
 
         const FVector3 NewPosition = CameraState.OrbitTarget + Offset;
         STransformComponent& Transform = World->GetComponent<STransformComponent>(EditorEntity);
-        Transform.SetLocation(NewPosition);
-        Transform.SetRotation(Math::FindLookAtRotation(CameraState.OrbitTarget, NewPosition));
+        Transform.SetLocalLocation(NewPosition);
+        Transform.SetLocalRotation(Math::FindLookAtRotation(CameraState.OrbitTarget, NewPosition));
     }
 
     void FEditorTool::DrawCameraModeSelector(float ItemWidth)
@@ -1822,15 +1858,15 @@ namespace Lumina
                 const float Alpha = 1.0f - std::exp(-CameraState.FocusInterpRate * static_cast<float>(DeltaTime));
                 if (CameraState.Mode == EEditorCameraMode::Free)
                 {
-                    const FVector3 NewLoc = Math::Mix(Transform.GetLocation(), CameraState.FocusFreePosition, Alpha);
-                    const FQuat NewRot = Math::Slerp(Transform.GetRotation(), CameraState.FocusFreeRotation, Alpha);
-                    Transform.SetLocation(NewLoc);
-                    Transform.SetRotation(NewRot);
+                    const FVector3 NewLoc = Math::Mix(Transform.GetLocalLocation(), CameraState.FocusFreePosition, Alpha);
+                    const FQuat NewRot = Math::Slerp(Transform.GetLocalRotation(), CameraState.FocusFreeRotation, Alpha);
+                    Transform.SetLocalLocation(NewLoc);
+                    Transform.SetLocalRotation(NewRot);
 
                     if (Math::Distance(NewLoc, CameraState.FocusFreePosition) < 1e-3f)
                     {
-                        Transform.SetLocation(CameraState.FocusFreePosition);
-                        Transform.SetRotation(CameraState.FocusFreeRotation);
+                        Transform.SetLocalLocation(CameraState.FocusFreePosition);
+                        Transform.SetLocalRotation(CameraState.FocusFreeRotation);
                         CameraState.bFocusInterp = false;
                     }
                 }
@@ -1868,9 +1904,9 @@ namespace Lumina
                     CameraState.OrthoFreeDistance - static_cast<float>(WheelDelta) * Zoom, 0.05f);
             }
 
-            const FVector3 Forward = Transform.GetForward();
-            const FVector3 Right   = Transform.GetRight();
-            const FVector3 Up      = Transform.GetUp();
+            const FVector3 Forward = Transform.GetLocalForward();
+            const FVector3 Right   = Transform.GetLocalRight();
+            const FVector3 Up      = Transform.GetLocalUp();
 
             // The pivot is captured once on the rising edge and owns the transform for the whole drag.
             if (bWantOrbitDrag)
@@ -1881,21 +1917,21 @@ namespace Lumina
                     float PivotDistance = 10.0f;
                     if (CameraState.bHasLastFocusPoint)
                     {
-                        const float FocusDistance = Math::Distance(Transform.GetLocation(), CameraState.LastFocusPoint);
+                        const float FocusDistance = Math::Distance(Transform.GetLocalLocation(), CameraState.LastFocusPoint);
                         if (FocusDistance > 0.1f)
                         {
                             PivotDistance = FocusDistance;
                         }
                     }
 
-                    CameraState.FreeOrbitPivot       = Transform.GetLocation() + Forward * PivotDistance;
+                    CameraState.FreeOrbitPivot       = Transform.GetLocalLocation() + Forward * PivotDistance;
                     CameraState.FreeOrbitDistance    = PivotDistance;
                     CameraState.bFreeOrbitPivotValid = true;
                     CameraState.bFreeOrbitActive     = true;
                     CameraState.Velocity             = FVector3(0.0f);
                 }
 
-                const FVector3 Offset = Transform.GetLocation() - CameraState.FreeOrbitPivot;
+                const FVector3 Offset = Transform.GetLocalLocation() - CameraState.FreeOrbitPivot;
                 const float Distance  = Math::Max(Math::Length(Offset), 0.05f);
 
                 // Spherical form and 0.4 sensitivity match ApplyOrbitTransform so both modes tumble identically.
@@ -1915,8 +1951,8 @@ namespace Lumina
                     Distance * std::cos(PitchRad) * std::cos(YawRad));
 
                 const FVector3 NewLocation = CameraState.FreeOrbitPivot + NewOffset;
-                Transform.SetLocation(NewLocation);
-                Transform.SetRotation(Math::FindLookAtRotation(CameraState.FreeOrbitPivot, NewLocation));
+                Transform.SetLocalLocation(NewLocation);
+                Transform.SetLocalRotation(Math::FindLookAtRotation(CameraState.FreeOrbitPivot, NewLocation));
                 CameraState.FreeOrbitDistance = Distance;
                 return;
             }
@@ -1951,7 +1987,7 @@ namespace Lumina
             // Analytic decay; explicit Euler (v -= v*Drag*dt) flips sign below 10 FPS and stutters.
             CameraState.Velocity *= std::exp(-Drag * static_cast<float>(DeltaTime));
 
-            Transform.Translate(CameraState.Velocity * static_cast<float>(DeltaTime) * CameraState.SpeedScale);
+            Transform.AddLocalLocation(CameraState.Velocity * static_cast<float>(DeltaTime) * CameraState.SpeedScale);
 
             // Signs match the orbit pan so both modes feel the same, scaled to stay sane at any working scale.
             if (bWantPanDrag)
@@ -1965,7 +2001,7 @@ namespace Lumina
                 const float PanScale = PanReference * 0.002f;
                 const FVector3 PanDelta = (Up * static_cast<float>(Raw.GetMouseDeltaY()) * PanScale)
                                         + (Right * static_cast<float>(Raw.GetMouseDeltaX()) * PanScale);
-                Transform.Translate(PanDelta);
+                Transform.AddLocalLocation(PanDelta);
 
                 if (CameraState.bFreeOrbitPivotValid)
                 {
@@ -2004,8 +2040,8 @@ namespace Lumina
                 if (bWantPan || bWantPanDrag)
                 {
                     const float PanScale = CameraState.OrbitDistance * 0.002f;
-                    const FVector3 Right = Transform.GetRight();
-                    const FVector3 Up    = Transform.GetUp();
+                    const FVector3 Right = Transform.GetLocalRight();
+                    const FVector3 Up    = Transform.GetLocalUp();
                     CameraState.OrbitTarget += Right * static_cast<float>(Raw.GetMouseDeltaX()) * PanScale;
                     CameraState.OrbitTarget += Up    * static_cast<float>(Raw.GetMouseDeltaY()) * PanScale;
                 }
@@ -2655,7 +2691,7 @@ namespace Lumina
             FVector3 TerrainOrigin(0.0f);
             if (const STransformComponent* TerrainTransform = Registry.TryGet<STransformComponent>(Entity))
             {
-                TerrainOrigin = TerrainTransform->GetLocation();
+                TerrainOrigin = TerrainTransform->GetLocalLocation();
             }
 
             FVector3 TerrainHit;

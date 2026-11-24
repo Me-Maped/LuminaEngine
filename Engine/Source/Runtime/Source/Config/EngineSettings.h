@@ -8,6 +8,7 @@
 #include "Containers/String.h"
 #include "Input/Key.h"
 #include "Physics/PhysicsTypes.h"
+#include "Renderer/HDROutput.h"
 #include "Renderer/PresentMode.h"
 #include "EngineSettings.generated.h"
 
@@ -62,8 +63,7 @@ namespace Lumina
         FString SharedArtifactCachePath;
     };
 
-    // Texture streaming budget and policy. Project-scoped rather than per-user: the pool size a project
-    // targets is a shipping decision, and it has to travel with the content it was tuned against.
+    // Project-scoped rather than per-user, since the pool size is a shipping decision that travels with the content.
     REFLECT(MinimalAPI, ConfigFile = "/Config/GameSettings.json", DisplayName = "Texture Streaming", Category = "Rendering")
     class CTextureStreamingSettings : public CDeveloperSettings
     {
@@ -97,8 +97,7 @@ namespace Lumina
         PROPERTY(Editable, Category = "Performance")
         int32 MaxUploadMBPerFrame = 32;
 
-        // Promotions + demotions per frame. Separate from the upload budget: a residency change recreates
-        // the GPU image and retires the old one, which a demotion pays while moving zero host bytes.
+        // Promotions and demotions per frame, separate from the upload budget since a demotion moves zero host bytes.
         PROPERTY(Editable, Category = "Performance")
         int32 MaxResidencyChangesPerFrame = 4;
     };
@@ -277,10 +276,10 @@ namespace Lumina
         TVector<FName> ChannelNames = TVector<FName>(CollisionLayers::kCount - CollisionLayers::kFirstChannel);
     };
 
+    // Edge detection threshold and search reach, where each step up finds fainter and longer edges for more GPU time.
     REFLECT()
     enum class ESMAAQuality : uint8
     {
-        Off,
         Low,
         Medium,
         High,
@@ -315,23 +314,26 @@ namespace Lumina
         CORTAO,
     };
 
-    // None is the built-in spatial upscale, which an unsupported or unregistered choice also falls back to.
+    // TAA and DLSS resolve many jittered frames and restore a render resolution below the display themselves; the others leave that to the spatial upscale.
     REFLECT()
-    enum class EUpscaler : uint8
+    enum class EAntiAliasingMethod : uint8
     {
         None,
+        // Morphological edges from the current frame alone.
+        SMAA,
+        // SMAA plus a second jittered subsample resolved against the reprojected last frame, and plain SMAA below native resolution.
+        SMAAT2x,
+        TAA,
+        // Needs the DLSS plugin and a GPU it supports, and runs TAA without them.
         DLSS,
-        FSR,
     };
 
-    // The standard upscaler quality modes, which each upscaler maps onto its own, plus a free percentage.
+    // How far below the display the scene renders, in the standard upscaler ratios each temporal method maps onto its own.
     REFLECT()
-    enum class EUpscalerMode : uint8
+    enum class ERenderResolution : uint8
     {
-        // Renders at ScreenPercentage.
-        Custom,
-        // Full resolution, using the upscaler only as anti-aliasing, which DLSS calls DLAA.
-        NativeAA,
+        // Full resolution, which DLSS calls DLAA.
+        Native,
         // About 67 percent per axis.
         Quality,
         // About 58 percent per axis.
@@ -340,15 +342,8 @@ namespace Lumina
         Performance,
         // A third per axis, meant for very high display resolutions.
         UltraPerformance,
-    };
-
-    // S2x and 4x are absent because both add 2x MSAA, which a visibility-buffer deferred path does not run.
-    REFLECT()
-    enum class ESMAAMode : uint8
-    {
-        Off,
-        SMAA1x,
-        SMAAT2x,
+        // Renders at ScreenPercentage.
+        Custom,
     };
 
     REFLECT()
@@ -377,6 +372,18 @@ namespace Lumina
         // Waits for the previous frame's GPU work before reading input, trading GPU throughput for a frame less input latency when GPU-bound.
         PROPERTY(Editable, Category = "Display")
         bool bLowLatencyMode = false;
+
+        // Presents the primary window in HDR10, which lets highlights run brighter than SDR white.
+        PROPERTY(Editable, Category = "Display")
+        EHDROutput HDROutput = EHDROutput::Auto;
+
+        // Brightness of SDR white and the UI in HDR, where 0 follows the Windows SDR content brightness.
+        PROPERTY(Editable, Category = "Display", ClampMin = 0.0f, ClampMax = 1000.0f, Units = "nits")
+        float HDRPaperWhiteNits = 0.0f;
+
+        // Brightest highlight sent to the display in HDR, where 0 uses the peak the monitor reports.
+        PROPERTY(Editable, Category = "Display", ClampMin = 0.0f, ClampMax = 10000.0f, Units = "nits")
+        float HDRPeakNits = 0.0f;
 
         void PostInitSettings() override;
 
@@ -412,22 +419,6 @@ namespace Lumina
         PROPERTY(Editable, Category = "Shadows", ClampMin = 128, ClampMax = 1024)
         int32 PointShadowResolution = 512;
 
-        // New meshes import with a cluster hierarchy the GPU cuts per meshlet, in place of a discrete LOD chain. Existing meshes rebuild from the mesh editor.
-        PROPERTY(Editable, Category = "Virtual Geometry")
-        bool bClusterLODByDefault = true;
-
-        // New meshes import with voxel splat levels past their coarsest geometry.
-        PROPERTY(Editable, Category = "Virtual Geometry")
-        bool bVoxelFarByDefault = true;
-
-        // Voxels along the longest side at the finest voxel level a new mesh bakes.
-        PROPERTY(Editable, Category = "Virtual Geometry", ClampMin = 4, ClampMax = 128)
-        int32 DefaultVoxelResolution = 128;
-
-        // Draws the baked voxel levels once a mesh is far enough; off keeps every mesh on its coarsest triangles.
-        PROPERTY(Editable, Category = "Virtual Geometry")
-        bool bVoxelFarRepresentation = true;
-
         // Replaces an instance smaller than ProxyTransitionPixels on screen with one splat carrying no transform or meshlet data of its own.
         PROPERTY(Editable, Category = "Virtual Geometry")
         bool bFarProxies = true;
@@ -436,9 +427,21 @@ namespace Lumina
         PROPERTY(Editable, Category = "Virtual Geometry", ClampMin = 0.0f, ClampMax = 16.0f, Delta = 0.25f)
         float ProxyTransitionPixels = 2.0f;
 
+        // Projected diameter in pixels under which an instance whose mesh has a baked impostor draws it instead of its meshlets.
+        PROPERTY(Editable, Category = "Virtual Geometry", ClampMin = 0.0f, ClampMax = 1024.0f, Delta = 1.0f)
+        float ImpostorTransitionPixels = 96.0f;
+
         // Sun shadow filtering and contact march steps, with the march off at Low; a low sun stretches each shadow texel along the ground, which only more taps hide.
         PROPERTY(Editable, Category = "Shadows")
         EShadowQuality ShadowQuality = EShadowQuality::High;
+
+        // Small opaque sun shadow casters rasterize in compute, where tiny triangles cost far less than in the hardware rasterizer.
+        PROPERTY(Editable, Category = "Shadows")
+        bool bVirtualShadowComputeRaster = true;
+
+        // The camera's small opaque meshlets rasterize in compute too, where triangles of a pixel or two cost far less than in the hardware rasterizer.
+        PROPERTY(Editable, Category = "Virtual Geometry")
+        bool bVisBufferComputeRaster = true;
 
         // At 1 a mesh switches LOD once its simplification error shrinks to one display pixel, and 2 waits for half a pixel.
         PROPERTY(Editable, Category = "Level of Detail", ClampMin = 0.25f, ClampMax = 16.0f, Delta = 0.25f)
@@ -488,48 +491,47 @@ namespace Lumina
         PROPERTY(Editable, Category = "Skinning", ClampMin = 0, ClampMax = 4096, Units = "MiB")
         int32 PreSkinnedVertexBudgetMiB = 0;
 
-        // How far below the display the scene renders, which the upscaler restores before tonemapping.
-        PROPERTY(Editable, Category = "Resolution")
-        EUpscalerMode UpscalerMode = EUpscalerMode::Custom;
-
-        // Percentage of the display each axis renders at while UpscalerMode is Custom.
-        PROPERTY(Editable, Category = "Resolution", ClampMin = 25.0f, ClampMax = 100.0f)
-        float ScreenPercentage = 100.0f;
-
-        PROPERTY(Editable, Category = "Resolution")
-        EUpscaler Upscaler = EUpscaler::None;
-
-        // Sharpening on the built-in spatial upscale, which softens the image it enlarges.
-        PROPERTY(Editable, Category = "Resolution", ClampMin = 0.0f, ClampMax = 1.0f)
-        float UpscaleSharpness = 0.25f;
-
-        // SMAA1x is morphological only; SMAAT2x adds a second jittered subsample resolved against a reprojected history.
         PROPERTY(Editable, Category = "Anti-Aliasing")
-        ESMAAMode SMAAMode = ESMAAMode::SMAA1x;
+        EAntiAliasingMethod AntiAliasing = EAntiAliasingMethod::TAA;
 
-        /** Edge-detection quality. Higher qualities detect more edges at higher GPU cost. */
-        PROPERTY(Editable, Category = "Anti-Aliasing")
+        PROPERTY(Editable, Category = "Anti-Aliasing", EditCondition = "AntiAliasing == SMAA || AntiAliasing == SMAAT2x", EditConditionHides)
         ESMAAQuality SMAAQuality = ESMAAQuality::High;
 
         // Lowers the edge threshold where depth jumps, so a silhouette against a similar color, such as grass over grass, is still smoothed.
-        PROPERTY(Editable, Category = "Anti-Aliasing")
+        PROPERTY(Editable, Category = "Anti-Aliasing", EditCondition = "AntiAliasing == SMAA || AntiAliasing == SMAAT2x", EditConditionHides)
         bool bSMAADepthEdges = true;
 
-        // With no temporal resolve, sharpens resolved masked edges to about one pixel so hashed alpha dithers only that band, and keeps the plain hash where leaves are too small to resolve.
-        PROPERTY(Editable, Category = "Anti-Aliasing")
-        bool bSharpenedAlphaTest = true;
-
-        // T2x history contribution. 0.5 is the true two-sample average; lower trades aliasing for less ghosting.
-        PROPERTY(Editable, Category = "Anti-Aliasing", ClampMin = 0.0f, ClampMax = 0.5f)
-        float TemporalHistoryWeight = 0.5f;
+        // The history's share of the resolve, where 0.5 is the true two-sample average and lower trades aliasing for less ghosting.
+        PROPERTY(Editable, Category = "Anti-Aliasing", ClampMin = 0.0f, ClampMax = 0.5f, EditCondition = "AntiAliasing == SMAAT2x", EditConditionHides)
+        float SMAAT2xHistoryWeight = 0.5f;
 
         // Clamps the reprojected history into the local color range, which is what stops bad motion ghosting.
-        PROPERTY(Editable, Category = "Anti-Aliasing")
-        bool bTemporalNeighborhoodClamp = true;
+        PROPERTY(Editable, Category = "Anti-Aliasing", EditCondition = "AntiAliasing == SMAAT2x", EditConditionHides)
+        bool bSMAAT2xNeighborhoodClamp = true;
 
         // Widens the clamp box in standard deviations. Larger keeps more history and ghosts more.
-        PROPERTY(Editable, Category = "Anti-Aliasing", ClampMin = 0.25f, ClampMax = 4.0f)
-        float TemporalClampGamma = 1.0f;
+        PROPERTY(Editable, Category = "Anti-Aliasing", ClampMin = 0.25f, ClampMax = 4.0f, EditCondition = "AntiAliasing == SMAAT2x", EditConditionHides)
+        float SMAAT2xClampGamma = 1.0f;
+
+        // Scales the subpixel offset. 0 pins both subsamples to the pixel center, which isolates the resolve.
+        PROPERTY(Editable, Category = "Anti-Aliasing", ClampMin = 0.0f, ClampMax = 1.0f, EditCondition = "AntiAliasing == SMAAT2x", EditConditionHides)
+        float SMAAT2xJitterScale = 0.4f;
+
+        // Screen fraction a pixel may reproject across before its history is refused outright.
+        PROPERTY(Editable, Category = "Anti-Aliasing", ClampMin = 0.01f, ClampMax = 1.0f, EditCondition = "AntiAliasing == SMAAT2x", EditConditionHides)
+        float SMAAT2xMaxReprojection = 0.25f;
+
+        // The new frame's share on a still pixel. Lower resolves finer and smooths more, higher keeps it sharper and less stable.
+        PROPERTY(Editable, Category = "Anti-Aliasing", ClampMin = 0.02f, ClampMax = 0.5f, EditCondition = "AntiAliasing == TAA", EditConditionHides)
+        float TAACurrentWeight = 0.04f;
+
+        // Standard deviations of the local color range the history is kept inside. Larger ghosts more, smaller flickers more.
+        PROPERTY(Editable, Category = "Anti-Aliasing", ClampMin = 0.5f, ClampMax = 3.0f, EditCondition = "AntiAliasing == TAA", EditConditionHides)
+        float TAAClipGamma = 1.25f;
+
+        // Under SMAA or no anti-aliasing, sharpens resolved masked edges to about one pixel; TAA and DLSS hash them instead. Foliage textures keep their density at range with Preserve Alpha Coverage.
+        PROPERTY(Editable, Category = "Anti-Aliasing")
+        bool bSharpenedAlphaTest = true;
 
         // Roughens highlights where the surface normal turns within a pixel, which stops them sparkling on dense or curved geometry but dulls the look.
         PROPERTY(Editable, Category = "Anti-Aliasing")
@@ -543,13 +545,17 @@ namespace Lumina
         PROPERTY(Editable, Category = "Anti-Aliasing", ClampMin = 0.0f, ClampMax = 1.0f, EditCondition = "bSpecularAntiAliasing")
         float SpecularAntiAliasingLimit = 0.18f;
 
-        // Scales the subpixel offset. 0 pins both subsamples to the pixel center, which isolates the resolve.
-        PROPERTY(Editable, Category = "Anti-Aliasing", ClampMin = 0.0f, ClampMax = 1.0f)
-        float TemporalJitterScale = 0.4f;
+        // How far below the display the scene renders. TAA and DLSS restore the rest, and the spatial upscale does for the other methods.
+        PROPERTY(Editable, Category = "Resolution")
+        ERenderResolution RenderResolution = ERenderResolution::Native;
 
-        // Screen fraction a pixel may reproject across before its history is refused outright.
-        PROPERTY(Editable, Category = "Anti-Aliasing", ClampMin = 0.01f, ClampMax = 1.0f)
-        float TemporalMaxReprojection = 0.25f;
+        // Percentage of the display each axis renders at.
+        PROPERTY(Editable, Category = "Resolution", ClampMin = 25.0f, ClampMax = 100.0f, EditCondition = "RenderResolution == Custom", EditConditionHides)
+        float ScreenPercentage = 100.0f;
+
+        // Sharpening on the spatial upscale, which softens the image it enlarges.
+        PROPERTY(Editable, Category = "Resolution", ClampMin = 0.0f, ClampMax = 1.0f, EditCondition = "AntiAliasing == None || AntiAliasing == SMAA || AntiAliasing == SMAAT2x", EditConditionHides)
+        float SpatialUpscaleSharpness = 0.25f;
 
         // VRS rate for opted-in passes; coarser is fewer PS invocations but softer, and a no-op without pipeline FSR.
         PROPERTY(ReadOnly, Category = "Variable Rate Shading")
@@ -602,6 +608,18 @@ namespace Lumina
         /** Trades depth-pyramid bandwidth against thin-object accuracy and temporal stability. */
         PROPERTY(Editable, Category = "Ambient Occlusion|Heuristics", ClampMin = 0.0f, ClampMax = 30.0f)
         float GTAODepthMipSamplingOffset = 3.3f;
+
+        // Large scale sky occlusion from cones traced through the mesh distance fields, under canopies, in alleys and indoors.
+        PROPERTY(Editable, Category = "Ambient Occlusion|Distance Field")
+        bool bDistanceFieldAO = true;
+
+        // How far from a surface a mesh can still block its sky.
+        PROPERTY(Editable, Category = "Ambient Occlusion|Distance Field", ClampMin = 0.5f, ClampMax = 50.0f)
+        float DistanceFieldAOMaxDistance = 8.0f;
+
+        // Camera distance the occlusion fades out by, which also sizes the grid its casters are binned into.
+        PROPERTY(Editable, Category = "Ambient Occlusion|Distance Field", ClampMin = 10.0f, ClampMax = 1000.0f)
+        float DistanceFieldAOViewDistance = 150.0f;
 
         // Half resolution indirect diffuse gathered along GTAO's horizon slices from last frame's lit color; needs GTAO on.
         PROPERTY(Editable, Category = "Global Illumination")

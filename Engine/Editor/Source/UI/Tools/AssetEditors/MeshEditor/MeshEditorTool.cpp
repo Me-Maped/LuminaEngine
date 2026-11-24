@@ -16,6 +16,8 @@
 #include "Containers/StringFormat.h"
 #include "FileSystem/FileSystem.h"
 #include "UI/InfoTable.h"
+#include "UI/EditorUI.h"
+#include "LuminaEditor.h"
 
 
 namespace Lumina
@@ -65,7 +67,7 @@ namespace Lumina
 
             ImGui::Spacing();
             ImGuiX::Font::PushFont(ImGuiX::Font::EFont::Large);
-            ImGui::SeparatorText("Properties");
+            ImGui::SeparatorText(LOC("Properties"));
             ImGuiX::Font::PopFont();
             ImGui::Spacing();
             PropertyTable.DrawTree();
@@ -108,7 +110,7 @@ namespace Lumina
             ImGui::Spacing();
         }
 
-        uint32 CountLODs(const FMeshResource& Resource)
+        uint32 CountSlots(const FMeshResource& Resource)
         {
             uint32 Count = 1;
             for (const FGeometrySurface& Surface : Resource.GeometrySurfaces)
@@ -127,7 +129,7 @@ namespace Lumina
         uint64 Triangles = 0;
         for (const FGeometrySurface& Surface : Resource.GeometrySurfaces)
         {
-            Triangles += SumTrianglesInRange(Resource.MeshletData.Meshlets, Surface.LODMeshletOffset[0], Surface.LODMeshletCount[0]);
+            Triangles += SumTrianglesInRange(Resource.MeshletData.Meshlets, Surface.LODMeshletOffset[0], Surface.FinestMeshletCount(Resource.MeshletData));
         }
 
         ImGui::BeginChild("##MeshSummary", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
@@ -155,10 +157,10 @@ namespace Lumina
         {
             const FString TriangleText = FormatCount(Triangles);
             const FString MaterialText = *Format("{}", Mesh.GetNumMaterials());
-            const FString LODText      = *Format("{}", CountLODs(Resource));
+            const FString SlotText     = *Format("{}", CountSlots(Resource));
 
-            const char* Values[] = { *TriangleText, *MaterialText, *LODText };
-            const char* Labels[] = { "Triangles", "Materials", "LODs" };
+            const char* Values[] = { *TriangleText, *MaterialText, *SlotText };
+            const char* Labels[] = { "Triangles", "Materials", "Hierarchy slots" };
             ImGui::TableNextRow();
             for (int32 Column = 0; Column < 3; ++Column)
             {
@@ -166,7 +168,7 @@ namespace Lumina
                 ImGuiX::Font::PushFont(ImGuiX::Font::EFont::MediumBold);
                 ImGui::TextUnformatted(Values[Column]);
                 ImGuiX::Font::PopFont();
-                ImGui::TextDisabled("%s", Labels[Column]);
+                ImGui::TextDisabled("%s", LOC_VIEW(Labels[Column]));
             }
             ImGui::EndTable();
         }
@@ -182,76 +184,47 @@ namespace Lumina
     void FStaticMeshEditorTool::DrawLODSection(CStaticMesh& Mesh)
     {
         const FMeshResource& Resource = Mesh.GetMeshResource();
-        const uint32 AvailableLODs = CountLODs(Resource);
-        PreviewLODIndex = Math::Min(PreviewLODIndex, (int32)AvailableLODs - 1);
+        const FMeshletData&  MD       = Resource.MeshletData;
+        const uint32         Slots    = CountSlots(Resource);
 
-        SectionTitle("Level of Detail");
+        SectionTitle(LOC("Level of Detail"));
+        ImGui::TextDisabled(LOC("The GPU cuts the hierarchy per meshlet, so the view mixes slots by distance."));
 
-        char LODNames[MAX_MESH_LODS][24];
-        const char* PreviewItems[MAX_MESH_LODS + 1];
-        PreviewItems[0] = "Automatic (by distance)";
-        for (uint32 Index = 0; Index < AvailableLODs; ++Index)
-        {
-            snprintf(LODNames[Index], sizeof(LODNames[Index]), Index == 0 ? LOC("LOD %u (full detail)") : LOC("LOD %u"), Index);
-            PreviewItems[Index + 1] = LODNames[Index];
-        }
-
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(LOC("Preview"));
-        ImGui::SameLine(110.0f);
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        int PreviewItem = PreviewLODIndex < 0 ? 0 : PreviewLODIndex + 1;
-        if (ImGui::Combo("##PreviewLOD", &PreviewItem, PreviewItems, (int)AvailableLODs + 1))
-        {
-            PreviewLODIndex = PreviewItem == 0 ? -1 : PreviewItem - 1;
-        }
-        ImGuiX::TextTooltip(LOCF("Force the viewport to one LOD instead of switching by distance."));
-
-        if (AvailableLODs == 1)
-        {
-            ImGui::TextDisabled(LOC("This mesh has a single LOD."));
-            return;
-        }
-
-        uint32 LODTriangles[MAX_MESH_LODS] = {};
-        float  LODError[MAX_MESH_LODS]     = {};
+        uint32 SourceTriangles              = 0;
+        uint32 SlotTriangles[MAX_MESH_LODS] = {};
+        float  SlotError[MAX_MESH_LODS]     = {};
+        float  SlotParent[MAX_MESH_LODS]    = {};
         for (const FGeometrySurface& Surface : Resource.GeometrySurfaces)
         {
-            for (uint32 LOD = 0; LOD < Surface.NumLODs && LOD < MAX_MESH_LODS; ++LOD)
+            SourceTriangles += SumTrianglesInRange(MD.Meshlets, Surface.LODMeshletOffset[0], Surface.FinestMeshletCount(MD));
+            for (uint32 Slot = 0; Slot < Surface.NumLODs && Slot < MAX_MESH_LODS; ++Slot)
             {
-                LODTriangles[LOD] += SumTrianglesInRange(Resource.MeshletData.Meshlets, Surface.LODMeshletOffset[LOD], Surface.LODMeshletCount[LOD]);
-                LODError[LOD] = Math::Max(LODError[LOD], Surface.LODError[LOD]);
+                SlotTriangles[Slot] += SumTrianglesInRange(MD.Meshlets, Surface.LODMeshletOffset[Slot], Surface.LODMeshletCount[Slot]);
+                SlotError[Slot]  = Math::Max(SlotError[Slot], Surface.LODError[Slot]);
+                SlotParent[Slot] = Math::Max(SlotParent[Slot], Surface.LODParentError[Slot]);
             }
         }
 
         ImGui::Spacing();
-        if (ImGui::BeginTable("##LODs", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp))
+        if (ImGui::BeginTable("##Slots", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp))
         {
-            ImGui::TableSetupColumn(LOC_ID("LOD"), ImGuiTableColumnFlags_WidthFixed, 44.0f);
+            ImGui::TableSetupColumn(LOC_ID_CTX("Slot", "lod"), ImGuiTableColumnFlags_WidthFixed, 56.0f);
             ImGui::TableSetupColumn(LOC_ID("Triangles"), ImGuiTableColumnFlags_WidthFixed, 80.0f);
-            ImGui::TableSetupColumn(LOC_ID("Of LOD 0"), ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn(LOC_ID("Error"), ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn(LOC_ID("Of source"), ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(LOC_ID("Error"), ImGuiTableColumnFlags_WidthFixed, 110.0f);
             ImGui::TableHeadersRow();
 
-            for (uint32 LOD = 0; LOD < AvailableLODs; ++LOD)
+            for (uint32 Slot = 0; Slot < Slots; ++Slot)
             {
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
-                ImGui::PushID((int)LOD);
-                const bool bPreviewed = PreviewLODIndex == (int32)LOD;
-                char Label[16];
-                snprintf(Label, sizeof(Label), "%u", LOD);
-                if (ImGui::Selectable(Label, bPreviewed, ImGuiSelectableFlags_SpanAllColumns))
-                {
-                    PreviewLODIndex = bPreviewed ? -1 : (int32)LOD;
-                }
-                ImGui::PopID();
+                ImGui::Text("%u", Slot);
 
                 ImGui::TableSetColumnIndex(1);
-                ImGui::TextUnformatted(*FormatCount(LODTriangles[LOD]));
+                ImGui::TextUnformatted(*FormatCount(SlotTriangles[Slot]));
 
                 ImGui::TableSetColumnIndex(2);
-                const float Ratio = LODTriangles[0] > 0 ? (float)LODTriangles[LOD] / (float)LODTriangles[0] : 0.0f;
+                const float Ratio = SourceTriangles > 0 ? Math::Min((float)SlotTriangles[Slot] / (float)SourceTriangles, 1.0f) : 0.0f;
                 const ImVec2 BarPos = ImGui::GetCursorScreenPos();
                 const float BarWidth = Math::Max(ImGui::GetContentRegionAvail().x - 46.0f, 10.0f);
                 const float BarHeight = ImGui::GetTextLineHeight() * 0.5f;
@@ -264,18 +237,17 @@ namespace Lumina
                 ImGui::TextDisabled("%3.0f%%", Ratio * 100.0f);
 
                 ImGui::TableSetColumnIndex(3);
-                if (LOD == 0)
+                if (SlotParent[Slot] >= kMeshletLODErrorInfinite)
                 {
-                    ImGui::TextDisabled("-");
+                    ImGui::Text(LOC("%.3g and up"), SlotError[Slot]);
                 }
                 else
                 {
-                    ImGui::Text("%.3g", LODError[LOD]);
+                    ImGui::Text(LOC("%.3g to %.3g"), SlotError[Slot], SlotParent[Slot]);
                 }
             }
             ImGui::EndTable();
         }
-        ImGui::TextDisabled(LOC("Click a row to preview that LOD."));
     }
 
     void FStaticMeshEditorTool::DrawSurfaceList(CStaticMesh& Mesh)
@@ -286,7 +258,7 @@ namespace Lumina
             SelectedSurfaceIndex = -1;
         }
 
-        SectionTitle("Surfaces");
+        SectionTitle(LOC("Surfaces"));
         if (Resource.GeometrySurfaces.IsEmpty())
         {
             ImGui::TextDisabled(LOC("This mesh has no surfaces."));
@@ -297,9 +269,9 @@ namespace Lumina
         {
             const FGeometrySurface& Surface = Resource.GeometrySurfaces[Index];
             CMaterialInterface* Material = Mesh.GetMaterialAtSlot((size_t)Surface.MaterialIndex);
-            const FString MaterialName = IsValid(Material) ? Material->GetName().ToString() : FString("No material");
-            const uint32 Triangles = SumTrianglesInRange(Resource.MeshletData.Meshlets, Surface.LODMeshletOffset[0], Surface.LODMeshletCount[0]);
-            const FString TriangleText = FormatCount(Triangles) + " tris";
+            const FString MaterialName = IsValid(Material) ? Material->GetName().ToString() : FString(LOC("No material"));
+            const uint32 Triangles = SumTrianglesInRange(Resource.MeshletData.Meshlets, Surface.LODMeshletOffset[0], Surface.FinestMeshletCount(Resource.MeshletData));
+            const FString TriangleText = FormatCount(Triangles) + LOC(" tris");
 
             ImGui::PushID(Index);
             const bool bSelected = SelectedSurfaceIndex == Index;
@@ -310,7 +282,7 @@ namespace Lumina
             {
                 SelectedSurfaceIndex = bSelected ? -1 : Index;
             }
-            ImGuiX::TextTooltip("{}", "Outline this surface in the viewport");
+            ImGuiX::TextTooltip("{}", LOC("Outline this surface in the viewport"));
 
             ImDrawList* DrawList = ImGui::GetWindowDrawList();
             const float TextY = RowPos.y + (RowHeight - ImGui::GetFontSize()) * 0.5f;
@@ -350,7 +322,7 @@ namespace Lumina
             ImGui::TableSetupColumn("##Value", ImGuiTableColumnFlags_WidthStretch);
 
             InfoTable::Row("GPU memory", ImGuiX::FormatSize(Resource.MeshBuffers.GeometryBlock.Size));
-            InfoTable::Row("Meshlets", FormatCount(Resource.MeshletData.Meshlets.Num()) + " across all LODs");
+            InfoTable::Row("Meshlets", FormatCount(Resource.MeshletData.Meshlets.Num()) + " across every level");
             InfoTable::Row("Bounds min", *Math::ToString(Bounds.Min));
             InfoTable::Row("Bounds max", *Math::ToString(Bounds.Max));
             if (Field.IsValid())
@@ -384,11 +356,11 @@ namespace Lumina
         World->EmplaceComponent<SStaticMeshComponent>(MeshEntity).SetStaticMesh(StaticMesh);
         STransformComponent& MeshTransform = World->GetComponent<STransformComponent>(MeshEntity);
 
-        float FloorY = MeshTransform.GetLocation().y + StaticMesh->GetAABB().Min.y;
+        float FloorY = MeshTransform.GetLocalLocation().y + StaticMesh->GetAABB().Min.y;
         CreateFloorPlane(FloorY);
 
         const SAABB Bounds = StaticMesh->GetAABB();
-        const FVector3 Center = MeshTransform.GetLocation() + Bounds.GetCenter();
+        const FVector3 Center = MeshTransform.GetLocalLocation() + Bounds.GetCenter();
         const float Radius = Math::Max(Math::Length(Bounds.GetSize() * 0.5f), 0.5f);
         SetOrbitTarget(Center, Radius * 3.0f);
         SetCameraMode(EEditorCameraMode::Orbit);
@@ -406,20 +378,13 @@ namespace Lumina
         SStaticMeshComponent& StaticMeshComponent = World->GetComponent<SStaticMeshComponent>(MeshEntity);
         STransformComponent&  Transform           = World->GetComponent<STransformComponent>(MeshEntity);
 
-        // The renderer only rewrites primitives that report a change, and marking every frame re-resolves.
-        if (StaticMeshComponent.ForcedLODIndex != PreviewLODIndex)
-        {
-            StaticMeshComponent.ForcedLODIndex = PreviewLODIndex;
-            StaticMeshComponent.MarkRenderStateDirty();
-        }
-
         if (bShowAABB && IsValid(StaticMeshComponent.StaticMesh.Get()))
         {
             SAABB AABB = StaticMeshComponent.StaticMesh->GetAABB().ToWorld(Transform.GetWorldMatrix());
             World->GetDebugInterface()->DrawBox(AABB.GetCenter(), AABB.GetSize() * 0.5f, FQuat(1, 0, 0, 0), FColor::Green);
         }
 
-        // Derive overlay AABB from the currently rendered LOD's meshlet range; LOD 0 bounds look stale after a forced LOD change.
+        // The overlay bounds the surface's source meshlets, which every coarser level stays within.
         if (SelectedSurfaceIndex >= 0 && IsValid(StaticMeshComponent.StaticMesh.Get()))
         {
             const FMeshResource& Resource = StaticMeshComponent.StaticMesh->GetMeshResource();
@@ -428,13 +393,8 @@ namespace Lumina
                 const FGeometrySurface& Surface = Resource.GeometrySurfaces[SelectedSurfaceIndex];
                 const FMeshletData&     MD      = Resource.MeshletData;
 
-                // Use LOD 0 for auto preview; forced preview uses selected LOD clamped to surface NumLODs.
-                const uint32 OverlayLOD = (PreviewLODIndex >= 0 && Surface.NumLODs > 0)
-                    ? (uint32)Math::Min((int32)Surface.NumLODs - 1, PreviewLODIndex)
-                    : 0u;
-
-                const uint32 OverlayOffset = Surface.LODMeshletOffset[OverlayLOD];
-                const uint32 OverlayCount  = Surface.LODMeshletCount[OverlayLOD];
+                const uint32 OverlayOffset = Surface.LODMeshletOffset[0];
+                const uint32 OverlayCount  = Surface.FinestMeshletCount(MD);
 
                 if (OverlayCount > 0 && !MD.Meshlets.IsEmpty())
                 {
@@ -605,17 +565,16 @@ namespace Lumina
         UVViewer.Invalidate();
         CollisionEditing->RebuildHullWireframes();
         SelectedSurfaceIndex = -1;
-        PreviewLODIndex = -1;
     }
 
     void FStaticMeshEditorTool::DrawHelpMenu()
     {
         DrawHelpTextRow(LOC("LODs"),
-            "Simplified levels the importer generated. Pick one under Level of Detail, or click its row, to preview it; "
-            "Automatic switches by distance. LOD Distance Scale in Properties moves the switch distances.");
-        DrawHelpTextRow(LOC_ID("Surfaces"),
-            "Surfaces are the parts of the mesh that each draw with one material slot. Click a surface to outline "
-            "its bounds in the viewport.");
+            LOC("The cluster hierarchy the importer built, grouped into slots. The GPU picks each meshlet's level by its distance; "
+            "LOD Distance Scale in Properties moves where the levels change."));
+        DrawHelpTextRow(LOC("Surfaces"),
+            LOC("Surfaces are the parts of the mesh that each draw with one material slot. Click a surface to outline "
+            "its bounds in the viewport."));
         DrawHelpTextRow(LOC("Materials"),
             "Material slots come from the source asset. Assign them under Properties > Materials, or drag a Material "
             "or Material Instance from the Content Browser onto a slot.");
@@ -685,26 +644,7 @@ namespace Lumina
             CStaticMesh* Mesh = Cast<CStaticMesh>(Asset.Get());
             const FMeshResource& Resource = Mesh->GetMeshResource();
 
-            uint32 VoxelSlots = 0;
-            uint32 Slots      = 0;
-            for (const FGeometrySurface& Surface : Resource.GeometrySurfaces)
-            {
-                Slots = Math::Max(Slots, Surface.NumLODs);
-                for (uint32 Slot = 0; Slot < Surface.NumLODs && Slot < MAX_MESH_LODS; ++Slot)
-                {
-                    VoxelSlots += Surface.IsVoxelLOD(Slot) ? 1u : 0u;
-                }
-            }
-
-            if (Mesh->HasClusterLOD())
-            {
-                ImGuiX::Text(LOCF("Cluster hierarchy, {0} slots, {1} meshlets"), Slots, Resource.MeshletData.Meshlets.Num());
-            }
-            else
-            {
-                ImGuiX::Text(LOCF("Discrete LODs, {0} slots"), Slots);
-            }
-            ImGuiX::Text(LOCF("Voxel levels: {0}"), VoxelSlots);
+            ImGuiX::Text(LOCF("Cluster hierarchy, {0} slots, {1} meshlets"), CountSlots(Resource), Resource.MeshletData.Meshlets.Num());
             ImGui::Separator();
 
             if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_REFRESH, "Rebuild Virtual Geometry")))
@@ -716,8 +656,14 @@ namespace Lumina
                     PropertyTable.MarkDirty();
                 }
             }
-            ImGuiX::TextTooltip("{}", "Rebuild the meshlets, cluster hierarchy and voxel levels from the settings in "
-                                      "Mesh Properties > Virtual Geometry.");
+            ImGuiX::TextTooltip("{}", LOC("Rebuild the meshlets and cluster hierarchy from the baked finest level."));
+
+            if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CUBE_OUTLINE, "Bake Impostor")) && Global::GEditorEngine != nullptr)
+            {
+                static_cast<FEditorUI*>(Global::GEditorEngine->GetDevelopmentToolsUI())->GetImpostorBaker().Enqueue(Mesh);
+            }
+            ImGuiX::TextTooltip("{}", Mesh->HasImpostor() ? LOC("Rebake the views far instances draw in place of their meshlets.")
+                                                          : LOC("Bake the views far instances draw in place of their meshlets."));
 
             ImGui::EndMenu();
         }

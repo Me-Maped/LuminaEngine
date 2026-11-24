@@ -16,6 +16,7 @@
 #include "Core/Templates/Optional.h"
 #include "Core/Reflection/Type/Function.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
+#include "Core/Serialization/NetArchive.h"
 #include "Core/Reflection/Type/Properties/ArrayProperty.h"
 #include "Core/Reflection/Type/Properties/OptionalProperty.h"
 #include "Paths/Paths.h"
@@ -686,8 +687,7 @@ TEST_F(FFrameMarshalTest, AContainerRoundTripsThroughTheDispatcher)
     FreeTarget(Target);
 }
 
-// A script-minted array keeps its elements in a byte vector, so the view has to read its length from the ops
-// table rather than the header it shares with a TVector.
+// A script-minted array keeps its elements in a byte vector, so the view reads its length from the ops table.
 TEST_F(FFrameMarshalTest, AScriptMintedArrayIsReadThroughTheSameView)
 {
     auto* Read = (FReadVectorFn)DotNet::ResolveManagedExport("Test_FrameReadVectorCount");
@@ -724,8 +724,7 @@ TEST_F(FFrameMarshalTest, AScriptMintedArrayIsReadThroughTheSameView)
     EXPECT_EQ(Ops->Num(Vector), 4);
 }
 
-// A script-declared optional has no C++ TOptional<T> to take ops from, so the mint synthesizes them and the
-// managed side binds it exactly as it binds a native one.
+// A script-declared optional has no C++ TOptional<T> to take ops from, so the mint synthesizes them.
 TEST_F(FFrameMarshalTest, AScriptMintedOptionalBindsAsANullable)
 {
     auto* Read = (FReadOptionalFn)DotNet::ResolveManagedExport("Test_FrameReadOptional");
@@ -765,8 +764,7 @@ TEST_F(FFrameMarshalTest, AScriptMintedOptionalBindsAsANullable)
     EXPECT_FALSE(Optional->IsSet(Member)) << "a null nullable has to reset the script optional";
 }
 
-// The synthesized ops are what FOptionalProperty's own serialize, copy and compare run on, so they have to
-// hold up away from the managed side too.
+// FOptionalProperty's own serialize, copy and compare run on the synthesized ops, so they must hold up natively.
 TEST_F(FFrameMarshalTest, AScriptMintedOptionalCopiesAndComparesThroughItsOps)
 {
     Scripting::FScriptExportSchema Params;
@@ -807,6 +805,34 @@ TEST_F(FFrameMarshalTest, ANullableResolvesToAnOptionalOverItsPayload)
     int32 PayloadKind = -1;
     EXPECT_EQ(Resolve(&PayloadKind), (int32)EPropertyTypeFlags::Optional);
     EXPECT_EQ(PayloadKind, (int32)EPropertyTypeFlags::Float);
+}
+
+// A C# NetSerialize packs through the bit archive C++ uses, so what one peer writes the other reads back field for field.
+TEST_F(FFrameMarshalTest, ACSharpNetArchiveReadsBackWhatItWrote)
+{
+    auto* Write = (int32(*)(void*))DotNet::ResolveManagedExport("Test_NetArchiveWrite");
+    auto* Read  = (int32(*)(void*))DotNet::ResolveManagedExport("Test_NetArchiveRead");
+    ASSERT_NE(Write, nullptr);
+    ASSERT_NE(Read, nullptr);
+
+    TVector<uint8> Bytes;
+    FNetArchive Writer(Bytes);
+    EXPECT_EQ(Write(&Writer), 0);
+    EXPECT_LE(Bytes.Num(), 32) << "ranged and quantized fields should pack into a handful of bits each";
+
+    FNetArchive Reader(Bytes.GetData(), static_cast<SIZE_T>(Bytes.Num()));
+    const int32 Failures = Read(&Reader);
+    EXPECT_EQ(Failures, 0) << "failure bits 0x" << std::hex << Failures;
+}
+
+// A script struct packs itself when it declares NetSerialize the way C++ does, and a near miss is not mistaken for one.
+TEST_F(FFrameMarshalTest, AScriptStructsNetSerializeIsFoundByItsSignature)
+{
+    auto* Detect = (int32(*)())DotNet::ResolveManagedExport("Test_DetectNetSerialize");
+    ASSERT_NE(Detect, nullptr);
+
+    const int32 Failures = Detect();
+    EXPECT_EQ(Failures, 0) << "failure bits 0x" << std::hex << Failures;
 }
 
 TEST_F(FFrameMarshalTest, EachScriptStructFormRegistersOnceWithOneHandle)
@@ -884,8 +910,7 @@ TEST_F(FFrameMarshalTest, AScriptMintedOptionalRoundTripsThroughTheDispatcher)
     FreeTarget(Target);
 }
 
-// The out container binding replaces a hand-written two-pass buffer export, so what it hands back has to be
-// the whole vector, whatever its element.
+// The out container binding must hand back the whole vector, whatever its element.
 TEST_F(FFrameMarshalTest, AReflectedOutContainerCrossesAsAnArray)
 {
     auto* Ints = (FVecIntsFn)DotNet::ResolveManagedExport("Test_VectorBindingInts");
@@ -972,8 +997,7 @@ TEST_F(FFrameMarshalTest, AnOutContainerOfBlittableStructsKeepsItsStride)
     EXPECT_FLOAT_EQ(LastY, 10.0f);
 }
 
-// An out container of objects crosses as raw pointers, so every element has to arrive as the canonical
-// managed instance for its object rather than a fresh wrapper per element.
+// Every element of an out container of objects must arrive as the canonical managed instance, not a fresh wrapper.
 TEST_F(FFrameMarshalTest, AnOutContainerOfObjectsRebuildsTheCanonicalWrapper)
 {
     auto* Objects = (FObjectArrayFn)DotNet::ResolveManagedExport("Test_ObjectArrayBinding");
@@ -1005,8 +1029,7 @@ TEST_F(FFrameMarshalTest, AHandleStructCrossesBothWaysWithoutLosingItsHighBits)
     EXPECT_EQ(RoundTrip(0ULL), 0ULL);
 }
 
-// A script callback crosses as the handle owning its closure, so firing it has to run that closure once and
-// leave the handle freed rather than dangling.
+// Firing a script callback runs its closure once and leaves the handle freed rather than dangling.
 TEST_F(FFrameMarshalTest, AScriptCallbackRunsOnceAndReleasesItsHandle)
 {
     auto* Bind = (FBindCallbackFn)DotNet::ResolveManagedExport("Test_BindScriptCallback");
@@ -1032,8 +1055,7 @@ TEST_F(FFrameMarshalTest, AScriptCallbackRunsOnceAndReleasesItsHandle)
     EXPECT_EQ(Runs, 1) << "a one-shot callback ran twice";
 }
 
-// A repeating callback is what a looping timer and a tween value step need, so firing it must leave the
-// handle alive and only the explicit release may free it.
+// Firing a repeating callback leaves the handle alive, and only the explicit release may free it.
 TEST_F(FFrameMarshalTest, ARepeatingScriptCallbackSurvivesEveryFireUntilReleased)
 {
     auto* Bind = (FBindCallbackFn)DotNet::ResolveManagedExport("Test_BindRepeatingScriptCallback");
@@ -1090,8 +1112,7 @@ TEST_F(FFrameMarshalTest, AnUnboundScriptCallbackIsSafeToInvoke)
     Scripting::InvokeScriptCallback(Unbound, 7);
 }
 
-// The managed wrapper revalidates a CObject by reading its array entry rather than crossing back, so the
-// case that matters is that a dead object still fails loudly instead of handing back reclaimed memory.
+// A dead object must still fail loudly instead of handing back reclaimed memory.
 TEST_F(FFrameMarshalTest, AWrapperToADestroyedObjectStillThrows)
 {
     auto* Bind = (FBindWrapperFn)DotNet::ResolveManagedExport("Test_BindObjectWrapper");
@@ -1123,8 +1144,7 @@ TEST_F(FFrameMarshalTest, AWrapperToADestroyedObjectStillThrows)
     Free(Wrapper);
 }
 
-// The generated invoker is an optimization over a path that still works without it, so the only way to know
-// it is carrying the call is to ask whether one exists for a signature it should cover and one it should not.
+// The invoker is only an optimization, so check one exists for a covered signature and none for an uncovered one.
 TEST_F(FFrameMarshalTest, AGeneratedInvokerCoversABlittableSignatureAndDeclinesTheRest)
 {
     auto* Has = (FHasInvokerFn)DotNet::ResolveManagedExport("Test_HasGeneratedInvoker");
@@ -1136,9 +1156,7 @@ TEST_F(FFrameMarshalTest, AGeneratedInvokerCoversABlittableSignatureAndDeclinesT
     EXPECT_EQ(Has(3), 0) << "a container view needs a token the invoker has no argument for";
 }
 
-// Dispatch answers a repeat call off a direct-mapped line rather than hashing, and a line holds one entry.
-// Alternating two functions makes every call miss the line the previous one just filled, which is the case
-// that would silently run the wrong method if the line's identity check were ever wrong.
+// Alternating two functions misses the direct-mapped line every call, and would run the wrong method if its identity check broke.
 TEST_F(FFrameMarshalTest, AlternatingTwoFunctionsKeepsEachBoundToItsOwnMethod)
 {
     auto* MakeTarget = (FMakeTargetFn)DotNet::ResolveManagedExport("Test_MakeMarshalTarget");
@@ -1179,8 +1197,7 @@ TEST_F(FFrameMarshalTest, AlternatingTwoFunctionsKeepsEachBoundToItsOwnMethod)
     FreeTarget(Target);
 }
 
-// Once the binder has published, native dispatch stops routing through the managed dispatcher and calls the
-// generated entry point itself, so what matters is that publishing happens and the direct call agrees.
+// Once the binder has published, native dispatch calls the generated entry point directly and the result must agree.
 TEST_F(FFrameMarshalTest, ADispatchedFunctionPublishesAnInvokerNativeCanCallDirectly)
 {
     auto* MakeTarget = (FMakeTargetFn)DotNet::ResolveManagedExport("Test_MakeMarshalTarget");
@@ -1403,8 +1420,7 @@ TEST_F(FFrameMarshalTest, ABindingThatDeclaresTheWrongWidthIsDropped)
     EXPECT_EQ(Result & 4, 4) << "a caller that declares nothing stays unchecked";
 }
 
-// A delegate and an instanced struct hold the address of their slot, so the frame views them in place
-// instead of refusing them against a much wider native slot.
+// A delegate and an instanced struct hold their slot address, so the frame views them in place.
 TEST_F(FFrameMarshalTest, ASlotViewBindsInPlaceRatherThanByWidth)
 {
     auto* Probe = (FSlotViewFn)DotNet::ResolveManagedExport("Test_SlotViewBinds");
@@ -1563,8 +1579,7 @@ TEST_F(FFrameMarshalTest, AnAsyncScriptFunctionHandsBackATokenNativeCanPoll)
     FreeTarget(Target);
 }
 
-// Nothing native ever released a token, so a finished fire-and-forget body used to sit in the table until
-// the next reload and its exception was never reported.
+// A finished fire-and-forget body used to sit in the table until the next reload and never report its exception.
 TEST_F(FFrameMarshalTest, AFinishedAsyncScriptFunctionIsReapedOnTheTick)
 {
     using FCountFn = int32(*)();

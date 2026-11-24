@@ -23,6 +23,7 @@ namespace Lumina
     enum class EMoveMode : uint8;
 
     class CWorld;
+    class FSimulation;
     struct FSimpleElementVertex;
 
     namespace Physics
@@ -63,6 +64,9 @@ namespace Lumina
         NODISCARD FORCEINLINE double GetTime() const { return Time; }
         NODISCARD FORCEINLINE EUpdateStage GetUpdateStage() const { return UpdateStage; }
         NODISCARD RUNTIME_API EWorldType GetWorldType() const;
+
+        // A network client, whose replicated state the host decides.
+        NODISCARD RUNTIME_API bool IsNetClient() const;
 
         //~ Structure. A parallel system's changes land at its segment's flush, an exclusive system's at once.
 
@@ -128,6 +132,9 @@ namespace Lumina
 
         // The parent links, settled at every flush, so any system may walk them.
         NODISCARD RUNTIME_API const ECS::FHierarchy& GetHierarchy() const;
+
+        // The world's deterministic simulation, null unless the project enables it.
+        NODISCARD RUNTIME_API FSimulation* GetSimulation() const;
 
         //~ Physics.
 

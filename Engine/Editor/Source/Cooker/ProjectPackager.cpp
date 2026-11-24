@@ -210,8 +210,7 @@ namespace Lumina
             return {};
         }
 
-        // Binaries an earlier package wrote that this one did not, which the game would otherwise carry forever.
-        // The reflector's Clang and the editor-only Nsight and BugSplat SDKs never load in a game, and Shipping compiles Aftermath out.
+        // Removes binaries an earlier package wrote, plus editor-only SDKs that never load in a game.
         bool IsUnusedByGameDll(const FPackagePlatformRules& Rules, FStringView FileName, FStringView ConfigSuffix)
         {
             const FStringView Unprefixed = WithoutLibraryPrefix(Rules, FileName);
@@ -465,6 +464,7 @@ namespace Lumina
                                FStringView BinariesDir,
                                FStringView DataDir,
                                bool bStageSymbols,
+                               const TVector<DotNet::FPackagedScriptUnit>& Units,
                                const TFunction<void(FStringView)>& LogFunc)
         {
             // 1. The managed bootstrap alone, since scripts arrive prebuilt and the script compiler and its generators never run in a game.
@@ -508,8 +508,6 @@ namespace Lumina
             }
 
             // 3. Prebuilt script assemblies + the manifest the cooked loader reads, beside the bootstrap that loads them.
-            TVector<DotNet::FPackagedScriptUnit> Units;
-            DotNet::GatherScriptUnitsForPackaging(Units);
 
             const FFixedString& ScriptsDst = ManagedDst;
             FString Manifest = "{\n  \"Units\": [\n";
@@ -699,7 +697,7 @@ namespace Lumina
         }
 
         // Lets the cooked game boot CoreCLR and load its scripts without the editor or dev tree.
-        CopyDotNetPayload(Rules, Paths::GetEngineInstallDirectory(), BinariesDir, DataDir, !(Config == "Shipping"), LogFunc);
+        CopyDotNetPayload(Rules, Paths::GetEngineInstallDirectory(), BinariesDir, DataDir, !(Config == "Shipping"), Options.ScriptUnits, LogFunc);
 
         Result.bSuccess = true;
         return Result;
@@ -864,6 +862,7 @@ namespace Lumina
                 LocalOpts.ProjectDirectory =
                     FString(Global::GEngine->GetProjectPath().GetData(), Global::GEngine->GetProjectPath().Len());
             }
+            DotNet::GatherScriptUnitsForPackaging(LocalOpts.ScriptUnits);
             const FPackageBuildResult Sub = BuildAndCopyOnly(LocalOpts, ProjectName, PakPath, LogFunc);
             if (!Sub.bSuccess)
             {

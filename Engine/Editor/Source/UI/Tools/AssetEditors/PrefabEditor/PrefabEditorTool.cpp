@@ -1,4 +1,4 @@
-﻿#include "Localization/Localization.h"
+#include "Localization/Localization.h"
 #include "PrefabEditorTool.h"
 #include "World/ECS/Registry.h"
 
@@ -816,9 +816,9 @@ namespace Lumina
         const float Distance = (Radius / Math::Tan(Math::Max(HalfFov, Math::Radians(1.0f)))) * 1.5f;
 
         STransformComponent& EditorTransform = Registry.Get<STransformComponent>(EditorEntity);
-        const FVector3 Forward = EditorTransform.GetForward();
-        EditorTransform.SetLocation(Center - Forward * Distance);
-        EditorTransform.SetRotation(Math::FindLookAtRotation(Center, Center - Forward * Distance));
+        const FVector3 Forward = EditorTransform.GetLocalForward();
+        EditorTransform.SetLocalLocation(Center - Forward * Distance);
+        EditorTransform.SetLocalRotation(Math::FindLookAtRotation(Center, Center - Forward * Distance));
     }
 
     bool FPrefabEditorTool::IsOutlinerEntityVisible(ECS::FEntity Entity) const
@@ -1326,9 +1326,8 @@ namespace Lumina
         DrawHelpTextRow(LOC("Components"),
             LOC("Add Component on a selected entity to attach. Drag an asset directly onto the entity row "
             "in the outliner for shortcut adds (e.g. drop a static mesh to add a SStaticMeshComponent)."));
-        DrawHelpTextRow("Dropping Prefabs",
-            "Dropping another prefab into the outliner copies its entities in. Prefabs do not nest, so "
-            "the copies are no longer linked to the source prefab.");
+        DrawHelpTextRow(LOC("Dropping Prefabs"), LOC("Dropping another prefab into the outliner copies its entities in. Prefabs do not nest, so "
+            "the copies are no longer linked to the source prefab."));
         DrawHelpTextRow(LOC("Save"),
             "Ctrl+S commits all entities, components and overrides to the prefab, then refreshes its "
             "placed copies in loaded worlds and its variants.");

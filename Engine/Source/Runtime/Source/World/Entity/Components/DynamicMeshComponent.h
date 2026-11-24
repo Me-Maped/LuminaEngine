@@ -32,7 +32,7 @@ namespace Lumina
 
     struct FMeshBuildOptions
     {
-        uint32 MaxLODs             = 1;
+        bool   bLODHierarchy       = false;
         bool   bGenerateTangents   = false;
         bool   bMeshletConeCulling = false;
         bool   bOptimizeMeshlets   = true;
@@ -88,8 +88,9 @@ namespace Lumina
         FUNCTION()
         void ClearMesh();
 
-        /** Finalize the staged data: generate meshlets/LODs and upload the GPU buffers. Returns false if
-         *  there is nothing renderable (no positions or no indices). Call after setting the streams.
+        /** Finalize the staged data: generate meshlets/LODs and upload the GPU buffers, deferring the upload
+         *  while RenderLayers is empty. Returns false if there is nothing renderable (no positions or no
+         *  indices). Call after setting the streams. Collision is the collider's own Commit.
          *
          *  Callable from any worker thread, and concurrently across DIFFERENT components -- which is the
          *  point, since this is the expensive call and chunked geometry commits many of them at once. The
@@ -120,8 +121,7 @@ namespace Lumina
         FUNCTION()
         int32 GetTriangleCount() const;
 
-        // Bulk stream setters. Counts are element counts, so 3 floats per vertex for positions and
-        // normals, 2 for UVs, 4 or 1 for float and packed colors, and 1 for an index.
+        // Bulk stream setters taking element counts, such as 3 floats per vertex position and 1 per index.
 
         FUNCTION()
         void SetPositionsData(const float* Data, int32 FloatCount);
@@ -144,15 +144,9 @@ namespace Lumina
         // Takes every stream and section without copying, replacing whatever was staged.
         void SetBuildData(FDynamicMeshBuildData&& Data);
 
-        /** How many LOD levels Commit() builds, 1 meaning LOD 0 only. Each extra level is another full
-         *  meshopt_simplify pass over the WHOLE LOD-0 index range (levels are not cascaded), plus a
-         *  full-size scratch allocation, so cost is roughly linear in this. Clamped to MAX_MESH_LODS.
-         *
-         *  Defaults to 1 because this component exists for geometry that is rebuilt often, where the build
-         *  lands on the frame that rebuilds it and the LOD ramp only pays off for meshes also viewed at
-         *  range. Raise it for procedural geometry that is built once and seen from far away. */
+        // Off by default since Commit() builds on the frame that rebuilds, and only geometry seen far away earns the hierarchy's build cost.
         PROPERTY(Editable, Category = "Rendering")
-        int32 MaxLODs = 1;
+        bool bLODHierarchy = false;
 
         /** Build per-meshlet normal cones so the GPU can cull backfacing clusters. Costs twice at build
          *  time: it selects meshopt's cone-weighted clustering (the expensive mode) and adds a bounds
@@ -180,13 +174,9 @@ namespace Lumina
         PROPERTY(Editable, Category = "Rendering")
         bool bGenerateTangents = true;
 
-        /** Keeps the CPU meshlet streams after Commit uploads them, which navigation and a dynamic mesh collider read; turn it off for a render-only mesh. */
+        // Keeps the CPU meshlet streams after upload for a caller that samples the geometry; a hidden mesh keeps them until shown.
         PROPERTY(Editable, Category = "Rendering")
-        bool bKeepCPUMeshletData = true;
-
-        // Keeps the committed positions and indices, which a dynamic mesh collider builds from once the meshlet streams are dropped.
-        PROPERTY(Editable, Category = "Physics")
-        bool bKeepCollisionTriangles = false;
+        bool bKeepCPUMeshletData = false;
 
         /// Takes a ref on the currently published data (null until the first successful Commit). Every
         /// reader outside this component goes through this rather than touching the pointer: Commit can
@@ -218,9 +208,15 @@ namespace Lumina
         // Game thread, for the resolve pass. Republishes a copy with the material half re-resolved against the current overrides.
         void RefreshResolvedMaterials();
 
+        // Render-scene sync. Data committed with no render layers is uploaded once it has some, and republished with its GPU slot.
+        void UploadOnShow();
+
     private:
 
         FDynamicMeshBuildData& EnsureBuildData();
+
+        // Uploads, resolves materials, drops the CPU streams and publishes, for a resource whose meshlets are built.
+        void PublishBuilt(TSharedPtr<FDynamicMeshRenderData> NewData);
 
         /// Resolve the material half of Data's surfaces against the current overrides. Takes the data
         /// rather than reading the member so Commit can run it on the not-yet-published snapshot.

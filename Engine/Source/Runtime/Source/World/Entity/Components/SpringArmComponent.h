@@ -50,6 +50,10 @@ namespace Lumina
         /** Radius of the sphere probe used for collision testing along the arm (meters). */
         PROPERTY(Editable, Category = "Camera|Spring Arm", ClampMin = 0.0f)
         float ProbeSize = 0.2f;
+        
+        /** Collision layers the probe can hit. Uncheck a channel to let the camera pass through it. */
+        PROPERTY(Editable, Category = "Camera|Spring Arm")
+        ECollisionProfiles CollisionMask = ECollisionProfiles::All;
 
         /** Pivot tracking responsiveness (1/seconds). Higher = snappier; 0 = instant. */
         PROPERTY(Editable, Category = "Camera|Spring Arm", ClampMin = 0.0f)
@@ -67,8 +71,7 @@ namespace Lumina
             bInitialized = false;
         }
 
-        // Runtime smoothing state (non-reflected). bInitialized snaps on the first
-        // tick (or after SetTarget) so the boom doesn't sweep in from a stale pose.
+        // Runtime smoothing state, where bInitialized snaps on the first tick or after SetTarget.
         FVector3   CurrentPivot = FVector3(0.0f);
         float       CurrentArmLength = 4.0f;
         bool        bInitialized = false;

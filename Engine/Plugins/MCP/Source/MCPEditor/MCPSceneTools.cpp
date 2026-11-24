@@ -3,6 +3,7 @@
 
 #include "Agent/AgentAssetResolve.h"
 #include "Agent/AgentEntityToken.h"
+#include "Agent/AgentObjectEdit.h"
 #include "Agent/AgentPropertyPath.h"
 #include "Agent/AgentToolMarshal.h"
 #include "Agent/AgentToolRegistry.h"
@@ -18,6 +19,7 @@
 #include "UI/Tools/EditorEntityUtils.h"
 #include "World/Entity/Components/CameraComponent.h"
 #include "World/Entity/Components/Component.h"
+#include "World/Entity/Components/EditorComponent.h"
 #include "World/Entity/Components/NameComponent.h"
 #include "World/Entity/Components/TagComponent.h"
 #include "World/Entity/Components/TransformComponent.h"
@@ -62,7 +64,7 @@ namespace Lumina::MCP
         }
 
         // Values come back as text because a free-form component tree has no fixed reflected shape.
-        FString DescribeEntityComponentValues(ECS::FRegistry& Registry, ECS::FEntity Entity)
+        FJsonValue DescribeEntityComponentValues(ECS::FRegistry& Registry, ECS::FEntity Entity)
         {
             FJsonValue Components = FJsonValue::MakeObject();
 
@@ -107,7 +109,7 @@ namespace Lumina::MCP
                 }
             }
 
-            return Components.ToString(2);
+            return Components;
         }
 
         // Entity fields store a raw handle, so the ids every other tool hands out are swapped in for it here.
@@ -205,7 +207,8 @@ namespace Lumina::MCP
 
             auto Visit = [&](ECS::FEntity Entity)
             {
-                if (!ContainsText(FStringView(SceneEntityName(Registry, Entity)), In.Contains))
+                // Generated entities such as forest tiles would bury what the level actually holds.
+                if (Registry.HasAny<FTransientEntityTag>(Entity) || !ContainsText(FStringView(SceneEntityName(Registry, Entity)), In.Contains))
                 {
                     return;
                 }
@@ -612,16 +615,9 @@ namespace Lumina::MCP
             ECS::FRegistry& Registry = *ScenePtr;
             Out.Name = SceneEntityName(Registry, Entity);
 
-            ForEachComponentStruct([&](CStruct* Reflected)
-            {
-                if (ECS::Utils::HasComponent(Registry, Entity, Reflected))
-                {
-                    Out.Components.Emplace(*Reflected->GetName().ToString());
-                }
-            });
-
-            return Agent::FToolResult::Ok(Lumina::Format("{} has {} component(s).\n{}",
-                Out.Name, Out.Components.Num(), DescribeEntityComponentValues(Registry, Entity)));
+            const FJsonValue Components = DescribeEntityComponentValues(Registry, Entity);
+            Out.Components = Components.ToString();
+            return Agent::FToolResult::Ok(Lumina::Format("{} has {} component(s).", Out.Name, Components.Num()));
         }
 
         void RegisterEntityDescribe(FStringView Owner)
@@ -936,6 +932,11 @@ namespace Lumina::MCP
                 return Agent::FToolResult::Error(Check.Error);
             }
 
+            if (const FString Refused = Agent::CheckPropertyValidator(Target, Value, FStringView(In.Path)); !Refused.IsEmpty())
+            {
+                return Agent::FToolResult::Error(Lumina::Format("'{}' refuses that value. {}", In.Path, Refused));
+            }
+
             FJsonValue Before;
             Agent::WriteProperty(Target.Property, Target.ValuePtr, Before);
             Out.Previous = Before.ToString();
@@ -1164,8 +1165,8 @@ namespace Lumina::MCP
         const FQuat Rotation = In.Target.Num() == 3
             ? Math::FindLookAtRotation(FVector3(In.Target[0], In.Target[1], In.Target[2]), Location)
             : FQuat(Math::Radians(FVector3(In.Rotation[0], In.Rotation[1], In.Rotation[2])));
-        Transform->SetLocation(Location);
-        Transform->SetRotation(Rotation);
+        Transform->SetLocalLocation(Location);
+        Transform->SetLocalRotation(Rotation);
 
         const FVector3 Euler = Math::Degrees(Math::YawFirstEulerAngles(Rotation));
         Out.World = "Editor";

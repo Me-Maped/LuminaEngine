@@ -28,6 +28,9 @@
 #include "Core/Profiler/GameplayProfiler.h"
 #include "Core/Profiler/Profile.h"
 #include "Memory/Allocators/Allocator.h"
+#if defined(LUMINA_WITH_GPU_PROFILING)
+#include "Renderer/GPUProfiler.h"
+#endif
 #if USING(WITH_EDITOR)
 #include "TaskSystem/Scheduler/JobProfiler.h"
 #endif
@@ -339,8 +342,9 @@ namespace Lumina
 
     bool FEngine::MountStartupFilesystems(FStartupProject& Startup, FBootTimer& Boot)
     {
+        // A packaged game's engine directory holds only what it writes, and its resources come from the pak.
         const FString& EngineDir = Paths::GetEngineDirectory();
-        if (!EngineDir.IsEmpty() && Filesystem::Exists(EngineDir))
+        if (!Paths::IsPackagedGame() && !EngineDir.IsEmpty() && Filesystem::Exists(EngineDir))
         {
             VFS::Mount<VFS::FNativeFileSystem>("/Engine", EngineDir);
         }
@@ -880,10 +884,18 @@ namespace Lumina
         int32 MaxFrameRate = GetMaxFrameRate();
         
         // The editor also slows down when another app has focus, while a game only slows down minimized, since two game windows side by side are a normal way to test.
-        bool bInBackground = !Global::GIsHeadless && Windowing::GetPrimaryWindowHandle()->IsWindowMinimized();
+        const bool bMinimized = !Global::GIsHeadless && Windowing::GetPrimaryWindowHandle()->IsWindowMinimized();
+        bool bInBackground = bMinimized;
         #if USING(WITH_EDITOR)
-        bInBackground |= !Global::GIsHeadless && !Platform::IsProcessForeground();
+        // A profiler is often read from another window, and throttling would measure the throttle instead of the frame.
+        bool bBeingProfiled = TracyIsConnected || FGameplayProfiler::Get().IsEnabled();
+        #if defined(LUMINA_WITH_GPU_PROFILING)
+        bBeingProfiled |= FGPUProfiler::Get().IsEnabled();
         #endif
+        // Minimized stays capped while profiled, since with no present to pace it the loop would spin.
+        bInBackground |= !Global::GIsHeadless && !bBeingProfiled && !Platform::IsProcessForeground();
+        #endif
+
         // A capture or benchmark set its own rate on purpose, so it keeps it with the window in the background.
         if (bInBackground && FrameRateCapOverride < 0)
         {
@@ -1820,7 +1832,8 @@ namespace Lumina
             return;
         }
 
-        Window->SetIcon(GetProjectIconPath());
+        const FFixedString Icon = GetProjectIconPath();
+        Window->SetIcon(Icon.IsEmpty() ? FFixedString("/Engine/Resources/Textures/Lumina.png") : Icon);
         #endif
     }
 

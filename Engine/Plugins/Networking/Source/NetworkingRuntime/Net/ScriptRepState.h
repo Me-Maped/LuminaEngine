@@ -7,11 +7,7 @@
 
 namespace Lumina
 {
-    // Server-only, transient (non-reflected). Last-sent serialized bytes of each PROPERTY(Replicated) field,
-    // keyed by replicated component wire-index -> per-field bytes. Drives native field-granular diffing in
-    // WriteEntityComponents so an unchanged component field isn't resent. Auto-removed with the entity by the ECS;
-    // re-seeded on the spawn baseline.
-    // Flat last-sent fields; two allocations per component rather than one per field.
+    // Server-only transient last-sent bytes of each Replicated field, so an unchanged field is not resent. Flat, with two allocations per component.
     struct FRepFieldSnapshot
     {
         TVector<uint8>  Bytes;
@@ -26,14 +22,16 @@ namespace Lumina
     {
         THashMap<uint32, FRepFieldSnapshot> LastSent;
 
+        // Replicated components this entity has lost, so a resend after a dropped packet can remove them again.
+        TVector<uint32> RemovedWireIndices;
+
         // Keyed by script handle rather than index, since removing a script shifts the ones after it.
         THashMap<FObjectHandle, FRepFieldSnapshot> ScriptLastSent;
 
         // When each script field last went out, only kept for scripts with a rate-limited field.
         THashMap<FObjectHandle, TVector<double>> ScriptFieldSentTime;
 
-        // Server game-clock time (seconds) of the last PropertyUpdate sent for this entity. Drives
-        // oldest-first scheduling in ReplicateDirtyProperties so a per-tick byte budget never starves an entity.
+        // Server game-clock time of the last PropertyUpdate, driving oldest-first scheduling so a byte budget never starves an entity.
         double LastReplicatedTime = 0.0;
     };
 }

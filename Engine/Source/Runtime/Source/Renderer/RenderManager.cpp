@@ -16,6 +16,8 @@
 #include "Config/GameUserSettings.h"
 #include "Paths/Paths.h"
 #include "Platform/Process/PlatformProcess.h"
+#include "Platform/Filesystem/FileHelper.h"
+#include "Containers/HashPrimitives.h"
 #include <thread>
 #include "TaskSystem/TaskSystem.h"
 #include "Core/Engine/Engine.h"
@@ -38,6 +40,21 @@ namespace Lumina
     // Under 3 GiB so a Steam Deck (3 GiB UMA heap) still passes whatever its driver reserves off the heap.
     static constexpr uint32 kMinimumVRAMMiB     = 2816;
     static constexpr uint32 kRecommendedVRAMMiB = 6144;
+
+    // Polled, since Windows sends no message GLFW forwards when the desktop switches HDR on or off.
+    static constexpr double kHDRDisplayPollSeconds  = 1.0;
+    static constexpr float  kFallbackPaperWhiteNits = 200.0f;
+    static constexpr float  kFallbackPeakNits       = 1000.0f;
+
+    // Mirrors FHDROutputArgs in Includes/HDROutput.slang.
+    struct FHDROutputArgs
+    {
+        uint32 Composite;
+        float  GainStops;
+        float  PaperWhiteNits;
+        float  PeakNits;
+    };
+    static_assert(sizeof(FHDROutputArgs) == 16, "FHDROutputArgs must match Includes/HDROutput.slang.");
 
     static void WarnIfBelowRecommendedVRAM()
     {
@@ -108,6 +125,39 @@ namespace Lumina
         // Saved after a burst rather than per pipeline, since the whole cache is rewritten each time.
         constexpr uint32 kBuildsPerCacheSave = 16;
 
+        // Prewarm builds never take more than this share of the workers, so a pipeline a frame is waiting on still finds one.
+        uint32 MaxConcurrentPrewarmBuilds(uint32 MaxInFlight)
+        {
+            return Math::Max(1u, MaxInFlight / 2u);
+        }
+
+        // Runs a record has stayed unbuildable before it is dropped, since its material may be gone for good.
+        constexpr uint32 kPrewarmMaxAge = 8;
+
+        constexpr uint32 kPrewarmMagic   = 0x4D525750u;
+        constexpr uint32 kPrewarmVersion = 1u;
+
+        struct FPrewarmFileHeader
+        {
+            uint32 Magic   = kPrewarmMagic;
+            uint32 Version = kPrewarmVersion;
+            uint32 Count   = 0;
+            uint32 RecordSize = sizeof(FPipelinePrewarmRecord);
+        };
+
+        struct FPrewarmFileEntry
+        {
+            FPipelinePrewarmRecord Record;
+            uint32                 Age  = 0;
+            uint32                 _Pad = 0;
+        };
+        static_assert(sizeof(FPrewarmFileEntry) == sizeof(FPipelinePrewarmRecord) + 8, "Written as raw bytes, so it must hold no padding.");
+
+        uint64 HashPrewarmRecord(const FPipelinePrewarmRecord& Record)
+        {
+            return Containers::HashBytes(&Record, sizeof(Record));
+        }
+
         enum EPendingState : uint8
         {
             PendingQueued  = 0,
@@ -174,7 +224,7 @@ namespace Lumina
         return Pipeline;
     }
 
-    RHI::FPipelineH FScenePipelineCache::Request(uint64 Hash, const FShaderH (&Shaders)[3], FPipelineBuild&& Build)
+    RHI::FPipelineH FScenePipelineCache::Request(uint64 Hash, const FShaderH (&Shaders)[3], FPipelineBuild&& Build, bool bPrewarm)
     {
         {
             FWriteScopeLock Lock(Mutex);
@@ -189,7 +239,7 @@ namespace Lumina
 
             TSharedPtr<FPendingBuild> Pending = AddPending(Hash, Shaders, Move(Build), true);
             FScopeLock QueueLock(QueueMutex);
-            Queue.Add(Move(Pending));
+            (bPrewarm ? PrewarmQueue : Queue).Add(Move(Pending));
         }
 
         Pump();
@@ -256,13 +306,14 @@ namespace Lumina
         {
             FScopeLock Lock(QueueMutex);
             --InFlight;
-            bDrained = InFlight == 0 && Queue.IsEmpty();
+            bDrained = InFlight == 0 && Queue.IsEmpty() && PrewarmQueue.IsEmpty();
         }
 
         if (bDrained && BuiltSinceSave.load(std::memory_order_relaxed) >= kBuildsPerCacheSave)
         {
             BuiltSinceSave.store(0, std::memory_order_relaxed);
             RHI::SavePipelineCache();
+            SavePrewarm();
         }
         Pump();
     }
@@ -276,12 +327,23 @@ namespace Lumina
             TSharedPtr<FPendingBuild> Next;
             {
                 FScopeLock Lock(QueueMutex);
-                if (InFlight >= MaxInFlight || Queue.IsEmpty())
+                if (InFlight >= MaxInFlight)
                 {
                     return;
                 }
-                Next = Move(Queue[0]);
-                Queue.RemoveAt(0);
+                if (!Queue.IsEmpty())
+                {
+                    Next = Move(Queue[0]);
+                    Queue.RemoveAt(0);
+                }
+                else if (!PrewarmQueue.IsEmpty() && InFlight < MaxConcurrentPrewarmBuilds(MaxInFlight))
+                {
+                    Next = PrewarmQueue.Pop();
+                }
+                else
+                {
+                    return;
+                }
                 ++InFlight;
             }
 
@@ -294,15 +356,18 @@ namespace Lumina
     {
         {
             FScopeLock Lock(QueueMutex);
-            for (TSharedPtr<FPendingBuild>& Pending : Queue)
+            for (TVector<TSharedPtr<FPendingBuild>>* Waiting : { &Queue, &PrewarmQueue })
             {
-                uint8 Expected = PendingQueued;
-                if (Pending->State.compare_exchange_strong(Expected, PendingDone, std::memory_order_acq_rel))
+                for (TSharedPtr<FPendingBuild>& Pending : *Waiting)
                 {
-                    Pending->Done.Signal();
+                    uint8 Expected = PendingQueued;
+                    if (Pending->State.compare_exchange_strong(Expected, PendingDone, std::memory_order_acq_rel))
+                    {
+                        Pending->Done.Signal();
+                    }
                 }
+                Waiting->Reset();
             }
-            Queue.Reset();
         }
 
         // A worker still compiling writes into Entries and needs the device alive until it returns.
@@ -348,12 +413,154 @@ namespace Lumina
     void FScenePipelineCache::ReleaseAll()
     {
         WaitForBuilds();
+        SavePrewarm();
         FWriteScopeLock Lock(Mutex);
         for (auto& [Hash, Entry] : Entries)
         {
             RHI::Retire(Entry.Pipeline);
         }
         Entries.Reset();
+    }
+
+    void FScenePipelineCache::LoadPrewarm(const FString& Path)
+    {
+        FScopeLock Lock(PrewarmMutex);
+        PrewarmPath = Path;
+        PrewarmRecords.Reset();
+        PrewarmPending.Reset();
+        PrewarmCursor = 0;
+
+        const FStringView PathView(*Path, Path.Len());
+        TVector<uint8> Data;
+        if (Path.IsEmpty() || !Paths::Exists(PathView) || !FileHelper::LoadFileToArray(Data, PathView) || Data.Num() < (int32)sizeof(FPrewarmFileHeader))
+        {
+            return;
+        }
+
+        FPrewarmFileHeader Header;
+        Memory::Memcpy(&Header, Data.GetData(), sizeof(Header));
+        const size_t Expected = sizeof(FPrewarmFileHeader) + (size_t)Header.Count * sizeof(FPrewarmFileEntry);
+        if (Header.Magic != kPrewarmMagic || Header.Version != kPrewarmVersion || Header.RecordSize != sizeof(FPipelinePrewarmRecord) || (size_t)Data.Num() != Expected)
+        {
+            LOG_WARN("Pipeline prewarm list at {} is from another version and was ignored.", Path);
+            return;
+        }
+
+        const uint8* Cursor = Data.GetData() + sizeof(FPrewarmFileHeader);
+        for (uint32 i = 0; i < Header.Count; ++i, Cursor += sizeof(FPrewarmFileEntry))
+        {
+            FPrewarmFileEntry Entry;
+            Memory::Memcpy(&Entry, Cursor, sizeof(Entry));
+            if (Entry.Age + 1u > kPrewarmMaxAge)
+            {
+                continue;
+            }
+            const uint64 Hash = HashPrewarmRecord(Entry.Record);
+            if (PrewarmRecords.TryAdd(Hash, FPrewarmEntry{ Entry.Record, Entry.Age + 1u }))
+            {
+                PrewarmPending.Add(Hash);
+            }
+        }
+        LOG_INFO("Pipeline prewarm list holds {} pipelines.", PrewarmPending.Num());
+    }
+
+    void FScenePipelineCache::SavePrewarm()
+    {
+        FScopeLock Lock(PrewarmMutex);
+        if (PrewarmPath.IsEmpty())
+        {
+            return;
+        }
+
+        FPrewarmFileHeader Header;
+        Header.Count = (uint32)PrewarmRecords.Num();
+        TVector<uint8> Data;
+        Data.SetNum((int32)(sizeof(Header) + Header.Count * sizeof(FPrewarmFileEntry)));
+        Memory::Memcpy(Data.GetData(), &Header, sizeof(Header));
+        uint8* Cursor = Data.GetData() + sizeof(Header);
+        for (const auto& [Hash, Recorded] : PrewarmRecords)
+        {
+            FPrewarmFileEntry Entry;
+            Entry.Record = Recorded.Record;
+            Entry.Age    = Recorded.Age;
+            Memory::Memcpy(Cursor, &Entry, sizeof(Entry));
+            Cursor += sizeof(Entry);
+        }
+
+        const FString Parent = Paths::Parent(FStringView(*PrewarmPath, PrewarmPath.Len()), true);
+        if (!Parent.IsEmpty())
+        {
+            Paths::CreateDirectories(FStringView(*Parent, Parent.Len()));
+        }
+        if (!FileHelper::SaveArrayToFile(Data, FStringView(*PrewarmPath, PrewarmPath.Len())))
+        {
+            LOG_WARN("Could not write the pipeline prewarm list to {}.", PrewarmPath);
+        }
+    }
+
+    void FScenePipelineCache::RecordPrewarm(const FPipelinePrewarmRecord& Record)
+    {
+        const uint64 Hash = HashPrewarmRecord(Record);
+        FScopeLock Lock(PrewarmMutex);
+        if (PrewarmPath.IsEmpty())
+        {
+            return;
+        }
+        if (FPrewarmEntry* Existing = PrewarmRecords.Find(Hash))
+        {
+            Existing->Age = 0;
+            return;
+        }
+        PrewarmRecords.TryAdd(Hash, FPrewarmEntry{ Record, 0u });
+    }
+
+    void FScenePipelineCache::PrewarmRecorded(uint32 Max, TFunctionRef<bool(const FPipelinePrewarmRecord&)> Try)
+    {
+        TInlineVector<uint64, 32> Hashes;
+        TInlineVector<FPipelinePrewarmRecord, 32> Batch;
+        {
+            FScopeLock Lock(PrewarmMutex);
+            const uint32 Pending = (uint32)PrewarmPending.Num();
+            const uint32 Take = Math::Min(Max, Pending);
+            for (uint32 i = 0; i < Take; ++i)
+            {
+                const uint64 Hash = PrewarmPending[(PrewarmCursor + i) % Pending];
+                if (const FPrewarmEntry* Entry = PrewarmRecords.Find(Hash))
+                {
+                    Hashes.Add(Hash);
+                    Batch.Add(Entry->Record);
+                }
+            }
+            PrewarmCursor = Pending > 0 ? (PrewarmCursor + Take) % Pending : 0;
+        }
+
+        TInlineVector<uint64, 32> Requested;
+        for (int32 i = 0; i < Batch.Num(); ++i)
+        {
+            if (Try(Batch[i]))
+            {
+                Requested.Add(Hashes[i]);
+            }
+        }
+        if (Requested.IsEmpty())
+        {
+            return;
+        }
+
+        FScopeLock Lock(PrewarmMutex);
+        for (uint64 Hash : Requested)
+        {
+            PrewarmPending.RemoveSwap(Hash);
+            if (FPrewarmEntry* Entry = PrewarmRecords.Find(Hash))
+            {
+                Entry->Age = 0;
+            }
+        }
+        PrewarmCursor = PrewarmPending.IsEmpty() ? 0 : PrewarmCursor % (uint32)PrewarmPending.Num();
+        if (PrewarmPending.IsEmpty())
+        {
+            LOG_INFO("Pipeline prewarm requested every recorded pipeline.");
+        }
     }
 
     FRenderManager::FRenderManager()
@@ -409,6 +616,10 @@ namespace Lumina
 
         // Before Shutdown, which drains the retire queues the slab hands its allocation to.
         MeshletHeaderSlab::Shutdown();
+
+        ReleaseHDRTargets();
+        RHI::Retire(HDREncodePipeline);
+        HDREncodePipeline = {};
 
         SwapchainTarget.Shutdown();
         RHI::FreeDevice();
@@ -470,6 +681,7 @@ namespace Lumina
             RenderBootLast = Now;
         };
 
+        const FString CachePath = PipelineCachePath();
         RHI::CreateDevice(RHI::FDeviceDesc
         {
             .bValidation = bValidation,
@@ -478,9 +690,12 @@ namespace Lumina
             // Meshlets draw through the vertex path without mesh shading, and -nomeshshaders forces that path.
             .DisabledFeatures = Global::GCommandLine != nullptr && Global::GCommandLine->Has("nomeshshaders") ? RHI::EDeviceFeature::MeshShading : RHI::EDeviceFeature::None,
             .MinDeviceLocalMemoryMiB = MinVRAMMiB,
-            .PipelineCachePath = PipelineCachePath(),
+            .PipelineCachePath = CachePath,
         });
         RenderBootMark("RHI::CreateDevice");
+
+        // Kept beside the driver's cache, so -nopipelinecache turns both off.
+        ScenePipelineCache.LoadPrewarm(CachePath.IsEmpty() ? FString() : Paths::Parent(FStringView(*CachePath, CachePath.Len()), true) + "/PipelinePrewarm.bin");
 
         WarnIfBelowRecommendedVRAM();
 
@@ -615,6 +830,8 @@ namespace Lumina
 
             ApplyPendingResize();
 
+            UpdateHDROutput();
+
             // Read every frame like the other renderer settings, and a no-op unless the value moved.
             RHI::SetMaxAnisotropy((float)GetDefault<CRendererSettings>()->MaxAnisotropy);
 
@@ -631,6 +848,10 @@ namespace Lumina
             }
 
             const FUIntVector2 Extent = SwapchainTarget.GetExtent();
+
+            // An HDR10 swapchain is reached through the SDR composite, which carries the scene's highlight gain to the encode.
+            const bool bHDRFrame = SwapchainTarget.IsHDR();
+            const RHI::FTextureH WindowImage = bHDRFrame ? AcquireHDRComposite(Extent) : SwapImage;
 
             RHI::FCmdListH CL = RHI::OpenCommandList();
             RHI::CmdSetTextureHeap(CL, RHI::GetGlobalHeap());
@@ -660,10 +881,22 @@ namespace Lumina
                 }
 
                 const RHI::FTextureH Source = Scene ? Scene->GetDisplayTexture() : RHI::FTextureH{};
+                if (Scene != nullptr)
+                {
+                    Scene->SetDisplayHeadroom(HDROutput.GetHeadroomStops());
+                }
                 if (RHI::IsValid(Source))
                 {
-                    RHI::CmdBlitTexture(CL, Source, RHI::FTextureSlice{}, SwapImage, RHI::FTextureSlice{}, RHI::EFilter::Linear);
+                    RHI::CmdBlitTexture(CL, Source, RHI::FTextureSlice{}, WindowImage, RHI::FTextureSlice{}, RHI::EFilter::Linear);
                 }
+                else if (bHDRFrame)
+                {
+                    const float Black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+                    RHI::CmdClearTexture(CL, WindowImage, Black);
+                }
+                RHI::CmdBarrier(CL,
+                    RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferWrite,
+                    RHI::EStageFlags::RasterColorOut, RHI::EAccessFlags::ColorRead | RHI::EAccessFlags::ColorWrite);
             }
             #endif
 
@@ -672,12 +905,17 @@ namespace Lumina
             {
                 LUMINA_PROFILE_SECTION_COLORED("ImGui Record", tracy::Color::SlateBlue3);
                 RHI::CmdBeginMarker(CL, "ImGui");
-                ImGuiRenderer->OnEndFrame(CL, SwapImage, Extent, ImGuiDrawData);
+                ImGuiRenderer->OnEndFrame(CL, WindowImage, Extent, ImGuiDrawData);
                 RHI::CmdEndMarker(CL);
             }
             #endif
 
-            RecordWindowCapture(CL, SwapImage, Extent, ThisFrameIndex);
+            RecordWindowCapture(CL, WindowImage, Extent, ThisFrameIndex);
+
+            if (bHDRFrame)
+            {
+                EncodeHDRComposite(CL, SwapImage);
+            }
 
             RHI::CmdEndMarker(CL);
 
@@ -724,7 +962,7 @@ namespace Lumina
         return true;
     }
 
-    void FRenderManager::RecordWindowCapture(RHI::FCmdListH CL, RHI::FTextureH SwapImage, const FUIntVector2& Extent, uint8 FrameIndex)
+    void FRenderManager::RecordWindowCapture(RHI::FCmdListH CL, RHI::FTextureH WindowImage, const FUIntVector2& Extent, uint8 FrameIndex)
     {
         FScopeLock Lock(WindowCaptureMutex);
         if (RequestedWindowCapture == 0 || InFlightWindowCapture.Ticket != 0 || Extent.x == 0 || Extent.y == 0)
@@ -744,7 +982,30 @@ namespace Lumina
         RHI::CmdBarrier(CL,
             RHI::EStageFlags::RasterColorOut | RHI::EStageFlags::Transfer, RHI::EAccessFlags::ColorWrite | RHI::EAccessFlags::TransferWrite,
             RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferRead);
-        RHI::CmdCopyTextureToMemory(CL, SwapImage, RHI::FTextureSlice{}, Readback, Extent.x);
+
+        // Readers expect the BGRA8 bytes an SDR swapchain holds, so the half-float HDR composite is converted first.
+        RHI::FTextureH Readable = WindowImage;
+        if (RHI::GetTextureDesc(WindowImage).Format != EFormat::BGRA8_UNORM)
+        {
+            if (!HDRCaptureScratch.IsValid() || RHI::GetTextureDesc(HDRCaptureScratch.Texture).Dimension.x != Extent.x
+                || RHI::GetTextureDesc(HDRCaptureScratch.Texture).Dimension.y != Extent.y)
+            {
+                RHI::Textures::Release(HDRCaptureScratch);
+                HDRCaptureScratch = RHI::Textures::Create(RHI::FTexture2DDesc
+                {
+                    .Width     = Extent.x,
+                    .Height    = Extent.y,
+                    .Format    = EFormat::BGRA8_UNORM,
+                    .DebugName = "Window.HDRCaptureScratch",
+                });
+            }
+            RHI::CmdBlitTexture(CL, WindowImage, RHI::FTextureSlice{}, HDRCaptureScratch.Texture, RHI::FTextureSlice{}, RHI::EFilter::Nearest);
+            RHI::CmdBarrier(CL,
+                RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferWrite,
+                RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferRead);
+            Readable = HDRCaptureScratch.Texture;
+        }
+        RHI::CmdCopyTextureToMemory(CL, Readable, RHI::FTextureSlice{}, Readback, Extent.x);
         RHI::CmdBarrier(CL,
             RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferWrite,
             RHI::EStageFlags::Host, RHI::EAccessFlags::HostRead);
@@ -784,6 +1045,140 @@ namespace Lumina
     void FRenderManager::RecreatePrimarySwapchain()
     {
         SwapchainTarget.Recreate();
+    }
+
+    void FRenderManager::SetUserHDROutput(EHDROutput Mode, float PaperWhiteNits)
+    {
+        bUserHDROutput     = true;
+        UserHDRMode        = Mode;
+        UserPaperWhiteNits = PaperWhiteNits;
+    }
+
+    void FRenderManager::UpdateHDROutput()
+    {
+        const CRendererSettings* Settings = GetDefault<CRendererSettings>();
+        const EHDROutput Mode = bUserHDROutput ? UserHDRMode : Settings->HDROutput;
+
+        FWindow* Window = Windowing::TryGetPrimaryWindowHandle();
+        const double Now = PlatformTime::Seconds();
+        if (Mode != EHDROutput::Off && Window != nullptr && Now >= NextHDRDisplayQuery)
+        {
+            NextHDRDisplayQuery = Now + kHDRDisplayPollSeconds;
+            int X = 0;
+            int Y = 0;
+            Window->GetWindowPosition(X, Y);
+            const FUIntVector2 Size = Window->GetExtent();
+            const PlatformDisplay::FHDRDisplayInfo Previous = HDRDisplay;
+            HDRDisplay = PlatformDisplay::QueryHDRDisplay(X + (int32)(Size.x / 2), Y + (int32)(Size.y / 2));
+            if (HDRDisplay.bHDREnabled != Previous.bHDREnabled || HDRDisplay.PeakNits != Previous.PeakNits
+                || HDRDisplay.SDRWhiteNits != Previous.SDRWhiteNits)
+            {
+                LOG_INFO("Display is in {} mode, peak {:.0f} nits, SDR white {:.0f} nits.", HDRDisplay.bHDREnabled ? "HDR" : "SDR",
+                         HDRDisplay.PeakNits, HDRDisplay.SDRWhiteNits);
+            }
+        }
+
+        SwapchainTarget.SetHDR(Mode == EHDROutput::On || (Mode == EHDROutput::Auto && HDRDisplay.bHDREnabled));
+
+        const float PaperWhite = bUserHDROutput && UserPaperWhiteNits > 0.0f ? UserPaperWhiteNits : Settings->HDRPaperWhiteNits;
+        const float Peak       = Settings->HDRPeakNits > 0.0f ? Settings->HDRPeakNits : HDRDisplay.PeakNits;
+
+        const bool bWasActive = HDROutput.bActive;
+        HDROutput.bActive        = SwapchainTarget.IsHDR();
+        HDROutput.PaperWhiteNits = PaperWhite > 0.0f ? PaperWhite : (HDRDisplay.SDRWhiteNits > 0.0f ? HDRDisplay.SDRWhiteNits : kFallbackPaperWhiteNits);
+        HDROutput.PeakNits       = Math::Max(Peak > 0.0f ? Peak : kFallbackPeakNits, HDROutput.PaperWhiteNits);
+
+        if (HDROutput.bActive != bWasActive)
+        {
+            LOG_INFO("Presenting {}, paper white {:.0f} nits, peak {:.0f} nits.", HDROutput.bActive ? "HDR10" : "SDR",
+                     HDROutput.PaperWhiteNits, HDROutput.PeakNits);
+        }
+        if (!HDROutput.bActive)
+        {
+            ReleaseHDRTargets();
+        }
+    }
+
+    RHI::FTextureH FRenderManager::AcquireHDRComposite(const FUIntVector2& Extent)
+    {
+        if (HDRComposite.IsValid())
+        {
+            const FUIntVector3 Built = RHI::GetTextureDesc(HDRComposite.Texture).Dimension;
+            if (Built.x == Extent.x && Built.y == Extent.y)
+            {
+                return HDRComposite.Texture;
+            }
+            RHI::Textures::Release(HDRComposite);
+        }
+
+        // Half floats, so the gain code in alpha keeps the precision 8 bits would band.
+        HDRComposite = RHI::Textures::Create(RHI::FTexture2DDesc
+        {
+            .Width         = Extent.x,
+            .Height        = Extent.y,
+            .Format        = EFormat::RGBA16_FLOAT,
+            .bRenderTarget = true,
+            .DebugName     = "Window.HDRComposite",
+        });
+        return HDRComposite.Texture;
+    }
+
+    void FRenderManager::EncodeHDRComposite(RHI::FCmdListH CL, RHI::FTextureH SwapImage)
+    {
+        if (!HDREncodePipeline)
+        {
+            const RHI::FColorTarget ColorTarget { .Format = EFormat::R10G10B10A2_UNORM };
+            RHI::FRasterDesc RasterDesc;
+            RasterDesc.Topology     = RHI::ETopology::TriangleList;
+            RasterDesc.ColorTargets = TSpan<const RHI::FColorTarget>(&ColorTarget, 1);
+            HDREncodePipeline = RHI::CreateGraphicsPipeline("FullscreenQuad.slang", "HDRCompositeEncode.slang", RasterDesc);
+            if (!HDREncodePipeline)
+            {
+                return;
+            }
+        }
+
+        RHI::CmdBarrier(CL,
+            RHI::EStageFlags::RasterColorOut | RHI::EStageFlags::Transfer, RHI::EAccessFlags::ColorWrite | RHI::EAccessFlags::TransferWrite,
+            RHI::EStageFlags::PixelShader, RHI::EAccessFlags::ShaderRead);
+
+        RHI::FRenderAttachment Color;
+        Color.Texture = SwapImage;
+        Color.LoadOp  = RHI::ELoadOp::Undefined;
+        Color.StoreOp = RHI::EStoreOp::Store;
+
+        RHI::FRenderPassDesc Pass;
+        Pass.ColorAttachments = TSpan<const RHI::FRenderAttachment>(&Color, 1);
+        Pass.RenderArea       = SwapchainTarget.GetExtent();
+
+        RHI::CmdBeginMarker(CL, "HDR Encode");
+        RHI::CmdBeginRenderPass(CL, Pass);
+        RHI::CmdSetDepthStencil(CL, RHI::FDepthStencilDesc{});
+        RHI::CmdSetCullMode(CL, RHI::ECullMode::None);
+        RHI::CmdSetPipeline(CL, HDREncodePipeline);
+
+        const FHDROutputArgs Args
+        {
+            .Composite      = HDRComposite.ResourceID(),
+            .GainStops      = HDROutput.GetHeadroomStops(),
+            .PaperWhiteNits = HDROutput.PaperWhiteNits,
+            .PeakNits       = HDROutput.PeakNits,
+        };
+        RHI::CmdDraw(CL, RHI::CopyTransient(Args), 3, 1, 0, 0);
+        RHI::CmdEndRenderPass(CL);
+        RHI::CmdEndMarker(CL);
+    }
+
+    void FRenderManager::ReleaseHDRTargets()
+    {
+        if (HDRComposite.IsValid())
+        {
+            RHI::Textures::Release(HDRComposite);
+        }
+        if (HDRCaptureScratch.IsValid())
+        {
+            RHI::Textures::Release(HDRCaptureScratch);
+        }
     }
 
     void FRenderManager::OnWindowResized(FWindow* Window, const FUIntVector2& Extent)

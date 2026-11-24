@@ -6,6 +6,8 @@
 
 #include "Assets/AssetRegistry/CookRoot.h"
 #include "Config/Config.h"
+#include "Config/EngineSettings.h"
+#include "UI/Tools/EditorToolContext.h"
 #include "Cooker/AssetCooker.h"
 #include "Cooker/ProjectPackager.h"
 #include "Core/Engine/Engine.h"
@@ -294,6 +296,7 @@ namespace Lumina
         Opts.Platform                       = static_cast<EPackagePlatform>(PlatformIndex);
         Opts.ExtraFiles                     = ExtraFiles;
         Opts.ExtraDirectories               = ExtraDirectories;
+        DotNet::GatherScriptUnitsForPackaging(Opts.ScriptUnits);
         Opts.BuildConfiguration             = (ConfigIndex == 0) ? FString("Shipping")
                                             : (ConfigIndex == 1) ? FString("Development")
                                                                  : FString("Debug");
@@ -349,27 +352,25 @@ namespace Lumina
         ImGui::Text(LOC("Project:    %.*s"), Global::GEngine->GetProjectName().Len(), Global::GEngine->GetProjectName().GetData());
 
         const TVector<FCookRoot> Roots = Global::GEngine->GetCookRoots();
-        if (Roots.IsEmpty())
+        const ImVec4 RootsColor = Roots.IsEmpty() ? ImVec4(1.0f, 0.6f, 0.4f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        ImGui::TextColored(RootsColor, LOC("Cook Roots: %d"), Roots.Num());
+        ImGui::SameLine();
+        if (ImGui::SmallButton(LOC_ICON_ID(LE_ICON_COG, "Edit")))
         {
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f),
-                LOC("Cook Roots: <none, open Project Settings > Maps > Cook Roots to add asset paths,"));
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f),
-                LOC("             or declare CookRoots in a .lplugin / put assets in a REFLECT(Group = ...) class>"));
+            ToolContext->OpenSettings(CProjectSettings::StaticClass(), "Cook");
         }
-        else
+        ImGui::SetItemTooltip(LOC("Opens Project Settings on the cook roots and cook folders."));
+
+        const int32 ShownLimit = 6;
+        const int32 Count = Roots.Num();
+        for (int32 i = 0; i < Count && i < ShownLimit; ++i)
         {
-            const int32 ShownLimit = 6;
-            ImGui::Text(LOC("Cook Roots: %d"), Roots.Num());
-            const int32 Count = Roots.Num();
-            for (int32 i = 0; i < Count && i < ShownLimit; ++i)
-            {
-                const FName ChunkName = Roots[i].Chunk.IsNone() ? FName("Main") : Roots[i].Chunk;
-                ImGui::TextDisabled("    [%s]  %s", *ChunkName.ToString(), *Roots[i].Asset);
-            }
-            if (Count > ShownLimit)
-            {
-                ImGui::TextDisabled(LOC("    ... (+%d more)"), Count - ShownLimit);
-            }
+            const FName ChunkName = Roots[i].Chunk.IsNone() ? FName("Main") : Roots[i].Chunk;
+            ImGui::TextDisabled("    [%s]  %s", *ChunkName.ToString(), *Roots[i].Asset);
+        }
+        if (Count > ShownLimit)
+        {
+            ImGui::TextDisabled(LOC("    ... (+%d more)"), Count - ShownLimit);
         }
 
         // Status badge, visible at a glance while a build is running.

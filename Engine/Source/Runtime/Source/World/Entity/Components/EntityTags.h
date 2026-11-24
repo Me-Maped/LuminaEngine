@@ -12,10 +12,23 @@ namespace Lumina
         GENERATED_BODY()
     };
 
-    // Present = this entity's scripts are suppressed (does not tick) while the entity itself
-    // stays active. Toggled from the outliner's per-row script button; the script system excludes it.
+    // Present suppresses this entity's scripts while the entity itself stays active.
     REFLECT(Component, HideInComponentList)
     struct RUNTIME_API SScriptDisabledTag
+    {
+        GENERATED_BODY()
+    };
+
+    // Another peer is authoritative over this entity and this one only mirrors it, so local systems make no gameplay decisions for it.
+    REFLECT(Component, HideInComponentList)
+    struct RUNTIME_API SNetProxyTag
+    {
+        GENERATED_BODY()
+    };
+
+    // A proxy whose transform that peer also streams, so local movement leaves it alone.
+    REFLECT(Component, HideInComponentList)
+    struct RUNTIME_API SNetDrivenTransformTag
     {
         GENERATED_BODY()
     };

@@ -1,4 +1,4 @@
-﻿#include "Localization/Localization.h"
+#include "Localization/Localization.h"
 #include "SettingsEditorTool.h"
 
 #include "Config/Config.h"
@@ -106,15 +106,21 @@ namespace Lumina
 
     void FSettingsEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("What's Listed",
-            "Every CDeveloperSettings subclass. Each is drawn with the standard reflected property table, "
-            "so it behaves exactly like an asset or component details panel.");
-        DrawHelpTextRow("Editing",
-            "Changes write immediately to the class's ConfigFile (grouped JSON). Right-click a row > "
-            "'Reset to Default' restores the value declared in code.");
-        DrawHelpTextRow("Adding settings",
-            "Declare a CDeveloperSettings subclass with PROPERTY members and a REFLECT(ConfigFile=...) tag. "
-            "It is discovered automatically; read it anywhere via GetDefault<CMySettings>().");
+        DrawHelpTextRow(LOC("What's Listed"), LOC("Every CDeveloperSettings subclass. Each is drawn with the standard reflected property table, "
+            "so it behaves exactly like an asset or component details panel."));
+        DrawHelpTextRow(LOC("Editing"), LOC("Changes write immediately to the class's ConfigFile (grouped JSON). Right-click a row > "
+            "'Reset to Default' restores the value declared in code."));
+        DrawHelpTextRow(LOC("Adding settings"), LOC("Declare a CDeveloperSettings subclass with PROPERTY members and a REFLECT(ConfigFile=...) tag. "
+            "It is discovered automatically; read it anywhere via GetDefault<CMySettings>()."));
+    }
+
+    void FSettingsEditorTool::Select(CClass* SettingsClass, FStringView Search)
+    {
+        SelectedClass = SettingsClass;
+        if (FPropertyTable* Table = GetOrCreateTable(SettingsClass))
+        {
+            Table->SetSearchText(Search);
+        }
     }
 
     FPropertyTable* FSettingsEditorTool::GetOrCreateTable(CClass* SettingsClass)

@@ -78,6 +78,7 @@
 #include "Config/EngineSettings.h"
 #include "ExternalEntities/ExternalEntities.h"
 #include "Subsystems/CoroutineManager.h"
+#include "Subsystems/NetSubsystem.h"
 #include "Subsystems/TimerManager.h"
 #include "Subsystems/TweenManager.h"
 #include "UI/RmlUiBridge.h"
@@ -92,6 +93,7 @@
 #include "World/Entity/Components/ExponentialHeightFogComponent.h"
 #include "World/Entity/Components/LightComponent.h"
 #include "World/Entity/Components/LocalFogVolumeComponent.h"
+#include "World/Entity/Components/GroundFogComponent.h"
 #include "World/Entity/Components/ReflectionProbeComponent.h"
 #include "World/Entity/Components/SkyLightComponent.h"
 #include "World/Entity/Components/SplineComponent.h"
@@ -122,6 +124,7 @@ namespace Lumina
             Registry.TrackChanges<SWaterComponent>();
             Registry.TrackChanges<SExponentialHeightFogComponent>();
             Registry.TrackChanges<SLocalFogVolumeComponent>();
+            Registry.TrackChanges<SGroundFogComponent>();
             Registry.TrackChanges<SCloudComponent>();
             Registry.TrackChanges<SEnvironmentComponent>();
             Registry.TrackChanges<STerrainComponent>();
@@ -452,6 +455,11 @@ namespace Lumina
 
         EntityRegistry.Ctx().Emplace<ECS::FEventQueues*>(&EventQueues);
 
+        if (WorldType == EWorldType::Game && GetDefault<CSimulationSettings>()->bEnabled)
+        {
+            Simulation = MakeUnique<FSimulation>(*this);
+        }
+
         ConnectComponentAccessValidators(EntityRegistry);
 
         auto WorldSettingsView = EntityRegistry.View<SDefaultWorldSettings>();
@@ -620,6 +628,7 @@ namespace Lumina
     void CWorld::TeardownWorld()
     {
         bTearingDown = true;
+        Simulation.reset();
 
         // First, so every subscription the managed side drops still disconnects against a live world.
         DotNet::NotifyWorldTeardown(this);
@@ -708,6 +717,11 @@ namespace Lumina
             // Before the pause check, so what was sent last frame still ages out while the game is paused.
             EventQueues.Advance();
 
+            if (CNetSubsystem* Net = GetNet())
+            {
+                Net->DispatchSessionEvents();
+            }
+
             RealDeltaTime = Context.GetDeltaTime();
             DeltaTime = RealDeltaTime * GetDefaultWorldSettings().DeltaTimeScale;
             TimeSinceCreation += DeltaTime;
@@ -739,6 +753,10 @@ namespace Lumina
         if (Stage == EUpdateStage::PrePhysics)
         {
             TickFixedUpdate(DeltaTime);
+            if (Simulation)
+            {
+                Simulation->Advance(DeltaTime);
+            }
         }
 
         // The frame's one propagation, owned here so a world with no renderer still settles, since physics syncs bodies from local transforms.
@@ -778,7 +796,17 @@ namespace Lumina
     {
         LUMINA_PROFILE_SCOPE();
 
-        if (bPaused || PhysicsScene == nullptr)
+        // Nothing cooks without a scene, so committed collision triangles are freed rather than held.
+        if (PhysicsScene == nullptr)
+        {
+            for (auto [Entity, Collider] : EntityRegistry.View<SDynamicMeshColliderComponent>().Each())
+            {
+                (void)Collider.TakeNewTriangles();
+            }
+            return;
+        }
+
+        if (bPaused)
         {
             return;
         }
@@ -1311,36 +1339,41 @@ namespace Lumina
     {
         // An unchanged write is skipped, since marking it dirty would re-sync the entity downstream for nothing.
         STransformComponent* Transform = FindScriptTransform(Entity, "SetEntityLocation");
-        if (Transform != nullptr && Transform->GetLocalLocation() != Location)
+        if (Transform != nullptr && Transform->GetWorldLocation() != Location)
         {
-            Transform->SetLocation(Location);
+            Transform->SetWorldLocation(Location);
         }
     }
 
     void CWorld::SetEntityRotation(ECS::FEntity Entity, FQuat Rotation)
     {
         STransformComponent* Transform = FindScriptTransform(Entity, "SetEntityRotation");
-        if (Transform != nullptr && !(Transform->GetLocalRotation() == Rotation))
+        if (Transform != nullptr && !(Transform->GetWorldRotation() == Rotation))
         {
-            Transform->SetRotation(Rotation);
+            Transform->SetWorldRotation(Rotation);
         }
     }
 
     void CWorld::SetEntityScale(ECS::FEntity Entity, FVector3 Scale)
     {
         STransformComponent* Transform = FindScriptTransform(Entity, "SetEntityScale");
-        if (Transform != nullptr && Transform->GetLocalScale() != Scale)
+        if (Transform != nullptr && Transform->GetWorldScale() != Scale)
         {
-            Transform->SetLocalScale(Scale);
+            Transform->SetWorldScale(Scale);
         }
     }
 
     void CWorld::SetEntityLocationAndRotation(ECS::FEntity Entity, FVector3 Location, FQuat Rotation)
     {
         STransformComponent* Transform = FindScriptTransform(Entity, "SetEntityLocationAndRotation");
-        if (Transform != nullptr && (Transform->GetLocalLocation() != Location || !(Transform->GetLocalRotation() == Rotation)))
+        if (Transform == nullptr)
         {
-            Transform->SetLocalLocationAndRotation(Location, Rotation);
+            return;
+        }
+        const FTransform Current = Transform->GetWorldTransform();
+        if (Current.GetLocation() != Location || !(Current.GetRotation() == Rotation))
+        {
+            Transform->SetWorldLocationAndRotation(Location, Rotation);
         }
     }
 
@@ -1358,7 +1391,7 @@ namespace Lumina
         {
             if (STransformComponent* Transform = EntityRegistry.TryGet<STransformComponent>(Entities[Index]))
             {
-                Transform->SetLocalTransform(Transforms[Index]);
+                Transform->SetWorldTransform(Transforms[Index]);
             }
         }
     }
@@ -1366,7 +1399,13 @@ namespace Lumina
     FVector3 CWorld::TranslateEntity(ECS::FEntity Entity, FVector3 Translation)
     {
         STransformComponent* Transform = FindScriptTransform(Entity, "TranslateEntity");
-        return Transform != nullptr ? Transform->Translate(Translation) : FVector3(0.0f);
+        if (Transform == nullptr)
+        {
+            return FVector3(0.0f);
+        }
+        const FVector3 Moved = Transform->GetWorldLocation() + Translation;
+        Transform->SetWorldLocation(Moved);
+        return Moved;
     }
 
     uint32 CWorld::GetNumEntities() const
@@ -1697,7 +1736,7 @@ namespace Lumina
         {
             for (const TStrongObjectPtr<CEntityScript>& Script : EntityRegistry.Get<SEntityScriptComponent>(Entity).Scripts)
             {
-                if (Script.Get() != nullptr && Script->IsAttached() && Script->GetClass()->IsChildOf(ScriptClass.Get()))
+                if (Script.Get() != nullptr && FEntityScriptAccess::IsAttached(*Script) && Script->GetClass()->IsChildOf(ScriptClass.Get()))
                 {
                     Out.Add(Script);
                 }
@@ -1905,7 +1944,7 @@ namespace Lumina
 
     bool SystemSchedule::NeedsFlushBetween(const FSystemAccess& Earlier, const FSystemAccess& Later, bool bDeclaredOrder)
     {
-        if (bDeclaredOrder || Earlier.bExclusive || Later.bExclusive)
+        if (Earlier.bExclusive || Later.bExclusive || (bDeclaredOrder && Earlier.bQueuesCommands))
         {
             return true;
         }
@@ -2454,7 +2493,7 @@ namespace Lumina
 
         if (STransformComponent* Transform = EntityRegistry.TryGet<STransformComponent>(Entity))
         {
-            Transform->SetLocalTransform(NewTransform);
+            Transform->SetWorldTransform(NewTransform);
             return;
         }
         EntityRegistry.Emplace<STransformComponent>(Entity, NewTransform);
@@ -2624,6 +2663,28 @@ namespace Lumina
             SystemContext.Time = FixedUpdateTime;
             TickSystems(SystemContext);
         }
+
+        SystemContext.UpdateStage   = OuterStage;
+        SystemContext.DeltaTime     = OuterDeltaTime;
+        SystemContext.RealDeltaTime = OuterRealDelta;
+        SystemContext.Time          = OuterTime;
+    }
+
+    void CWorld::RunSimulationStage(float TickSeconds, uint32 Tick)
+    {
+        LUMINA_PROFILE_SCOPE();
+
+        const EUpdateStage OuterStage = SystemContext.UpdateStage;
+        const double OuterDeltaTime   = SystemContext.DeltaTime;
+        const double OuterRealDelta   = SystemContext.RealDeltaTime;
+        const double OuterTime        = SystemContext.Time;
+
+        SystemContext.UpdateStage   = EUpdateStage::Simulation;
+        SystemContext.DeltaTime     = TickSeconds;
+        SystemContext.RealDeltaTime = TickSeconds;
+        SystemContext.Time          = (double)Tick * TickSeconds;
+        TickSystems(SystemContext);
+        FlushCommands();
 
         SystemContext.UpdateStage   = OuterStage;
         SystemContext.DeltaTime     = OuterDeltaTime;

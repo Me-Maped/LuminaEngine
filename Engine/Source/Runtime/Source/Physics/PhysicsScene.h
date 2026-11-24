@@ -4,6 +4,7 @@
 #include "PhysicsTypes.h"
 #include "Core/Templates/Optional.h"
 #include "Containers/Function.h"
+#include "Containers/FunctionRef.h"
 #include "Containers/Span.h"
 #include "Containers/Vector.h"
 #include "Memory/SmartPtr.h"
@@ -25,6 +26,20 @@ namespace Lumina
 
 namespace Lumina::Physics
 {
+    // A cooked collision shape at unit scale, never changed after the cook; colliders, bodies and navmesh bakes share it.
+    class RUNTIME_API FCollisionShape
+    {
+    public:
+        virtual ~FCollisionShape() = default;
+
+        // Each triangle's corners in shape space, a hull's faces fanned.
+        virtual void ForEachTriangle(TFunctionRef<void(const FVector3&, const FVector3&, const FVector3&)> Func) const = 0;
+
+        FVector3 LocalMin = FVector3(0.0f);
+        FVector3 LocalMax = FVector3(0.0f);
+        bool     bConvex  = false;
+    };
+
     // Inputs to build one ragdoll. Backend neutral so gameplay and world code can drive it.
     struct FRagdollDesc
     {
@@ -46,8 +61,7 @@ namespace Lumina::Physics
         Position = 2,   // Drive toward a target position (rad hinge, m slider) via the motor spring.
     };
 
-    // Backend-neutral description of one constraint, built by gameplay/editor code and resolved by the scene.
-    // World-space frames; a body set to ECS::NullEntity is treated as "fixed to the world".
+    // Frames are world space, and a body set to ECS::NullEntity is fixed to the world.
     REFLECT()
     struct SConstraintDesc
     {
@@ -120,7 +134,7 @@ namespace Lumina::Physics
         const CPhysicsMaterial* Material = nullptr;
         SCollisionProfile       Profile = { .Layer = ECollisionProfiles::Static };
         bool                    bConvex = true;
-        int32                   SourceIndex = -1;       // Echoed back as SRayResult::InstanceIndex on a hit.
+        int32                   SourceIndex = -1;       // Echoed back as the InstanceIndex of ray and overlap results.
     };
 
     // A body no entity owns, for procedural or tool geometry. Shapes come from Collision when set, else from the raw triangles, three indices each.
@@ -231,9 +245,9 @@ namespace Lumina::Physics
         virtual TOptional<SRayResult> CastShapeClosest(const SQueryShape& Shape, const FVector3& Start, const FVector3& End,
                                                        ECollisionProfiles LayerMask, TSpan<const ECS::FEntity> IgnoreEntities) = 0;
 
-        // Distinct entities intersecting the shape; returns the count written, == OutEntities.Num() means possibly more.
+        // Distinct entities and instances intersecting the shape; returns the count written, == Out.Num() means possibly more.
         virtual int32 OverlapShape(const SQueryShape& Shape, const FVector3& Center, ECollisionProfiles LayerMask,
-                                   TSpan<const ECS::FEntity> IgnoreEntities, TSpan<ECS::FEntity> OutEntities) = 0;
+                                   TSpan<const ECS::FEntity> IgnoreEntities, TSpan<SOverlapResult> Out) = 0;
 
         // False when the entity has no body.
         virtual bool GetClosestPointOnBody(ECS::FEntity Entity, const FVector3& Point, FVector3& OutPoint) const = 0;
@@ -250,20 +264,40 @@ namespace Lumina::Physics
             return CastShapeClosest(SQueryShape::Sphere(Settings.Radius), Settings.Start, Settings.End, Settings.LayerMask, Settings.IgnoreEntities);
         }
 
-        // Distinct entities whose bodies contain the world point, a zero-radius overlap rather than a sweep.
-        int32 CollidePoint(const FVector3& Point, TSpan<const ECS::FEntity> IgnoreEntities, TSpan<ECS::FEntity> OutEntities)
+        // Every overlap result, Out cleared first and grown until the scene stops filling it.
+        void OverlapAll(const SQueryShape& Shape, const FVector3& Center, ECollisionProfiles LayerMask,
+                        TSpan<const ECS::FEntity> IgnoreEntities, TVector<SOverlapResult>& Out)
         {
-            return OverlapShape(SQueryShape::Sphere(0.0f), Point, ECollisionProfiles::All, IgnoreEntities, OutEntities);
+            constexpr int32 MaxOverlapResults = 16384;
+            int32 Capacity = 64;
+            int32 Written = 0;
+            for (;;)
+            {
+                Out.SetNum(Capacity);
+                Written = OverlapShape(Shape, Center, LayerMask, IgnoreEntities, TSpan<SOverlapResult>(Out.GetData(), (size_t)Capacity));
+                if (Written < Capacity || Capacity >= MaxOverlapResults)
+                {
+                    break;
+                }
+                Capacity *= 2;
+            }
+            Out.SetNum(Written);
         }
 
-        int32 OverlapSphere(const FVector3& Center, float Radius, TSpan<const ECS::FEntity> IgnoreEntities, TSpan<ECS::FEntity> OutEntities)
+        // Bodies containing the world point, a zero-radius overlap rather than a sweep.
+        int32 CollidePoint(const FVector3& Point, TSpan<const ECS::FEntity> IgnoreEntities, TSpan<SOverlapResult> Out)
         {
-            return OverlapShape(SQueryShape::Sphere(Radius), Center, ECollisionProfiles::All, IgnoreEntities, OutEntities);
+            return OverlapShape(SQueryShape::Sphere(0.0f), Point, ECollisionProfiles::All, IgnoreEntities, Out);
         }
 
-        int32 OverlapBox(const FVector3& Center, const FVector3& HalfExtents, const FQuat& Rotation, TSpan<const ECS::FEntity> IgnoreEntities, TSpan<ECS::FEntity> OutEntities)
+        int32 OverlapSphere(const FVector3& Center, float Radius, TSpan<const ECS::FEntity> IgnoreEntities, TSpan<SOverlapResult> Out)
         {
-            return OverlapShape(SQueryShape::Box(HalfExtents, Rotation), Center, ECollisionProfiles::All, IgnoreEntities, OutEntities);
+            return OverlapShape(SQueryShape::Sphere(Radius), Center, ECollisionProfiles::All, IgnoreEntities, Out);
+        }
+
+        int32 OverlapBox(const FVector3& Center, const FVector3& HalfExtents, const FQuat& Rotation, TSpan<const ECS::FEntity> IgnoreEntities, TSpan<SOverlapResult> Out)
+        {
+            return OverlapShape(SQueryShape::Box(HalfExtents, Rotation), Center, ECollisionProfiles::All, IgnoreEntities, Out);
         }
 
         // An entity whose ragdoll is simulating takes these as one whole ragdoll, pushes shared out by limb mass.
@@ -379,8 +413,7 @@ namespace Lumina::Physics
         virtual void DestroyBody(const SPhysicsBodyTarget& Body) {}
         virtual void SetBodyTransform(const SPhysicsBodyTarget& Body, const FVector3& Position, const FQuat& Rotation) {}
 
-        // Build a ragdoll's bodies + constraints and add them to the scene. Returns an opaque handle the
-        // caller stores; null on failure. Must be called outside the physics step (PrePhysics is fine).
+        // Must be called outside the physics step, and returns null on failure.
         virtual TSharedPtr<FPhysicsRagdollHandle> CreateRagdoll(const FRagdollDesc& Desc) = 0;
 
         // Remove a ragdoll's bodies + constraints from the scene. Safe with a null/empty handle.
@@ -392,9 +425,7 @@ namespace Lumina::Physics
         // Retunes the entity's simulating ragdoll to Asset's joint limits and soft limit springs without rebuilding it.
         virtual void RetuneRagdollLimits(ECS::FEntity Entity, const CPhysicsAsset& Asset) {}
 
-        // Constraints / joints. Create returns an opaque non-zero handle (0 == failure); the caller stores it
-        // to drive motors, query break state, or destroy the joint. Must be called outside the physics step
-        // (gameplay/PrePhysics is fine), mirroring CreateRagdoll. Default no-op.
+        // Create returns a non-zero handle, and like CreateRagdoll it must be called outside the physics step.
         virtual uint32 CreateConstraint(const SConstraintDesc& Desc) { return 0; }
         virtual void DestroyConstraint(uint32 ConstraintID) {}
         virtual void SetConstraintEnabled(uint32 ConstraintID, bool bEnabled) {}
@@ -402,8 +433,7 @@ namespace Lumina::Physics
         virtual void SetConstraintMotor(uint32 ConstraintID, EConstraintMotorMode Mode, float Target) {}
         // True once a breakable joint's applied force exceeded its BreakForce (the joint is then disabled).
         virtual bool IsConstraintBroken(uint32 ConstraintID) { return false; }
-        // Current value of a powered joint: a Hinge's angle (radians) or a Slider's position (meters). 0 for
-        // joints without a single driven scalar (Fixed/Point/Distance/Cone).
+        // A Hinge's angle in radians or a Slider's position in meters, and 0 for joints without a single driven scalar.
         virtual float GetConstraintValue(uint32 ConstraintID) { return 0.0f; }
 
     protected:

@@ -5,6 +5,7 @@
 #include "World/Entity/EntityUtils.h"
 
 #include "Renderer/ShaderHandle.h"
+#include "World/Scene/RenderScene/ImpostorPointSet.h"
 #include "Containers/HashTable.h"
 #include "Containers/Span.h"
 #include "Containers/Vector.h"
@@ -100,6 +101,7 @@ namespace Lumina
         uint32          MaterialIndex;
         EInstanceFlags  MaterialFlags;
         bool            bMaterialCastsShadows;
+        bool            bWorldPositionOffset = false;
         // Held so the release decrements the same counter the bind incremented, whatever the primitive has become since.
         bool            bSkinned = false;
 
@@ -152,13 +154,14 @@ namespace Lumina
         uint32                              ResolveHandle = INVALID_MESH_RESOLVE_HANDLE;
         uint32                              ResolveGeneration = 0;
 
-        int32                               ForcedLODIndex = -1;
         // PackCustomDepthStencil, zero when it draws no custom depth.
         uint32                              CustomDepthStencil = 0;
         EInstanceFlags                      BaseFlags = EInstanceFlags::None;
         EPrimitiveSource                    Source = EPrimitiveSource::StaticMesh;
         bool                                bCastShadow = true;
-        bool                                bCastFarShadow = false;
+        bool                                bAffectDistanceField = true;
+                bool                                bShadowWPO = true;
+        float                               WPODisableDistance = 0.0f;
         // Whether ForegroundKeys holds this primitive, so tracking it is one test rather than a search.
         bool                                bForegroundTracked = false;
 
@@ -248,6 +251,9 @@ namespace Lumina
         // Blocks of slots holding an instance streamed this frame, sorted, whose CPU spheres trail the GPU.
         const TVector<uint32>& GetStreamedBlocks() const { return StreamedBlocks; }
 
+        // While the world distance field is in use, a streamed caster also keeps its CPU sphere current, which costs a write per move.
+        void SetStreamDistanceFieldSpheres(bool bEnabled);
+
         uint32                              Num() const { return (uint32)Primitives.Num(); }
         const FScenePrimitive*              GetPrimitives() const { return Primitives.GetData(); }
         // The gather stamps per-primitive upload state through this; entries are disjoint per worker.
@@ -261,6 +267,8 @@ namespace Lumina
 
         uint32                              GetSkinnedPrimitiveCount() const { return (uint32)SkeletalIndices.Num(); }
         uint32                              GetFoliageInstanceCount() const { return FoliageInstanceCount; }
+        FImpostorPointSet&                  GetImpostorPoints() { return ImpostorPointSet; }
+        const FImpostorPointSet&            GetImpostorPoints() const { return ImpostorPointSet; }
 
         // Primitives drawn into custom depth, so the renderer adds the view and the pass only while one exists.
         uint32                              GetCustomDepthPrimitiveCount() const { return CustomDepthCount; }
@@ -311,7 +319,8 @@ namespace Lumina
             uint32 SeenSerial         = 0;
         };
 
-        // A contiguous run of retained slots the GPU scatter fills each frame, leaving unused ones inactive. Idempotent per key while the mesh is the same and Capacity fits.
+        // True when the species already holds a block of this mesh at least this large, so acquiring it allocates no slots.
+        bool GrassSpeciesFits(const FGrassSpeciesKey& Key, const CStaticMesh* Mesh, uint32 Capacity) const;
         FGrassSpeciesBinding AcquireGrassSpecies(const FGrassSpeciesKey& Key, CStaticMesh* Mesh, uint32 ResolveHandle, uint32 Capacity);
 
         // Frees every block no AcquireGrassSpecies asked for since the last call, which covers dead, disabled and grassless terrains alike.
@@ -344,7 +353,7 @@ namespace Lumina
         void BindGrassSurface(FGrassSpeciesBinding& Binding, const FResolvedMesh& Resolved);
         void ReleaseGrassBlock(const FGrassSpeciesBinding& Binding);
         uint32 TakeGrassBlock(uint32 Capacity);
-        void   AddGrassFreeBlock(uint32 Base, uint32 Count);
+        void   AddFreeSlotBlock(uint32 Base, uint32 Count);
 
         // Touches only Primitives[Index], so this half is parallel-safe; kNoBoneSlice means it needs one.
         uint32                      TouchBoneSlice(uint32 Index, uint32 Count, uint32 FrameNumber);
@@ -367,7 +376,9 @@ namespace Lumina
         const TVector<uint32>&      GetDirtyInstanceSlots() const { return DirtyInstanceSlots; }
         const TVector<uint32>&      GetDirtyStaticSlots() const   { return DirtyStaticSlots; }
         const TVector<uint32>&      GetDeactivatedSlots() const   { return DeactivatedSlots; }
-        void                        ClearDirtyInstanceSlots()     { DirtyInstanceSlots.Reset(); DirtyStaticSlots.Reset(); DeactivatedSlots.Reset(); }
+        // Slot ranges (base, count) whose device entries clear to zero, matching CPU entries that already are.
+        const TVector<FUIntVector2>& GetZeroedSlotRanges() const  { return ZeroedSlotRanges; }
+        void                        ClearDirtyInstanceSlots()     { DirtyInstanceSlots.Reset(); DirtyStaticSlots.Reset(); DeactivatedSlots.Reset(); ZeroedSlotRanges.Reset(); }
         // True after a reset or when most slots changed at once, so the whole array is re-sent.
         bool                        NeedsFullInstanceUpload() const { return bFullInstanceUpload; }
         // The partial paths send only the dirty slots, so re-sending all of them pays once nearly every slot changed.
@@ -379,6 +390,9 @@ namespace Lumina
         void                        AssignMeshletVisibility();
         uint32                      GetMeshletVisibilityExtent() const { return MeshletVisibilityExtent; }
         uint64                      GetLargestLODMeshletTotal() const { return LargestLODMeshletTotal; }
+
+        // Gives the free run at the end of the retained arrays back, so a grass or streaming peak does not hold every per-slot buffer for the session.
+        void                        TrimRetainedTail();
 
         void                        NotifyResolveTableChanged() { bResolveTableChanged = true; }
 
@@ -541,6 +555,7 @@ namespace Lumina
         // Freed, so only the active bit changes.
         TVector<uint32>                     DeactivatedSlots;
         TVector<uint32>                     DirtyStaticSlots;
+        TVector<FUIntVector2>               ZeroedSlotRanges;
         bool                                bFullInstanceUpload = true;
         // Tracked apart from the transforms, so a moving crowd does not re-send payload that never changed.
         bool                                bFullStaticUpload = true;
@@ -555,9 +570,9 @@ namespace Lumina
         uint32                              MaxSurfaceDescMeshlets = 0;
 
         void    UpdateMeshletVisibility(uint32 Slot);
-        // Meshlets in the slot's largest LOD, zero for an inactive slot.
-        uint32  LargestLODMeshletsOf(uint32 Slot) const;
-        uint32  LargestLODMeshletsOfSurface(uint32 SurfaceDescIndex) const;
+        // Meshlets the slot's visibility words cover, its whole hierarchy and run offset, zero for an inactive slot.
+        uint32  VisibilityMeshletsOf(uint32 Slot) const;
+        uint32  VisibilityMeshletsOfSurface(uint32 SurfaceDescIndex) const;
         void    ReleaseMeshletVisibility(uint32 Slot);
         void    FreeMeshletVisibilityRange(uint32 Base, uint32 Words);
 
@@ -575,7 +590,9 @@ namespace Lumina
         THashMap<FGrassSpeciesKey, FGrassSpeciesBinding> GrassSpecies;
         uint32                              GrassSlotCount = 0;
         uint32                              GrassSerial = 1;
-        TVector<FUIntVector2>               GrassFreeBlocks;
+        // Released grass blocks, kept whole for the next block and carved from the front for single slots.
+        TVector<FUIntVector2>               FreeSlotBlocks;
+        uint32                              RetainedTrimCountdown = 0;
 
         //~ Per entity
 
@@ -597,6 +614,8 @@ namespace Lumina
             uint32      StreamSlot = kNoStreamSlot;
             float       StreamRadius = 0.0f;
             FVector3    StreamCenter = FVector3(0.0f);
+            // The slot feeds the world distance field, which reads a mover's sphere from its CPU entry, so the stream keeps that one current.
+            bool        bStreamDFCaster = false;
         };
         static_assert(sizeof(FEntityRecord) == 64, "One entity per cache line, so movers on different threads never share one.");
         static_assert(kLinkedSources == 3, "FEntityRecord::Links initializer must match kLinkedSources.");
@@ -703,6 +722,11 @@ namespace Lumina
             uint32                          SyncedVersion = 0;
             // Resolve identity per TYPE, which is what the staleness sweep compares instead of per instance.
             TVector<uint64>                 TypeResolveKeys;
+            // One point per instance and one type per foliage type, held while any type draws as impostor points.
+            FImpostorPointSet::FRange       Points;
+            FImpostorPointSet::FRange       PointTypes;
+            // A reference on each point type's impostor batch, since its deferred material only shades while the batch is live.
+            TVector<uint32>                 PointBatches;
         };
 
         struct FFoliageTypeResolve
@@ -715,11 +739,15 @@ namespace Lumina
             float                               MaxDrawDistance = 0.0f;
             EInstanceFlags                      BaseFlags = EInstanceFlags::None;
             bool                                bCastShadow = true;
-            bool                                bCastFarShadow = false;
+                        bool                                bShadowWPO = true;
             bool                                bChanged = false;
             float                               ThinningStartDistance = 0.0f;
+            float                               WPODisableDistance = 0.0f;
             // Instances of this type a fresh bind gives a span, counted so its batch references are taken in one add.
             uint32                              FreshInstances = 0;
+            // Set instead of Memo on a type whose instances are impostor points, which then hold no slots.
+            const FBindingMemo*                 PointMemo = nullptr;
+            uint32                              ImpostorSurface = 0;
         };
 
         static FInstanceCullEntry   MakeFoliageCull(const FSurfaceBinding& Binding, const FFoliageTypeResolve& Type, const FVector4& WorldSphere, bool bHidden);
@@ -727,6 +755,10 @@ namespace Lumina
         static FInstanceProxy       MakeFoliageProxy(const FFoliageTypeResolve& Type, uint32 SurfaceIndex);
 
         void    SyncFoliage(ECS::FRegistry& Registry, const FSyncPools& Pools, ECS::FEntity Entity);
+        // Rewrites the entity's impostor points and types from FoliageTypeScratch, or releases them when no type draws as points.
+        void    SyncImpostorPoints(FFoliageEntityState& State, const SFoliageComponent& Foliage, uint32 EntityID);
+        FImpostorType MakeImpostorType(const FFoliageTypeResolve& Type, uint32 EntityID) const;
+        void    ReleaseImpostorPoints(FFoliageEntityState& State);
         // Fills FoliageTypeScratch for this sync and reports whether the type table changed shape.
         bool    ResolveFoliageTypes(FFoliageEntityState& State, const SFoliageComponent& Foliage, const FSyncPools& Pools, ECS::FEntity Entity);
         // Rebuilds the component's bake and sizes the instance table to it, releasing a shrunk tail.
@@ -755,6 +787,7 @@ namespace Lumina
 
         ECS::TEntityMap<FFoliageEntityState> FoliageByEntity;
         uint32                              FoliageInstanceCount = 0;
+        FImpostorPointSet                   ImpostorPointSet;
 
         TVector<FFoliageTypeResolve>        FoliageTypeScratch;
 
@@ -901,27 +934,17 @@ namespace Lumina
         // A streamed mover that stopped still holds CPU copies from before it streamed, so it takes the CPU path once.
         void CatchUpStoppedStreams(const FSyncPools& Pools, uint32 MovedStamp, bool bNoneStopped);
 
-        enum class EStreamKind : uint32
-        {
-            Skip,
-            CPUPath,
-            Stream,
-        };
-        // What the stream needs of one entity this frame, read from its record.
-        struct FStreamCacheEntry
-        {
-            EStreamKind Kind = EStreamKind::Skip;
-            uint32      Slot = kNoStreamSlot;
-            FVector3    LocalCenter = FVector3(0.0f);
-            float       Radius = 0.0f;
-        };
-        FStreamCacheEntry LookupStreamCacheEntry(ECS::FEntity Entity);
+        // The entity's record with its stream cache current, or null when nothing of it is drawn; a StreamSlot of kNoStreamSlot takes the CPU path.
+        FEntityRecord* FindStreamRecord(ECS::FEntity Entity);
         void BuildStreamCacheEntry(FEntityRecord& Record) const;
+        // Writes the record the GPU scatters, plus the CPU bounds a skeletal primitive's gather culls and picks LODs with.
+        void WriteStreamRecord(const FEntityRecord& Stamp, uint32 Record, const FMatrix4& Matrix);
         // A structural sync of the entity, which may move its slot or bounds.
         void InvalidateStreamCache(ECS::FEntity Entity);
         // Everything at once, for a rescan, a reset or a foreground toggle.
         void InvalidateAllStreamCache();
         uint32                      StreamCacheGeneration = 1;
+        bool                        bStreamDistanceFieldSpheres = false;
 
         FTransformStreamTarget      StreamTarget;
         uint32                      StreamCount = 0;
@@ -969,6 +992,8 @@ namespace Lumina
         FStreamedLists              StreamedLastFrame;
         TVector<ECS::FEntity>       StoppedScratch;
         TVector<uint32>             StreamedBlocks;
+        // One bit per cull block, which orders and dedupes StreamedBlocks in a single pass.
+        TVector<uint64>             StreamedBlockBits;
         // Drops every streamed list and record count, for a reset or a rescan that rebuilt the CPU copies.
         void ResetStreamState();
 

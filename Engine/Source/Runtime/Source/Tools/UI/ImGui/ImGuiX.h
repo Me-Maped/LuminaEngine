@@ -34,8 +34,7 @@ namespace Lumina::ImGuiX
         ImVec2          Size = ImVec2(0, 0);
     };
     
-    // Editor UI scale (monitor DPI * bias); 1.0 = none. Fonts/style track it automatically;
-    // multiply hardcoded pixel sizes by this so custom layouts stay aligned.
+    // Editor UI scale (monitor DPI times bias). Multiply hardcoded pixel sizes by this to stay aligned.
     RUNTIME_API float GetUIScale();
 
     // Set by the ImGui renderer whenever the scale is (re)resolved.
@@ -268,13 +267,10 @@ namespace Lumina::ImGuiX
     // Whether that combo's list is open, so a caller can skip gathering items nobody can see.
     RUNTIME_API bool IsSearchableComboOpen(const char* StrId);
 
-    // Searchable combo for picking an asset of (or deriving from) FilterClass from the registry.
-    // Writes the chosen asset's GUID into InOutGUID and returns true when it changes.
+    // Picks a registry asset of FilterClass into InOutGUID and returns true when it changes.
     RUNTIME_API bool AssetReferenceCombo(const char* StrId, CClass* FilterClass, FGuid& InOutGUID, const char* ItemIcon = nullptr);
 
-    // Searchable combo over every loaded class that is-a BaseClass (BaseClass itself included). Writes
-    // the pick into InOutClass and returns true when it changes. bAllowNone adds a leading "None" entry
-    // that clears the selection; without it the combo always holds a class once one is set.
+    // Picks a loaded class deriving from BaseClass into InOutClass, and bAllowNone adds an entry that clears it.
     RUNTIME_API bool ClassCombo(const char* StrId, CClass* BaseClass, CClass*& InOutClass, bool bAllowNone = true, const char* ItemIcon = nullptr);
 
     // Same, over structs that is-a BaseStruct. BaseStruct itself is listed only with bIncludeBase.
@@ -300,6 +296,10 @@ namespace Lumina::ImGuiX
     // ImGui::Image of a texture asset, wrapped in BeginTextureDisplay.
     RUNTIME_API void TextureImage(const CTexture* Texture, const ImVec2& Size);
 
+    // Draws the following images as a scene's display image, opaque, so the HDR highlight gain in its alpha reaches the window.
+    RUNTIME_API void BeginSceneDisplay(ImDrawList* DrawList);
+    RUNTIME_API void EndSceneDisplay(ImDrawList* DrawList);
+
     /**
      * Draws the following images as one slice of a Texture2DArray.
      */
@@ -308,6 +308,12 @@ namespace Lumina::ImGuiX
 
     namespace Detail
     {
+        // Mirrors IMGUI_DISPLAY_* in Includes/ImGuiCommon.slang.
+        constexpr uint32 GDisplayModeDirect = 0u;
+        constexpr uint32 GDisplayModeHDR    = 1u;
+        constexpr uint32 GDisplayModeLinear = 2u;
+        constexpr uint32 GDisplayModeScene  = 3u;
+
         // Mirrors FImGuiArgs' display fields in Includes/ImGuiCommon.slang.
         struct FImGuiDisplayState
         {
@@ -317,10 +323,7 @@ namespace Lumina::ImGuiX
             uint32 bIsArray    = 0;     // 0 = Texture2D, 1 = Texture2DArray
         };
 
-        // Marker only; never invoked. The renderer backend compares ImDrawCmd::UserCallback against
-        // this and reads ImDrawCmd::UserCallbackData as an FImGuiDisplayState. Going through the
-        // draw list rather than a global keeps the state ordered with the draws it applies to, which
-        // is what makes it correct across docked windows and secondary viewports.
+        // Marker the renderer matches on ImDrawCmd::UserCallback, and going through the draw list keeps state ordered across docked windows and viewports.
         RUNTIME_API ImDrawCallback GetDisplayStateCallback();
     }
 
@@ -341,8 +344,7 @@ namespace Lumina::ImGuiX
 
         RUNTIME_API void NotifyInternal(EType Type, FStringView Msg);
 
-        // Extra pixels to lift the notification stack above the work-area bottom edge.
-        // The editor sets this to the open footer drawer's height so toasts aren't covered.
+        // Lifts the notification stack above the bottom edge, so toasts clear the open footer drawer.
         RUNTIME_API void SetBottomInset(float Pixels);
 
         template <typename... TArgs>
@@ -404,16 +406,12 @@ namespace Lumina::ImGuiX
         }
     }
     
-    // Stand-in for the OS title bar, drawn as the main viewport's top side bar. Laid out left to right as
-    // [menu section][info section][window controls]. Every pixel not covered by a widget is reported to the
-    // platform window as caption, so the whole bar drags without any section having to reserve a gap.
+    // Stand-in for the OS title bar, and every pixel not covered by a widget is reported as caption so the whole bar drags.
     class RUNTIME_API FApplicationTitleBar
     {
     public:
 
-        // Draws the bar for this frame. Only the info section is measured by the caller; the menu section
-        // takes every pixel that is left, so long content (a project name) is bounded by the window rather
-        // than clipped against a fixed section width.
+        // Only the info section is measured by the caller, and the menu section takes all remaining width.
         void Draw(TFunction<void()>&& MenuSectionDrawFunction = TFunction<void()>(),
                   TFunction<void()>&& InfoSectionDrawFunction = TFunction<void()>(),
                   float InfoSectionWidth = 0.0f);
@@ -427,8 +425,7 @@ namespace Lumina::ImGuiX
         // Scaled width of the minimize/maximize/close cluster.
         static float GetWindowControlsWidth();
 
-        // Height of the single row the sections draw on. Content taller than a line of text (icons,
-        // images) should be centered on the section's height, since the menu cursor is not on the text row.
+        // Taller content such as icons should center on this height, since the menu cursor is not on the text row.
         static float GetContentRowHeight();
 
     private:

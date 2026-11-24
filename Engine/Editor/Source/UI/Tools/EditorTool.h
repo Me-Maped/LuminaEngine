@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "EditorAction.h"
 #include "ToolFlags.h"
@@ -9,6 +9,7 @@
 #include "Core/Object/ObjectHandleTyped.h"
 #include "Core/Reflection/Type/ObjectReferenceVisitor.h"
 #include "Events/EventProcessor.h"
+#include "Localization/Localization.h"
 #include "Memory/SmartPtr.h"
 #include "Scripting/ManagedTypeRegistry.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
@@ -354,7 +355,7 @@ namespace Lumina
         FToolWindow* CreateToolWindow(FName InName, const TFunction<void(bool)>& DrawFunction, const ImVec2& WindowPadding = ImVec2(-1, -1), bool DisableScrolling = false);
         void RemoveToolWindow(const FName& InName);
 
-        virtual void DrawHelpMenu() { DrawHelpTextRow("No Help Available", ""); }
+        virtual void DrawHelpMenu() { DrawHelpTextRow(LOC("No Help Available"), ""); }
         void DrawHelpTextRow(const char* Label, const char* Text) const;
 
         void TickEditorActions();

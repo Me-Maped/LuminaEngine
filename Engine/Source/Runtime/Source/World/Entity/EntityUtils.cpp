@@ -156,6 +156,28 @@ namespace Lumina
         }
     }
 
+    void ValidateSystemQueuesCommands()
+    {
+        const FSystemAccess* Access = GExecutingSystemAccess;
+        if (Access == nullptr || Access->bExclusive || Access->bQueuesCommands)
+        {
+            return;
+        }
+
+        static FMutex SeenMutex;
+        static THashSet<const FSystemAccess*> Seen;
+        bool bFirst = false;
+        {
+            FScopeLock Lock(SeenMutex);
+            bFirst = Seen.TryAdd(Access);
+        }
+        if (bFirst)
+        {
+            LOG_ERROR("A system that declared QueuesNoCommands queued a deferred command; remove the declaration, since systems ordered after it no longer wait for a flush.");
+            DEBUG_ASSERT(false, "System queued a command after declaring QueuesNoCommands (see log).");
+        }
+    }
+
     void ValidateNotInParallelSystem(const char* What)
     {
         const FSystemAccess* Access = GExecutingSystemAccess;
@@ -542,7 +564,7 @@ namespace Lumina::ECS::Utils
             int32 NumEntitiesSerialized = 0;
             Ar << NumEntitiesSerialized;
 
-            Registry.ForEachEntityExcept<FEditorComponent>([&](ECS::FEntity Entity)
+            Registry.ForEachEntityExcept<FEditorComponent, FTransientEntityTag>([&](ECS::FEntity Entity)
             {
                 if (ShouldWrite != nullptr && !ShouldWrite(Registry, Entity))
                 {
@@ -1658,7 +1680,7 @@ namespace Lumina::ECS::Utils
     {
         if (auto* Transform = Registry.TryGet<STransformComponent>(Entity))
         {
-            Transform->SetScale(Scale);
+            Transform->SetLocalScale(Scale);
         }
     }
 

@@ -28,6 +28,7 @@
 #include "Physics/PhysicsScene.h"
 #include "Scripting/EntityScript.h"
 #include "UI/WorldUIContext.h"
+#include "Simulation/Simulation.h"
 
 #include "Containers/Name.h"
 #include "Containers/String.h"
@@ -53,7 +54,7 @@ namespace Lumina
     class CSequenceSubsystem;
     class CNetSubsystem;
     class CUISubsystem;
-    class CDebugDrawSubsystem;
+    class CDebugSubsystem;
     class CSpawnSubsystem;
     class CEnvironmentSubsystem;
     class CSaveGameSubsystem;
@@ -213,6 +214,12 @@ namespace Lumina
         FUNCTION()
         NODISCARD bool IsGameWorld() const { return WorldType == EWorldType::Game; }
 
+        // Present in a game world while the project enables deterministic simulation, null otherwise.
+        NODISCARD FSimulation* GetSimulation() const { return Simulation.get(); }
+
+        // Runs the Simulation stage once at the given tick, for FSimulation, which decides when and how often.
+        void RunSimulationStage(float TickSeconds, uint32 Tick);
+
         FUNCTION()
         NODISCARD bool IsSimulating() const { return WorldType == EWorldType::Simulation; }
 
@@ -346,7 +353,7 @@ namespace Lumina
         FUNCTION()
         void SetEntityTag(ECS::FEntity Entity, const FName& Tag);
 
-        //~ Transforms. Getters read world space, and setters write the entity's own space under its parent.
+        //~ Transforms, read and written in world space like the component's World accessors.
 
         FUNCTION()
         FTransform GetEntityTransform(ECS::FEntity Entity);
@@ -647,7 +654,7 @@ namespace Lumina
         CUISubsystem* GetUI();
 
         FUNCTION(ScriptProperty)
-        CDebugDrawSubsystem* GetDebugDraw();
+        CDebugSubsystem* GetDebug();
 
         FUNCTION(ScriptProperty)
         CSpawnSubsystem* GetSpawner();
@@ -709,7 +716,7 @@ namespace Lumina
         // The render scene's Extract moves the queued paints into its frame snapshot.
         void DrainRenderTargetPaints(TVector<FTexturePaintOp>& OutOps);
 
-        //~ Debug drawing, where the drawing calls themselves live on GetDebugDraw.
+        //~ Debug drawing, where the drawing calls themselves live on GetDebug.
 
         NODISCARD FWorldDebugInterface* GetDebugInterface() { return &DebugInterface; }
 
@@ -752,7 +759,7 @@ namespace Lumina
 
         using FEngineSubsystems = TTuple<CPhysicsSubsystem*, CInputSubsystem*, CTweenSubsystem*, CTimerSubsystem*,
             CMessageSubsystem*, CAnimationSubsystem*, CCameraSubsystem*, CNavigationSubsystem*, CPerceptionSubsystem*,
-            CSequenceSubsystem*, CNetSubsystem*, CUISubsystem*, CDebugDrawSubsystem*, CSpawnSubsystem*,
+            CSequenceSubsystem*, CNetSubsystem*, CUISubsystem*, CDebugSubsystem*, CSpawnSubsystem*,
             CEnvironmentSubsystem*, CSaveGameSubsystem*>;
 
         template<typename T>
@@ -825,6 +832,7 @@ namespace Lumina
         FRenderCallbackList                 RenderCallbacks;
         TUniquePtr<Physics::IPhysicsScene>  PhysicsScene;
         TUniquePtr<FWorldUIContext>         UIContext;
+        TUniquePtr<FSimulation>             Simulation;
 
         //~ System schedule.
 

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <meshoptimizer.h>
 #include "Containers/Span.h"
@@ -10,7 +10,6 @@
 #include "Platform/Platform.h"
 #include "Renderer/Format.h"
 #include "Renderer/MeshDistanceField.h"
-#include "Renderer/VirtualGeometrySettings.h"
 #include "Renderer/RHITexture.h"
 #include "Assets/AssetTypes/Textures/Texture.h"
 #include "Renderer/SkeletonResource.h"
@@ -19,6 +18,7 @@ namespace Lumina
 {
     struct FAnimationResource;
     struct FMeshResource;
+    struct FMeshletData;
     struct FSkeletonResource;
     struct FSourceVertex;
     class FScopedSlowTask;
@@ -26,9 +26,7 @@ namespace Lumina
 
 namespace Lumina::Import
 {
-    // Clean a raw source string (a file stem, a DCC material name, ...) into a tidy asset name: keep
-    // [A-Za-z0-9], collapse every run of other characters (spaces, '.', '_', punctuation) into a single '_',
-    // and trim leading/trailing separators. An empty result falls back to Fallback.
+    // Keeps [A-Za-z0-9], collapses other runs into one underscore, and falls back to Fallback when empty.
     inline FString SanitizeAssetName(FStringView In, FStringView Fallback = "Asset")
     {
         FString Out;
@@ -58,8 +56,7 @@ namespace Lumina::Import
         return Out;
     }
 
-    // Sanitized name with Prefix (e.g. "T_") prepended, unless it already begins with Prefix (case-insensitive)
-    // so a re-import or an already-conventionally-named source never becomes "T_T_Foo".
+    // Skips the prefix when the name already begins with it (case-insensitive) so a re-import never becomes "T_T_Foo".
     inline FString MakeAssetName(FStringView Prefix, FStringView Raw, FStringView Fallback = "Asset")
     {
         FString Name = SanitizeAssetName(Raw, Fallback);
@@ -170,17 +167,9 @@ namespace Lumina::Import
             /** Skip heavy finalization and user transforms; dialog defers them to commit time. */
             bool bSkipFinalization  = false;
 
-            /** Seeds CMesh::DistanceFieldSettings on every mesh the import creates, and drives the
-             *  voxelization pass in FinalizeMeshImportData. Off by default: the build is the single most
-             *  expensive step of a mesh import, and most meshes never need a field. */
+            // Seeds CMesh::DistanceFieldSettings on every mesh the import creates and drives the voxelization in FinalizeMeshImportData.
             SDistanceFieldBuildSettings DistanceField;
-
-            // Seeds CMesh::VirtualGeometrySettings and picks the meshlet build GenerateMeshlets runs.
-            SVirtualGeometryBuildSettings VirtualGeometry;
         };
-
-        // Copies the virtual geometry settings onto the resource's build inputs, which is all GenerateMeshlets reads.
-        RUNTIME_API void ApplyVirtualGeometrySettings(FMeshResource& Resource, const SVirtualGeometryBuildSettings& Settings);
 
         /** One source image, deduplicated by Key during parse. Embedded payloads are a VIEW into the
          *  parser's own buffer (Bytes) so a GLB's textures are never copied; a parser that cannot keep its
@@ -199,8 +188,7 @@ namespace Lumina::Import
             // Set when a masked material reads this image's alpha, to that material's cutoff.
             float AlphaCoverageCutoff = 0.0f;
 
-            // Total basisu encode threads for this texture (includes the calling thread; 1 = single-threaded).
-            // 0 = auto. A batch cooking many textures at once passes 1 so each doesn't spawn its own pool.
+            // Total basisu encode threads including the caller, 0 for auto. Batch cooks pass 1 to avoid a pool per texture.
             uint32 EncodeThreadBudget = 0;
 
             NODISCARD bool IsEmbedded() const { return !Bytes.IsEmpty(); }
@@ -322,11 +310,6 @@ namespace Lumina::Import
 
             /** Indexed by EMaterialTextureSlot. */
             EImportSampler      Samplers[(size_t)EMaterialTextureSlot::Count] = {};
-
-            NODISCARD const FTextureUVTransform& GetUVTransform(EMaterialTextureSlot Slot) const
-            {
-                return UVTransforms[(size_t)Slot];
-            }
         };
 
         /** The resources one deduplicated source mesh produced. A source mesh whose primitives are a mix of
@@ -458,9 +441,6 @@ namespace Lumina::Import
              *  (then a slot index is itself the Materials index). */
             TVector<int16>                              MergedMaterialSlotToSource;
 
-            /** Populated by the dialog at commit; drives FinalizeMeshImportData and per-asset creation gates. */
-            FMeshImportOptions                          CommitOptions;
-
             /** Source-node count before dedup, for the import report. */
             uint32                                      SourceNodeCount = 0;
 
@@ -477,8 +457,7 @@ namespace Lumina::Import
              */
             bool                                        bHasVertexColors = false;
 
-            // Out-of-line (MeshImport.cpp): the dtor releases preview thumbnails, and all of
-            // these need member TUniquePtrs' types complete, which they are not here.
+            // Out-of-line because the member TUniquePtrs need complete types.
             RUNTIME_API FMeshImportData();
             RUNTIME_API FMeshImportData(FMeshImportData&&) noexcept;
             RUNTIME_API FMeshImportData& operator=(FMeshImportData&&) noexcept;
@@ -488,6 +467,7 @@ namespace Lumina::Import
         RUNTIME_API void OptimizeNewlyImportedMesh(FMeshResource& MeshResource, FScopedSlowTask* Progress = nullptr);
         /** When Progress is set, advances StepPerSurface of progress for each surface meshletized. */
         RUNTIME_API void GenerateMeshlets(FMeshResource& MeshResource, FScopedSlowTask* Progress = nullptr, float StepPerSurface = 0.0f);
+
         RUNTIME_API void AnalyzeMeshStatistics(FMeshResource& MeshResource, FMeshStatistics& OutMeshStats);
         // Pieces that share a source material share one merged slot, so a merge never adds slots per object.
         RUNTIME_API int16 FindOrAddMergedMaterialSlot(TVector<int16>& SlotToSource, int16 SourceMaterial);
@@ -496,8 +476,7 @@ namespace Lumina::Import
          *  When Progress is set, advances a total of ProgressBudget across the finalize pass. */
         RUNTIME_API void FinalizeMeshImportData(FMeshImportData& Data, const FMeshImportOptions& Options, FScopedSlowTask* Progress = nullptr, float ProgressBudget = 1.0f);
 
-        // Model-format parsers live in the editor's CImporter hierarchy; they pull
-        // tinyobjloader/ufbx/cgltf, which don't ship in the Game runtime.
+        // Model-format parsers live in the editor's CImporter hierarchy because tinyobjloader, ufbx and cgltf don't ship in the Game runtime.
     }
 
 }

@@ -175,21 +175,10 @@ namespace Lumina
     }
 
     // Read live from the project settings CDO, like SSR and the froxel grid; there is no per-world copy.
-    inline ESMAAMode GetSMAAMode()
-    {
-        const CRendererSettings* Settings = GetDefault<CRendererSettings>();
-        return Settings != nullptr ? Settings->SMAAMode : ESMAAMode::Off;
-    }
-
-    // Quality is only the edge-detection preset now, so a legacy Off here means the default, not disabled.
     inline ESMAAQuality GetSMAAQuality()
     {
         const CRendererSettings* Settings = GetDefault<CRendererSettings>();
-        if (Settings == nullptr || Settings->SMAAQuality == ESMAAQuality::Off)
-        {
-            return ESMAAQuality::High;
-        }
-        return Settings->SMAAQuality;
+        return Settings != nullptr ? Settings->SMAAQuality : ESMAAQuality::High;
     }
 
     inline bool IsSMAADepthEdgesEnabled()
@@ -220,27 +209,21 @@ namespace Lumina
 
     struct FSunShadowFilter
     {
-        uint32 Taps;
-        float  RadiusTexels;  // in texels of the nearest cascade
+        float  RadiusTexels;  // in virtual shadow texels, which are about a screen pixel each
         uint32 ContactSteps;  // the sun's screen-space contact march, 0 when it is off
-        uint32 BlockerTaps;   // contact-hardening blocker search on the near cascades, 0 when it is off
     };
 
-    // The narrowest kernel any quality uses, which contact hardening never goes below or the edge shows texel stairs.
-    inline constexpr float GSunShadowMinFilterRadiusTexels = 2.0f;
-
-    // Godot's Soft Low, Medium, High and Ultra directional filters.
     inline FSunShadowFilter GetSunShadowFilter()
     {
         const CRendererSettings* Settings = GetDefault<CRendererSettings>();
         switch (Settings != nullptr ? Settings->ShadowQuality : EShadowQuality::High)
         {
-        case EShadowQuality::Low:    return { 4u,  GSunShadowMinFilterRadiusTexels, 0u,  0u };
-        case EShadowQuality::Medium: return { 8u,  GSunShadowMinFilterRadiusTexels, 8u,  0u };
-        case EShadowQuality::High:   return { 16u, 3.0f, 12u, 8u };
-        case EShadowQuality::Ultra:  return { 32u, 4.0f, 16u, 12u };
+        case EShadowQuality::Low:    return { 0.0f, 0u };
+        case EShadowQuality::Medium: return { 1.0f, 8u };
+        case EShadowQuality::High:   return { 1.0f, 12u };
+        case EShadowQuality::Ultra:  return { 1.5f, 16u };
         }
-        return { 16u, 3.0f, 12u, 8u };
+        return { 1.0f, 12u };
     }
 
     inline ESSRQuality GetSSRQuality()

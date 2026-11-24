@@ -40,7 +40,7 @@ struct FGrassScatterPushConstants
     float  TerrainNormalDistance;
 
     // Constant for the whole species, one mesh and one material, so the CPU interns these once.
-    uint   _PadInstanceSlotBase;
+    uint   LayerCount;
     uint   DrawIDAndFlags;
     uint   SurfaceDescIndex;
     uint   MeshletHeaderSlot;
@@ -116,7 +116,7 @@ void main(uint3 Tid : SV_DispatchThreadID)
         return;
     }
 
-    // Keeping (F/d)^2 of the blades holds their density on screen roughly constant, since a patch's projected area falls the same way.
+    // Keeping (F/d)^2 of the blades holds their density on screen roughly constant, since a blade's projected area falls the same way.
     float Keep = 1.0;
     float KeepFade = 1.0;
     if (P->FullDensityDistance > 0.0 && CameraDistance > P->FullDensityDistance)
@@ -139,17 +139,29 @@ void main(uint3 Tid : SV_DispatchThreadID)
     // Terrain vertex i sits on texel center i, so the lattice maps onto centers exactly as the terrain draws it.
     const float2 HeightUV = (Local * float(P->Resolution - 1u) + 0.5) / float(P->Resolution);
 
-    const float Weight = P->LayerWeights.SampleLevel(Samplers::LinearClamp, float3(HeightUV, (float)P->LayerIndex), 0).r;
+    float Weight = P->LayerWeights.SampleLevel(Samplers::LinearClamp, float3(HeightUV, (float)P->LayerIndex), 0).r;
+    // Layer 0 fills whatever the others leave unpainted, as the terrain material shades it, so a fresh terrain grows its base grass.
+    if (P->LayerIndex == 0u)
+    {
+        float Painted = 0.0;
+        for (uint Layer = 1u; Layer < P->LayerCount; ++Layer)
+        {
+            Painted += P->LayerWeights.SampleLevel(Samplers::LinearClamp, float3(HeightUV, (float)Layer), 0).r;
+        }
+        Weight = max(Weight, 1.0 - Painted);
+    }
     if (Weight < P->MinWeight)
     {
         return;
     }
 
     // Stochastic thinning by weight, so coverage fades with the paint instead of ending on a hard edge.
-    if (Hash01(CellHash * 3u + 2u) > Weight)
+    const float WeightHash = Hash01(CellHash * 3u + 2u);
+    if (WeightHash > Weight)
     {
         return;
     }
+    const float WeightFade = ThinningFade(saturate(Weight), WeightHash);
 
     // Packed as world X and Z like the terrain vertex shader reads it, with Y rebuilt from unit length.
     const float2 PackedXZ = P->NormalMap.SampleLevel(Samplers::LinearClamp, HeightUV, 0).rg * 2.0 - 1.0;
@@ -168,14 +180,15 @@ void main(uint3 Tid : SV_DispatchThreadID)
     // Survivors grow to cover for the thinned ones, and everything shrinks away over the last stretch so the edge never pops.
     const float Coverage = min(rsqrt(Keep), kMaxThinnedScale);
     const float EdgeFade = 1.0 - smoothstep(P->Radius * kEdgeFadeStart, P->Radius, CameraDistance);
-    const float Scale = lerp(P->ScaleMin, P->ScaleMax, Hash01(CellHash ^ 0x9E3779B9u)) * Coverage * EdgeFade * KeepFade;
+    const float Scale = lerp(P->ScaleMin, P->ScaleMax, Hash01(CellHash ^ 0x9E3779B9u)) * Coverage * EdgeFade * KeepFade * WeightFade;
     if (Scale <= 0.001)
     {
         return;
     }
 
     // Yaw about world up, then tilted toward the surface normal by AlignToNormal.
-    const float Yaw = P->bRandomYaw != 0u ? Hash01(CellHash ^ 0x85EBCA6Bu) * TWO_PI : 0.0;
+    const float YawTurn = Hash01(CellHash ^ 0x85EBCA6Bu);
+    const float Yaw = P->bRandomYaw == 0u ? 0.0 : YawTurn * TWO_PI;
     const float4 YawQuat = float4(0.0, sin(Yaw * 0.5), 0.0, cos(Yaw * 0.5));
 
     const float3 Up = float3(0.0, 1.0, 0.0);
@@ -217,7 +230,7 @@ void main(uint3 Tid : SV_DispatchThreadID)
     Cull.DrawIDAndFlags   = P->DrawIDAndFlags | ((uint)EInstanceFlags::Active << 16);
     Cull.SurfaceDescIndex = P->SurfaceDescIndex;
     Cull.MaxDrawDistance  = P->MaxDrawDistance;
-    Cull.LODAndThinning   = 0u;
+    Cull.FlagsAndThinning = 0u;
     (P->OutCullEntries).Set(Slot, Cull);
 
     FInstanceStatic Static;
@@ -233,5 +246,9 @@ void main(uint3 Tid : SV_DispatchThreadID)
     Static.SkinnedVertexBase       = kNoPreSkinBase;
     Static.MeshletVisibilityBase   = kNoMeshletVisibility;
     Static.RenderLayers            = RENDER_LAYER_DEFAULT_MASK;
+    Static.WPODisableDistance      = 0.0;
+    Static.Reserved0               = 0u;
+    Static.Reserved1               = 0u;
+    Static.Reserved2               = 0u;
     (P->OutStatic).Set(Slot, Static);
 }

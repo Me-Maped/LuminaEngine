@@ -12,6 +12,7 @@ namespace Lumina
 
         // The bounds build reads the retained slots this sync rewrites.
         JoinInstanceBlockBounds();
+        ScenePrimitives.TrimRetainedTail();
 
         ScenePrimitives.SetForegroundView(ExtractFrame->ViewVolume, ExtractFrame->ViewLayers);
 
@@ -96,7 +97,10 @@ namespace Lumina
         FFrameData::FGeometry::FRetainedUpload& Out = ExtractFrame->Geometry.RetainedUpload;
 
         // Ahead of everything below, since a base that moves marks its slot static-dirty.
-        ScenePrimitives.AssignMeshletVisibility();
+        {
+            LUMINA_PROFILE_SECTION("Publish/Meshlet Visibility");
+            ScenePrimitives.AssignMeshletVisibility();
+        }
         Out.MeshletVisibilityWords = ScenePrimitives.GetMeshletVisibilityExtent();
         Out.LargestLODMeshlets     = ScenePrimitives.GetLargestLODMeshletTotal();
         Out.GrassMeshlets          = ScenePrimitives.GetGrassMeshletDemand();
@@ -108,6 +112,7 @@ namespace Lumina
         Out.DirtySlots.Reset();
         Out.DirtyStaticSlots.Reset();
         Out.DeactivatedSlots.Reset();
+        Out.ZeroedSlotRanges.Reset();
 
         const uint32 DeviceCapacity = RetainedDeviceCapacity.load(std::memory_order_acquire);
         // Growth keeps the device contents, so only a device holding nothing valid needs everything again.
@@ -119,6 +124,7 @@ namespace Lumina
 
         if (!Out.bFull || !Out.bFullStatic)
         {
+            LUMINA_PROFILE_SECTION("Publish/Collect Dirty Slots");
             // A bitmap over the slot range yields the sorted, unique list in linear time, where a sort did not.
             DirtySlotBits.SetNum(IntCastChecked<int32>(RenderUtils::GetGroupCount(SlotCount, 64u)));
             auto Collect = [this, SlotCount](const TVector<uint32>& In, TVector<uint32>& OutList)
@@ -192,6 +198,13 @@ namespace Lumina
                     Out.DeactivatedSlots.Add(Slot);
                 }
             }
+            for (const FUIntVector2& Range : ScenePrimitives.GetZeroedSlotRanges())
+            {
+                if (Range.x < SlotCount && Range.y != 0u)
+                {
+                    Out.ZeroedSlotRanges.Emplace(Range.x, Math::Min(Range.y, SlotCount - Range.x));
+                }
+            }
         }
 
         // Records sit at the front of the slot's buffer and their slots after room for every record it can hold.
@@ -210,6 +223,27 @@ namespace Lumina
         Out.SurfaceDescCount        = ScenePrimitives.GetSurfaceDescCount();
         Out.bSurfaceDescsChanged    = ScenePrimitives.AreSurfaceDescsDirty() || Out.bFull || Out.bFullStatic;
         Out.MaxSurfaceDescMeshlets  = ScenePrimitives.GetMaxSurfaceDescMeshlets();
+
+        {
+            LUMINA_PROFILE_SECTION("Publish/Impostor Points");
+            FImpostorPointSet& Points = ScenePrimitives.GetImpostorPoints();
+            Points.RefreshBlockBounds();
+            Points.TakeDirty(Out.ImpostorPointRuns, Out.ImpostorTypeRuns, Out.ImpostorBlockRuns);
+            Out.ImpostorPointCount = Points.GetPointCount();
+            Out.ImpostorTypeCount  = Points.GetTypeCount();
+            Out.ImpostorBlockCount = Points.GetBlockCount();
+            // Buffers that lost their contents take everything, since the runs only name what changed.
+            if (bImpostorResendAll.exchange(false, std::memory_order_acq_rel))
+            {
+                Out.ImpostorPointRuns.Reset();
+                Out.ImpostorTypeRuns.Reset();
+                Out.ImpostorBlockRuns.Reset();
+                Out.ImpostorPointRuns.Emplace(0u, Out.ImpostorPointCount);
+                Out.ImpostorTypeRuns.Emplace(0u, Out.ImpostorTypeCount);
+                Out.ImpostorBlockRuns.Emplace(0u, Out.ImpostorBlockCount);
+            }
+            LUMINA_PROFILE_VALUE("Impostor/Points", (int64)Points.GetLivePointCount());
+        }
 
         // Channel consumed, since the decisions above are now owned by this frame.
         ScenePrimitives.ClearDirtyInstanceSlots();

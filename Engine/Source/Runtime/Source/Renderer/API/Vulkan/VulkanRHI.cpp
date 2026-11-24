@@ -12,6 +12,9 @@
 #include "Core/Console/ConsoleVariable.h"
 #include "Renderer/RHIUpload.h"
 #include "Core/Threading/Atomic.h"
+#include "Core/Threading/Sync.h"
+#include "Core/Threading/Thread.h"
+#include "Platform/Time/PlatformTime.h"
 #include "Core/Windows/GLFWInclude.h"
 #include "Memory/SmartPtr.h"
 #include "Memory/Allocators/Allocator.h"
@@ -22,7 +25,6 @@
 #include "Renderer/API/Vulkan/VulkanMacros.h"
 #include "Renderer/API/Vulkan/VulkanAllocator.h"
 #include "Renderer/RHINative.h"
-#include "Renderer/RenderDocImpl.h"
 #include "Renderer/ErrorHandling/Vulkan/VulkanCrashTracker.h"
 #include "Renderer/ErrorHandling/Vulkan/VulkanBreadcrumbs.h"
 #include "Platform/CrashHandler.h"
@@ -526,7 +528,6 @@ namespace Lumina::RHI
     };
     
     // A live slot's new view, held until that copy's frame slot has waited out every reader of the old one.
-    // A sampled image slot, or with Sampler set a sampler slot, waiting for its frame copy to go idle.
     struct FDeferredSampledWrite
     {
         uint32      Slot = kInvalidHeapSlot;
@@ -579,11 +580,16 @@ namespace Lumina::RHI
     static constexpr uint32 kMaxGPUZoneDepth = 16;
 #endif
 
+#if defined(LUMINA_WITH_GPU_PROFILING)
+    static constexpr uint32 kMaxProfilerDepth = 32;
+#endif
+
     struct FCommandList
     {
         VkCommandBuffer CommandBuffer;
         VkCommandPool   Pool;
         GPUPtr          CurrentIndexBuffer;
+        uint64          CurrentIndexSize;
         VkIndexType     CurrentIndexType;
         VkViewport      CurrentViewport;
         VkRect2D        CurrentScissor;
@@ -598,6 +604,12 @@ namespace Lumina::RHI
 
         uint32 BreadcrumbStack[FGpuBreadcrumbs::MaxDepth] = {};
         uint32 BreadcrumbDepth = 0;
+
+#if defined(LUMINA_WITH_GPU_PROFILING)
+        // Per list, so scopes recorded in parallel on other lists or queues never nest under this one's.
+        int32  ProfilerScopes[kMaxProfilerDepth] = {};
+        uint32 ProfilerDepth = 0;
+#endif
 
         // Tracked per list, since a submitted list is not reset until its frame slot comes back around.
         bool bOpen = false;
@@ -614,6 +626,7 @@ namespace Lumina::RHI
     static void ForgetBoundState(FCommandList& CommandList)
     {
         CommandList.CurrentIndexBuffer        = 0;
+        CommandList.CurrentIndexSize          = 0;
         CommandList.CurrentIndexType          = VK_INDEX_TYPE_UINT32;
         CommandList.CurrentViewport           = kUnsetViewport;
         CommandList.CurrentScissor            = kUnsetScissor;
@@ -677,6 +690,8 @@ namespace Lumina::RHI
         uint32                 CurrentImageIndex;
         VkSemaphore            CurrentAcquire;
         FPresentSync           SubmittedSync;      // signaled by the frame submit, waited by the present after it
+        bool                   bHDRRequested = false;
+        bool                   bHDR          = false;   // built as HDR10, which a surface without it never is
     };
 
     // What a GPU copy crosses, since host-sourced bytes are the ones that cost PCIe bandwidth every frame.
@@ -704,11 +719,16 @@ namespace Lumina::RHI
         bool                            bDeviceAddressCommands = false;
         // Present fences retire an old swapchain without idling every queue on the device.
         bool                            bSwapchainMaintenance1 = false;
+        bool                            bSwapchainColorSpace = false;
         // The CPU can write straight into an optimally-tiled image, with no staging buffer and no copy pass.
         bool                            bHostImageCopy = false;
         bool                            bHostQueryReset = false;
+        // Per EQueueType, from the family it resolves to, since a transfer-only family may report no timestamp bits.
+        bool                            bQueueTimestamps[3] = {};
+        bool                            bQueueResetsQueries[3] = {};
         // A mesh shader may write its viewport index, which lets one draw cover several shadow tiles.
         bool                            bShaderOutputViewportIndex = false;
+        bool                            bBufferInt64Atomics = false;
 #if USING(WITH_EDITOR)
         bool                            bPipelineStats = false;
         // Capture the driver's internal representations too, which costs pipeline creation time.
@@ -755,8 +775,7 @@ namespace Lumina::RHI
         // Published after the reset, so a concurrent submit never records into the ring being reset.
         TAtomic<uint32>                 CurrentRetireSlot{0};
 
-        // Pages and dedicated blocks, sorted by device address for interior-pointer resolution.
-        // Both address-sorted. Malloc walks only the pages, so dedicated blocks never lengthen that scan.
+        // Both lists are sorted by device address, and Malloc walks only the pages so dedicated blocks never lengthen that scan.
         TVector<FMemoryBlock>           MemoryPages;
         TVector<FMemoryBlock>           DedicatedBlocks;
 
@@ -823,6 +842,26 @@ namespace Lumina::RHI
         TAtomic<uint32>                 PendingImageInits{0};
 
 
+        // Driver frees of whole blocks and images run here, since one large block takes the driver tens of milliseconds to free.
+        struct FReleaseWorker
+        {
+            struct FItem
+            {
+                VkBuffer      Buffer     = VK_NULL_HANDLE;
+                VkImage       Image      = VK_NULL_HANDLE;
+                VkImageView   View       = VK_NULL_HANDLE;
+                VmaAllocation Allocation = nullptr;
+            };
+            TVector<FItem>     Items;
+            FMutex             Mutex;
+            FConditionVariable Wake;
+            FThread            Thread;
+            TAtomic<bool>      bStop{false};
+            // When the driver last created a buffer block or an image, since a driver free beside an allocation stalls them both.
+            TAtomic<uint64>    LastAllocCycles{0};
+        };
+        FReleaseWorker                  Release;
+
         FSharedMutex                    MemoryMutex;
         TArray<FMutex, 3>               QueueMutexes;
         TArray<uint32, 3>               QueueLockIndex;
@@ -835,6 +874,102 @@ namespace Lumina::RHI
     };
 
     static FDeviceImpl* GDevice;
+
+    static void ReleaseNow(const FDeviceImpl::FReleaseWorker::FItem& Item)
+    {
+        if (Item.View != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(GDevice->Device, Item.View, Vulkan::HostAllocator());
+        }
+        if (Item.Image != VK_NULL_HANDLE)
+        {
+            vmaDestroyImage(GDevice->Allocator, Item.Image, Item.Allocation);
+        }
+        else if (Item.Buffer != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(GDevice->Allocator, Item.Buffer, Item.Allocation);
+        }
+    }
+
+    // How long the driver goes without creating memory before the worker hands it the next free.
+    static constexpr double kReleaseQuietSeconds = 0.25;
+    static constexpr uint32 kReleaseQuietPollMs  = 10;
+    // The longest a batch waits for quiet, so steady texture streaming cannot hold freed memory forever.
+    static constexpr double kReleaseMaxHoldSeconds = 2.0;
+
+    // Stamped on every buffer block or image creation, which the release worker waits out.
+    static void NoteDriverAllocation()
+    {
+        GDevice->Release.LastAllocCycles.store(PlatformTime::Cycles(), std::memory_order_relaxed);
+    }
+
+    static void StartReleaseWorker()
+    {
+        FDeviceImpl::FReleaseWorker& Release = GDevice->Release;
+        Release.bStop  = false;
+        Release.Thread = FThread(FThreadOptions{ .Name = "RHI Release", .Priority = EThreadPriority::Background }, [&Release]()
+        {
+            TVector<FDeviceImpl::FReleaseWorker::FItem> Batch;
+            for (;;)
+            {
+                {
+                    FUniqueLock Lock(Release.Mutex);
+                    Release.Wake.Wait(Lock, [&Release] { return Release.bStop || !Release.Items.IsEmpty(); });
+                    if (Release.Items.IsEmpty())
+                    {
+                        return;
+                    }
+                    Batch = Move(Release.Items);
+                    Release.Items.Reset();
+                }
+
+                const uint64 BatchStart = PlatformTime::Cycles();
+                for (const FDeviceImpl::FReleaseWorker::FItem& Item : Batch)
+                {
+                    // Held while the frame is allocating, so a scene load's new buffers never queue behind an old one's free in the driver.
+                    while (!Release.bStop
+                        && PlatformTime::ToSeconds(PlatformTime::Cycles() - Release.LastAllocCycles.load(std::memory_order_relaxed)) < kReleaseQuietSeconds
+                        && PlatformTime::ToSeconds(PlatformTime::Cycles() - BatchStart) < kReleaseMaxHoldSeconds)
+                    {
+                        PlatformTime::SleepMilliseconds(kReleaseQuietPollMs);
+                    }
+                    LUMINA_PROFILE_SECTION("RHI::ReleaseMemory");
+                    ReleaseNow(Item);
+                }
+            }
+        });
+    }
+
+    // Frees inline once the worker has stopped, so a release during teardown still reaches the driver.
+    static void QueueRelease(const FDeviceImpl::FReleaseWorker::FItem& Item)
+    {
+        FDeviceImpl::FReleaseWorker& Release = GDevice->Release;
+        {
+            FScopeLock Lock(Release.Mutex);
+            if (Release.Thread.Joinable() && !Release.bStop)
+            {
+                Release.Items.Add(Item);
+                Release.Wake.NotifyOne();
+                return;
+            }
+        }
+        ReleaseNow(Item);
+    }
+
+    // Drains what is queued before returning, since the allocator the frees go through is destroyed next.
+    static void StopReleaseWorker()
+    {
+        FDeviceImpl::FReleaseWorker& Release = GDevice->Release;
+        {
+            FScopeLock Lock(Release.Mutex);
+            Release.bStop = true;
+            Release.Wake.NotifyAll();
+        }
+        if (Release.Thread.Joinable())
+        {
+            Release.Thread.Join();
+        }
+    }
 
     static VkPipelineCreateFlags PipelineCreateFlags();
 
@@ -899,18 +1034,32 @@ namespace Lumina::RHI
     // Set during instance creation; swapchain maintenance1 cannot be enabled without it.
     static bool GSurfaceMaintenance1Available = false;
 
-    // Resolve a GPUPtr (possibly interior) to its owning allocation. Caller holds MemoryMutex (shared).
     // Bumped under the write lock on every insert, erase and clear, which is what can move a cached block.
     static TAtomic<uint64> GMemoryBlockGeneration{ 1 };
 
+    // A copy rather than a pointer into the ledger, so a hit reads nothing the write lock guards.
     struct FBlockCacheEntry
     {
-        const FMemoryBlock* Block      = nullptr;
-        uint64              Generation = 0;
+        GPUPtr   Device     = 0;
+        uint64   Size       = 0;
+        VkBuffer Buffer     = VK_NULL_HANDLE;
+        uint64   Generation = 0;
     };
 
     // Indirect draws and staged copies resolve the same few buffers every call, so a tiny cache nearly always hits.
     static constexpr uint32 kBlockCacheSize = 4;
+
+    struct FBlockCache
+    {
+        FBlockCacheEntry Entries[kBlockCacheSize];
+        uint32           NextSlot = 0;
+    };
+
+    static FBlockCache& ThreadBlockCache()
+    {
+        static thread_local FBlockCache Cache;
+        return Cache;
+    }
 
     static const FMemoryBlock* SearchSorted(const TVector<FMemoryBlock>& Blocks, GPUPtr Ptr)
     {
@@ -927,6 +1076,7 @@ namespace Lumina::RHI
         return It;
     }
 
+    // Caller holds MemoryMutex, shared or exclusive.
     static const FMemoryBlock* SearchMemory(GPUPtr Ptr)
     {
         const FMemoryBlock* Found = SearchSorted(GDevice->MemoryPages, Ptr);
@@ -954,62 +1104,68 @@ namespace Lumina::RHI
         return VkStridedDeviceAddressRangeKHR{ .address = (VkDeviceAddress)Ptr, .size = Size, .stride = Stride };
     }
 
-    static const FMemoryBlock* FindMemory(GPUPtr Ptr)
-    {
-        static thread_local FBlockCacheEntry Cache[kBlockCacheSize];
-        static thread_local uint32           NextSlot = 0;
-
-        // A matching generation is what makes the cached pointer safe to dereference at all.
-        const uint64 Generation = GMemoryBlockGeneration.load(std::memory_order_acquire);
-
-        for (const FBlockCacheEntry& Entry : Cache)
-        {
-            // Underflow when Ptr is below the base wraps past Size, so one compare covers both ends.
-            if (Entry.Generation == Generation && Entry.Block != nullptr
-                && Ptr - Entry.Block->Device < Entry.Block->Size)
-            {
-                return Entry.Block;
-            }
-        }
-
-        const FMemoryBlock* Found = SearchMemory(Ptr);
-        if (Found != nullptr)
-        {
-            Cache[NextSlot] = FBlockCacheEntry{ Found, Generation };
-            NextSlot = (NextSlot + 1u) % kBlockCacheSize;
-        }
-
-        return Found;
-    }
-
     struct FBufferRange
     {
         VkBuffer     Buffer;
         VkDeviceSize Offset;
     };
 
+    // Lock-free. A block that moved or died since it was cached bumped the generation, and a pointer into a freed block is the caller's bug either way.
+    static bool ResolveCachedBuffer(GPUPtr Ptr, FBufferRange& Out)
+    {
+        const uint64 Generation = GMemoryBlockGeneration.load(std::memory_order_acquire);
+        for (const FBlockCacheEntry& Entry : ThreadBlockCache().Entries)
+        {
+            // Underflow when Ptr is below the base wraps past Size, so one compare covers both ends.
+            if (Entry.Generation == Generation && Ptr - Entry.Device < Entry.Size)
+            {
+                Out = { Entry.Buffer, Ptr - Entry.Device };
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Caller holds MemoryMutex shared.
     static bool ResolveBufferLocked(GPUPtr Ptr, FBufferRange& Out)
     {
-        const FMemoryBlock* Block = FindMemory(Ptr);
+        if (ResolveCachedBuffer(Ptr, Out))
+        {
+            return true;
+        }
+
+        const FMemoryBlock* Block = SearchMemory(Ptr);
         if (Block == nullptr)
         {
             return false;
         }
+
+        // Stamped with the generation read under the lock, so no writer can have moved the block in between.
+        FBlockCache& Cache = ThreadBlockCache();
+        Cache.Entries[Cache.NextSlot] = FBlockCacheEntry{ Block->Device, Block->Size, Block->Buffer,
+                                                          GMemoryBlockGeneration.load(std::memory_order_relaxed) };
+        Cache.NextSlot = (Cache.NextSlot + 1u) % kBlockCacheSize;
+
         Out = { Block->Buffer, Ptr - Block->Device };
         return true;
     }
 
     static bool ResolveBuffer(GPUPtr Ptr, FBufferRange& Out)
     {
-        LUMINA_PROFILE_SCOPE();
+        if (ResolveCachedBuffer(Ptr, Out))
+        {
+            return true;
+        }
         FReadScopeLock Lock(GDevice->MemoryMutex);
         return ResolveBufferLocked(Ptr, Out);
     }
 
     static bool ResolveBuffers(GPUPtr A, FBufferRange& OutA, GPUPtr B, FBufferRange& OutB)
     {
-        LUMINA_PROFILE_SCOPE();
+        if (ResolveCachedBuffer(A, OutA) && ResolveCachedBuffer(B, OutB))
+        {
+            return true;
+        }
         FReadScopeLock Lock(GDevice->MemoryMutex);
         return ResolveBufferLocked(A, OutA) && ResolveBufferLocked(B, OutB);
     }
@@ -1092,7 +1248,7 @@ namespace Lumina::RHI
     // Caller holds MemoryMutex shared.
     static bool IsHostMemoryLocked(GPUPtr Ptr)
     {
-        const FMemoryBlock* Block = FindMemory(Ptr);
+        const FMemoryBlock* Block = SearchMemory(Ptr);
         return Block != nullptr && Block->MemType != EMemoryType::GPUOnly;
     }
 
@@ -1348,6 +1504,94 @@ namespace Lumina::RHI
         return DeviceLocal;
     }
 
+    template <typename TFeatures>
+    struct TRequiredFeature
+    {
+        const char*             Name;
+        VkBool32 TFeatures::*   Member;
+    };
+
+#define LUMINA_REQUIRED_FEATURE(Struct, Field) TRequiredFeature<Struct>{ #Field, &Struct::Field }
+
+    // Selection turns down a device missing any of these, and CreateDevice enables every one.
+    constexpr TRequiredFeature<VkPhysicalDeviceFeatures> kRequiredFeatures10[] =
+    {
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, fragmentStoresAndAtomics),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, samplerAnisotropy),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, sampleRateShading),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, fillModeNonSolid),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, imageCubeArray),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, multiViewport),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, multiDrawIndirect),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, shaderStorageImageWriteWithoutFormat),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, shaderStorageImageReadWithoutFormat),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, shaderStorageImageExtendedFormats),
+        // Gathers carrying a constant offset, which is how the GTAO passes read a whole quad in one tap.
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, shaderImageGatherExtended),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, drawIndirectFirstInstance),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, vertexPipelineStoresAndAtomics),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, shaderInt16),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, shaderInt64),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, independentBlend),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, pipelineStatisticsQuery),
+        // Virtual shadow meshlets clip their raster to the drawn pages under them.
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceFeatures, shaderClipDistance),
+    };
+
+    constexpr TRequiredFeature<VkPhysicalDeviceVulkan11Features> kRequiredFeatures11[] =
+    {
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan11Features, shaderDrawParameters),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan11Features, multiview),
+    };
+
+    constexpr TRequiredFeature<VkPhysicalDeviceVulkan12Features> kRequiredFeatures12[] =
+    {
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan12Features, timelineSemaphore),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan12Features, drawIndirectCount),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan12Features, bufferDeviceAddress),
+        // Slang lays out pointer-reached structs scalar-packed (a float3 at offset 4), which std430 forbids without this.
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan12Features, scalarBlockLayout),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan12Features, descriptorIndexing),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan12Features, descriptorBindingPartiallyBound),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan12Features, descriptorBindingSampledImageUpdateAfterBind),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan12Features, descriptorBindingStorageImageUpdateAfterBind),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan12Features, descriptorBindingUpdateUnusedWhilePending),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan12Features, samplerFilterMinmax),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan12Features, runtimeDescriptorArray),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan12Features, shaderInt8),
+    };
+
+    constexpr TRequiredFeature<VkPhysicalDeviceVulkan13Features> kRequiredFeatures13[] =
+    {
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan13Features, dynamicRendering),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan13Features, synchronization2),
+        LUMINA_REQUIRED_FEATURE(VkPhysicalDeviceVulkan13Features, shaderDemoteToHelperInvocation),
+    };
+
+#undef LUMINA_REQUIRED_FEATURE
+
+    template <typename TFeatures, size_t N>
+    static void EnableRequiredFeatures(TFeatures& Enabled, const TRequiredFeature<TFeatures> (&Required)[N])
+    {
+        for (const TRequiredFeature<TFeatures>& Feature : Required)
+        {
+            Enabled.*Feature.Member = VK_TRUE;
+        }
+    }
+
+    template <typename TFeatures, size_t N>
+    static void AppendMissingFeatures(const TFeatures& Supported, const TRequiredFeature<TFeatures> (&Required)[N], FString& OutMissing)
+    {
+        for (const TRequiredFeature<TFeatures>& Feature : Required)
+        {
+            if (Supported.*Feature.Member != VK_TRUE)
+            {
+                OutMissing += OutMissing.IsEmpty() ? "" : ", ";
+                OutMissing += Feature.Name;
+            }
+        }
+    }
+
     struct FDeviceSuitability
     {
         bool    bSuitable = false;
@@ -1428,6 +1672,25 @@ namespace Lumina::RHI
             if (!bHasGraphics)
             {
                 Result.Reason = "exposes no graphics queue family";
+                return Result;
+            }
+        }
+
+        {
+            VkPhysicalDeviceVulkan13Features Supported13{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
+            VkPhysicalDeviceVulkan12Features Supported12{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, .pNext = &Supported13 };
+            VkPhysicalDeviceVulkan11Features Supported11{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, .pNext = &Supported12 };
+            VkPhysicalDeviceFeatures2        Supported2 { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,          .pNext = &Supported11 };
+            vkGetPhysicalDeviceFeatures2(Gpu, &Supported2);
+
+            FString Missing;
+            AppendMissingFeatures(Supported2.features, kRequiredFeatures10, Missing);
+            AppendMissingFeatures(Supported11, kRequiredFeatures11, Missing);
+            AppendMissingFeatures(Supported12, kRequiredFeatures12, Missing);
+            AppendMissingFeatures(Supported13, kRequiredFeatures13, Missing);
+            if (!Missing.IsEmpty())
+            {
+                Result.Reason = FString("does not support the Vulkan features ") + Missing;
                 return Result;
             }
         }
@@ -1960,8 +2223,7 @@ namespace Lumina::RHI
     vkCreateDescriptorSetLayout(*GDevice, &LayoutInfo, Vulkan::HostAllocator(), &GDevice->DescriptorLayout);
     vkCreateDescriptorPool(*GDevice, &PoolInfo, Vulkan::HostAllocator(), &GDevice->DescriptorPool);
     
-    // Two slots, written independently. Offset 0 is the per-draw args block; offset 8 is the scene
-    // root, which only CmdSetSceneRoot touches. Mirrors FRHIRoot in GlobalRHI.slang.
+    // Offset 8 is the scene root that only CmdSetSceneRoot touches. Mirrors FRHIRoot in GlobalRHI.slang.
     VkPushConstantRange PushConstantRanges
     {
         .stageFlags = VK_SHADER_STAGE_ALL,
@@ -2139,14 +2401,16 @@ namespace Lumina::RHI
     
     GDevice->Textures.SetDtor([](FTexture* Texture)
     {
-        if (Texture->DefaultImageView != VK_NULL_HANDLE)
-        {
-            vkDestroyImageView(*GDevice, Texture->DefaultImageView, Vulkan::HostAllocator());
-        }
-
+        FDeviceImpl::FReleaseWorker::FItem Item;
+        Item.View = Texture->DefaultImageView;
         if (Texture->Allocation != nullptr)
         {
-            vmaDestroyImage(GDevice->Allocator, Texture->Image, Texture->Allocation);
+            Item.Image      = Texture->Image;
+            Item.Allocation = Texture->Allocation;
+        }
+        if (Item.View != VK_NULL_HANDLE || Item.Image != VK_NULL_HANDLE)
+        {
+            QueueRelease(Item);
         }
 
         Texture->~FTexture();
@@ -2308,6 +2572,13 @@ namespace Lumina::RHI
                 InstanceExtensions.Add(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
                 InstanceExtensions.Add(SurfaceMaint);
                 GSurfaceMaintenance1Available = true;
+            }
+
+            // Lists the HDR color spaces among a surface's formats, without which no swapchain can present HDR10.
+            if (HasInstanceExt(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME))
+            {
+                InstanceExtensions.Add(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+                GDevice->bSwapchainColorSpace = true;
             }
         }
 
@@ -2682,6 +2953,15 @@ namespace Lumina::RHI
         constexpr uint32 kMaxMeshGroupsPerDraw = 1u << 24;
         GDevice->MaxMeshWorkGroupCountX = Math::Min(kMaxMeshGroupsPerDraw,
                                           Math::Min(Chosen.MaxMeshWorkGroupCount, Chosen.MaxMeshWorkGroupTotalCount));
+
+        // AMD reports a higher limit but an indirect mesh draw past 65535 groups wraps to the remainder, dropping meshlets.
+        constexpr uint32 AmdVendorId                  = 0x1002u;
+        constexpr uint32 kAmdMaxIndirectMeshGroups    = 65535u;
+        if (GDevice->Properties.vendorID == AmdVendorId && GDevice->MaxMeshWorkGroupCountX > kAmdMaxIndirectMeshGroups)
+        {
+            GDevice->MaxMeshWorkGroupCountX = kAmdMaxIndirectMeshGroups;
+            LOG_DISPLAY("RHI: mesh draws capped at {} workgroups each, since AMD wraps larger indirect counts.", kAmdMaxIndirectMeshGroups);
+        }
     }
 
     // Aliases compute and transfer onto graphics when the device exposes no dedicated family.
@@ -2727,6 +3007,19 @@ namespace Lumina::RHI
             ? (uint32)EQueueType::Compute  : (uint32)EQueueType::Graphics;
         GDevice->QueueLockIndex[(uint32)EQueueType::Transfer] = (TransferFamily != Constants::kIndexNoneU32)
             ? (uint32)EQueueType::Transfer : (uint32)EQueueType::Graphics;
+
+        uint32 FamilyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(GDevice->PhysicsDevice, &FamilyCount, nullptr);
+        TVector<VkQueueFamilyProperties> Families(FamilyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(GDevice->PhysicsDevice, &FamilyCount, Families.GetData());
+        for (uint32 QueueIndex = 0; QueueIndex < 3; ++QueueIndex)
+        {
+            const uint32 Family = GDevice->QueueFamilies[QueueIndex];
+            const bool bKnown = Family < FamilyCount;
+            GDevice->bQueueTimestamps[QueueIndex]    = bKnown && Families[Family].timestampValidBits != 0;
+            GDevice->bQueueResetsQueries[QueueIndex] = GDevice->bQueueTimestamps[QueueIndex]
+                && (Families[Family].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0;
+        }
 
         GDevice->NumSharedQueueFamilies = 0;
         GDevice->SharedQueueFamilies[GDevice->NumSharedQueueFamilies++] = GraphicsFamily;
@@ -2868,6 +3161,7 @@ namespace Lumina::RHI
         }
 
         VK_CHECK(vmaCreateAllocator(&AllocatorInfo, &GDevice->Allocator));
+        StartReleaseWorker();
     }
 
     void Internal::CreateDevice(const FDeviceDesc& DeviceDesc)
@@ -2894,7 +3188,6 @@ namespace Lumina::RHI
         bool bUnifiedImageLayouts = false;
         bool bSwapchainMaintenance1 = false;
         bool bDeviceAddressCommands = false;
-        bool bComputeDerivatives = false;
 #if USING(WITH_EDITOR)
         bool bPipelineStats  = false;
 #endif
@@ -2953,9 +3246,6 @@ namespace Lumina::RHI
                 bPageableMemory = EnableIfPresent(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME);
             }
 
-            // Aerial perspective and the cloud march take ddx/ddy from compute, which needs quad groups.
-            bComputeDerivatives = EnableIfPresent(VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME);
-
             if (GDevice->bMeshShaderSupported)
             {
                 EnableIfPresent(VK_EXT_MESH_SHADER_EXTENSION_NAME);
@@ -2996,75 +3286,42 @@ namespace Lumina::RHI
         VkPhysicalDeviceVulkan13Features Supported13{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, .pNext = &Supported14 };
         VkPhysicalDeviceVulkan12Features Supported12{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, .pNext = &Supported13 };
         VkPhysicalDeviceVulkan11Features Supported11{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, .pNext = &Supported12 };
-        VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR SupportedDerivatives
-            { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR, .pNext = &Supported11 };
-        VkPhysicalDeviceFeatures2        Supported2 { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,          .pNext = &SupportedDerivatives };
+        VkPhysicalDeviceFeatures2        Supported2 { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,          .pNext = &Supported11 };
         vkGetPhysicalDeviceFeatures2(GDevice->PhysicsDevice, &Supported2);
 
         // All settled during selection, so nothing is re-queried here.
 
         VkPhysicalDeviceFeatures Features10             = {};
-        Features10.fragmentStoresAndAtomics             = VK_TRUE;
-        Features10.samplerAnisotropy                    = VK_TRUE;
-        Features10.sampleRateShading                    = VK_TRUE;
-        Features10.fillModeNonSolid                     = VK_TRUE;
-        Features10.imageCubeArray                       = VK_TRUE;
-        Features10.multiViewport                        = VK_TRUE;
-        Features10.multiDrawIndirect                    = VK_TRUE;
-        Features10.shaderStorageImageWriteWithoutFormat = VK_TRUE;
-        Features10.shaderStorageImageReadWithoutFormat  = VK_TRUE;
-        Features10.shaderStorageImageExtendedFormats    = VK_TRUE;
-        // Gathers carrying a constant offset, which is how the GTAO passes read a whole quad in one tap.
-        Features10.shaderImageGatherExtended            = VK_TRUE;
-        Features10.drawIndirectFirstInstance            = VK_TRUE;
-        Features10.vertexPipelineStoresAndAtomics       = VK_TRUE;
-        Features10.shaderInt16                          = VK_TRUE;
-        Features10.shaderInt64                          = VK_TRUE;
-        Features10.independentBlend                     = VK_TRUE;
-        Features10.pipelineStatisticsQuery              = VK_TRUE;
+        EnableRequiredFeatures(Features10, kRequiredFeatures10);
         Features10.wideLines                            = Supported2.features.wideLines;
         Features10.geometryShader                       = Supported2.features.geometryShader;
 
         VkPhysicalDeviceVulkan11Features Features11{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
-        Features11.shaderDrawParameters   = VK_TRUE;
-        Features11.multiview              = VK_TRUE;
+        EnableRequiredFeatures(Features11, kRequiredFeatures11);
         Features11.storageBuffer16BitAccess = Supported11.storageBuffer16BitAccess;
 
         VkPhysicalDeviceVulkan12Features Features12{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
-        Features12.timelineSemaphore                            = VK_TRUE;
-        Features12.drawIndirectCount                            = VK_TRUE;
-        Features12.bufferDeviceAddress                          = VK_TRUE;
-        // Slang lays out pointer-reached structs scalar-packed (a float3 at offset 4), which std430 forbids without this.
-        Features12.scalarBlockLayout                            = VK_TRUE;
+        EnableRequiredFeatures(Features12, kRequiredFeatures12);
 
-        if (Supported12.bufferDeviceAddressCaptureReplay && FRenderDoc::IsAttached())
+        const bool bCaptureReplayRequested = Algo::AnyOf(GPendingDeviceRequests, [](const Native::FDeviceCreationRequest& Request) { return Request.bBufferDeviceAddressCaptureReplay; });
+        if (Supported12.bufferDeviceAddressCaptureReplay && bCaptureReplayRequested)
         {
             Features12.bufferDeviceAddressCaptureReplay = VK_TRUE;
-            LOG_DISPLAY("RenderDoc attached: enabling bufferDeviceAddressCaptureReplay so captures replay.");
+            LOG_DISPLAY("RHI: bufferDeviceAddressCaptureReplay enabled so frame captures replay.");
         }
-        Features12.descriptorIndexing                           = VK_TRUE;
-        Features12.descriptorBindingPartiallyBound              = VK_TRUE;
-        Features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
-        Features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
-        Features12.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
-        Features12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
-        Features12.descriptorBindingUpdateUnusedWhilePending    = VK_TRUE;
-        Features12.samplerFilterMinmax                          = VK_TRUE;
-        Features12.runtimeDescriptorArray                       = VK_TRUE;
         Features12.hostQueryReset                               = Supported12.hostQueryReset;
         GDevice->bHostQueryReset                                = Supported12.hostQueryReset == VK_TRUE;
         // Slang declares ShaderViewportIndex for SV_ViewportArrayIndex, which is only legal with this enabled.
         Features12.shaderOutputViewportIndex                    = Supported12.shaderOutputViewportIndex;
         GDevice->bShaderOutputViewportIndex                     = Supported12.shaderOutputViewportIndex == VK_TRUE;
+        // The compute rasterizer's depth and ID pairs, so a device without it keeps every meshlet on the hardware raster.
+        Features12.shaderBufferInt64Atomics                     = Supported12.shaderBufferInt64Atomics;
+        GDevice->bBufferInt64Atomics                            = Supported12.shaderBufferInt64Atomics == VK_TRUE;
         // Heap indices vary per lane in batched draws, and AMD otherwise samples the first lane's descriptor for the wave.
         Features12.shaderSampledImageArrayNonUniformIndexing    = Supported12.shaderSampledImageArrayNonUniformIndexing;
-        Features12.shaderInt8                                   = VK_TRUE;
-        Features12.shaderFloat16                                = VK_TRUE;
 
         VkPhysicalDeviceVulkan13Features Features13{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
-        Features13.dynamicRendering = VK_TRUE;
-        Features13.synchronization2 = VK_TRUE;
-        Features13.shaderDemoteToHelperInvocation = VK_TRUE;
+        EnableRequiredFeatures(Features13, kRequiredFeatures13);
         Features13.subgroupSizeControl = GDevice->MeshRequiredSubgroupSize != 0 || GDevice->ComputeRequiredSubgroupSize != 0;
 
         VkPhysicalDeviceVulkan14Features Features14{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES };
@@ -3102,14 +3359,6 @@ namespace Lumina::RHI
             GDevice->bSwapchainMaintenance1 = true;
         }
         
-        VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR DerivativeFeatures
-            { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR };
-        if (bComputeDerivatives && SupportedDerivatives.computeDerivativeGroupQuads)
-        {
-            DerivativeFeatures.computeDerivativeGroupQuads = VK_TRUE;
-            Chain(DerivativeFeatures);
-        }
-
         VkPhysicalDeviceFaultFeaturesEXT DeviceFaultFeatures{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT };
         if (bDeviceFault)
         {
@@ -3369,6 +3618,8 @@ namespace Lumina::RHI
         GDevice->QueryPools.Clear();
 #endif
 
+        StopReleaseWorker();
+
         LOG_INFO("RHI: {} buffers at shutdown ({} pooled pages, {} dedicated).",
                  GDevice->MemoryPages.Num() + GDevice->DedicatedBlocks.Num(), GDevice->MemoryPages.Num(), GDevice->DedicatedBlocks.Num());
 #if USING(WITH_EDITOR)
@@ -3425,8 +3676,7 @@ namespace Lumina::RHI
         GDevice = nullptr;
     }
 
-    // Caller holds HeapMutex, or has otherwise guaranteed the device is idle.
-    // Caller holds the queue locks.
+    // Caller holds HeapMutex and the queue locks, or has otherwise guaranteed the device is idle.
     static void ResetTransientRing(FDeviceImpl::FTransientRing& Ring)
     {
         if (Ring.Used != 0)
@@ -3582,6 +3832,7 @@ namespace Lumina::RHI
         {
             Info.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         }
+        NoteDriverAllocation();
 
         VkBufferCreateInfo BufferInfo = {};
         BufferInfo.sType  = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -3835,7 +4086,7 @@ namespace Lumina::RHI
         FWriteScopeLock Lock(GDevice->MemoryMutex);
 
         // A page's buffer is shared, so only a dedicated block's object name describes one allocation.
-        const FMemoryBlock* Block = FindMemory(GPU);
+        const FMemoryBlock* Block = SearchMemory(GPU);
         if (Block != nullptr && Block->Suballocator == nullptr)
         {
             NameObject(VK_OBJECT_TYPE_BUFFER, (uint64)Block->Buffer, Name);
@@ -3882,7 +4133,7 @@ namespace Lumina::RHI
         ++GDevice->ReleasedPages;
 
         vmaDestroyVirtualBlock(Page.Suballocator);
-        vmaDestroyBuffer(GDevice->Allocator, Page.Buffer, Page.Allocation);
+        QueueRelease({ .Buffer = Page.Buffer, .Allocation = Page.Allocation });
         GMemoryBlockGeneration.fetch_add(1, std::memory_order_release);
 
         LOG_INFO("RHI: released an empty {} MiB {} memory page at {:#x}.", Page.Size >> 20, MemoryTypeToString(Page.MemType), Page.Device);
@@ -4015,7 +4266,7 @@ namespace Lumina::RHI
         if (It != GDevice->DedicatedBlocks.end() && It->Device == Allocation.Gpu)
         {
             GDevice->HeldBytes[(uint32)It->MemType] -= It->Size;
-            vmaDestroyBuffer(GDevice->Allocator, It->Buffer, It->Allocation);
+            QueueRelease({ .Buffer = It->Buffer, .Allocation = It->Allocation });
             GDevice->DedicatedBlocks.RemoveAt(static_cast<int32>(It - GDevice->DedicatedBlocks.begin()));
             GMemoryBlockGeneration.fetch_add(1, std::memory_order_release);
         }
@@ -4742,7 +4993,9 @@ namespace Lumina::RHI
         }
 
         const FQueryPool& Query = GDevice->QueryPools[Pool];
-        if (Query.Pool == VK_NULL_HANDLE || First >= Query.Capacity)
+        const FCommandList& List = GDevice->CommandLists[CL];
+        // A transfer-only family can neither reset nor be relied on to write, so its scopes read as unavailable.
+        if (Query.Pool == VK_NULL_HANDLE || First >= Query.Capacity || !GDevice->bQueueResetsQueries[(uint32)List.Queue])
         {
             return;
         }
@@ -4750,7 +5003,7 @@ namespace Lumina::RHI
         const uint32 Clamped = Math::Min(Count, Query.Capacity - First);
         if (Clamped > 0)
         {
-            vkCmdResetQueryPool(GDevice->CommandLists[CL].CommandBuffer, Query.Pool, First, Clamped);
+            vkCmdResetQueryPool(List.CommandBuffer, Query.Pool, First, Clamped);
         }
     }
 
@@ -4762,12 +5015,16 @@ namespace Lumina::RHI
         }
 
         const FQueryPool& Query = GDevice->QueryPools[Pool];
-        if (Query.Pool == VK_NULL_HANDLE || Index >= Query.Capacity)
+        FCommandList& List = GDevice->CommandLists[CL];
+        const uint32 QueueIndex = (uint32)List.Queue;
+        // Without a host reset the query can only have been reset on this queue, which some families cannot do.
+        const bool bQueueCanWrite = GDevice->bQueueTimestamps[QueueIndex]
+            && (GDevice->bHostQueryReset || GDevice->bQueueResetsQueries[QueueIndex]);
+        if (Query.Pool == VK_NULL_HANDLE || Index >= Query.Capacity || !bQueueCanWrite)
         {
             return;
         }
 
-        FCommandList& List = GDevice->CommandLists[CL];
         const VkPipelineStageFlags2 VkStage = ToVkPipelineState(ClampStagesToQueue(Stage, List.Queue));
         vkCmdWriteTimestamp2(List.CommandBuffer, VkStage, Query.Pool, Index);
     }
@@ -4786,10 +5043,31 @@ namespace Lumina::RHI
             return false;
         }
 
-        const VkResult Result = vkGetQueryPoolResults(*GDevice, Query.Pool, First, Count,
-            Count * sizeof(uint64), OutTicks.GetData(), sizeof(uint64), VK_QUERY_RESULT_64_BIT);
+        struct FTickWithAvailability
+        {
+            uint64 Tick;
+            uint64 Available;
+        };
+        FMemMark Mark;
+        FTickWithAvailability* Results = Mark.AllocArray<FTickWithAvailability>(Count);
 
-        return Result == VK_SUCCESS;
+        const VkResult Result = vkGetQueryPoolResults(*GDevice, Query.Pool, First, Count,
+            Count * sizeof(FTickWithAvailability), Results, sizeof(FTickWithAvailability),
+            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+
+        if (Result != VK_SUCCESS && Result != VK_NOT_READY)
+        {
+            return false;
+        }
+
+        bool bAllAvailable = true;
+        for (uint32 i = 0; i < Count; ++i)
+        {
+            const bool bAvailable = Results[i].Available != 0;
+            OutTicks[i] = bAvailable ? Results[i].Tick : kTimestampUnavailable;
+            bAllAvailable &= bAvailable;
+        }
+        return bAllAvailable;
     }
 
 #endif
@@ -5080,6 +5358,11 @@ namespace Lumina::RHI
     bool SupportsMeshShaders()
     {
         return GDevice != nullptr && GDevice->bMeshShaderSupported;
+    }
+
+    bool SupportsBufferInt64Atomics()
+    {
+        return GDevice != nullptr && GDevice->bBufferInt64Atomics;
     }
 
     uint32 GetMaxMeshWorkGroupCount()
@@ -5488,6 +5771,7 @@ namespace Lumina::RHI
         VkResult ImageResult;
         {
             LUMINA_PROFILE_SECTION("RHI::vmaCreateImage");
+            NoteDriverAllocation();
             ImageResult = vmaCreateImage(GDevice->Allocator, &Info, &AllocationCreateInfo, &Image, &Allocation, AllocationInfoPtr);
         }
         if (ImageResult != VK_SUCCESS || Image == VK_NULL_HANDLE || Allocation == nullptr)
@@ -6193,6 +6477,29 @@ namespace Lumina::RHI
         return VK_PRESENT_MODE_FIFO_KHR;
     }
 
+    static VkSurfaceFormatKHR ChooseSurfaceFormat(const FSwapchain& SC)
+    {
+        constexpr VkSurfaceFormatKHR SDR { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
+        if (!SC.bHDRRequested || !GDevice->bSwapchainColorSpace)
+        {
+            return SDR;
+        }
+
+        uint32 Count = 0;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(GDevice->PhysicsDevice, SC.Surface, &Count, nullptr);
+        TVector<VkSurfaceFormatKHR> Formats(Count);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(GDevice->PhysicsDevice, SC.Surface, &Count, Formats.GetData());
+
+        for (const VkSurfaceFormatKHR& Candidate : Formats)
+        {
+            if (Candidate.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 && Candidate.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT)
+            {
+                return Candidate;
+            }
+        }
+        return SDR;
+    }
+
     static bool BuildSwapchainImages(FSwapchain& SC, const FUIntVector2& Extent, VkSwapchainKHR OldSwapchain)
     {
         VkSurfaceCapabilitiesKHR Caps{};
@@ -6225,8 +6532,9 @@ namespace Lumina::RHI
             ImageCount = Math::Min(ImageCount, Caps.maxImageCount);
         }
 
-        const VkFormat Format = VK_FORMAT_B8G8R8A8_UNORM;
-
+        const VkSurfaceFormatKHR SurfaceFormat = ChooseSurfaceFormat(SC);
+        const VkFormat Format = SurfaceFormat.format;
+        SC.bHDR = SurfaceFormat.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT;
 
         VkSwapchainCreateInfoKHR Info
         {
@@ -6234,7 +6542,7 @@ namespace Lumina::RHI
             .surface          = SC.Surface,
             .minImageCount    = ImageCount,
             .imageFormat      = Format,
-            .imageColorSpace  = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+            .imageColorSpace  = SurfaceFormat.colorSpace,
             .imageExtent      = ActualExtent,
             .imageArrayLayers = 1,
             // Transfer source lets a window capture copy the presented image back, where the surface allows it.
@@ -6264,7 +6572,7 @@ namespace Lumina::RHI
         FTextureDesc Desc;
         Desc.Type      = ETextureType::Tex2D;
         Desc.Dimension = FUIntVector3(SC.Extent.x, SC.Extent.y, 1);
-        Desc.Format    = EFormat::BGRA8_UNORM;
+        Desc.Format    = SC.bHDR ? EFormat::R10G10B10A2_UNORM : EFormat::BGRA8_UNORM;
         Desc.Usage     = EImageUsageFlags::ColorAttachment | EImageUsageFlags::TransferDst;
 
         SC.Images.Reserve(Count);
@@ -6507,8 +6815,17 @@ namespace Lumina::RHI
 
     EFormat GetSwapchainFormat(FSwapchainH Swapchain)
     {
-        (void)Swapchain;
-        return EFormat::BGRA8_UNORM;   // BuildSwapchainImages always requests this
+        return GDevice->Swapchains[Swapchain].bHDR ? EFormat::R10G10B10A2_UNORM : EFormat::BGRA8_UNORM;
+    }
+
+    void SetSwapchainHDR(FSwapchainH Swapchain, bool bHDR)
+    {
+        GDevice->Swapchains[Swapchain].bHDRRequested = bHDR;
+    }
+
+    bool IsSwapchainHDR(FSwapchainH Swapchain)
+    {
+        return GDevice->Swapchains[Swapchain].bHDR;
     }
 
     static void SwapchainImageBarrier(VkCommandBuffer Cmd, VkImage Image, VkImageLayout Old, VkImageLayout New,
@@ -6568,8 +6885,7 @@ namespace Lumina::RHI
         return Buffer;
     }
 
-    // Both submit paths must call this: a target created this frame is still UNDEFINED until it runs.
-    // Caller holds the queue lock, which is what guards the ring.
+    // Both submit paths must call this, since a target created this frame is still UNDEFINED until it runs.
     static VkCommandBuffer DrainPendingImageInits(EQueueType Queue)
     {
         LUMINA_PROFILE_SCOPE();
@@ -6814,9 +7130,7 @@ namespace Lumina::RHI
         return Result == VK_SUCCESS;
     }
 
-    // Push constants are undefined at command-buffer begin. Seeding null makes a missed CmdSetSceneRoot
-    // a null deref at the first scene read instead of a wild pointer into a previous frame's memory.
-    // Push constants are illegal on a transfer-only pool, and nothing recorded there reads the scene root.
+    // Seeding null makes a missed CmdSetSceneRoot a null deref instead of a wild pointer into a previous frame's memory.
     static void SeedSceneRoot(VkCommandBuffer Buffer, EQueueType Type)
     {
         if (Type == EQueueType::Transfer)
@@ -6858,7 +7172,8 @@ namespace Lumina::RHI
             {
                 .sType              = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
                 .pNext              = nullptr,
-                .flags              = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+                // No per-buffer reset bit, since the whole pool is reset and the bit can cost drivers their pool fast path.
+                .flags              = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
                 .queueFamilyIndex   = GDevice->QueueFamilies[(uint32)Type]
             };
 
@@ -6888,6 +7203,9 @@ namespace Lumina::RHI
         CommandList.GPUZoneDepth = 0;
 #endif
         CommandList.BreadcrumbDepth = 0;
+#if defined(LUMINA_WITH_GPU_PROFILING)
+        CommandList.ProfilerDepth = 0;
+#endif
         CommandList.bOpen = true;
         CommandList.bGraphicsPipelineBound = false;
         CommandList.bComputePipelineBound  = false;
@@ -6905,8 +7223,6 @@ namespace Lumina::RHI
         LUMINA_PROFILE_SCOPE();
         FCommandList& List = GDevice->CommandLists[CommandList];
 
-        FScopeLock Lock(GDevice->CommandPoolMutex);
-
         // A reset without a submit discards the recording, so it can never name anything.
         if (List.bOpen)
         {
@@ -6914,8 +7230,10 @@ namespace Lumina::RHI
             GDevice->OpenCommandLists[(uint32)List.Queue].fetch_sub(1, std::memory_order_release);
         }
 
+        // The pool belongs to this list alone, so only the free list push needs the lock.
         VK_CHECK(vkResetCommandPool(*GDevice, List.Pool, 0));
 
+        FScopeLock Lock(GDevice->CommandPoolMutex);
         GDevice->FreeCommandLists[(uint32)List.Queue].Add(CommandList);
     }
 
@@ -6928,6 +7246,16 @@ namespace Lumina::RHI
         return GDevice->OpenCommandLists[(uint32)Queue].load(std::memory_order_acquire);
     }
 
+    void Internal::LockQueue(EQueueType Queue)
+    {
+        QueueLockFor(Queue).lock();
+    }
+
+    void Internal::UnlockQueue(EQueueType Queue)
+    {
+        QueueLockFor(Queue).unlock();
+    }
+
     void Internal::Submit(EQueueType Queue, TSpan<const FCmdListH> CommandLists, TSpan<const FSemaphoreInfo> Waits, TSpan<const FSemaphoreInfo> Signals)
     {
         LUMINA_PROFILE_SCOPE();
@@ -6936,8 +7264,6 @@ namespace Lumina::RHI
 
         auto* SignalInfos = Scratch.AllocArray<VkSemaphoreSubmitInfo>(Signals.Num());
         auto* WaitInfos   = Scratch.AllocArray<VkSemaphoreSubmitInfo>(Waits.Num());
-
-        FScopeLock SubmitLock(QueueLockFor(Queue));
 
         VkCommandBuffer TransitionBuffer = DrainPendingImageInits(Queue);
 
@@ -7033,17 +7359,15 @@ namespace Lumina::RHI
         {
             // Flat and fixed, since a hash map here rehashes and allocates while the queue lock is held.
             struct FSignalHighWater { uint64 Native; uint64 Value; };
-            static FSignalHighWater HighestSignaled[16] = {};
-            // Shared across queues while each queue holds a different submit lock.
-            static FMutex HighWaterMutex;
-            FScopeLock HighWaterLock(HighWaterMutex);
+            // One table per queue lock, which the caller holds, so the check needs no lock of its own.
+            static FSignalHighWater HighestSignaled[3][16] = {};
 
             for (const FSemaphoreInfo& Signal : Signals)
             {
                 const uint64 Native = (uint64)GDevice->Semaphores[Signal.Semaphore].Semaphore;
 
                 FSignalHighWater* Entry = nullptr;
-                for (FSignalHighWater& Candidate : HighestSignaled)
+                for (FSignalHighWater& Candidate : HighestSignaled[GDevice->QueueLockIndex[(uint32)Queue]])
                 {
                     if (Candidate.Native == Native || Candidate.Native == 0)
                     {
@@ -7749,7 +8073,6 @@ namespace Lumina::RHI
     void CmdBarrier(FCmdListH CL, EStageFlags Before, EAccessFlags BeforeAccess,
                     EStageFlags After, EAccessFlags AfterAccess)
     {
-        LUMINA_PROFILE_SCOPE();
         const EQueueType Queue = GDevice->CommandLists[CL].Queue;
 
         const EStageFlags SrcStages = ClampStagesToQueue(Before, Queue);
@@ -7935,7 +8258,6 @@ namespace Lumina::RHI
 
     void CmdSetTextureHeap(FCmdListH CL, FTextureHeapH Heap)
     {
-        LUMINA_PROFILE_SCOPE();
         const FCommandList& List = GDevice->CommandLists[CL];
         const uint32 Copy = GDevice->CurrentRetireSlot.load(std::memory_order_acquire) % kFramesInFlight;
         auto* DescriptorSet = GDevice->TextureHeaps[Heap].DescriptorSets[Copy];
@@ -7966,7 +8288,6 @@ namespace Lumina::RHI
 
     void CmdSetDepthStencil(FCmdListH CL, const FDepthStencilDesc& State)
     {
-        LUMINA_PROFILE_SCOPE();
         FCommandList& List = GDevice->CommandLists[CL];
         if (List.bDepthStencilSet && IsSameDepthStencil(List.CurrentDepthStencil, State))
         {
@@ -8024,7 +8345,6 @@ namespace Lumina::RHI
 
     void CmdSetPipeline(FCmdListH CL, FPipelineH Pipeline)
     {
-        LUMINA_PROFILE_SCOPE();
         FCommandList& List = GDevice->CommandLists[CL];
         const FPipeline PL = Pipeline.Handle != 0 ? GDevice->Pipelines[Pipeline] : FPipeline{};
         if (PL.Pipeline == VK_NULL_HANDLE)
@@ -8092,29 +8412,41 @@ namespace Lumina::RHI
         SetViewport(GDevice->CommandLists[CL], Viewport);
     }
 
-    // Legacy path only; the new command needs a range size, and the cache below already gates the resolve.
+    // Skipped while the same range and type are bound, so a run of draws from one buffer binds once.
     static bool BindIndexBuffer(FCommandList& CommandList, FGPURange Indices, EIndexType IndexType)
     {
-        const GPUPtr IndexBuffer = Indices.Address;
-        const uint32 IndexOffset = 0;
-        const GPUPtr BindKey = IndexBuffer + IndexOffset;
         const VkIndexType VulkanIndexType = ToVkIndexType(IndexType);
-
-        if (BindKey == CommandList.CurrentIndexBuffer && VulkanIndexType == CommandList.CurrentIndexType)
+        if (Indices.Address == CommandList.CurrentIndexBuffer && Indices.Size == CommandList.CurrentIndexSize
+            && VulkanIndexType == CommandList.CurrentIndexType)
         {
             return true;
         }
 
-        FBufferRange Range;
-        if (!ResolveBuffer(IndexBuffer, Range))
+        // The address form needs the range size, which every engine index range carries.
+        if (UseAddressCommands() && Indices.Size != 0)
         {
-            return false;
+            const VkBindIndexBuffer3InfoKHR Info
+            {
+                .sType        = VK_STRUCTURE_TYPE_BIND_INDEX_BUFFER_3_INFO_KHR,
+                .addressRange = AddressRange(Indices.Address, Indices.Size),
+                .addressFlags = kEngineAddressFlags,
+                .indexType    = VulkanIndexType,
+            };
+            vkCmdBindIndexBuffer3KHR(CommandList.CommandBuffer, &Info);
+        }
+        else
+        {
+            FBufferRange Range;
+            if (!ResolveBuffer(Indices.Address, Range))
+            {
+                return false;
+            }
+            vkCmdBindIndexBuffer(CommandList.CommandBuffer, Range.Buffer, Range.Offset, VulkanIndexType);
         }
 
-        vkCmdBindIndexBuffer(CommandList.CommandBuffer, Range.Buffer, Range.Offset + IndexOffset, VulkanIndexType);
-        CommandList.CurrentIndexBuffer = BindKey;
+        CommandList.CurrentIndexBuffer = Indices.Address;
+        CommandList.CurrentIndexSize   = Indices.Size;
         CommandList.CurrentIndexType   = VulkanIndexType;
-
         return true;
     }
 
@@ -8432,7 +8764,16 @@ namespace Lumina::RHI
         }
 
 #if defined(LUMINA_WITH_GPU_PROFILING)
-        FGPUProfiler::Get().BeginScope(CL, Name);
+        {
+            const uint32 Depth  = List.ProfilerDepth;
+            const int32  Parent = Depth > 0 && Depth <= kMaxProfilerDepth ? List.ProfilerScopes[Depth - 1] : Constants::kIndexNone;
+            const int32  Scope  = FGPUProfiler::Get().BeginScope(CL, Name, Parent, (int32)Depth);
+            if (Depth < kMaxProfilerDepth)
+            {
+                List.ProfilerScopes[Depth] = Scope;
+            }
+            ++List.ProfilerDepth;
+        }
 #endif
 
 #if defined(TRACY_ENABLE)
@@ -8452,7 +8793,14 @@ namespace Lumina::RHI
         FCommandList& List = GDevice->CommandLists[CL];
 
 #if defined(LUMINA_WITH_GPU_PROFILING)
-        FGPUProfiler::Get().EndScope(CL);
+        if (List.ProfilerDepth > 0)
+        {
+            --List.ProfilerDepth;
+            if (List.ProfilerDepth < kMaxProfilerDepth)
+            {
+                FGPUProfiler::Get().EndScope(CL, List.ProfilerScopes[List.ProfilerDepth]);
+            }
+        }
 #endif
 
         if (List.BreadcrumbDepth > 0)

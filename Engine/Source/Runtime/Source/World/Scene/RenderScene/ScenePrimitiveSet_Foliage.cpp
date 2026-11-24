@@ -6,7 +6,7 @@ namespace Lumina
 {
     FInstanceCullEntry FScenePrimitiveSet::MakeFoliageCull(const FSurfaceBinding& Binding, const FFoliageTypeResolve& Type, const FVector4& WorldSphere, bool bHidden)
     {
-        const EInstanceFlags Flags = ScenePrimitiveSetInternal::ComposeInstanceFlags(Type.BaseFlags, Binding, Type.bCastShadow, Type.bCastFarShadow,
+        const EInstanceFlags Flags = ScenePrimitiveSetInternal::ComposeInstanceFlags(Type.BaseFlags, Binding, Type.bCastShadow,
                                                                                      Type.Surfaces != nullptr && !bHidden,
                                                                                      Type.MeshletHeaderSlot != MeshletHeaderSlab::kNullSlot);
         FInstanceCullEntry Cull = {};
@@ -15,7 +15,8 @@ namespace Lumina
         Cull.DrawIDAndFlags   = PackDrawIDAndFlags(Binding.BatchIndex, Flags);
         Cull.SurfaceDescIndex = Binding.SurfaceDescIndex;
         Cull.MaxDrawDistance  = Type.MaxDrawDistance;
-        Cull.LODAndThinning   = PackLODAndThinning(-1, Type.ThinningStartDistance);
+        Cull.FlagsAndThinning = PackFlagsAndThinning(Type.ThinningStartDistance, RENDER_LAYER_DEFAULT_MASK, 0u, Type.bShadowWPO,
+                                                     ScenePrimitiveSetInternal::IsShadowCacheable(Binding, Type.bShadowWPO));
         return Cull;
     }
 
@@ -38,6 +39,7 @@ namespace Lumina
         Static.EntityID              = EntityID;
         Static.SkinnedIndex          = kNoSkinnedIndex;
         Static.MeshletVisibilityBase = MeshletVisibilityBase;
+        Static.WPODisableDistance    = Type.WPODisableDistance;
         return Static;
     }
 
@@ -57,6 +59,7 @@ namespace Lumina
             return;
         }
         FoliageInstanceCount -= (uint32)State->Instances.Num();
+        ReleaseImpostorPoints(*State);
         PendingFoliageReleases.Add(Move(*State));
         FoliageByEntity.Remove(Entity);
     }
@@ -119,6 +122,11 @@ namespace Lumina
         }
         FlushDeferredBatchReleases(DeferredBatchReleaseScratch);
 
+        if (bContentChanged || Algo::AnyOf(FoliageTypeScratch, [](const FFoliageTypeResolve& Type) { return Type.bChanged; }))
+        {
+            SyncImpostorPoints(State, *Foliage, Entity.Value);
+        }
+
         // Every slot now holds its transform and bounds, so a second copy per instance is hundreds of megabytes in a large field.
         if (Baked != nullptr)
         {
@@ -169,9 +177,10 @@ namespace Lumina
             Out.BaseFlags             = Type.CachedBaseFlags;
             Out.ResolveHandle         = Type.ResolveHandle;
             Out.bCastShadow           = Type.bCastShadow;
-            Out.bCastFarShadow        = Type.bCastFarShadow;
             Out.ThinningStartDistance = Type.ThinningStartDistance;
             Out.MaxDrawDistance       = Type.CullDistance;
+            Out.bShadowWPO            = Type.bShadowWorldPositionOffset;
+            Out.WPODisableDistance    = Type.WorldPositionOffsetDisableDistance;
 
             if (Type.ResolveHandle != INVALID_MESH_RESOLVE_HANDLE
                 && Cache.IsValidHandle(Type.ResolveHandle)
@@ -182,6 +191,8 @@ namespace Lumina
                 {
                     Out.Surfaces   = &Entry.Surfaces;
                     Out.Generation = Entry.Generation;
+                    // The entry's own slot, since the type's cached copy can trail a generation the points were written at.
+                    Out.MeshletHeaderSlot = Entry.MeshletHeaderSlot;
                 }
             }
 
@@ -211,6 +222,29 @@ namespace Lumina
                 && Type.ResolveHandle < (uint32)BindingMemoByHandle.Num())
             {
                 Type.Memo = &BindingMemoByHandle[Type.ResolveHandle];
+            }
+        }
+
+        // A type whose mesh has an impostor gives its instances points instead of slots, through the one surface that draws it.
+        if (Foliage.bImpostorPoints)
+        {
+            for (FFoliageTypeResolve& Type : FoliageTypeScratch)
+            {
+                if (Type.Memo == nullptr || EnumHasAnyFlags(Type.BaseFlags, EInstanceFlags::Skinned))
+                {
+                    continue;
+                }
+                for (uint32 s = 0; s < (uint32)Type.Surfaces->Num(); ++s)
+                {
+                    const FResolvedSurface& Surface = (*Type.Surfaces)[s];
+                    if (EnumHasAnyFlags(Surface.MaterialFlags, EInstanceFlags::Impostor) && Surface.Proxy.SplatHalfSize > 0.0f)
+                    {
+                        Type.PointMemo       = Type.Memo;
+                        Type.ImpostorSurface = s;
+                        Type.Memo            = nullptr;
+                        break;
+                    }
+                }
             }
         }
 
@@ -527,6 +561,12 @@ namespace Lumina
         }
         const FFoliageInstanceRef& Ref = State.Instances[Instance];
         const bool bHidden = Foliage.IsInstanceHidden(Instance);
+        if (Instance < State.Points.Count && Ref.TypeRow < State.PointTypes.Count)
+        {
+            const uint32 Type = State.PointTypes.Base + Ref.TypeRow;
+            const bool   bDrawsPoint = (ImpostorPointSet.GetType(Type).Flags & IMPOSTOR_TYPE_FLAG_ACTIVE) != 0u;
+            ImpostorPointSet.SetPointType(State.Points.Base + Instance, bHidden || !bDrawsPoint ? IMPOSTOR_TYPE_NONE : Type);
+        }
         for (uint32 s = 0; s < Ref.SurfaceCount; ++s)
         {
             const uint32 Slot = Bindings[Ref.BindingBase + s].InstanceSlot;
@@ -777,5 +817,97 @@ namespace Lumina
         {
             DeactivatedSlots.Append(FoliageSlotScratch);
         }
+    }
+
+    //~ Impostor points
+
+    FImpostorType FScenePrimitiveSet::MakeImpostorType(const FFoliageTypeResolve& Type, uint32 EntityID) const
+    {
+        FImpostorType Out = {};
+        if (Type.PointMemo == nullptr || Type.ImpostorSurface >= (uint32)Type.PointMemo->Protos.Num())
+        {
+            return Out;
+        }
+        const FSurfaceBinding& Proto = Type.PointMemo->Protos[Type.ImpostorSurface];
+        Out.Proxy             = MakeFoliageProxy(Type, Type.ImpostorSurface);
+        Out.MeshletHeaderSlot = Type.MeshletHeaderSlot;
+        Out.MaterialIndex     = Proto.MaterialIndex;
+        Out.EntityID          = EntityID;
+        Out.MaxDrawDistance   = Type.MaxDrawDistance;
+        Out.Flags             = IMPOSTOR_TYPE_FLAG_ACTIVE | (Type.bCastShadow && Proto.bMaterialCastsShadows ? IMPOSTOR_TYPE_FLAG_CAST_SHADOW : 0u);
+        return Out;
+    }
+
+    void FScenePrimitiveSet::ReleaseImpostorPoints(FFoliageEntityState& State)
+    {
+        // Points first, since clearing their shadow reads the types they point at.
+        ImpostorPointSet.FreePoints(State.Points);
+        ImpostorPointSet.FreeTypes(State.PointTypes);
+        for (uint32 Batch : State.PointBatches)
+        {
+            Batches.ReleaseBatchRef(Batch, false);
+        }
+        State.PointBatches.Reset();
+    }
+
+    void FScenePrimitiveSet::SyncImpostorPoints(FFoliageEntityState& State, const SFoliageComponent& Foliage, uint32 EntityID)
+    {
+        if (!Algo::AnyOf(FoliageTypeScratch, [](const FFoliageTypeResolve& Type) { return Type.PointMemo != nullptr; }))
+        {
+            ReleaseImpostorPoints(State);
+            return;
+        }
+
+        LUMINA_PROFILE_SCOPE();
+
+        const uint32 TypeCount     = (uint32)FoliageTypeScratch.Num();
+        const uint32 InstanceCount = (uint32)Foliage.Instances.Num();
+
+        // The old shadow goes before anything is rewritten, while the points still read their old types.
+        ImpostorPointSet.TouchRange(State.Points);
+        if (State.Points.Count != InstanceCount)
+        {
+            ImpostorPointSet.FreePoints(State.Points);
+            State.Points = ImpostorPointSet.AllocatePoints(InstanceCount);
+        }
+        if (State.PointTypes.Count != TypeCount)
+        {
+            ImpostorPointSet.FreeTypes(State.PointTypes);
+            State.PointTypes = ImpostorPointSet.AllocateTypes(TypeCount);
+        }
+
+        // Taken before the old references go, so a batch both sets share never retires in between.
+        TVector<uint32> PointBatches;
+        for (uint32 t = 0; t < TypeCount; ++t)
+        {
+            const FFoliageTypeResolve& Type = FoliageTypeScratch[t];
+            ImpostorPointSet.SetType(State.PointTypes.Base + t, MakeImpostorType(Type, EntityID));
+            if (Type.PointMemo != nullptr && Type.ImpostorSurface < (uint32)Type.PointMemo->Protos.Num())
+            {
+                const uint32 Batch = Type.PointMemo->Protos[Type.ImpostorSurface].BatchIndex;
+                Batches.AddBatchRef(Batch, false);
+                PointBatches.Add(Batch);
+            }
+        }
+        for (uint32 Batch : State.PointBatches)
+        {
+            Batches.ReleaseBatchRef(Batch, false);
+        }
+        State.PointBatches = Move(PointBatches);
+
+        for (uint32 i = 0; i < InstanceCount; ++i)
+        {
+            const SFoliageInstance& Instance = Foliage.Instances[i];
+            const bool bPoint = Foliage.IsValidType(Instance.TypeIndex) && FoliageTypeScratch[Instance.TypeIndex].PointMemo != nullptr
+                             && !Foliage.IsInstanceHidden(i);
+
+            FImpostorPoint Point = {};
+            Point.Position = Instance.Position;
+            Point.Rotation = PackImpostorRotation(Instance.GetRotationQuat());
+            Point.Scale    = Math::Max(Instance.Scale.x, Math::Max(Instance.Scale.y, Instance.Scale.z));
+            Point.Type     = bPoint ? State.PointTypes.Base + (uint32)Instance.TypeIndex : IMPOSTOR_TYPE_NONE;
+            ImpostorPointSet.SetPoint(State.Points.Base + i, Point);
+        }
+        ImpostorPointSet.TouchRange(State.Points);
     }
 }

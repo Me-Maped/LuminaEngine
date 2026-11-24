@@ -6,8 +6,8 @@ Setup 会从本仓库的 GitHub Releases（`external-deps` 标签）为每个平
 
 | 宿主平台 | 资源 | 状态 |
 |---|---|---|
-| Windows | `External-Win64.zip`（约 192 MB） | 已发布 |
-| Linux | `External-Linux64.tar.gz`（约 186 MB） | 已发布 — 可用 [`BuildScripts/MakeLinuxBundle.sh`](BuildScripts/MakeLinuxBundle.sh) 重新构建 |
+| Windows | `External-Win64-r2.zip`（约 165 MB） | 已发布 |
+| Linux | `External-Linux64-r2.tar.gz`（约 196 MB） | 已发布 — 可用 [`BuildScripts/MakeLinuxBundle.sh`](BuildScripts/MakeLinuxBundle.sh) 重新构建 |
 
 这些依赖包被设计为**可以共存于同一个 `External/` 目录树中**，因此在同时为两个平台构建的机器上
 两者都会安装，且互不覆盖。之所以不需要任何平台子目录方案就能做到，是因为其中的内容不会在文件名上
@@ -17,6 +17,10 @@ Setup 会从本仓库的 GitHub Releases（`external-deps` 标签）为每个平
 Setup 判断某个依赖包是否已安装，靠的是探测宿主平台的单个哨兵文件 ——
 `LLVM/bin/libclang.dll` 或 `LLVM/lib/libclang.so` —— 而不是仅仅检查 `External/` 是否存在，
 因此一个为其他平台准备好的检出仍会去拉取当前宿主所需的东西。
+
+安装校验通过后，Setup 会把依赖包的 SHA-256 写入 `External/.bundle-<Platform>.sha256`。
+当某个检出固定的是另一个哈希时，Setup 会替换依赖包，并且在替换完成之前每次构建都会给出警告。
+因此，拉取一个重新固定依赖包哈希的提交，只需要再运行一次 Setup。
 
 Linux 依赖包是 **tarball 而不是 zip**，这是要求而非偏好。Slang 的 Linux 库使用带版本号的
 文件名，并用普通名称的符号链接指向它们（`libslang.so` → `libslang-compiler.so.0.x.y`），
@@ -34,18 +38,18 @@ Tracy 工具和 .NET 宿主都需要它。`ZipFile.ExtractToDirectory` 两者都
 | 库 | 路径（大小） | 用途 | 许可证 |
 |---|---|---|---|
 | .NET 10 runtime + hosting headers | `External/DotNet`（78 MB） | 用于 C# 脚本（LuminaSharp）的 CoreCLR 宿主 | MIT（头文件）；.NET 可再发行条款（运行时） |
-| LLVM / Clang 19 (libclang) | `External/LLVM`（337 MB） | Reflector 解析 C++ 头文件以生成反射代码 | Apache-2.0 WITH LLVM-exception |
-| Slang | `External/SLang`（155 MB） | 将 `.slang` shader 编译为 SPIR-V | Apache-2.0 WITH LLVM-exception |
-| RenderDoc | `External/RenderDoc`（24 MB） | 应用内 GPU 帧捕获 | MIT |
-| Tracy | `External/Tracy`（77 MB） | CPU/GPU 性能分析器 | BSD-3-Clause |
+| LLVM / Clang 23 (libclang) | `External/LLVM`（86 MB） | Reflector 解析 C++ 头文件以生成反射代码 | Apache-2.0 WITH LLVM-exception |
+| Slang | `External/SLang`（150 MB） | 将 `.slang` shader 编译为 SPIR-V | Apache-2.0 WITH LLVM-exception |
+| RenderDoc | `External/RenderDoc`（27 MB） | 应用内 GPU 帧捕获 | MIT |
+| Tracy | `External/Tracy`（142 MB） | CPU/GPU 性能分析器 | BSD-3-Clause |
 
 ## 上游来源
 
-- **.NET 10.0.2**（win-x64）：<https://github.com/dotnet/runtime>，构建见 <https://dotnet.microsoft.com/download/dotnet/10.0>。头文件为 MIT（`src/native/corehost`）；运行时为 Microsoft 的可再发行组件。
-- **LLVM / Clang 19.x**（提交 `faef8b4`）：<https://github.com/llvm/llvm-project>。从源码构建，因为官方 Windows 安装包附带的 `libclang.dll` 缺少链接所需的 import lib 和头文件。
-- **Slang**（std module 2026.3.1）：<https://github.com/shader-slang/slang>。`slang-llvm.dll` 内置了 LLVM，`slang-glslang.dll` 封装了 glslang，`gfx.dll` 是 Slang 已弃用的图形层。
-- **RenderDoc**：<https://github.com/baldurk/renderdoc>，构建见 <https://renderdoc.org/builds>。以动态方式加载，因此本地安装的版本也可使用。
-- **Tracy**：<https://github.com/wolfpld/tracy>。
+- **.NET 10.0.15**（win-x64）：<https://github.com/dotnet/runtime>，构建见 <https://dotnet.microsoft.com/download/dotnet/10.0>。头文件为 MIT（`src/native/corehost`）；运行时为 Microsoft 的可再发行组件。
+- **LLVM / Clang 23.1.6**：<https://github.com/llvm/llvm-project>。在 Windows 上，`libclang.dll`、`libclang.lib` 和 `clang-c` 头文件取自该 release 的 `clang+llvm-<v>-x86_64-pc-windows-msvc` tarball；Reflector 只使用 libclang 的 C API，不需要其他组件。
+- **Slang**（std module 2026.22.1）：<https://github.com/shader-slang/slang>。`slang-llvm.dll` 内置了 LLVM，`slang-glslang.dll` 封装了 glslang，`gfx.dll` 是 Slang 已弃用的图形层。
+- **RenderDoc 1.47**：<https://github.com/baldurk/renderdoc>，构建见 <https://renderdoc.org/builds>。以动态方式加载，因此本地安装的版本也可使用。
+- **Tracy 0.15.0**：<https://github.com/wolfpld/tracy>。`Engine/Source/ThirdParty/tracy` 中的客户端必须与这些工具是同一版本；其中的 Lumina 补丁以 `Lumina patch` 标注。
 
 ## 校验
 
@@ -54,11 +58,11 @@ Setup 在解压前会用 `SetupMode.Bundles`
 哈希保存在仓库中而非下载文件旁边，因此被篡改或掉包的文件会被拒绝。你也可以自行校验：
 
 ```bash
-sha256sum External-Linux64.tar.gz
+sha256sum External-Linux64-r2.tar.gz
 ```
 
 ```bat
-powershell -NoProfile -Command "(Get-FileHash External-Win64.zip -Algorithm SHA256).Hash"
+powershell -NoProfile -Command "(Get-FileHash External-Win64-r2.zip -Algorithm SHA256).Hash"
 ```
 
 固定的哈希为空表示该平台尚未发布依赖包，此时 Setup 会如实告知，而不是去下载 release 为缺失资源
@@ -90,7 +94,7 @@ LLVM 来自发行版的 `libclang-$MAJOR-dev` 包，而不是 llvm.org 的 tarba
 依赖包包含 `libLLVM` 和 `libclang` 链接所需的一切 —— libxml2、ICU、libedit、libffi、
 libzstd、liblzma、libtinfo、libbsd、libmd、zlib —— 并将它们放置在它们旁边的 `External/LLVM/lib` 中。
 这并非多余的双保险：LLVM 构建时所依赖的版本并不是当前发行版所附带的版本。Ubuntu 26.04 拥有
-`libxml2.so.16`，而那里任何可安装的东西都无法满足在 22.04 上构建的 LLVM 19 所需的
+`libxml2.so.16`，而那里任何可安装的东西都无法满足在 22.04 上构建的 LLVM 所需的
 `libxml2.so.2`，所以没有任何 `apt-get` 命令能解决这一点。
 
 `Reflector.Build.cs` 在链接时通过 `-Wl,-rpath-link` 找到它们，在加载时通过相对于 `$ORIGIN` 的
@@ -114,7 +118,7 @@ ABI 风险，而且每个发行版都有它们。
 要查看某个副本还需要什么：
 
 ```bash
-ldd External/LLVM/lib/libLLVM.so.19.1 | grep "not found"
+ldd External/LLVM/lib/libLLVM.so.23.1 | grep "not found"
 ```
 
 ### 手动获取
@@ -139,7 +143,9 @@ External/RenderDoc/renderdoc.dll | librenderdoc.so    应用内 GPU 捕获
 External/Tracy/                                       性能分析器 UI 二进制
 ```
 
-然后运行 `GenerateProjectFiles.bat`。只要当前宿主的哨兵文件已存在，Setup 就会跳过下载。
+然后运行 `GenerateProjectFiles.bat`。只有当本机的哨兵文件已存在，且
+`External/.bundle-<Platform>.sha256` 中记录的是所固定的哈希时，Setup 才会跳过下载；
+因此手工拼装的目录若要避免被替换，请把该哈希写入其中。
 
 ## 许可证合规
 
@@ -157,17 +163,18 @@ LLVM 和 Slang 为 Apache-2.0，Tracy 为 BSD，RenderDoc 和 .NET 头文件为 
 ## 更新依赖包
 
 ```bat
-:: replace the asset (the URL stays the same)
-gh release upload external-deps External-Win64.zip --clobber
-gh release upload external-deps External-Linux64.tar.gz --clobber
+:: upload under the next revision name, never over an existing asset
+gh release upload external-deps External-Win64-r3.zip
+gh release upload external-deps External-Linux64-r3.tar.gz
 ```
 
-然后重新固定哈希：把哈希粘贴到对应条目在 `SetupMode.Bundles` 中的 `Sha256` 字段，
-并与上传该资源的提交放在同一个 commit 中。仅在首次时需要创建 release：
+然后重新固定哈希：把对应条目在 `SetupMode.Bundles` 中的 `AssetName` 指向新文件，并把它的
+哈希粘贴到 `Sha256` 中。推送这次重新固定，然后用
+`gh release delete-asset external-deps <asset>` 删除之前的资源。绝不要就地替换资源，
+因为在重新固定落地之前 `main` 一直固定着旧哈希。
+
+仅在首次时需要创建 release：
 `gh release create external-deps <asset> --title "External dependencies"`。
 
-两个资源都命名为 `External-<Platform>.<format>`。格式不同是因为内容不同：Linux 的那个
+资源命名为 `External-<Platform>-r<N>.<format>`。格式不同是因为内容不同：Linux 的那个
 必须是 tarball，才能保留符号链接和可执行位，而 zip 会丢失它们。
-
-该 release 目前仍保留着旧的、无后缀的 `External.zip`。请留着它。它的 URL 被固化在重命名之前
-创建的每个检出中，删除它会让所有这些检出的 Setup 失效；把它保留为旧别名没有任何代价。

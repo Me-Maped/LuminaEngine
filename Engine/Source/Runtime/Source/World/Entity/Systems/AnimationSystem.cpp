@@ -18,6 +18,7 @@
 #include "Physics/PhysicsScene.h"
 #include "Renderer/MeshData.h"
 #include "TaskSystem/TaskSystem.h"
+#include "TaskSystem/Fork/ForkRuntime.h"
 #include "World/Entity/Components/EntityTags.h"
 #include "World/Entity/Components/AnimationGraphComponent.h"
 #include "World/Entity/Components/CharacterComponent.h"
@@ -86,10 +87,16 @@ namespace Lumina
         // A leader that is hidden or culled still animates while a follower is drawn, at the closest follower's detail.
         template<typename TFollowers, typename TLinks, typename TMeshes>
         void RaiseLeaderDemand(const SSystemContext& Context, TFollowers& Followers, const TLinks& Links, const TMeshes& Meshes,
+                               TVector<THashMap<ECS::FEntity, FAnimLeaderDemand>>& DemandBySlot,
                                THashSet<ECS::FEntity>& TakenFromFollowers, double Now)
         {
-            TakenFromFollowers.Reset();
-            Followers.ForEach([&](ECS::FEntity Entity, const SFollowerPoseComponent&, const SSkeletalMeshComponent& Mesh)
+            // Thousands of followers share a handful of leaders, so each worker folds its followers per leader and only the leaders are merged.
+            DemandBySlot.SetNum(Jobs::GetNumThreadSlots());
+            for (THashMap<ECS::FEntity, FAnimLeaderDemand>& Slot : DemandBySlot)
+            {
+                Slot.Reset();
+            }
+            Followers.ParallelForEach([&](ECS::FEntity Entity, const SFollowerPoseComponent&, const SSkeletalMeshComponent& Mesh)
             {
                 if (Now - Mesh.LastRenderedTime > kAnimVisibilityGrace)
                 {
@@ -97,32 +104,56 @@ namespace Lumina
                 }
 
                 const ECS::FEntity LeaderEntity = SkeletalUtils::ResolvePoseLeader(Links, Meshes, Context.GetHierarchy(), [&Context](ECS::FEntity Candidate) { return Context.IsValidEntity(Candidate); }, Entity);
-                SSkeletalMeshComponent* Leader = LeaderEntity != ECS::NullEntity ? Meshes.template TryGet<SSkeletalMeshComponent>(LeaderEntity) : nullptr;
-                if (Leader == nullptr)
+                if (LeaderEntity == ECS::NullEntity)
                 {
                     return;
                 }
 
-                Leader->FollowerRenderedTime = Math::Max(Leader->FollowerRenderedTime, Mesh.LastRenderedTime);
-
-                // A drawn leader's own stamps are current, and the followers sit on it anyway.
-                if (Now - Leader->LastRenderedTime <= kAnimVisibilityGrace)
+                THashMap<ECS::FEntity, FAnimLeaderDemand>& Slot = DemandBySlot[Jobs::GetThreadSlot()];
+                if (FAnimLeaderDemand* Demand = Slot.Find(LeaderEntity))
                 {
-                    return;
-                }
-
-                // Zero means full rate and every bone, so the smaller value is always the more detailed one.
-                if (TakenFromFollowers.TryAdd(LeaderEntity))
-                {
-                    Leader->LastDistanceOverRadius = Mesh.LastDistanceOverRadius;
-                    Leader->LastBoneLODTolerance   = Mesh.LastBoneLODTolerance;
+                    Demand->FollowerRenderedTime = Math::Max(Demand->FollowerRenderedTime, Mesh.LastRenderedTime);
+                    Demand->DistanceOverRadius   = Math::Min(Demand->DistanceOverRadius, Mesh.LastDistanceOverRadius);
+                    Demand->BoneLODTolerance     = Math::Min(Demand->BoneLODTolerance, Mesh.LastBoneLODTolerance);
                 }
                 else
                 {
-                    Leader->LastDistanceOverRadius = Math::Min(Leader->LastDistanceOverRadius, Mesh.LastDistanceOverRadius);
-                    Leader->LastBoneLODTolerance   = Math::Min(Leader->LastBoneLODTolerance, Mesh.LastBoneLODTolerance);
+                    Slot.Add(LeaderEntity, FAnimLeaderDemand{ Mesh.LastRenderedTime, Mesh.LastDistanceOverRadius, Mesh.LastBoneLODTolerance });
                 }
-            });
+            }, 256);
+
+            TakenFromFollowers.Reset();
+            for (const THashMap<ECS::FEntity, FAnimLeaderDemand>& Slot : DemandBySlot)
+            {
+                for (const auto& [LeaderEntity, Demand] : Slot)
+                {
+                    SSkeletalMeshComponent* Leader = Meshes.template TryGet<SSkeletalMeshComponent>(LeaderEntity);
+                    if (Leader == nullptr)
+                    {
+                        continue;
+                    }
+
+                    Leader->FollowerRenderedTime = Math::Max(Leader->FollowerRenderedTime, Demand.FollowerRenderedTime);
+
+                    // A drawn leader's own stamps are current, and the followers sit on it anyway.
+                    if (Now - Leader->LastRenderedTime <= kAnimVisibilityGrace)
+                    {
+                        continue;
+                    }
+
+                    // Zero means full rate and every bone, so the smaller value is always the more detailed one.
+                    if (TakenFromFollowers.TryAdd(LeaderEntity))
+                    {
+                        Leader->LastDistanceOverRadius = Demand.DistanceOverRadius;
+                        Leader->LastBoneLODTolerance   = Demand.BoneLODTolerance;
+                    }
+                    else
+                    {
+                        Leader->LastDistanceOverRadius = Math::Min(Leader->LastDistanceOverRadius, Demand.DistanceOverRadius);
+                        Leader->LastBoneLODTolerance   = Math::Min(Leader->LastBoneLODTolerance, Demand.BoneLODTolerance);
+                    }
+                }
+            }
         }
     }
 
@@ -294,15 +325,21 @@ namespace Lumina
             }
         }
 
+        // Neither it nor anything following it was drawn lately, so a mesh that ticks when rendered keeps the pose it has.
+        bool IsPoseHeldOffscreen(const SSkeletalMeshComponent& Mesh, double Now)
+        {
+            return Mesh.VisibilityBasedAnimTick == EAnimUpdateMode::TickWhenRendered &&
+                   (Now - Math::Max(Mesh.LastRenderedTime, Mesh.FollowerRenderedTime)) > kAnimVisibilityGrace &&
+                   CVarAnimBudget.GetValue();
+        }
+
         // Frozen time deliberately does NOT accumulate, so an off-screen pose resumes where it left off.
         bool ShouldUpdatePose(SSkeletalMeshComponent& Mesh, ECS::FEntity Entity, float DeltaTime,
                               double Now, bool bForce, float& OutStepTime)
         {
             OutStepTime = 0.0f;
 
-            if (Mesh.VisibilityBasedAnimTick == EAnimUpdateMode::TickWhenRendered &&
-                (Now - Math::Max(Mesh.LastRenderedTime, Mesh.FollowerRenderedTime)) > kAnimVisibilityGrace &&
-                CVarAnimBudget.GetValue())
+            if (IsPoseHeldOffscreen(Mesh, Now))
             {
                 return false;
             }
@@ -641,6 +678,21 @@ namespace Lumina
             }
         }
 
+        void SendNotifyEvents(const ECS::TEventWriter<SAnimNotifyFiredEvent>& Writer, ECS::FEntity Entity, const TVector<FAnimNotifyEvent>& Fired)
+        {
+            for (const FAnimNotifyEvent& Notify : Fired)
+            {
+                SAnimNotifyFiredEvent Event;
+                Event.Entity = Entity;
+                Event.Name   = Notify.Name;
+                Event.Track  = Notify.Track;
+                Event.Type   = Notify.Type;
+                Event.Weight = Notify.Weight;
+                Event.Alpha  = Notify.Alpha;
+                Writer.Send(Event);
+            }
+        }
+
         void SendMontageEvents(const ECS::TEventWriter<SAnimMontageStartedEvent>& Started, const ECS::TEventWriter<SAnimMontageBlendingOutEvent>& BlendingOut,
                                const ECS::TEventWriter<SAnimMontageEndedEvent>& Ended, ECS::FEntity Entity, FAnimMontagePlayer& Montages)
         {
@@ -664,7 +716,7 @@ namespace Lumina
 
         // One entity's graph update, parallel-safe; pose math happens in the execute phase.
         void UpdateGraph(const SSystemContext& SystemContext, ECS::FEntity Entity,
-                         SAnimationGraphComponent& AnimGraph, SSkeletalMeshComponent& Mesh, const STransformComponent* Transform,
+                         SAnimationGraphComponent& AnimGraph, SSkeletalMeshComponent& Mesh,
                          float DeltaTime, double Now, const FKinematicsState& KinematicsState)
         {
             AnimGraph.NotifyEvents.Reset();
@@ -708,10 +760,10 @@ namespace Lumina
 
             // Ground traces are read-only and PrePhysics never overlaps the step, so querying here is safe.
             FAnimGraphSceneContext SceneContext;
-            if (Transform != nullptr)
+            // Read from the kinematics pass, so animation takes no transform access and runs beside the systems that move things.
+            if (const FTransform* WorldPose = KinematicsState.FindWorldTransform(Entity))
             {
-                // Computed rather than cached, since the capsule this mesh hangs from moved earlier this frame and a stale pose slips the feet.
-                const VTransform World = Transform->GetWorldTransform();
+                const VTransform World = *WorldPose;
 
                 SceneContext.Scene          = SystemContext.GetPhysics();
                 SceneContext.BoneTransforms = &Mesh.BoneTransforms;
@@ -934,10 +986,11 @@ namespace Lumina
 
         if (bHasFollower)
         {
-            RaiseLeaderDemand(Context, Followers, PoseLinks, LeaderMeshes, TakenFromFollowers, Now);
+            RaiseLeaderDemand(Context, Followers, PoseLinks, LeaderMeshes, LeaderDemandBySlot, TakenFromFollowers, Now);
         }
 
         NotifyQueue.Prepare();
+        const bool bNotifyReaders = NotifyFired.HasReaders();
 
         const bool bFuseExecute = CVarFuseAnimExecute.GetValue();
 
@@ -957,6 +1010,10 @@ namespace Lumina
                 if (!Anim.NotifyEvents.IsEmpty())
                 {
                     NotifyQueue.Record(Entity, EAnimNotifyPass::Simple, Anim.NotifyEvents);
+                    if (bNotifyReaders)
+                    {
+                        SendNotifyEvents(NotifyFired, Entity, Anim.NotifyEvents);
+                    }
                 }
 
                 // Recording that ANY entity produced root motion lets the serial apply skip its sweep.
@@ -969,11 +1026,11 @@ namespace Lumina
 
         if (bHasGraph)
         {
-            GraphAnimators.ParallelForEach([&](ECS::FEntity Entity, ECS::TMut<SAnimationGraphComponent> AnimGraphMut, ECS::TMut<SSkeletalMeshComponent> MeshMut, const STransformComponent* Transform)
+            GraphAnimators.ParallelForEach([&](ECS::FEntity Entity, ECS::TMut<SAnimationGraphComponent> AnimGraphMut, ECS::TMut<SSkeletalMeshComponent> MeshMut)
             {
                 SSkeletalMeshComponent& Mesh = MeshMut.GetMut();
                 SAnimationGraphComponent& AnimGraph = AnimGraphMut.GetMut();
-                UpdateGraph(Context, Entity, AnimGraph, Mesh, Transform, DeltaTime, Now, SharedKinematics);
+                UpdateGraph(Context, Entity, AnimGraph, Mesh, DeltaTime, Now, SharedKinematics);
                 SendMontageEvents(MontageStarted, MontageBlendingOut, MontageEnded, Entity, AnimGraph.Montages);
 
                 // Run while this mesh is hot, instead of after a barrier that waits for every graph.
@@ -985,6 +1042,10 @@ namespace Lumina
                 if (!AnimGraph.NotifyEvents.IsEmpty())
                 {
                     NotifyQueue.Record(Entity, EAnimNotifyPass::Graph, AnimGraph.NotifyEvents);
+                    if (bNotifyReaders)
+                    {
+                        SendNotifyEvents(NotifyFired, Entity, AnimGraph.NotifyEvents);
+                    }
                 }
 
                 if (AnimGraph.PendingRootMotion.bHasMotion)
@@ -1006,6 +1067,12 @@ namespace Lumina
         {
             Followers.ParallelForEach([&](ECS::FEntity Entity, ECS::TMut<SFollowerPoseComponent> FollowerMut, ECS::TMut<SSkeletalMeshComponent> MeshMut)
             {
+                // An unseen follower keeps its last copy and its borrowed slice, which still draws the leader's live pose into any shadow.
+                if (FollowerMut.Get().CopiedLeader != ECS::NullEntity && IsPoseHeldOffscreen(MeshMut.Get(), Now))
+                {
+                    return;
+                }
+
                 SSkeletalMeshComponent& Mesh = MeshMut.GetMut();
                 SFollowerPoseComponent& Follower = FollowerMut.GetMut();
                 Follower.bSharesLeaderPose = false;
@@ -1129,7 +1196,7 @@ namespace Lumina
 
         if (bHasGraph)
         {
-            GraphAnimators.ForEach([&](ECS::FEntity Entity, ECS::TMut<SAnimationGraphComponent> AnimGraphMut, ECS::TMut<SSkeletalMeshComponent>, const STransformComponent*)
+            GraphAnimators.ForEach([&](ECS::FEntity Entity, ECS::TMut<SAnimationGraphComponent> AnimGraphMut, ECS::TMut<SSkeletalMeshComponent>)
             {
                 SAnimationGraphComponent& AnimGraph = AnimGraphMut.GetMut();
                 ApplyRootMotion(Entity, AnimGraph.PendingRootMotion);

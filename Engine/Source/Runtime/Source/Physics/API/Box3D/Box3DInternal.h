@@ -100,8 +100,7 @@ namespace Lumina::Physics
         return Shape;
     }
 
-    // Combine modes ride in the surface material id, which is the only per-shape data the mixing
-    // callbacks receive. Bit 16 marks a real material so a plain zero id still means no material.
+    // Combine modes ride in the surface material id, the only per-shape data mixing callbacks receive, and bit 16 marks a real material.
     inline constexpr uint64 MaterialIdPresentBit = 1ull << 16;
 
     FORCEINLINE uint64 PackMaterialId(uint8 FrictionCombine, uint8 RestitutionCombine)
@@ -109,8 +108,7 @@ namespace Lumina::Physics
         return MaterialIdPresentBit | (uint64)FrictionCombine | ((uint64)RestitutionCombine << 8);
     }
 
-    // Box3D's mover ignores initial overlap and cannot climb out of geometry, so a spawn that starts buried
-    // has to be lifted onto the surface before the first step or it free falls forever.
+    // Box3D's mover cannot climb out of geometry, so a buried spawn must be lifted onto the surface before the first step.
     enum class EMoverSeatResult : uint8
     {
         Seated,
@@ -194,13 +192,7 @@ namespace Lumina::Physics
         [&]<typename... TColliders>(ECS::TTypeList<TColliders...>) { (Func.template operator()<TColliders>(), ...); }(FColliderTypes{});
     }
 
-    // A dynamic mesh may keep only its committed triangles, which collision falls back to when the meshlets are gone.
-    inline bool HasCollisionGeometry(const FMeshResource& Resource)
-    {
-        return !Resource.MeshletData.IsEmpty() || (!Resource.Positions.IsEmpty() && !Resource.Indices.IsEmpty());
-    }
-
-    // Flattens a mesh resource's LOD-0 meshlets, or else its kept triangles, into positions and triangles when the caller needs them.
+    // Flattens a static mesh resource's LOD-0 meshlets into positions and triangles when the caller needs them.
     bool GatherMeshResourceGeometry(const FMeshResource& Resource, const FVector3& Scale,
                                     TVector<b3Vec3>& OutPositions, TVector<int32>* OutIndices);
 }

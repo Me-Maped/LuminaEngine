@@ -3,6 +3,8 @@
 #include "Core/Delegates/ScriptDelegate.h"
 #include "Core/Object/ObjectMacros.h"
 #include "Core/Object/ObjectHandleTyped.h"
+#include "Containers/Vector.h"
+#include "Memory/SmartPtr.h"
 #include "Physics/PhysicsTypes.h"
 #include "World/Entity/Events/CollisionEvent.h"
 #include "PhysicsComponent.generated.h"
@@ -11,6 +13,7 @@ namespace Lumina
 {
     class CStaticMesh;
     class CPhysicsMaterial;
+    namespace Physics { class FCollisionShape; }
 
     REFLECT(Component, Category = "Physics")
     struct RUNTIME_API CACHE_ALIGN SRigidBodyComponent
@@ -79,9 +82,7 @@ namespace Lumina
         PROPERTY(Editable, Category = "Physics")
         bool bUseGravity = true;
 
-        // Per-axis degree-of-freedom locks (world space). Locking lets you build 2D/planar mechanics or
-        // pin a body to an axis without an external constraint. Dynamic bodies only; locking all six is
-        // invalid (use a Static body instead) and is ignored.
+        // Per-axis world space locks for dynamic bodies, and locking all six is ignored (use a Static body).
 
         /** Prevent the body from translating along the world X axis. */
         PROPERTY(Editable, Category = "Physics|Constraints")
@@ -184,8 +185,7 @@ namespace Lumina
         bool bAffectsNavigation = true;
     };
 
-    // Capsule collider: cylinder of length 2*HalfHeight capped by radius-Radius hemispheres, along local Y
-    // (RotationOffset lays it on its side). Total height 2*(HalfHeight + Radius).
+    // Capsule collider along local Y, with total height 2*(HalfHeight + Radius).
     REFLECT(Component, Category = "Physics")
     struct RUNTIME_API SCapsuleColliderComponent
     {
@@ -220,8 +220,7 @@ namespace Lumina
         bool bAffectsNavigation = true;
     };
 
-    // Cylinder collider: flat-ended, along local Y; cheaper than a convex hull but rolls realistically.
-    // Total height 2*HalfHeight; CapRadius rounds the rim edges (0 = sharp).
+    // Flat-ended cylinder collider along local Y with total height 2*HalfHeight, and CapRadius rounds the rim.
     REFLECT(Component, Category = "Physics")
     struct RUNTIME_API SCylinderColliderComponent
     {
@@ -260,8 +259,7 @@ namespace Lumina
         bool bAffectsNavigation = true;
     };
 
-    // Tapered capsule: a capsule with different top/bottom cap radii (tree trunks, tapered limbs), along
-    // local Y. Total height ~2*(HalfHeight + max radius). Convex, so it works on dynamic bodies.
+    // Capsule with different top and bottom radii along local Y, convex so it works on dynamic bodies.
     REFLECT(Component, Category = "Physics")
     struct RUNTIME_API STaperedCapsuleColliderComponent
     {
@@ -300,8 +298,7 @@ namespace Lumina
         bool bAffectsNavigation = true;
     };
 
-    // Tapered cylinder: flat-ended cylinder with different top/bottom radii (funnels, barrels, tapered
-    // pillars), along local Y. Total height is 2*HalfHeight.
+    // Flat-ended cylinder with different top and bottom radii along local Y, with total height 2*HalfHeight.
     REFLECT(Component, Category = "Physics")
     struct RUNTIME_API STaperedCylinderColliderComponent
     {
@@ -340,9 +337,7 @@ namespace Lumina
         bool bAffectsNavigation = true;
     };
 
-    // Infinite plane collider (water surfaces, kill floors, level boundaries). The local +Y axis is the
-    // surface normal -- orient/position via the entity transform; the half-space below the plane is solid.
-    // Static only (the body is forced Static, like terrain).
+    // Infinite static plane collider whose local +Y is the normal, with the half-space below it solid.
     REFLECT(Component, Category = "Physics")
     struct RUNTIME_API SPlaneColliderComponent
     {
@@ -366,17 +361,21 @@ namespace Lumina
         bool bAffectsNavigation = true;
     };
 
-    /** Static collider built from an STerrainComponent's heightmap (height field). Requires both components on the same entity. */
-    // Collision built from an SDynamicMeshComponent's committed geometry on the same entity. The mesh has
-    // no CMesh to point at (it owns its render data outright), so unlike SMeshColliderComponent there is no
-    // asset reference -- the shape is rebuilt from whatever that component last committed.
+    // Triangles handed to a collider, held only until its physics scene cooks or drops them.
+    struct FDynamicMeshCollisionInput
+    {
+        TVector<FVector3> Positions;
+        TVector<uint32>   Indices;
+    };
+
+    // Collision from triangles handed over through Commit, cooked off the game thread. Needs no SDynamicMeshComponent.
     REFLECT(Component, Category = "Physics")
     struct RUNTIME_API SDynamicMeshColliderComponent
     {
         GENERATED_BODY()
 
         /** Build a convex hull (allows dynamic bodies). False builds a concave triangle mesh: static/kinematic only,
-            which is what terrain wants. */
+            which is what terrain wants. Read when the cook takes the triangles, so a change needs another Commit. */
         PROPERTY(Editable)
         bool bConvex = false;
 
@@ -392,11 +391,30 @@ namespace Lumina
         PROPERTY(Editable, Category = "Navigation")
         bool bAffectsNavigation = true;
 
-        /** Render data version the collision body was built from, so a re-commit rebuilds it. Not authored. */
-        PROPERTY(ReadOnly)
+        // Any thread, one at a time per component. Moves the triangles in; the next cook takes them and frees them.
+        void Commit(TVector<FVector3>&& Positions, TVector<uint32>&& Indices);
+
+        // Game thread, for the physics scene or a world without one. Null when nothing was committed since the last take.
+        TSharedPtr<FDynamicMeshCollisionInput> TakeNewTriangles();
+
+        // Acquire-load paired with the release in Commit, so a new version comes with its triangles.
+        uint32 LoadGeometryVersion() const;
+
+        // Bumped by every Commit.
         uint32 GeometryVersion = 0;
+
+        // What the last cook built, null until one lands. The physics scene patches it in, so OnUpdate announces a new shape.
+        TSharedPtr<const Physics::FCollisionShape> Shape;
+
+    private:
+
+        // Reached only through the atomic exchange, since Commit may run on a worker.
+        TSharedPtr<FDynamicMeshCollisionInput> PendingTriangles;
+
+        uint32 TakenGeometryVersion = 0;
     };
 
+    /** Static collider built from an STerrainComponent's heightmap (height field). Requires both components on the same entity. */
     REFLECT(Component, Category = "Physics")
     struct RUNTIME_API STerrainColliderComponent
     {
@@ -456,10 +474,7 @@ namespace Lumina
         float HalfHeight = 0.5f;
     };
 
-    // Custom collision shape built by merging several primitives into one body (multi-shape body):
-    // a table = box top + 4 box legs, an L-wall = two boxes, a barrel cluster = cylinders, etc. Concave
-    // overall yet still usable on a dynamic body, and cheap (the children share the cached primitive shapes).
-    // Needs at least 2 children to form a compound; with 1 it falls back to that single offset shape.
+    // Several primitives merged into one body, concave overall yet usable on a dynamic body, and one child falls back to that single offset shape.
     REFLECT(Component, Category = "Physics")
     struct RUNTIME_API SCompoundColliderComponent
     {
@@ -482,11 +497,7 @@ namespace Lumina
         bool bAffectsNavigation = true;
     };
 
-    // Conveyor / moving surface. Bodies resting on this entity's collider are dragged along its surface at
-    // the given world-space velocity, without the body itself moving (it feeds the contact solver).
-    // Requires an SRigidBodyComponent on the same entity. SurfaceVelocity is m/s; AngularSurfaceVelocity is
-    // rad/s about the body's center (best for a body that is the conveyor itself). Runtime changes:
-    // World.Physics.SetSurfaceVelocity.
+    // Conveyor surface that drags resting bodies at SurfaceVelocity (m/s) and AngularSurfaceVelocity (rad/s) without moving, and needs an SRigidBodyComponent.
     REFLECT(Component, Category = "Physics")
     struct RUNTIME_API SConveyorComponent
     {
@@ -501,9 +512,7 @@ namespace Lumina
         FVector3 AngularSurfaceVelocity = FVector3(0.0f);
     };
 
-    // Joint connecting this entity's rigid body to another body (or the world). The system creates the live
-    // joint once both bodies exist; removing the component (or the entity) tears it down. This
-    // entity is body B (the child); TargetBody is body A (the parent / anchor).
+    // Joint from this entity (body B) to TargetBody (body A, the anchor), created once both bodies exist.
     REFLECT(Component, Category = "Physics")
     struct RUNTIME_API SPhysicsConstraintComponent
     {

@@ -531,9 +531,9 @@ namespace Lumina
             {
                 FAutoKeyPose& Pose = AutoKeyWatch[i];
                 Pose.Entity = Entity;
-                Pose.Location = Transform->GetLocation();
-                Pose.Rotation = Math::Degrees(Math::YawFirstEulerAngles(Transform->GetRotation()));
-                Pose.Scale = Transform->GetScale();
+                Pose.Location = Transform->GetLocalLocation();
+                Pose.Rotation = Math::Degrees(Math::YawFirstEulerAngles(Transform->GetLocalRotation()));
+                Pose.Scale = Transform->GetLocalScale();
             }
         }
     }
@@ -564,11 +564,11 @@ namespace Lumina
             }
 
             const FAutoKeyPose& Watched = AutoKeyWatch[i];
-            const FVector3 Rotation = Math::Degrees(Math::YawFirstEulerAngles(Transform->GetRotation()));
+            const FVector3 Rotation = Math::Degrees(Math::YawFirstEulerAngles(Transform->GetLocalRotation()));
 
-            const bool bMoved = Math::LengthSquared(Transform->GetLocation() - Watched.Location) > PositionEpsilonSq
+            const bool bMoved = Math::LengthSquared(Transform->GetLocalLocation() - Watched.Location) > PositionEpsilonSq
                              || Math::LengthSquared(Rotation - Watched.Rotation) > AngleEpsilonSq
-                             || Math::LengthSquared(Transform->GetScale() - Watched.Scale) > PositionEpsilonSq;
+                             || Math::LengthSquared(Transform->GetLocalScale() - Watched.Scale) > PositionEpsilonSq;
 
             if (bMoved)
             {
@@ -2049,9 +2049,9 @@ namespace Lumina
             CSequenceTrack_Transform* Track = FindOrCreateTransformTrack(BindingIndex);
             const float Time = Sequence->SnapToFrame(PlayTime);
 
-            SequencerEditModeInternal::KeyVector(Track->Location, Time, Transform->GetLocation(), false);
-            SequencerEditModeInternal::KeyVector(Track->Rotation, Time, Math::Degrees(Math::YawFirstEulerAngles(Transform->GetRotation())), false);
-            SequencerEditModeInternal::KeyVector(Track->Scale, Time, Transform->GetScale(), false);
+            SequencerEditModeInternal::KeyVector(Track->Location, Time, Transform->GetLocalLocation(), false);
+            SequencerEditModeInternal::KeyVector(Track->Rotation, Time, Math::Degrees(Math::YawFirstEulerAngles(Transform->GetLocalRotation())), false);
+            SequencerEditModeInternal::KeyVector(Track->Scale, Time, Transform->GetLocalScale(), false);
             Track->Rotation.UnwindAngles();
             SequencerEditModeInternal::RefreshTangents(Track);
         });

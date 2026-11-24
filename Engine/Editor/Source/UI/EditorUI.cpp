@@ -1,4 +1,4 @@
-﻿#include "EditorUI.h"
+#include "EditorUI.h"
 #include "Localization/Localization.h"
 #include "World/WorldContext.h"
 #include "Containers/Algorithm.h"
@@ -106,7 +106,6 @@
 #include "Scripting/EntityScript.h"
 #include "Scripting/DotNet/DotNetHost.h"
 #include "Renderer/CustomPrimitiveData.h"
-#include "Renderer/RenderDocImpl.h"
 #include "Renderer/RenderManager.h"
 #include "Renderer/RHI.h"
 #include "Renderer/ShaderCompiler.h"
@@ -197,6 +196,48 @@ namespace Lumina
     namespace
     {
         constexpr ImVec4 kProjDialogAccentBlue = ImVec4(0.36f, 0.66f, 1.00f, 1.00f);
+
+        void BakeFoliageImpostorsCommand()
+        {
+            if (Global::GEditorEngine != nullptr)
+            {
+                static_cast<FEditorUI*>(Global::GEditorEngine->GetDevelopmentToolsUI())->BakeFoliageImpostors();
+            }
+        }
+
+        // Leaves every changed package dirty rather than saving, like the impostor bake, so the user decides what to keep.
+        void BuildMeshDistanceFieldsCommand()
+        {
+            const FName StaticMeshClass = CStaticMesh::StaticClass()->GetName();
+            const TVector<FAssetDataPtr> Meshes = FAssetRegistry::Get().FindByPredicate([&StaticMeshClass](const FAssetData& Data)
+            {
+                return Data.AssetClass == StaticMeshClass && FStringView(*Data.Path, Data.Path.Len()).StartsWith("/Game/");
+            });
+
+            int32 Built = 0;
+            int32 Failed = 0;
+            for (const FAssetDataPtr& Data : Meshes)
+            {
+                CStaticMesh* Mesh = LoadObject<CStaticMesh>(Data->AssetGUID);
+                if (Mesh == nullptr || (Mesh->DistanceFieldSettings.bEnabled && Mesh->HasDistanceField()))
+                {
+                    continue;
+                }
+                Mesh->DistanceFieldSettings.bEnabled = true;
+                Mesh->BuildDistanceField();
+                if (!Mesh->HasDistanceField())
+                {
+                    ++Failed;
+                    continue;
+                }
+                if (CPackage* Package = Mesh->GetPackage())
+                {
+                    Package->MarkDirty();
+                }
+                ++Built;
+            }
+            LOG_INFO("Built distance fields for {} of {} static meshes in /Game, {} failed. Save them to keep the fields.", Built, Meshes.Num(), Failed);
+        }
 
         /** A button's three states. Hover lightens and press darkens, unlike ImGuiX::ButtonEx. */
         struct FButtonColors
@@ -514,6 +555,11 @@ namespace Lumina
         // Init ThumbnailManager before world load so engine primitive meshes are in the transient package before deserialization.
         (void)CThumbnailManager::Get();
 
+        FConsoleRegistry::Get().RegisterCommand(FConsoleCommand("Impostor.BakeFoliage",
+            "Bakes an impostor for every mesh the open world's forests and painted foliage scatter, leaving their packages dirty.", &BakeFoliageImpostorsCommand));
+        FConsoleRegistry::Get().RegisterCommand(FConsoleCommand("Mesh.BuildDistanceFields",
+            "Turns on and builds the distance field of every static mesh in /Game that lacks one, leaving their packages dirty.", &BuildMeshDistanceFieldsCommand));
+
         // Content-browser tiles that draw their own body (curves, etc) instead of a rendered thumbnail.
         AssetTilePainters::RegisterBuiltin();
 
@@ -659,11 +705,11 @@ namespace Lumina
         TStrongObjectPtr<CWorld> World = NewObject<CWorld>(nullptr, "Transient World", FGuid::New(), OF_Transient);
 
         WorldEditorTool = CreateTool<FWorldEditorTool>(this, World.Get());
+        RegisterDockedDrawerSettings();
         // They start undocked, living in the bottom status bar instead of a dock split.
         ContentBrowser = CreateDrawerTool<FContentBrowserEditorTool>(LE_ICON_FOLDER, "Content Browser", ImGuiMod_Ctrl | ImGuiKey_Space, this);
         ConsoleLogTool = CreateDrawerTool<FConsoleLogEditorTool>(LE_ICON_CONSOLE_LINE, "Output Log", ImGuiMod_Ctrl | ImGuiKey_J, this);
 
-        // Spawns and destroys extra-player Game Preview tools as the world editor starts and stops play.
         // Play shows the player's saved quality, and stopping hands the editor its project values back.
         (void)WorldEditorTool->GetOnPreviewStartRequestedDelegate().AddLambda([this]()
         {
@@ -708,6 +754,14 @@ namespace Lumina
 
     void FEditorUI::Deinitialize(const FUpdateContext& UpdateContext)
     {
+        // ImGui saves again when its context dies after this, and without the handler that save would drop the docked drawers.
+        if (ImGuiIO& IO = ImGui::GetIO(); IO.IniFilename != nullptr)
+        {
+            ImGui::SaveIniSettingsToDisk(IO.IniFilename);
+            IO.IniFilename = nullptr;
+        }
+        ImGui::RemoveSettingsHandler(DockedDrawersSettingsName);
+
         StandaloneLauncher.Shutdown();
         FCoreEditorDelegates::OnAssetDeleted.Remove(AssetDeletedHandle);
         FObjectReferenceProviders::Unregister(this);
@@ -992,7 +1046,7 @@ namespace Lumina
         {
             if (FFooterDrawer* Drawer = FindDrawerForTool(ToolToClose); Drawer != nullptr)
             {
-                Drawer->bDocked = false;
+                SetDrawerDocked(*Drawer, false);
                 ToolToClose = nullptr;
             }
         }
@@ -1047,8 +1101,7 @@ namespace Lumina
             SaveAllDirtyPackages();
         }
 
-        // Gated on no active text input so it cannot fire out of a rename field or a search box.
-        // The code workspace takes Ctrl+P for its own quick open while it has focus.
+        // Gated on no active text input, and the code workspace takes Ctrl+P for its own quick open while focused.
         const bool bCodeFocused = LastActiveTool != nullptr && LastActiveTool->GetUniqueTypeID() == FCodeWorkspaceTool::s_toolTypeID;
         if (ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().WantTextInput && !bCodeFocused
             && ImGui::IsKeyPressed(ImGuiKey_P, false))
@@ -1067,6 +1120,15 @@ namespace Lumina
 
         MaterialCompiles.Tick();
         ParticleCompiles.Tick();
+        ImpostorBaker.Tick();
+    }
+
+    void FEditorUI::BakeFoliageImpostors()
+    {
+        if (WorldEditorTool != nullptr && WorldEditorTool->GetWorld() != nullptr)
+        {
+            ImpostorBaker.EnqueueFoliage(*WorldEditorTool->GetWorld());
+        }
     }
 
     void FEditorUI::OnEndFrame(const FUpdateContext& UpdateContext)
@@ -1083,7 +1145,7 @@ namespace Lumina
     
     double FEditorUI::GetToolWorldUpdateInterval(const CWorld* ToolWorld, bool bFocused) const
     {
-        // Focused means the active TOOL, since a material's node graph edits still want a live preview.
+        // Focused means the last tool with a world, since a material's node graph edits still want a live preview.
         if (bFocused || ToolWorld == nullptr)
         {
             return 0.0;
@@ -1137,6 +1199,10 @@ namespace Lumina
         if (Tool == LastActiveTool)
         {
             LastActiveTool = nullptr;
+        }
+        if (Tool == LastActiveWorldTool)
+        {
+            LastActiveWorldTool = nullptr;
         }
 
         Tool->Deinitialize(UpdateContext);
@@ -1493,6 +1559,44 @@ namespace Lumina
             FEditorUI::MakeToolPanel<FConsoleVariableEditorTool>(LE_ICON_TUNE " Console Variables"),
             FEditorUI::MakeToolPanel<FPluginBrowserEditorTool>(LE_ICON_PUZZLE " Plugin Browser"),
         };
+
+        constexpr FEditorUI::FToolPanel GSettingsPanel = FEditorUI::MakeToolPanel<FSettingsEditorTool>(LE_ICON_COG " Settings");
+        constexpr FEditorUI::FToolPanel GPackagerPanel = FEditorUI::MakeToolPanel<FProjectPackagerEditorTool>(LE_ICON_PACKAGE_VARIANT " Package Project...");
+        constexpr FEditorUI::FToolPanel GTerminalPanel = FEditorUI::MakeToolPanel<FTerminalEditorTool>(LE_ICON_CONSOLE_LINE " Terminal");
+        constexpr FEditorUI::FToolPanel GAboutPanel    = FEditorUI::MakeToolPanel<FAboutEditorTool>(LE_ICON_CIRCLE " About Lumina");
+
+        // The menu panels that sit outside the debug list, so a name lookup reaches every window the menus toggle.
+        constexpr const FEditorUI::FToolPanel* GMenuPanels[] = { &GSettingsPanel, &GPackagerPanel, &GTerminalPanel, &GAboutPanel };
+
+        constexpr FStringView GCodeWorkspaceName = "Code";
+
+        // One window the Tools or File menu can toggle, whichever mechanism it uses.
+        struct FToolChoice
+        {
+            FStringView            Name;
+            const FEditorUI::FToolPanel* Panel = nullptr;
+            const FToolsMenuEntry* Entry = nullptr;
+            bool                   bCode = false;
+        };
+
+        TVector<FToolChoice> GatherToolChoices()
+        {
+            TVector<FToolChoice> Choices;
+            for (const FEditorUI::FToolPanel* Panel : GMenuPanels)
+            {
+                Choices.Add({ ToolPanelName(Panel->Label), Panel, nullptr, false });
+            }
+            Choices.Add({ GCodeWorkspaceName, nullptr, nullptr, true });
+            for (const FEditorUI::FToolPanel& Panel : GDebugToolPanels)
+            {
+                Choices.Add({ ToolPanelName(Panel.Label), &Panel, nullptr, false });
+            }
+            for (const FToolsMenuEntry& Entry : FToolsMenuRegistry::Get().GetEntries())
+            {
+                Choices.Add({ ToolPanelName(Entry.Label), nullptr, &Entry, false });
+            }
+            return Choices;
+        }
     }
 
     void FEditorUI::RecordSessionTab(FEditorTool* Tool, FString Key)
@@ -1866,60 +1970,90 @@ namespace Lumina
         }
     }
 
-    bool FEditorUI::OpenToolPanel(FStringView Name, FString& OutError)
+    bool FEditorUI::IsToolPanelOpen(const FToolPanel& Panel) const
     {
-        struct FCandidate
-        {
-            FStringView            Name;
-            const FToolPanel*      Panel = nullptr;
-            const FToolsMenuEntry* Entry = nullptr;
-        };
+        return FindToolByTypeID(Panel.TypeID) != nullptr;
+    }
 
-        TVector<FCandidate> Candidates;
-        for (const FToolPanel& Panel : GDebugToolPanels)
+    static bool IsToolChoiceOpen(const FEditorUI& UI, const FToolChoice& Choice)
+    {
+        if (Choice.Entry != nullptr)
         {
-            Candidates.Add({ ToolPanelName(Panel.Label), &Panel, nullptr });
+            return Choice.Entry->IsActive && Choice.Entry->IsActive();
         }
-        for (const FToolsMenuEntry& Entry : FToolsMenuRegistry::Get().GetEntries())
-        {
-            Candidates.Add({ ToolPanelName(Entry.Label), nullptr, &Entry });
-        }
+        return Choice.bCode ? UI.IsToolActive<FCodeWorkspaceTool>() : UI.IsToolPanelOpen(*Choice.Panel);
+    }
 
-        const FCandidate* Match = nullptr;
+    void FEditorUI::ForEachToolPanel(TFunctionRef<void(FStringView, bool)> Visit) const
+    {
+        for (const FToolChoice& Choice : GatherToolChoices())
+        {
+            Visit(Choice.Name, IsToolChoiceOpen(*this, Choice));
+        }
+    }
+
+    // An exact name wins, else the one panel whose name contains it.
+    static bool ResolveToolChoice(const TVector<FToolChoice>& Choices, FStringView Name, const FToolChoice*& OutMatch, FString& OutError)
+    {
+        OutMatch = nullptr;
         int32 PartialCount = 0;
-        for (const FCandidate& Candidate : Candidates)
+        for (const FToolChoice& Choice : Choices)
         {
-            if (EqualsIgnoreCase(Candidate.Name, Name))
+            if (EqualsIgnoreCase(Choice.Name, Name))
             {
-                Match = &Candidate;
-                PartialCount = 1;
-                break;
+                OutMatch = &Choice;
+                return true;
             }
-            if (CodeText::FindIgnoreCase(Candidate.Name, Name, 0) >= 0)
+            if (CodeText::FindIgnoreCase(Choice.Name, Name, 0) >= 0)
             {
-                Match = &Candidate;
+                OutMatch = &Choice;
                 ++PartialCount;
             }
         }
 
-        if (PartialCount != 1)
+        if (PartialCount == 1)
         {
-            FString Names;
-            for (const FCandidate& Candidate : Candidates)
-            {
-                Names.Append(Lumina::Format("{}{}", Names.IsEmpty() ? "" : ", ", Candidate.Name));
-            }
-            OutError = Lumina::Format("{} '{}'. Tool panels are {}.", PartialCount == 0 ? "No tool panel is named" : "Several tool panels match", Name, Names);
+            return true;
+        }
+
+        FString Names;
+        for (const FToolChoice& Choice : Choices)
+        {
+            Names.Append(Lumina::Format("{}{}", Names.IsEmpty() ? "" : ", ", Choice.Name));
+        }
+        OutError = Lumina::Format("{} '{}'. Tools are {}.", PartialCount == 0 ? "No tool is named" : "Several tools match", Name, Names);
+        OutMatch = nullptr;
+        return false;
+    }
+
+    bool FEditorUI::OpenToolPanel(FStringView Name, FString& OutError)
+    {
+        const TVector<FToolChoice> Choices = GatherToolChoices();
+        const FToolChoice* Match = nullptr;
+        if (!ResolveToolChoice(Choices, Name, Match, OutError))
+        {
             return false;
         }
 
         if (Match->Entry != nullptr)
         {
-            if (!(Match->Entry->IsActive && Match->Entry->IsActive()) && Match->Entry->OnToggle)
+            if (!IsToolChoiceOpen(*this, *Match) && Match->Entry->OnToggle)
             {
                 Match->Entry->OnToggle();
             }
             return true;
+        }
+
+        if (Match->bCode)
+        {
+            OpenCodeWorkspace();
+            return true;
+        }
+
+        if (Match->Panel == &GPackagerPanel && Paths::IsInstalledBuild())
+        {
+            OutError = "Packaging a game needs a source build of the engine.";
+            return false;
         }
 
         FEditorTool* Tool = FindToolByTypeID(Match->Panel->TypeID);
@@ -1928,6 +2062,42 @@ namespace Lumina
             Tool = Match->Panel->Create(*this);
         }
         FocusTargetWindowName = *Tool->GetToolName();
+        return true;
+    }
+
+    bool FEditorUI::CloseToolPanel(FStringView Name, FString& OutError)
+    {
+        const TVector<FToolChoice> Choices = GatherToolChoices();
+        const FToolChoice* Match = nullptr;
+        if (!ResolveToolChoice(Choices, Name, Match, OutError))
+        {
+            return false;
+        }
+
+        if (!IsToolChoiceOpen(*this, *Match))
+        {
+            return true;
+        }
+
+        if (Match->Entry != nullptr)
+        {
+            if (Match->Entry->OnToggle)
+            {
+                Match->Entry->OnToggle();
+            }
+            return true;
+        }
+
+        // The workspace may hold unsaved files, so it goes through the same prompt the menu uses.
+        FEditorTool* Tool = Match->bCode ? static_cast<FEditorTool*>(FindTool<FCodeWorkspaceTool>()) : FindToolByTypeID(Match->Panel->TypeID);
+        if (Match->bCode)
+        {
+            PromptCloseTools({ Tool });
+        }
+        else
+        {
+            ToolsPendingDestroy.Enqueue(Tool);
+        }
         return true;
     }
 
@@ -2272,6 +2442,83 @@ namespace Lumina
         }
     }
 
+    void FEditorUI::RegisterFooterDrawer(FEditorTool* Tool, const char* Icon, const char* Label, ImGuiKeyChord Shortcut)
+    {
+        FFooterDrawer& Drawer = FooterDrawers.EmplaceGetRef(Tool, Icon, Label, Shortcut);
+        Drawer.bDocked = SavedDockedDrawers.Contains(FString(Label));
+    }
+
+    void FEditorUI::SetDrawerDocked(FFooterDrawer& Drawer, bool bDocked)
+    {
+        if (Drawer.bDocked != bDocked)
+        {
+            Drawer.bDocked = bDocked;
+            ImGui::MarkIniSettingsDirty();
+        }
+    }
+
+    void FEditorUI::RegisterDockedDrawerSettings()
+    {
+        ImGuiSettingsHandler Handler;
+        Handler.TypeName   = DockedDrawersSettingsName;
+        Handler.TypeHash   = ImHashStr(Handler.TypeName);
+        Handler.ReadOpenFn = &FEditorUI::ReadDockedDrawersOpen;
+        Handler.ReadLineFn = &FEditorUI::ReadDockedDrawersLine;
+        Handler.WriteAllFn = &FEditorUI::WriteDockedDrawers;
+        Handler.UserData   = this;
+        ImGui::AddSettingsHandler(&Handler);
+    }
+
+    void* FEditorUI::ReadDockedDrawersOpen(ImGuiContext*, ImGuiSettingsHandler* Handler, const char*)
+    {
+        return Handler->UserData;
+    }
+
+    void FEditorUI::ReadDockedDrawersLine(ImGuiContext*, ImGuiSettingsHandler* Handler, void*, const char* Line)
+    {
+        constexpr FStringView Prefix = "Docked=";
+        const FStringView Text(Line);
+        if (!Text.StartsWith(Prefix))
+        {
+            return;
+        }
+
+        FEditorUI* EditorUI = static_cast<FEditorUI*>(Handler->UserData);
+        const FStringView NameView = Text.Mid(Prefix.Len());
+        const FString Name(NameView.GetData(), NameView.Len());
+        if (!EditorUI->SavedDockedDrawers.Contains(Name))
+        {
+            EditorUI->SavedDockedDrawers.Add(Name);
+        }
+        for (FFooterDrawer& Drawer : EditorUI->FooterDrawers)
+        {
+            Drawer.bDocked |= Name == Drawer.Label;
+        }
+    }
+
+    void FEditorUI::WriteDockedDrawers(ImGuiContext*, ImGuiSettingsHandler* Handler, ImGuiTextBuffer* Buffer)
+    {
+        const FEditorUI* EditorUI = static_cast<const FEditorUI*>(Handler->UserData);
+        Buffer->appendf("[%s][State]\n", Handler->TypeName);
+        for (const FFooterDrawer& Drawer : EditorUI->FooterDrawers)
+        {
+            if (Drawer.bDocked)
+            {
+                Buffer->appendf("Docked=%s\n", Drawer.Label);
+            }
+        }
+        // A plugin drawer missing this run keeps its docked state for the run that has it again.
+        for (const FString& Name : EditorUI->SavedDockedDrawers)
+        {
+            const bool bRegistered = Algo::AnyOf(EditorUI->FooterDrawers, [&](const FFooterDrawer& Drawer) { return Name == Drawer.Label; });
+            if (!bRegistered)
+            {
+                Buffer->appendf("Docked=%s\n", *Name);
+            }
+        }
+        Buffer->append("\n");
+    }
+
     FEditorUI::FFooterDrawer* FEditorUI::FindDrawerForTool(const FEditorTool* Tool)
     {
         for (FFooterDrawer& Drawer : FooterDrawers)
@@ -2604,7 +2851,7 @@ namespace Lumina
 
             if (ImGui::Button(DockLabel) && Drawer != nullptr)
             {
-                Drawer->bDocked = true;
+                SetDrawerDocked(*Drawer, true);
 
                 // Queued because the bottom node may not exist yet and can only be split before DockSpace() runs.
                 PendingBottomDockTool       = Drawer->Tool;
@@ -2740,6 +2987,10 @@ namespace Lumina
         if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_DockHierarchy))
         {
             LastActiveTool = EditorTool;
+            if (EditorTool->HasWorld())
+            {
+                LastActiveWorldTool = EditorTool;
+            }
         }
         
         // Per-document ID, so tabs from one document are not dockable in another.
@@ -2799,7 +3050,7 @@ namespace Lumina
         // A docked drawer tool goes back to its footer drawer, same as when its own X is pressed.
         if (FFooterDrawer* Drawer = FindDrawerForTool(Tool); Drawer != nullptr)
         {
-            Drawer->bDocked = false;
+            SetDrawerDocked(*Drawer, false);
             return;
         }
 
@@ -3016,7 +3267,8 @@ namespace Lumina
             const bool bKeepAlive = bVisible || ToolWorld->IsNetServer();
             ToolWorld->SetActive(bKeepAlive);
 
-            ToolWorld->SetUpdateInterval(GetToolWorldUpdateInterval(ToolWorld, bIsLastFocusedTool));
+            // Measured against the last world tool, so focusing a profiler or console beside a world does not throttle what it watches.
+            ToolWorld->SetUpdateInterval(GetToolWorldUpdateInterval(ToolWorld, LastActiveWorldTool == Tool));
 
             // Tool->Update just flew the camera, and CCameraSystem runs a stage too late for the overlays below.
             CCameraSystem::ResolveActiveCameraView(ToolWorld->GetEntityRegistry());
@@ -3633,14 +3885,14 @@ namespace Lumina
         SavePackages(GatherUnsavedPackages());
     }
 
-    void FEditorUI::OpenSettings(CClass* Page)
+    void FEditorUI::OpenSettings(CClass* Page, FStringView Search)
     {
         FSettingsEditorTool* Settings = FindTool<FSettingsEditorTool>();
         if (Settings == nullptr)
         {
             Settings = CreateTool<FSettingsEditorTool>(this);
         }
-        Settings->Select(Page);
+        Settings->Select(Page, Search);
         FocusTargetWindowName = *Settings->GetToolName();
     }
 
@@ -4411,7 +4663,7 @@ namespace Lumina
 
         ImGui::Separator();
 
-        DrawToolMenuItem(MakeToolPanel<FSettingsEditorTool>(LE_ICON_COG " Settings"));
+        DrawToolMenuItem(GSettingsPanel);
 
         if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_ROTATE_LEFT, "Recent")))
         {
@@ -4490,7 +4742,7 @@ namespace Lumina
         }
         else
         {
-            DrawToolMenuItem(MakeToolPanel<FProjectPackagerEditorTool>(LE_ICON_PACKAGE_VARIANT " Package Project..."));
+            DrawToolMenuItem(GPackagerPanel);
         }
 
         ImGui::EndMenu();
@@ -4506,7 +4758,7 @@ namespace Lumina
         ImGui::TextColored(EditorColors::TextDim(), LOC("Workspace"));
         ImGui::Separator();
 
-        DrawToolMenuItem(MakeToolPanel<FTerminalEditorTool>(LE_ICON_CONSOLE_LINE " Terminal"));
+        DrawToolMenuItem(GTerminalPanel);
         if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CODE_BRACES, "Code"), nullptr, IsToolActive<FCodeWorkspaceTool>()))
         {
             if (FCodeWorkspaceTool* Workspace = FindTool<FCodeWorkspaceTool>())
@@ -4565,11 +4817,6 @@ namespace Lumina
             LaunchTracyProfiler();
         }
         
-        if (ImGui::MenuItem(LOC_ICON_ID(LE_ICON_CAMERA, "RenderDoc Capture")))
-        {
-            FRenderDoc::Get().TriggerCapture();
-        }
-
         if (ImGui::BeginMenu(LOC_ICON_ID(LE_ICON_CAMERA, "Screenshot")))
         {
             if (ImGui::MenuItem(LOC("Save PNG (Tonemapped)"), "F9"))
@@ -4667,7 +4914,7 @@ namespace Lumina
         ImGui::Separator();
         
         // About + Contributors are now tabs of the same tool, so a single menu entry covers both.
-        DrawToolMenuItem(MakeToolPanel<FAboutEditorTool>(LE_ICON_CIRCLE " About Lumina"));
+        DrawToolMenuItem(GAboutPanel);
 
         ImGui::EndMenu();
     }
@@ -5122,8 +5369,7 @@ namespace Lumina
             }
         }
 
-        // Keyed by the asset, so a repointed key is a rebuilt table: written in place it would sit in the
-        // bucket its old hash chose and the tool would never be found for that asset again.
+        // Keyed by the asset, so a repointed key is a rebuilt table since in-place it would sit in its old hash bucket.
         THashMap<CObject*, FEditorTool*> Rebuilt;
         Rebuilt.Reserve(ActiveAssetTools.Num());
         for (const auto& [Asset, Tool] : ActiveAssetTools)

@@ -1,4 +1,4 @@
-﻿#include "Localization/Localization.h"
+#include "Localization/Localization.h"
 #include "PropertyMatrixTool.h"
 
 #include "EditorToolContext.h"
@@ -293,10 +293,10 @@ namespace Lumina
 
     void FPropertyMatrixTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Rows", "Every asset the matrix was opened on. Click to select, Ctrl+Click to toggle, Shift+Click for a range, double-click to open its editor.");
-        DrawHelpTextRow("Columns", "Pin a property from the Selection panel or the Columns menu to show it as a column. Cells edit in place.");
-        DrawHelpTextRow("Bulk edits", "The Selection panel edits every selected asset at once, and so does a cell in a selected row. Dimmed rows differ between the selected assets.");
-        DrawHelpTextRow("Saving", "Edits mark the assets dirty. Save writes every one of them, and each edit is one undo step for all of them.");
+        DrawHelpTextRow(LOC("Rows"), LOC("Every asset the matrix was opened on. Click to select, Ctrl+Click to toggle, Shift+Click for a range, double-click to open its editor."));
+        DrawHelpTextRow(LOC("Columns"), LOC("Pin a property from the Selection panel or the Columns menu to show it as a column. Cells edit in place."));
+        DrawHelpTextRow(LOC("Bulk edits"), LOC("The Selection panel edits every selected asset at once, and so does a cell in a selected row. Dimmed rows differ between the selected assets."));
+        DrawHelpTextRow(LOC("Saving"), LOC("Edits mark the assets dirty. Save writes every one of them, and each edit is one undo step for all of them."));
     }
 
     void FPropertyMatrixTool::OnPostUndoRedo()

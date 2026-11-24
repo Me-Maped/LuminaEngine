@@ -7,14 +7,18 @@ namespace Lumina
     // Kept out of the lighting shader so the production path carries no debug branch.
     void FDefaultSceneRenderer::SceneDebugViewPass(RHI::FCmdListH CL)
     {
-        if (MaterialClassifyLayout.NumSlots == 0u ||
-            RenderFrame->SceneGlobalData.CullData.DebugMode == 0u)
+        const uint32 DebugMode = RenderFrame->SceneGlobalData.CullData.DebugMode;
+        // Marches the field through every pixel, sky included, so it runs even with no deferred surface on screen.
+        const bool bWorldField = DebugMode == (uint32)ERenderSceneDebugFlags::WorldDistanceField;
+        if (DebugMode == 0u || (MaterialClassifyLayout.NumSlots == 0u && !bWorldField))
         {
             return;
         }
 
         static const FShaderH VertexShader = FShaderLibrary::Get("FullscreenQuad.slang");
-        static const FShaderH PixelShader = FShaderLibrary::Get("SceneDebugViewPixel.slang");
+        static const FShaderH SurfacePixelShader = FShaderLibrary::Get("SceneDebugViewPixel.slang");
+        static const FShaderH FieldPixelShader = FShaderLibrary::Get("WorldDistanceFieldDebugPixel.slang");
+        const FShaderH PixelShader = bWorldField ? FieldPixelShader : SurfacePixelShader;
         if (!VertexShader || !PixelShader)
         {
             return;
@@ -23,7 +27,7 @@ namespace Lumina
         SCENE_GPU_SCOPE(CL, "Scene Debug View");
 
         const FSceneImage& ColorImg = GetNamedImage(ENamedImage::HDR);
-        const FUIntVector2 Extent   = FUIntVector2(MaterialClassifyLayout.ScreenW, MaterialClassifyLayout.ScreenH);
+        const FUIntVector2 Extent   = bWorldField ? CurrentView->Size : FUIntVector2(MaterialClassifyLayout.ScreenW, MaterialClassifyLayout.ScreenH);
 
         RHI::FRenderAttachment Color;
         Color.Texture        = ColorImg.Texture;
@@ -45,6 +49,15 @@ namespace Lumina
         Key.ColorTargets.Add({ ColorImg.Desc.Format, {} });
         RHI::CmdSetPipeline(CL, GetOrCreatePipeline(Key));
 
+        if (bWorldField)
+        {
+            const FWorldDistanceFieldGPU FieldArgs = MakeWorldDistanceFieldArgs();
+            RHI::CmdDraw(CL, MakeArgs(FieldArgs), 3, 1, 0, 0);
+            RHI::CmdEndRenderPass(CL);
+            Barriers::RasterToRead(CL);
+            return;
+        }
+
         struct FSceneDebugViewPC
         {
             uint32 GBufferAIndex;
@@ -55,8 +68,9 @@ namespace Lumina
             uint32 DepthIndex;
             uint32 DrawListCount;
             uint32 _Pad0;
+            RHI::TGPUSpan<uint32> ShadowRasterDebug;
         } PC = {};
-        static_assert(sizeof(FSceneDebugViewPC) == 32, "FSceneDebugViewPC must match SceneDebugViewPixel.slang FSceneDebugViewArgs.");
+        static_assert(sizeof(FSceneDebugViewPC) == 48, "FSceneDebugViewPC must match SceneDebugViewPixel.slang FSceneDebugViewArgs.");
         PC.GBufferAIndex  = (uint32)GetNamedImage(ENamedImage::GBufferA).GetResourceID();
         PC.GBufferBIndex  = (uint32)GetNamedImage(ENamedImage::GBufferB).GetResourceID();
         PC.GBufferCIndex  = (uint32)GetNamedImage(ENamedImage::GBufferC).GetResourceID();
@@ -64,6 +78,7 @@ namespace Lumina
         PC.VisBufferIndex = (uint32)GetNamedImage(ENamedImage::VisBuffer).GetResourceID();
         PC.DepthIndex     = (uint32)GetNamedImage(ENamedImage::DepthAttachment).GetResourceID();
         PC.DrawListCount  = DrawListCapacity;
+        PC.ShadowRasterDebug = { VirtualShadowResources.ComputeRasterDebug, VirtualShadowResources.ComputeRasterDebugWords };
 
         RHI::CmdDraw(CL, MakeArgs(PC), 3, 1, 0, 0);
         RHI::CmdEndRenderPass(CL);

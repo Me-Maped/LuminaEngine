@@ -32,21 +32,19 @@ float ShadowMaskedOpacity(FMaskedVertexOutput Input)
 }
 
 [shader("fragment")]
-void FragmentMain(FMaskedVertexOutput Input)
+void FragmentMain(FMaskedVertexOutput Input, uint ViewportIndex : SV_ViewportArrayIndex)
 {
-    // A splat's UVs span its source triangle's box, so the mipped opacity is the share of light its cards stop.
-    const float Opacity = ShadowMaskedOpacity(Input);
-    if (MaskedIsVoxelSplat(Input))
-    {
-        // A per-frame shift would make the shadow crawl.
-        if (FixedInterleavedGradientNoise(Input.Position.xy) >= Opacity)
-        {
-            discard;
-        }
-        return;
-    }
-    if (Opacity < GetMaterialOpacityClip(Input.MaterialIndex))
+    const uint CullViewIndex = MeshletPass().CullViewIndex + (IsMultiViewShadowDraw() ? ViewportIndex : 0u);
+    // A close caster rasters its whole meshlet at the finest level, so texels outside this frame's pages skip the opacity graph.
+    if (IsVirtualShadowFragmentSkipped(CullViewIndex, Input.Position))
     {
         discard;
     }
+    if (ShadowMaskedOpacity(Input) < GetMaterialOpacityClip(Input.MaterialIndex))
+    {
+        discard;
+    }
+
+    // A virtual shadow level has no depth target, so a kept fragment writes its own depth into the page pool.
+    WriteVirtualShadowDepth(CullViewIndex, Input.Position);
 }

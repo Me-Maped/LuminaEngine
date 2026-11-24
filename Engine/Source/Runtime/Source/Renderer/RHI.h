@@ -494,7 +494,6 @@ namespace Lumina::RHI
     {
         None                  = 0,
         MeshShading           = BIT(0),
-        ComputeDerivatives    = BIT(1),
         DeviceAddressCommands = BIT(2),
         PipelineStatistics    = BIT(3),
         MemoryPriority        = BIT(4),
@@ -616,6 +615,9 @@ namespace Lumina::RHI
     
     RUNTIME_API bool           SupportsMeshShaders();
 
+    // 64-bit atomics on storage buffers, which the compute rasterizer needs to keep the nearest depth and its ID together.
+    RUNTIME_API bool           SupportsBufferInt64Atomics();
+
     RUNTIME_API uint32         GetMaxMeshWorkGroupCount();
 
     // How many viewports one draw can address, which caps the views a multi-view shadow draw covers.
@@ -661,6 +663,9 @@ namespace Lumina::RHI
     RUNTIME_API FTextureH    AcquireNextImage(FSwapchainH Swapchain);   // invalid handle if out-of-date this call
     RUNTIME_API FUIntVector2 GetSwapchainExtent(FSwapchainH Swapchain);
     RUNTIME_API EFormat      GetSwapchainFormat(FSwapchainH Swapchain);
+    // Takes effect at the next rebuild, which falls back to SDR where the surface offers no HDR10 format.
+    RUNTIME_API void         SetSwapchainHDR(FSwapchainH Swapchain, bool bHDR);
+    RUNTIME_API bool         IsSwapchainHDR(FSwapchainH Swapchain);
     RUNTIME_API void         CmdSwapchainBarrierToRender(FCmdListH CL, FSwapchainH Swapchain);
     // Split so the submit can sit inside the caller's ordering lock and the slow present call outside it.
     RUNTIME_API void         SubmitSwapchainFrame(FSwapchainH Swapchain, FCmdListH FinalCommandList, FSemaphoreH FrameSignal, uint64 FrameSignalValue,
@@ -708,7 +713,9 @@ namespace Lumina::RHI
     // No-op unless collection is armed.
     RUNTIME_API void         CmdWriteTimestamp(FCmdListH CL, FQueryPoolH Pool, uint32 Index, EStageFlags Stage);
 
-    // Returns false without blocking while the GPU has not reached the writes yet.
+    inline constexpr uint64  kTimestampUnavailable = ~0ull;
+
+    // Returns false without blocking while any query is unwritten, and each of those reads as kTimestampUnavailable.
     RUNTIME_API bool         ReadTimestamps(FQueryPoolH Pool, uint32 First, uint32 Count, TSpan<uint64> OutTicks);
 
 #endif

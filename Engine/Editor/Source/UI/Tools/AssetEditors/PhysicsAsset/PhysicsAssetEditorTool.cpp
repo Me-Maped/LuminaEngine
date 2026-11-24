@@ -1,4 +1,4 @@
-﻿#include "Localization/Localization.h"
+#include "Localization/Localization.h"
 #include "PhysicsAssetEditorTool.h"
 #include "World/ECS/Registry.h"
 
@@ -419,8 +419,8 @@ namespace Lumina
         STransformComponent& MeshTransform = World->GetComponent<STransformComponent>(MeshEntity);
         STransformComponent& EditorTransform = World->GetComponent<STransformComponent>(EditorEntity);
 
-        const FQuat LookAt = Math::FindLookAtRotation(MeshTransform.GetWorldLocation() + FVector3(0.0f, 0.85f, 0.0f), EditorTransform.GetLocation());
-        EditorTransform.SetRotation(LookAt);
+        const FQuat LookAt = Math::FindLookAtRotation(MeshTransform.GetWorldLocation() + FVector3(0.0f, 0.85f, 0.0f), EditorTransform.GetLocalLocation());
+        EditorTransform.SetLocalRotation(LookAt);
     }
 
     void FPhysicsAssetEditorTool::OnAssetDataChangedExternally()
@@ -1405,7 +1405,7 @@ namespace Lumina
             const STransformComponent& FloorTransform = World->GetComponent<STransformComponent>(FloorBodyEntity);
             if (const SBoxColliderComponent* FloorBox = World->TryGetComponent<SBoxColliderComponent>(FloorBodyEntity))
             {
-                World->GetDebugInterface()->DrawBox(FloorTransform.GetLocation(), FloorBox->HalfExtent, FloorTransform.GetRotation(),
+                World->GetDebugInterface()->DrawBox(FloorTransform.GetLocalLocation(), FloorBox->HalfExtent, FloorTransform.GetLocalRotation(),
                     FVector4(0.25f, 1.0f, 0.45f, 1.0f), 2.0f, false);
             }
 
@@ -1415,7 +1415,7 @@ namespace Lumina
             {
                 bFloorBodyReported = true;
                 LOG_INFO("PhysicsAsset sim: floor body {} created at {}, half extent {}", FloorBodyEntity.Value,
-                    FloorTransform.GetLocation().y, World->GetComponent<SBoxColliderComponent>(FloorBodyEntity).HalfExtent.y);
+                    FloorTransform.GetLocalLocation().y, World->GetComponent<SBoxColliderComponent>(FloorBodyEntity).HalfExtent.y);
             }
             else if (!bFloorBodyReported && SimulationFrames == 60)
             {
@@ -1471,7 +1471,7 @@ namespace Lumina
 
         // The visual floor plane carries no collider, so the ragdoll needs something to land on.
         FloorBodyEntity = World->ConstructEntity("Simulation Floor");
-        World->GetComponent<STransformComponent>(FloorBodyEntity).SetLocation(FVector3(0.0f, -0.5f, 0.0f));
+        World->GetComponent<STransformComponent>(FloorBodyEntity).SetLocalLocation(FVector3(0.0f, -0.5f, 0.0f));
 
         // The body is built from what the component holds at construction, so pass values in.
         SRigidBodyComponent BodyDesc;
@@ -1521,7 +1521,7 @@ namespace Lumina
                 MeshComponent.bRenderBonesDirty = true;
             }
 
-            World->GetComponent<STransformComponent>(MeshEntity).SetLocation(FVector3(0.0f));
+            World->GetComponent<STransformComponent>(MeshEntity).SetLocalLocation(FVector3(0.0f));
         }
 
         if (FloorBodyEntity != ECS::NullEntity)
@@ -1948,28 +1948,21 @@ namespace Lumina
 
     void FPhysicsAssetEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow("Bodies",
-            "Each body is a collision primitive bound to a bone. Right-click a bone in the tree to add or "
-            "remove one. The selected body draws its frame axes so offsets can be dialed in.");
-        DrawHelpTextRow("Generate",
-            "Fits a capsule down every bone longer than the minimum length and joins each to its nearest "
-            "ancestor body. Start here, then fix up by hand.");
-        DrawHelpTextRow("Constraints",
-            "A swing-twist joint limiting how far a child body rotates against its parent. The red cone is the "
+        DrawHelpTextRow(LOC("Bodies"), LOC("Each body is a collision primitive bound to a bone. Right-click a bone in the tree to add or "
+            "remove one. The selected body draws its frame axes so offsets can be dialed in."));
+        DrawHelpTextRow(LOC("Generate"), LOC("Fits a capsule down every bone longer than the minimum length and joins each to its nearest "
+            "ancestor body. Start here, then fix up by hand."));
+        DrawHelpTextRow(LOC("Constraints"), LOC("A swing-twist joint limiting how far a child body rotates against its parent. The red cone is the "
             "elliptical swing limit and the red arc the twist limit; the amber cone and arc are where the soft "
-            "limit starts pulling back. The selected constraint's dots drag those angles.");
-        DrawHelpTextRow("Preview",
-            "The mesh comes from the Skeleton's Preview Mesh and is drawn in bind pose. Bodies are authored "
-            "against the bind pose, so what you see is what the ragdoll starts from.");
-        DrawHelpTextRow("Viewport Editing",
-            "Click a body in the viewport to select it. The orange dots resize it: one per box extent, or "
-            "radius and half-height on a capsule. Drag a dot along its axis to set that dimension.");
-        DrawHelpTextRow("Body Frame",
-            "The gizmo on the selected body moves and rotates its frame relative to the bone, writing the "
-            "Translation and Rotation offsets. Space swaps between move and rotate.");
-        DrawHelpTextRow("Grabbing",
-            "While simulating, Shift + left-drag pulls the body under the cursor with a spring. Fling it to "
-            "check whether the joint limits hold up under real forces.");
+            "limit starts pulling back. The selected constraint's dots drag those angles."));
+        DrawHelpTextRow(LOC("Preview"), LOC("The mesh comes from the Skeleton's Preview Mesh and is drawn in bind pose. Bodies are authored "
+            "against the bind pose, so what you see is what the ragdoll starts from."));
+        DrawHelpTextRow(LOC("Viewport Editing"), LOC("Click a body in the viewport to select it. The orange dots resize it: one per box extent, or "
+            "radius and half-height on a capsule. Drag a dot along its axis to set that dimension."));
+        DrawHelpTextRow(LOC("Body Frame"), LOC("The gizmo on the selected body moves and rotates its frame relative to the bone, writing the "
+            "Translation and Rotation offsets. Space swaps between move and rotate."));
+        DrawHelpTextRow(LOC("Grabbing"), LOC("While simulating, Shift + left-drag pulls the body under the cursor with a spring. Fling it to "
+            "check whether the joint limits hold up under real forces."));
     }
 
     void FPhysicsAssetEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const
