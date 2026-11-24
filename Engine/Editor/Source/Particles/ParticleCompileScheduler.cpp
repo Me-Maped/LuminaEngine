@@ -4,6 +4,7 @@
 #include "Assets/AssetTypes/ParticleSystem/ParticleSystem.h"
 #include "Containers/Algorithm.h"
 #include "Core/Object/Package/Package.h"
+#include "Localization/Localization.h"
 #include "Renderer/RenderManager.h"
 #include "Renderer/ShaderCompiler.h"
 #include "TaskSystem/Fork/ForkRuntime.h"
@@ -45,7 +46,7 @@ namespace Lumina
 
         if (InFlight.IsEmpty() && AssetsNeedingSave > 0)
         {
-            ImGuiX::Notifications::NotifyInfo("{0} particle asset(s) recompiled into the artifact cache. Save them once to drop the bytecode from their assets.", AssetsNeedingSave);
+            ImGuiX::Notifications::NotifyInfo(LOCF("{0} particle asset(s) recompiled into the artifact cache. Save them once to drop the bytecode from their assets."), AssetsNeedingSave);
             AssetsNeedingSave = 0;
         }
     }

@@ -1,4 +1,4 @@
-﻿#include "Containers/StringFormat.h"
+#include "Containers/StringFormat.h"
 #include "World/World.h"
 #include "AnimationMontageEditorTool.h"
 #include "Localization/Localization.h"
@@ -332,14 +332,12 @@ namespace Lumina
             LOC("Drag an animation from the content browser onto a slot lane to add a segment. "
             "Drag a segment to move it, drag its right edge to change its play rate. "
             "Right-click a lane for Reflow, which packs the segments end to end."));
-        DrawHelpTextRow(LOC("Sections"),
-            "Sections split the timeline into named regions. A section runs to the next one in time order, "
+        DrawHelpTextRow(LOC("Sections"), LOC("Sections split the timeline into named regions. A section runs to the next one in time order, "
             "then continues into its Next Section; leaving Next Section empty ends the montage there. "
             "Point Next Section at itself to loop, and call JumpToMontageSection from script to chain a combo. "
-            "Double-click the Sections row to add one, and right-click a section to pick its Next Section.");
-        DrawHelpTextRow(LOC("Notifies"),
-            "Each notify track is its own row. Double-click a row to add a notify, right-click it for a notify state, "
-            "and drag a state's edges to resize it. Use + Add in the corner for new slots, sections and notify tracks.");
+            "Double-click the Sections row to add one, and right-click a section to pick its Next Section."));
+        DrawHelpTextRow(LOC("Notifies"), LOC("Each notify track is its own row. Double-click a row to add a notify, right-click it for a notify state, "
+            "and drag a state's edges to resize it. Use + Add in the corner for new slots, sections and notify tracks."));
         DrawHelpTextRow(LOC("Playing from script"),
             LOC("Grab the entity's AnimationGraphComponent:\n"
             "  anim.PlayMontage(Montage, 1.0f)\n"

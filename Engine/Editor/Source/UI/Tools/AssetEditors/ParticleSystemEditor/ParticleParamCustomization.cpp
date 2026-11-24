@@ -1,4 +1,4 @@
-﻿#include "ParticleParamCustomization.h"
+#include "ParticleParamCustomization.h"
 #include "Localization/Localization.h"
 
 #include <imgui.h>
@@ -116,8 +116,8 @@ namespace Lumina
 
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             {
-                ImGuiX::WrappedTooltip("Driven by the user parameter '{}'. Set it at runtime with the matching ParticleSystemComponent Set call.",
-                    *Value.ParameterName);
+                ImGuiX::WrappedTooltip("{}", *Format(LOCF("Driven by the user parameter '{}'. Set it at runtime with the matching ParticleSystemComponent Set call."),
+                    *Value.ParameterName));
             }
         }
         else

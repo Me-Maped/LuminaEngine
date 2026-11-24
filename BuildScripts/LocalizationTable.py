@@ -473,22 +473,36 @@ def dump_view_names():
     if not generated:
         raise SystemExit(f"no generated reflection under {REFLECTION_ROOT}; build first")
 
-    param = re.compile(r'Construct_CStruct_Lumina_\w+_Statics::(\w+) = \{ '
-                       r'"((?:[^"\\]|\\.)*)", (.*?), METADATA_PARAMS\(', re.M)
-    meta = re.compile(r'static constexpr Lumina::FMetaDataPairParam (\w+)_Metadata\[\] = \{(.*?)\n\t\};', re.S)
+    # The reflected members live in the type's Properties[] initializer; a type's own Desc also
+    # carries a .Name, so matching that would collect type names as if they were properties.
+    block = re.compile(r'Lumina::FPropertyDesc [\w:]+::Properties\[\] =\s*\{(.*?)\n\};', re.S)
+    entry = re.compile(r'\{\s*\.Name = "((?:[^"\\]|\\.)*)"(.*?)LUMINA_METADATA\(\s*(\w+)\s*,', re.S)
+    meta = re.compile(r'static constexpr Lumina::FMetadataEntry (\w+)\[\] = \{(.*?)\n\t\};', re.S)
     pair = re.compile(r'\{ "((?:[^"\\]|\\.)*)", "((?:[^"\\]|\\.)*)" \}')
-    typeflags = re.compile(r'Lumina::EPropertyTypeFlags::(\w+)')
 
     display = set()
     categories = set()
     for path in generated:
         text = io.open(path, encoding="utf-8-sig").read()
-        for match in param.finditer(text):
-            display.add(display_name(typeflags.search(match.group(3)), match.group(1)))
+        metadata = {}
         for match in meta.finditer(text):
-            for name, value in pair.findall(match.group(2)):
-                if name == "Category" and value:
-                    categories.update(value.split("|"))
+            pairs = dict(pair.findall(match.group(2)))
+            metadata[match.group(1)] = pairs
+            category = pairs.get("Category")
+            if category:
+                categories.update(category.split("|"))
+        for block_match in block.finditer(text):
+            for match in entry.finditer(block_match.group(1)):
+                member, table = match.group(1), match.group(3)
+                # An authored DisplayName wins over the derived one, exactly as FProperty does.
+                authored = metadata.get(table, {}).get("DisplayName")
+                display.add(authored if authored else display_name(member))
+
+    # An empty result means the generated format moved again, and writing it would silently strip
+    # every property name from the table's ordering input.
+    if not display:
+        raise SystemExit("parsed no property display names from the generated reflection; "
+                         "the Lumina Reflection Tool's output format changed")
 
     payload = {"property_display_names": sorted(display),
                "property_category_segments": sorted(categories)}
@@ -499,15 +513,21 @@ def dump_view_names():
     print(f"{VIEW_DATA}: {len(display)} display names, {len(categories)} category segments")
 
 
-def display_name(typeflags, member):
-    """FProperty::MakeDisplayNameFromName, so the key here is the key the details panel looks up."""
+def display_name(member):
+    """FProperty::MakeDisplayNameFromName, so the key here is the key the details panel looks up.
+
+    The generated reflection carries no property type flags, so a leading "b" is treated as the
+    boolean prefix the engine only strips from a Bool property. Nothing else in this code base names
+    a member that way, and a name this rule gets wrong only costs an entry it would not have had.
+    """
     raw = member
-    if typeflags is not None and typeflags.group(1) == "Bool" and len(raw) > 1 \
-            and raw[0] == "b" and raw[1].isupper():
+    if len(raw) > 1 and raw[0] == "b" and raw[1].isupper():
         raw = raw[1:]
     out = []
     for index, char in enumerate(raw):
-        if index > 0 and char.isupper() and raw[index - 1] not in " _" and not raw[index - 1].isupper():
+        acronym_ends = index > 0 and index + 1 < len(raw) and raw[index - 1].isupper() and raw[index + 1].islower()
+        if index > 0 and char.isupper() and not raw[index - 1].isspace() \
+                and (not raw[index - 1].isupper() or acronym_ends):
             out.append(" ")
         out.append(char)
     if out:

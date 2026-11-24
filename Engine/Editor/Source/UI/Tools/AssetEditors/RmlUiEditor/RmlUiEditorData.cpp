@@ -1,4 +1,4 @@
-﻿#include "Localization/Localization.h"
+#include "Localization/Localization.h"
 #include "RmlUiEditorTool.h"
 
 #include <algorithm>
@@ -472,8 +472,8 @@ namespace Lumina
         if (DesignModels.IsEmpty())
         {
             RmlDataPanel::DataSectionHeader(LE_ICON_DATABASE_OUTLINE, "No data model");
-            ImGui::TextWrapped("This document binds no data. Put data-model=\"Name\" on its body, where Name is a class with Bind members, "
-                "a UIScript or CUIScript for instance, or the name its DataModel gives. Then use {{ Member }} and the data-* attributes inside it.");
+            ImGui::TextWrapped(LOC("This document binds no data. Put data-model=\"Name\" on its body, where Name is a class with Bind members, "
+                "a UIScript or CUIScript for instance, or the name its DataModel gives. Then use {{ Member }} and the data-* attributes inside it."));
             if (!AvailableModels.IsEmpty())
             {
                 ImGui::Spacing();

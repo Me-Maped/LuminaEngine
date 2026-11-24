@@ -67,7 +67,7 @@ namespace Lumina
 
         if (InFlight.IsEmpty() && Deferred.IsEmpty() && MaterialsNeedingSave > 0)
         {
-            ImGuiX::Notifications::NotifyInfo("{0} material(s) recompiled into the artifact cache. Save them once to drop the bytecode from their assets.", MaterialsNeedingSave);
+            ImGuiX::Notifications::NotifyInfo(LOCF("{0} material(s) recompiled into the artifact cache. Save them once to drop the bytecode from their assets."), MaterialsNeedingSave);
             MaterialsNeedingSave = 0;
         }
     }

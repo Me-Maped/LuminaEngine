@@ -1,4 +1,4 @@
-﻿#include "Containers/StringFormat.h"
+#include "Containers/StringFormat.h"
 #include "World/World.h"
 #include "AnimationEditorTool.h"
 #include "Localization/Localization.h"
@@ -309,11 +309,10 @@ namespace Lumina
         DrawHelpTextRow(LOC("Playback"),
             LOC("Play/Pause and Stop drive the preview through the animation system, so the clip "
             "plays exactly as it will at runtime. Drag the playhead on the ruler to scrub."));
-        DrawHelpTextRow(LOC("Notify Tracks"),
-            "Add lanes with '+ Track'. Double-click a lane to drop a Notify (instant), or right-click it "
+        DrawHelpTextRow(LOC("Notify Tracks"), LOC("Add lanes with '+ Track'. Double-click a lane to drop a Notify (instant), or right-click it "
             "for a Notify State (ranged). Drag markers to move them, drag a state's edges to resize, and "
             "press Delete to remove the selection. Snap to Frame quantizes edits to the frame rate. "
-            "The wheel zooms, Shift pans, and Ctrl or the track headers scroll.");
+            "The wheel zooms, Shift pans, and Ctrl or the track headers scroll."));
         DrawHelpTextRow(LOC("Listening in script"),
             LOC("Grab the entity's SimpleAnimationComponent and bind by name:\n"
             "  anim:BindNotify(\"Footstep\", function(e, name, t) ... end)\n"

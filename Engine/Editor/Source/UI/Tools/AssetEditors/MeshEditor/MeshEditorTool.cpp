@@ -1,4 +1,4 @@
-﻿#include "Localization/Localization.h"
+#include "Localization/Localization.h"
 #include "MeshEditorTool.h"
 
 #include "Tools/UI/ImGui/EditorColors.h"
@@ -575,17 +575,14 @@ namespace Lumina
         DrawHelpTextRow(LOC("Surfaces"),
             LOC("Surfaces are the parts of the mesh that each draw with one material slot. Click a surface to outline "
             "its bounds in the viewport."));
-        DrawHelpTextRow(LOC("Materials"),
-            "Material slots come from the source asset. Assign them under Properties > Materials, or drag a Material "
-            "or Material Instance from the Content Browser onto a slot.");
-        DrawHelpTextRow(LOC("Visualizers"),
-            "Toggle the mesh AABB from the View menu, and click a surface row to outline its bounds.");
+        DrawHelpTextRow(LOC("Materials"), LOC("Material slots come from the source asset. Assign them under Properties > Materials, or drag a Material "
+            "or Material Instance from the Content Browser onto a slot."));
+        DrawHelpTextRow(LOC("Visualizers"), LOC("Toggle the mesh AABB from the View menu, and click a surface row to outline its bounds."));
         DrawHelpTextRow(LOC_ICON(LE_ICON_CUBE_OUTLINE, "Collision"),
             LOC("The Collision tab makes and edits this mesh's collision. Pick Box, Sphere, Capsule, Convex Hull, Hull per Part "
             "or Exact Mesh to create it, then click shapes in the viewport to move and resize them. Any entity showing "
             "this mesh with a Mesh Collider uses it. Saving the mesh saves its collision too."));
-        DrawHelpTextRow(LOC("Reimport"),
-            "If the source file changed, right-click the mesh in the Content Browser and pick Reimport From File.");
+        DrawHelpTextRow(LOC("Reimport"), LOC("If the source file changed, right-click the mesh in the Content Browser and pick Reimport From File."));
     }
 
     void FStaticMeshEditorTool::DrawViewModeExtraItems()

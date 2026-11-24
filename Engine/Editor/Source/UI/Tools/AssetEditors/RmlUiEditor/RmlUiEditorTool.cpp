@@ -1,4 +1,4 @@
-﻿#include "Localization/Localization.h"
+#include "Localization/Localization.h"
 #include "RmlUiEditorTool.h"
 
 #include <string>
@@ -810,7 +810,7 @@ namespace Lumina
             else if (!bDiskChangedWhileDirty)
             {
                 bDiskChangedWhileDirty = true;
-                ImGuiX::Notifications::NotifyWarning("'{0}' changed on disk while it has unsaved edits here. Saving will ask before overwriting.", *VirtualPath);
+                ImGuiX::Notifications::NotifyWarning(LOCF("'{0}' changed on disk while it has unsaved edits here. Saving will ask before overwriting."), *VirtualPath);
             }
         }
 

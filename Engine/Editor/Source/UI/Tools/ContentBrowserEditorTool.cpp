@@ -1,4 +1,4 @@
-﻿#include "ContentBrowserEditorTool.h"
+#include "ContentBrowserEditorTool.h"
 #include "Core/CoreEditorDelegates.h"
 
 #include "Asset/AssetOps.h"
@@ -2078,9 +2078,8 @@ namespace Lumina
             "Filtering happens at drop-time based on the asset class."));
         DrawHelpTextRow(LOC("Filter"),
             LOC("Filter menu hides asset classes you don't want to see. View Options changes tile size."));
-        DrawHelpTextRow(LOC("Rename / Delete"),
-            "F2 renames the tile in place, or opens Bulk Rename when several are selected; Delete removes. References follow a rename by asset GUID, "
-            "so inbound references stay intact without redirectors.");
+        DrawHelpTextRow(LOC("Rename / Delete"), LOC("F2 renames the tile in place, or opens Bulk Rename when several are selected; Delete removes. References follow a rename by asset GUID, "
+            "so inbound references stay intact without redirectors."));
     }
 
     FFixedString FContentBrowserEditorTool::MakeTypeLabel(const VFS::FFileInfo& FileInfo)
@@ -2385,8 +2384,8 @@ namespace Lumina
                 return;
             }
         }
-        else if (!Dialogs::Confirmation("Confirm Deletion",
-            "Are you sure you want to delete {0} selected item(s)?\n""\nThis action cannot be undone.", Paths.Num()))
+        else if (!Dialogs::Confirmation(LOC_ID("Confirm Deletion"),
+            LOCF("Are you sure you want to delete {0} selected item(s)?\n""\nThis action cannot be undone."), Paths.Num()))
         {
             return;
         }

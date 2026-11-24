@@ -1,4 +1,4 @@
-﻿#include <string>
+#include <string>
 #include <string_view>
 #include "Localization/Localization.h"
 #include "MaterialEditorTool.h"
@@ -481,7 +481,7 @@ namespace Lumina
         {
             NodeGraph->bShowCostHeat = !NodeGraph->bShowCostHeat;
         }
-        ImGuiX::TextTooltip("{}", "Marks each node with the shader work it added in the last compile, red for the most expensive.");
+        ImGuiX::TextTooltip("{}", LOC("Marks each node with the shader work it added in the last compile, red for the most expensive."));
     }
 
     void FMaterialEditorTool::DrawMaterialGraph()

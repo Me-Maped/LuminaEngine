@@ -1328,9 +1328,8 @@ namespace Lumina
             "in the outliner for shortcut adds (e.g. drop a static mesh to add a SStaticMeshComponent)."));
         DrawHelpTextRow(LOC("Dropping Prefabs"), LOC("Dropping another prefab into the outliner copies its entities in. Prefabs do not nest, so "
             "the copies are no longer linked to the source prefab."));
-        DrawHelpTextRow(LOC("Save"),
-            "Ctrl+S commits all entities, components and overrides to the prefab, then refreshes its "
-            "placed copies in loaded worlds and its variants.");
+        DrawHelpTextRow(LOC("Save"), LOC("Ctrl+S commits all entities, components and overrides to the prefab, then refreshes its "
+            "placed copies in loaded worlds and its variants."));
     }
 
     void FPrefabEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)

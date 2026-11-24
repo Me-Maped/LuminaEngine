@@ -1,5 +1,6 @@
 #include "RuntimePCH.h"
 #include "SceneRendererInternal.h"
+#include "Localization/Localization.h"
 #include "Platform/Time/PlatformTime.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
 
@@ -101,7 +102,7 @@ namespace Lumina
                     if (const double Now = PlatformTime::Seconds(); Threading::IsMainThread() && Now - LastDeferredSlotCapToast > 10.0)
                     {
                         LastDeferredSlotCapToast = Now;
-                        ImGuiX::Notifications::NotifyWarning("Over {} distinct material shaders are on screen; the excess draws as the default material.", SlotBudget);
+                        ImGuiX::Notifications::NotifyWarning(LOCF("Over {} distinct material shaders are on screen; the excess draws as the default material."), SlotBudget);
                     }
                     #endif
 

@@ -1,4 +1,4 @@
-﻿#include "Localization/Localization.h"
+#include "Localization/Localization.h"
 #include "MaterialFunctionEditorTool.h"
 
 #include "imgui.h"
@@ -211,7 +211,7 @@ namespace Lumina
         if (bHasErrors && Asset != nullptr)
         {
             LOG_ERROR("Material function '{}' failed to compile:\n{}", *Asset->GetName(), *CompilationLog);
-            ImGuiX::Notifications::NotifyError("'{0}' has compile errors, so materials using it were not recompiled. See the Signature panel.", *Asset->GetName());
+            ImGuiX::Notifications::NotifyError(LOCF("'{0}' has compile errors, so materials using it were not recompiled. See the Signature panel."), *Asset->GetName());
         }
 
         FAssetEditorTool::OnSave();

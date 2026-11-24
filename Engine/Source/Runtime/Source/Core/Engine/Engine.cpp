@@ -1,4 +1,4 @@
-﻿#include "Platform/Time/PlatformTime.h"
+#include "Platform/Time/PlatformTime.h"
 #include "World/Entity/PersistentEntities.h"
 #include "RuntimePCH.h"
 #include <string>
@@ -1117,7 +1117,7 @@ namespace Lumina
             return false;
         }
 
-        if (!Dialogs::Confirmation("Rebuild Project", "The code for {} {}.\n\nRebuild it now? The editor closes, builds the project, then opens it again.", Name, Reason))
+        if (!Dialogs::Confirmation(LOC_ID("Rebuild Project"), LOCF("The code for {} {}.\n\nRebuild it now? The editor closes, builds the project, then opens it again."), Name, Reason))
         {
             return false;
         }
@@ -1223,7 +1223,7 @@ namespace Lumina
                         return false;
                     }
                     ImGuiX::Notifications::NotifyError(
-                        "Project '{}' code was not loaded: {}. Rebuild the project for this engine (matching configuration/platform).",
+                        LOCF("Project '{}' code was not loaded: {}. Rebuild the project for this engine (matching configuration/platform)."),
                         ProjectName, LoadError);
 #endif
                 }

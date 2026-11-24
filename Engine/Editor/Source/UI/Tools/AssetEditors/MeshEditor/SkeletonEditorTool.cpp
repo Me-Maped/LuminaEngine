@@ -1,4 +1,4 @@
-﻿#include "SkeletonEditorTool.h"
+#include "SkeletonEditorTool.h"
 #include "World/World.h"
 #include "World/ECS/Registry.h"
 #include "Assets/AssetTypes/Mesh/Skeleton/Skeleton.h"
@@ -224,17 +224,14 @@ namespace Lumina
 
     void FSkeletonEditorTool::DrawHelpMenu()
     {
-        DrawHelpTextRow(LOC("Hierarchy"),
-            "Bone tree on the left mirrors the import. Click a bone to select; transforms come from the "
-            "bind pose.");
+        DrawHelpTextRow(LOC("Hierarchy"), LOC("Bone tree on the left mirrors the import. Click a bone to select; transforms come from the "
+            "bind pose."));
         DrawHelpTextRow(LOC("Sockets"),
             LOC("Sockets are named transforms relative to a bone, listed in gold under their bone. Right-click a "
             "bone to add one and a socket to delete it. Runtime code looks them up by name (e.g. 'WeaponR')."));
-        DrawHelpTextRow(LOC("Retargeting"),
-            "Two skeletons with identical bone names auto-retarget animations between them.");
-        DrawHelpTextRow(LOC("Preview"),
-            "Set Preview Mesh in the details to see the skeleton applied. Useful for verifying "
-            "socket positions.");
+        DrawHelpTextRow(LOC("Retargeting"), LOC("Two skeletons with identical bone names auto-retarget animations between them."));
+        DrawHelpTextRow(LOC("Preview"), LOC("Set Preview Mesh in the details to see the skeleton applied. Useful for verifying "
+            "socket positions."));
     }
 
     void FSkeletonEditorTool::DrawToolMenu(const FUpdateContext& UpdateContext)
